@@ -83,6 +83,10 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val downloadId = inputData.getLong(KEY_DOWNLOAD_ID, -1)
         val item = dao.get(downloadId) ?: return@withContext Result.failure()
+        // Paused/cancelled before we got scheduled: nothing to do.
+        if (item.status == DownloadStatus.PAUSED || item.status == DownloadStatus.CANCELLED) {
+            return@withContext Result.success()
+        }
         val host = item.url.toHttpUrlOrNull()?.host
 
         try {
@@ -164,7 +168,12 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
             Result.retry()
         } catch (e: CancellationException) {
             withContext(NonCancellable) {
-                dao.get(downloadId)?.let { dao.update(it.copy(status = DownloadStatus.CANCELLED)) }
+                dao.get(downloadId)?.let {
+                    // A pause also cancels the work; keep PAUSED, don't overwrite it.
+                    if (it.status != DownloadStatus.PAUSED) {
+                        dao.update(it.copy(status = DownloadStatus.CANCELLED))
+                    }
+                }
             }
             throw e
         } catch (e: Exception) {

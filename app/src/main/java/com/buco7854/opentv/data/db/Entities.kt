@@ -16,6 +16,7 @@ object DownloadStatus {
     const val DONE = 2
     const val FAILED = 3
     const val CANCELLED = 4
+    const val PAUSED = 5
 }
 
 @Entity(tableName = "playlists")
@@ -62,6 +63,30 @@ data class ChannelEntity(
     val episode: Int?,
     /** Original position in the M3U file, preserved for stable ordering. */
     val position: Int,
+    /** Xtream stream id when this entry came from the panel API (enables get_vod_info etc.). */
+    val xtreamStreamId: Long? = null,
+    /** Days of catch-up archive the provider keeps for this live channel; 0 = none. */
+    val catchupDays: Int = 0,
+)
+
+/**
+ * A series from an Xtream panel's catalog (get_series). Episodes are fetched
+ * lazily per series and cached as [ChannelEntity] rows with
+ * seriesKey = "xs:{seriesId}", so the playlist refresh never has to make one
+ * request per show.
+ */
+@Entity(tableName = "xtream_series", primaryKeys = ["playlistId", "seriesId"])
+data class XtreamSeriesEntity(
+    val playlistId: Long,
+    val seriesId: Long,
+    val name: String,
+    val categoryName: String,
+    val cover: String?,
+    val plot: String?,
+    val castNames: String?,
+    val genre: String?,
+    val rating: Double?,
+    val episodesFetchedAtMs: Long = 0,
 )
 
 @Entity(

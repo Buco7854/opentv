@@ -5,8 +5,19 @@ Media3/ExoPlayer and Room.
 
 ## Features (v0.1)
 
+- **Xtream login** — add a playlist with server + username + password and the app
+  drives the panel API directly: server-side Live/Movies/Series categories (no
+  classification guessing), the full series catalog with plot/cast/rating/cover,
+  lazily-fetched episode lists (one request per series opened, cached a day),
+  panel-provided movie details, auto-wired EPG, and catch-up. A refresh costs
+  exactly six API requests.
+- **Catch-up TV** — channels with a provider archive (`tv_archive`, or
+  `catchup-days` in M3U) show their past programmes in the guide sheet; tap one
+  to replay it via the panel's timeshift endpoint.
 - **M3U / M3U8 playlists** — add a remote URL from your provider, or import a local
   `.m3u`/`.m3u8` file from device storage.
+- **List or poster grid** — browse movies and series as rows or as a portrait
+  poster-card grid; one toggle in the browse bar, persisted.
 - **Categories & search** — `group-title` tags become browsable folders, split into
   **Live / Movies / Series** tabs. A global search bar scans every category at once.
 - **Smart VOD detection** — M3U is a flat format, so content type is always a guess;
@@ -19,7 +30,8 @@ Media3/ExoPlayer and Room.
   counted as channels. Episodes are grouped per show and sorted by season/episode.
   The classifier is covered by unit tests (`ContentClassifierTest`).
 - **VOD downloads** — save movies and episodes to local storage for offline viewing,
-  with resume support, progress notifications, and a downloads manager.
+  with pause/resume (continuing from the same byte), progress notifications, and a
+  downloads manager.
 - **Connection monitoring** — for Xtream-based playlists the app reads
   `player_api.php` and shows **active / maximum concurrent connections** (plus plan
   expiry), so you never trip your provider's connection limit.

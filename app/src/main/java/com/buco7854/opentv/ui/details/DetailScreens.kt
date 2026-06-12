@@ -79,7 +79,7 @@ private fun metaChips(channel: ChannelEntity, meta: MetadataEntity?): List<Strin
 }
 
 @Composable
-private fun Poster(logo: String?, fallback: androidx.compose.ui.graphics.vector.ImageVector) {
+internal fun Poster(logo: String?, fallback: androidx.compose.ui.graphics.vector.ImageVector) {
     Box(
         Modifier
             .fillMaxWidth()
@@ -145,7 +145,11 @@ fun MovieDetailScreen(
 
     LaunchedEffect(channelId) {
         channel = OpenTvApp.graph.db.channelDao().get(channelId)
-        channel?.let { meta = OpenTvApp.graph.metadata.forTitle(isSeries = false, rawName = it.name) }
+        channel?.let { c ->
+            // Xtream movies have panel-provided details; keyless lookups are the fallback.
+            meta = c.xtreamStreamId?.let { OpenTvApp.graph.xtream.vodMetadata(c) }
+                ?: OpenTvApp.graph.metadata.forTitle(isSeries = false, rawName = c.name)
+        }
     }
 
     Scaffold(
@@ -331,7 +335,7 @@ fun SeriesDetailScreen(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SeasonPicker(seasons: List<Int>, selected: Int?, onSelect: (Int?) -> Unit) {
+internal fun SeasonPicker(seasons: List<Int>, selected: Int?, onSelect: (Int?) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
         OutlinedTextField(
@@ -358,7 +362,7 @@ private fun SeasonPicker(seasons: List<Int>, selected: Int?, onSelect: (Int?) ->
 }
 
 @Composable
-private fun EpisodeRow(
+internal fun EpisodeRow(
     episode: ChannelEntity,
     downloadState: DownloadEntity?,
     onPlay: () -> Unit,

@@ -30,6 +30,21 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         _message.value = null
     }
 
+    fun addXtream(name: String, server: String, username: String, password: String) {
+        viewModelScope.launch {
+            _busy.value = true
+            try {
+                graph.playlists.addFromXtream(name, server, username, password)
+                _message.value = "Xtream playlist added"
+            } catch (e: Exception) {
+                ErrorLog.log("Xtream login", e)
+                _message.value = "Xtream login failed: ${ErrorLog.describe(e)}"
+            } finally {
+                _busy.value = false
+            }
+        }
+    }
+
     fun addFromUrl(name: String, url: String, epgUrl: String) {
         viewModelScope.launch {
             _busy.value = true

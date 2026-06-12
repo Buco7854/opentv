@@ -1,5 +1,6 @@
 package com.buco7854.opentv.data.m3u
 
+import com.buco7854.opentv.data.db.ChannelKind
 import java.io.BufferedReader
 import java.util.Locale
 
@@ -13,6 +14,7 @@ class M3uEntry(
     val seriesKey: String?,
     val season: Int?,
     val episode: Int?,
+    val catchupDays: Int,
 )
 
 class M3uHeader(val epgUrl: String?)
@@ -35,6 +37,7 @@ object M3uParser {
         var logo: String? = null
         var group: String? = null
         var tvgId: String? = null
+        var catchupDays = 0
         var extGrp: String? = null
         var pendingInfo = false
 
@@ -61,6 +64,8 @@ object M3uParser {
                     logo = attrs["tvg-logo"]?.takeIf { it.isNotBlank() }
                     group = attrs["group-title"]?.takeIf { it.isNotBlank() }
                     tvgId = attrs["tvg-id"]?.takeIf { it.isNotBlank() }
+                    catchupDays = attrs["catchup-days"]?.toIntOrNull()
+                        ?: attrs["tv-archive-duration"]?.toIntOrNull() ?: 0
                     pendingInfo = true
                 }
                 trimmed.startsWith("#EXTGRP:", ignoreCase = true) -> {
@@ -70,10 +75,10 @@ object M3uParser {
                     // Decorative separator rows ("#### SPORTS ####") are not content;
                     // letting them through is how some players end up with phantom channels.
                     if (!ContentClassifier.isSeparator(name)) {
-                        onEntry(buildEntry(name, trimmed, logo, group ?: extGrp, tvgId))
+                        onEntry(buildEntry(name, trimmed, logo, group ?: extGrp, tvgId, catchupDays))
                     }
                     pendingInfo = false
-                    logo = null; group = null; tvgId = null
+                    logo = null; group = null; tvgId = null; catchupDays = 0
                 }
             }
             line = reader.readLine()
@@ -83,7 +88,14 @@ object M3uParser {
     private fun parseAttrs(line: String): Map<String, String> =
         ATTR.findAll(line).associate { it.groupValues[1].lowercase(Locale.ROOT) to it.groupValues[2] }
 
-    private fun buildEntry(name: String, url: String, logo: String?, group: String?, tvgId: String?): M3uEntry {
+    private fun buildEntry(
+        name: String,
+        url: String,
+        logo: String?,
+        group: String?,
+        tvgId: String?,
+        catchupDays: Int,
+    ): M3uEntry {
         val classification = ContentClassifier.classify(name, url, group)
         return M3uEntry(
             name = name,
@@ -95,6 +107,7 @@ object M3uParser {
             seriesKey = classification.seriesKey,
             season = classification.season,
             episode = classification.episode,
+            catchupDays = if (classification.kind == ChannelKind.LIVE) catchupDays else 0,
         )
     }
 }

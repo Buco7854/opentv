@@ -85,6 +85,52 @@ interface ChannelDao {
 
     @Query("SELECT DISTINCT tvgId FROM channels WHERE playlistId = :playlistId AND kind = 0 AND tvgId IS NOT NULL")
     suspend fun distinctLiveTvgIds(playlistId: Long): List<String>
+
+    @Query("SELECT COUNT(*) FROM channels WHERE playlistId = :playlistId AND seriesKey = :seriesKey")
+    suspend fun countEpisodes(playlistId: Long, seriesKey: String): Int
+
+    @Query("DELETE FROM channels WHERE playlistId = :playlistId AND seriesKey = :seriesKey")
+    suspend fun deleteEpisodes(playlistId: Long, seriesKey: String)
+}
+
+@Dao
+interface XtreamSeriesDao {
+    /** Blocking on purpose: called in batches during refresh on Dispatchers.IO. */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    fun insertAll(series: List<XtreamSeriesEntity>)
+
+    @Query("DELETE FROM xtream_series WHERE playlistId = :playlistId")
+    suspend fun deleteForPlaylist(playlistId: Long)
+
+    @Query(
+        "SELECT categoryName as groupTitle, COUNT(*) as count FROM xtream_series " +
+            "WHERE playlistId = :playlistId GROUP BY categoryName ORDER BY categoryName"
+    )
+    fun observeCategories(playlistId: Long): Flow<List<GroupCount>>
+
+    @Query(
+        "SELECT * FROM xtream_series WHERE playlistId = :playlistId " +
+            "AND categoryName = :category ORDER BY name"
+    )
+    fun observeInCategory(playlistId: Long, category: String): Flow<List<XtreamSeriesEntity>>
+
+    @Query("SELECT * FROM xtream_series WHERE playlistId = :playlistId AND seriesId = :seriesId")
+    suspend fun get(playlistId: Long, seriesId: Long): XtreamSeriesEntity?
+
+    @Query("SELECT COUNT(*) FROM xtream_series WHERE playlistId = :playlistId")
+    fun observeCount(playlistId: Long): Flow<Int>
+
+    @Query(
+        "SELECT * FROM xtream_series WHERE playlistId = :playlistId " +
+            "AND name LIKE '%' || :query || '%' ESCAPE '\\' ORDER BY name LIMIT 100"
+    )
+    suspend fun search(playlistId: Long, query: String): List<XtreamSeriesEntity>
+
+    @Query(
+        "UPDATE xtream_series SET episodesFetchedAtMs = :fetchedAtMs " +
+            "WHERE playlistId = :playlistId AND seriesId = :seriesId"
+    )
+    suspend fun setEpisodesFetched(playlistId: Long, seriesId: Long, fetchedAtMs: Long)
 }
 
 @Dao
@@ -103,11 +149,12 @@ interface EpgDao {
     )
     suspend fun nowAiring(playlistId: Long, now: Long): List<ProgrammeEntity>
 
+    /** Guide entries ending after [fromMs] - set fromMs into the past for catch-up. */
     @Query(
         "SELECT * FROM programmes WHERE playlistId = :playlistId AND tvgId = :tvgId " +
-            "AND endMs > :now ORDER BY startMs LIMIT :limit"
+            "AND endMs > :fromMs ORDER BY startMs LIMIT :limit"
     )
-    suspend fun upcoming(playlistId: Long, tvgId: String, now: Long, limit: Int): List<ProgrammeEntity>
+    suspend fun guideSince(playlistId: Long, tvgId: String, fromMs: Long, limit: Int): List<ProgrammeEntity>
 
     @Query("SELECT COUNT(*) FROM programmes WHERE playlistId = :playlistId")
     suspend fun count(playlistId: Long): Int

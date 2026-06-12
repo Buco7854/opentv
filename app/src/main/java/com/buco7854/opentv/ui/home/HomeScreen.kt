@@ -54,6 +54,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -143,6 +144,10 @@ fun HomeScreen(
             onAddUrl = { name, url, epg ->
                 showAdd = false
                 viewModel.addFromUrl(name, url, epg)
+            },
+            onAddXtream = { name, server, user, pass ->
+                showAdd = false
+                viewModel.addXtream(name, server, user, pass)
             },
             onAddFile = { name, uri ->
                 showAdd = false
@@ -256,12 +261,16 @@ private fun PlaylistCard(
 private fun AddPlaylistDialog(
     onDismiss: () -> Unit,
     onAddUrl: (name: String, url: String, epg: String) -> Unit,
+    onAddXtream: (name: String, server: String, username: String, password: String) -> Unit,
     onAddFile: (name: String, uri: android.net.Uri) -> Unit,
 ) {
-    var mode by remember { mutableStateOf(0) } // 0 = URL, 1 = file
+    var mode by remember { mutableStateOf(0) } // 0 = Xtream login, 1 = M3U URL, 2 = file
     var name by remember { mutableStateOf("") }
     var url by remember { mutableStateOf("") }
     var epg by remember { mutableStateOf("") }
+    var server by remember { mutableStateOf("") }
+    var username by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) onAddFile(name, uri)
@@ -273,8 +282,9 @@ private fun AddPlaylistDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = mode == 0, onClick = { mode = 0 }, label = { Text("From URL") })
-                    FilterChip(selected = mode == 1, onClick = { mode = 1 }, label = { Text("Local file") })
+                    FilterChip(selected = mode == 0, onClick = { mode = 0 }, label = { Text("Xtream") })
+                    FilterChip(selected = mode == 1, onClick = { mode = 1 }, label = { Text("M3U URL") })
+                    FilterChip(selected = mode == 2, onClick = { mode = 2 }, label = { Text("File") })
                 }
                 OutlinedTextField(
                     value = name,
@@ -283,23 +293,54 @@ private fun AddPlaylistDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                if (mode == 0) {
-                    OutlinedTextField(
-                        value = url,
-                        onValueChange = { url = it },
-                        label = { Text("M3U / M3U8 URL") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        value = epg,
-                        onValueChange = { epg = it },
-                        label = { Text("EPG (XMLTV) URL — optional") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                } else {
-                    Text(
+                when (mode) {
+                    0 -> {
+                        OutlinedTextField(
+                            value = server,
+                            onValueChange = { server = it },
+                            label = { Text("Server (host:port)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        OutlinedTextField(
+                            value = username,
+                            onValueChange = { username = it },
+                            label = { Text("Username") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        OutlinedTextField(
+                            value = password,
+                            onValueChange = { password = it },
+                            label = { Text("Password") },
+                            singleLine = true,
+                            visualTransformation = PasswordVisualTransformation(),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Text(
+                            "Uses the provider's API directly: server-side Live / Movies / Series " +
+                                "categories, series catalog with details, catch-up, and EPG — no guessing.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    1 -> {
+                        OutlinedTextField(
+                            value = url,
+                            onValueChange = { url = it },
+                            label = { Text("M3U / M3U8 URL") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        OutlinedTextField(
+                            value = epg,
+                            onValueChange = { epg = it },
+                            label = { Text("EPG (XMLTV) URL — optional") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    else -> Text(
                         "Pick a .m3u / .m3u8 file from your device.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -310,13 +351,15 @@ private fun AddPlaylistDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    if (mode == 0) {
-                        if (url.isNotBlank()) onAddUrl(name, url, epg)
-                    } else {
-                        filePicker.launch(arrayOf("*/*"))
+                    when (mode) {
+                        0 -> if (server.isNotBlank() && username.isNotBlank() && password.isNotBlank()) {
+                            onAddXtream(name, server, username, password)
+                        }
+                        1 -> if (url.isNotBlank()) onAddUrl(name, url, epg)
+                        else -> filePicker.launch(arrayOf("*/*"))
                     }
                 },
-            ) { Text(if (mode == 0) "Add" else "Choose file") }
+            ) { Text(if (mode == 2) "Choose file" else "Add") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )

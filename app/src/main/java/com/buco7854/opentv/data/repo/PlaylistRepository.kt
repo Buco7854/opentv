@@ -4,10 +4,14 @@ import android.content.ContentResolver
 import android.net.Uri
 import com.buco7854.opentv.data.db.AppDatabase
 import com.buco7854.opentv.data.db.ChannelEntity
+import com.buco7854.opentv.data.db.ChannelKind
 import com.buco7854.opentv.data.db.PlaylistEntity
+import com.buco7854.opentv.data.db.XtreamSeriesEntity
 import com.buco7854.opentv.data.m3u.M3uParser
 import com.buco7854.opentv.data.net.Http
 import com.buco7854.opentv.data.xtream.Xtream
+import com.buco7854.opentv.data.xtream.XtreamCredentials
+import com.buco7854.opentv.diag.ErrorLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -34,6 +38,30 @@ class PlaylistRepository(private val db: AppDatabase) {
     private val lastAttemptMs = HashMap<Long, Long>()
 
     val playlists = db.playlistDao().observeAll()
+
+    /**
+     * Add a playlist by Xtream login (server + username + password). The login
+     * is validated against player_api.php first, so bad credentials surface as
+     * a clear error instead of an empty playlist.
+     */
+    suspend fun addFromXtream(name: String, server: String, username: String, password: String): Long {
+        val base = Xtream.normalizeServer(server)
+            ?: throw IllegalArgumentException("Invalid server address")
+        val creds = XtreamCredentials(base, username.trim(), password.trim())
+        Xtream.fetchAccountInfo(creds) // throws "Login rejected" on bad credentials
+        val id = db.playlistDao().insert(
+            PlaylistEntity(
+                name = name.ifBlank { "Xtream" },
+                url = null, // native Xtream playlists are API-driven, no M3U URL
+                epgUrl = Xtream.xmltvUrl(creds),
+                xtreamBase = creds.base,
+                xtreamUser = creds.user,
+                xtreamPass = creds.pass,
+            )
+        )
+        refresh(id, force = true)
+        return id
+    }
 
     suspend fun addFromUrl(name: String, url: String, epgUrl: String?): Long {
         val creds = Xtream.detect(url)
@@ -78,7 +106,6 @@ class PlaylistRepository(private val db: AppDatabase) {
     suspend fun refresh(playlistId: Long, force: Boolean = false): Unit = withContext(Dispatchers.IO) {
         refreshMutex.withLock {
             val playlist = db.playlistDao().get(playlistId) ?: return@withLock
-            val url = playlist.url ?: return@withLock // local imports have nothing to refresh
             val now = System.currentTimeMillis()
             val lastAttempt = lastAttemptMs[playlistId] ?: 0L
             if (force) {
@@ -86,6 +113,17 @@ class PlaylistRepository(private val db: AppDatabase) {
             } else {
                 if (now - playlist.lastRefreshedMs < MIN_REFRESH_INTERVAL_MS) return@withLock
                 if (now - lastAttempt < FAILURE_RETRY_INTERVAL_MS) return@withLock
+            }
+
+            val url = playlist.url
+            if (url == null) {
+                // Native Xtream playlists refresh through the panel API; plain
+                // local-file imports have nothing to refresh.
+                if (playlist.xtreamBase != null) {
+                    lastAttemptMs[playlistId] = now
+                    refreshXtream(playlist, now)
+                }
+                return@withLock
             }
             lastAttemptMs[playlistId] = now
 
@@ -117,6 +155,109 @@ class PlaylistRepository(private val db: AppDatabase) {
     }
 
     /**
+     * Full refresh through the panel API: exactly six requests (three category
+     * lists, three stream lists). Series episodes are NOT fetched here - they
+     * load lazily per series via XtreamRepository, or this would cost one
+     * request per show in the catalog.
+     */
+    private suspend fun refreshXtream(playlist: PlaylistEntity, now: Long) {
+        val creds = XtreamCredentials(playlist.xtreamBase!!, playlist.xtreamUser!!, playlist.xtreamPass!!)
+
+        val liveCategories = runCatching { Xtream.fetchCategories(creds, "get_live_categories") }
+            .getOrElse { ErrorLog.log("Xtream refresh", it); emptyMap() }
+        val vodCategories = runCatching { Xtream.fetchCategories(creds, "get_vod_categories") }
+            .getOrElse { emptyMap() }
+        val seriesCategories = runCatching { Xtream.fetchCategories(creds, "get_series_categories") }
+            .getOrElse { emptyMap() }
+
+        // Live failing is fatal (bad login / dead panel); VOD or series may
+        // legitimately be absent from some subscriptions.
+        val live = Xtream.fetchLiveStreams(creds)
+        val vod = runCatching { Xtream.fetchVodStreams(creds) }
+            .getOrElse { ErrorLog.log("Xtream VOD list", it); emptyList() }
+        val seriesList = runCatching { Xtream.fetchSeriesList(creds) }
+            .getOrElse { ErrorLog.log("Xtream series list", it); emptyList() }
+
+        db.channelDao().deleteForPlaylist(playlist.id)
+        db.xtreamSeriesDao().deleteForPlaylist(playlist.id)
+
+        var position = 0
+        val batch = ArrayList<ChannelEntity>(500)
+        fun flush() {
+            if (batch.isNotEmpty()) {
+                db.channelDao().insertAll(ArrayList(batch))
+                batch.clear()
+            }
+        }
+        for (stream in live) {
+            batch.add(
+                ChannelEntity(
+                    playlistId = playlist.id,
+                    name = stream.name,
+                    url = Xtream.liveUrl(creds, stream.streamId),
+                    logo = stream.icon,
+                    groupTitle = liveCategories[stream.categoryId] ?: "Live",
+                    tvgId = stream.epgChannelId,
+                    kind = ChannelKind.LIVE,
+                    seriesKey = null,
+                    season = null,
+                    episode = null,
+                    position = position++,
+                    xtreamStreamId = stream.streamId,
+                    catchupDays = stream.archiveDays,
+                )
+            )
+            if (batch.size >= 500) flush()
+        }
+        for (stream in vod) {
+            batch.add(
+                ChannelEntity(
+                    playlistId = playlist.id,
+                    name = stream.name,
+                    url = Xtream.vodUrl(creds, stream.streamId, stream.containerExtension),
+                    logo = stream.icon,
+                    groupTitle = vodCategories[stream.categoryId] ?: "Movies",
+                    tvgId = null,
+                    kind = ChannelKind.MOVIE,
+                    seriesKey = null,
+                    season = null,
+                    episode = null,
+                    position = position++,
+                    xtreamStreamId = stream.streamId,
+                )
+            )
+            if (batch.size >= 500) flush()
+        }
+        flush()
+
+        seriesList.chunked(500).forEach { chunk ->
+            db.xtreamSeriesDao().insertAll(
+                chunk.map { item ->
+                    XtreamSeriesEntity(
+                        playlistId = playlist.id,
+                        seriesId = item.seriesId,
+                        name = item.name,
+                        categoryName = seriesCategories[item.categoryId] ?: "Series",
+                        cover = item.cover,
+                        plot = item.plot,
+                        castNames = item.cast,
+                        genre = item.genre,
+                        rating = item.rating,
+                    )
+                }
+            )
+        }
+
+        db.playlistDao().update(
+            playlist.copy(
+                lastRefreshedMs = now,
+                channelCount = live.size + vod.size + seriesList.size,
+                epgUrl = playlist.epgUrl ?: Xtream.xmltvUrl(creds),
+            )
+        )
+    }
+
+    /**
      * Streams entries straight from the reader into Room in batches of 500, so a
      * 50k-entry playlist is never held in memory in full. Must be called on
      * Dispatchers.IO (the DAO insert is blocking).
@@ -142,6 +283,7 @@ class PlaylistRepository(private val db: AppDatabase) {
                     season = entry.season,
                     episode = entry.episode,
                     position = position++,
+                    catchupDays = entry.catchupDays,
                 )
             )
             if (batch.size >= 500) {
@@ -156,6 +298,7 @@ class PlaylistRepository(private val db: AppDatabase) {
     suspend fun delete(playlistId: Long) = withContext(Dispatchers.IO) {
         db.channelDao().deleteForPlaylist(playlistId)
         db.epgDao().deleteForPlaylist(playlistId)
+        db.xtreamSeriesDao().deleteForPlaylist(playlistId)
         db.playlistDao().delete(playlistId)
     }
 

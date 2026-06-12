@@ -39,11 +39,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
 import androidx.lifecycle.viewModelScope
-import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.lifecycle.viewmodel.initializer
-import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.compose.runtime.LaunchedEffect
 import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.data.db.ChannelEntity
@@ -53,6 +49,7 @@ import com.buco7854.opentv.ui.components.ChannelLogo
 import com.buco7854.opentv.ui.components.EmptyState
 import com.buco7854.opentv.ui.components.Pill
 import com.buco7854.opentv.ui.components.kindIcon
+import com.buco7854.opentv.ui.components.playlistViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -64,7 +61,14 @@ import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 
 /** One row per series, however many episodes matched. */
-data class SeriesHit(val seriesKey: String, val count: Int, val logo: String?, val groupTitle: String)
+data class SeriesHit(
+    val seriesKey: String,
+    val count: Int,
+    val logo: String?,
+    val groupTitle: String,
+    /** Set when the hit comes from an Xtream panel's series catalog. */
+    val xtreamSeriesId: Long? = null,
+)
 
 data class SearchResults(
     val live: List<ChannelEntity> = emptyList(),
@@ -92,21 +96,36 @@ class SearchViewModel(app: Application, private val playlistId: Long) : AndroidV
                     .replace("%", "\\%")
                     .replace("_", "\\_")
                 val rows = OpenTvApp.graph.db.channelDao().search(playlistId, escaped)
+                // Episodes collapse into one row per show; the series pages
+                // handle seasons and episode listing. The Xtream catalog is a
+                // separate table, searched alongside (cached episodes are
+                // excluded from the channel grouping by their xs: key).
+                val m3uSeries = rows.filter { it.kind == ChannelKind.SERIES }
+                    .filterNot { it.seriesKey?.startsWith("xs:") == true }
+                    .groupBy { it.seriesKey ?: it.name }
+                    .map { (key, episodes) ->
+                        SeriesHit(
+                            seriesKey = key,
+                            count = episodes.size,
+                            logo = episodes.firstOrNull { it.logo != null }?.logo,
+                            groupTitle = episodes.first().groupTitle,
+                        )
+                    }
+                val xtreamSeries = OpenTvApp.graph.db.xtreamSeriesDao()
+                    .search(playlistId, escaped)
+                    .map {
+                        SeriesHit(
+                            seriesKey = it.name,
+                            count = 0,
+                            logo = it.cover,
+                            groupTitle = it.categoryName,
+                            xtreamSeriesId = it.seriesId,
+                        )
+                    }
                 SearchResults(
                     live = rows.filter { it.kind == ChannelKind.LIVE },
                     movies = rows.filter { it.kind == ChannelKind.MOVIE },
-                    // Episodes collapse into one row per show; the series page
-                    // handles seasons and episode listing.
-                    series = rows.filter { it.kind == ChannelKind.SERIES }
-                        .groupBy { it.seriesKey ?: it.name }
-                        .map { (key, episodes) ->
-                            SeriesHit(
-                                seriesKey = key,
-                                count = episodes.size,
-                                logo = episodes.firstOrNull { it.logo != null }?.logo,
-                                groupTitle = episodes.first().groupTitle,
-                            )
-                        },
+                    series = xtreamSeries + m3uSeries,
                 )
             } catch (e: Exception) {
                 ErrorLog.log("Search", e)
@@ -124,13 +143,9 @@ fun SearchScreen(
     onPlay: (url: String, title: String) -> Unit,
     onOpenMovie: (channelId: Long) -> Unit,
     onOpenSeries: (seriesKey: String) -> Unit,
+    onOpenXtreamSeries: (seriesId: Long) -> Unit,
 ) {
-    val viewModel: SearchViewModel = viewModel(
-        key = "search-$playlistId",
-        factory = viewModelFactory {
-            initializer { SearchViewModel(this[APPLICATION_KEY]!! as Application, playlistId) }
-        },
-    )
+    val viewModel = playlistViewModel(playlistId, ::SearchViewModel)
     val query by viewModel.query.collectAsState()
     val results by viewModel.results.collectAsState()
     val focusRequester = remember { FocusRequester() }
@@ -208,14 +223,18 @@ fun SearchScreen(
                     }
                     if (results.series.isNotEmpty()) {
                         item { SectionHeader("Series") }
-                        items(results.series, key = { "series-" + it.seriesKey }) { hit ->
+                        items(results.series, key = { "series-${it.xtreamSeriesId ?: it.seriesKey}" }) { hit ->
                             ResultRow(
                                 title = hit.seriesKey,
-                                subtitle = "${hit.groupTitle} · ${hit.count} matching episodes",
+                                subtitle = hit.groupTitle +
+                                    (if (hit.count > 0) " · ${hit.count} matching episodes" else ""),
                                 logo = hit.logo,
                                 kind = ChannelKind.SERIES,
                                 badge = "Series",
-                                onClick = { onOpenSeries(hit.seriesKey) },
+                                onClick = {
+                                    hit.xtreamSeriesId?.let { onOpenXtreamSeries(it) }
+                                        ?: onOpenSeries(hit.seriesKey)
+                                },
                             )
                         }
                     }

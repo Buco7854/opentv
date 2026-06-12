@@ -9,8 +9,10 @@ import com.buco7854.opentv.data.db.ChannelKind
 import com.buco7854.opentv.data.db.DownloadEntity
 import com.buco7854.opentv.data.db.DownloadStatus
 import com.buco7854.opentv.data.db.GroupCount
+import com.buco7854.opentv.data.db.PlaylistEntity
 import com.buco7854.opentv.data.db.ProgrammeEntity
 import com.buco7854.opentv.data.db.SeriesGroup
+import com.buco7854.opentv.data.db.XtreamSeriesEntity
 import com.buco7854.opentv.data.xtream.AccountInfo
 import com.buco7854.opentv.diag.ErrorLog
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -18,6 +20,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -36,9 +39,32 @@ class BrowseViewModel(app: Application, val playlistId: Long) : AndroidViewModel
     val tab = MutableStateFlow(ChannelKind.LIVE)
     val group = MutableStateFlow<String?>(null)
 
-    val groups: StateFlow<List<GroupCount>> = tab
-        .flatMapLatest { channelDao.observeGroups(playlistId, it) }
+    private fun PlaylistEntity?.isXtreamNative() = this != null && url == null && xtreamBase != null
+
+    /** True when this playlist is API-driven (added via Xtream login). */
+    val isXtreamNative: StateFlow<Boolean> = playlist
+        .map { it.isXtreamNative() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    val groups: StateFlow<List<GroupCount>> = combine(tab, playlist) { t, p -> t to p }
+        .flatMapLatest { (t, p) ->
+            // Native Xtream playlists keep series in their own catalog table.
+            if (t == ChannelKind.SERIES && p.isXtreamNative()) {
+                graph.db.xtreamSeriesDao().observeCategories(playlistId)
+            } else {
+                channelDao.observeGroups(playlistId, t)
+            }
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val xtreamSeries: StateFlow<List<XtreamSeriesEntity>> =
+        combine(tab, group, playlist) { t, g, p -> Triple(t, g, p) }
+            .flatMapLatest { (t, g, p) ->
+                if (t == ChannelKind.SERIES && g != null && p.isXtreamNative()) {
+                    graph.db.xtreamSeriesDao().observeInCategory(playlistId, g)
+                } else flowOf(emptyList())
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val channels: StateFlow<List<ChannelEntity>> = combine(tab, group) { t, g -> t to g }
         .flatMapLatest { (t, g) ->
@@ -66,7 +92,11 @@ class BrowseViewModel(app: Application, val playlistId: Long) : AndroidViewModel
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
     val movieCount = channelDao.observeCount(playlistId, ChannelKind.MOVIE)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
-    val seriesCount = channelDao.observeCount(playlistId, ChannelKind.SERIES)
+    val seriesCount = playlist
+        .flatMapLatest { p ->
+            if (p.isXtreamNative()) graph.db.xtreamSeriesDao().observeCount(playlistId)
+            else channelDao.observeCount(playlistId, ChannelKind.SERIES)
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
     /** tvgId -> programme currently on air (local DB only, no network). */
@@ -79,6 +109,18 @@ class BrowseViewModel(app: Application, val playlistId: Long) : AndroidViewModel
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message
     fun consumeMessage() { _message.value = null }
+
+    /** Poster-grid vs row-list browsing, persisted across sessions. */
+    val gridView: StateFlow<Boolean> = graph.playerPrefs.settings
+        .map { it.gridBrowse }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    fun toggleGridView() {
+        viewModelScope.launch {
+            val current = graph.playerPrefs.settings.first()
+            graph.playerPrefs.save(current.copy(gridBrowse = !current.gridBrowse))
+        }
+    }
 
     init {
         viewModelScope.launch {
@@ -119,8 +161,16 @@ class BrowseViewModel(app: Application, val playlistId: Long) : AndroidViewModel
         }
     }
 
-    suspend fun upcomingProgrammes(tvgId: String): List<ProgrammeEntity> =
-        graph.epg.upcoming(playlistId, tvgId)
+    /** Guide for one channel; reaches back into the catch-up archive when available. */
+    suspend fun guideFor(channel: ChannelEntity): List<ProgrammeEntity> {
+        val tvgId = channel.tvgId ?: return emptyList()
+        val now = System.currentTimeMillis()
+        val since = if (channel.catchupDays > 0) now - channel.catchupDays * 86_400_000L else now
+        return graph.epg.guide(playlistId, tvgId, since)
+    }
+
+    suspend fun catchupUrl(channel: ChannelEntity, programme: ProgrammeEntity): String? =
+        graph.xtream.catchupUrlFor(channel, programme.startMs, programme.endMs)
 
     fun download(channel: ChannelEntity) {
         viewModelScope.launch {

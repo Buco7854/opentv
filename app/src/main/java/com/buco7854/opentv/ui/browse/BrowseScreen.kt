@@ -26,10 +26,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.rounded.ViewList
 import androidx.compose.material.icons.rounded.CalendarMonth
-import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Replay
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -53,28 +55,31 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.lifecycle.viewmodel.initializer
-import androidx.lifecycle.viewmodel.viewModelFactory
-import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
 import com.buco7854.opentv.data.db.ChannelEntity
 import com.buco7854.opentv.data.db.ChannelKind
 import com.buco7854.opentv.data.db.DownloadEntity
 import com.buco7854.opentv.data.db.ProgrammeEntity
+import com.buco7854.opentv.data.db.XtreamSeriesEntity
 import com.buco7854.opentv.ui.components.ChannelLogo
 import com.buco7854.opentv.ui.components.DownloadStateIcon
-import com.buco7854.opentv.ui.components.EmptyState
+import com.buco7854.opentv.ui.components.PosterGrid
+import com.buco7854.opentv.ui.components.PosterItem
 import com.buco7854.opentv.ui.components.kindIcon
+import com.buco7854.opentv.ui.components.EmptyState
+import com.buco7854.opentv.ui.components.playlistViewModel
 import com.buco7854.opentv.ui.theme.Mint
 import kotlinx.coroutines.delay
-import java.text.DateFormat
+import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
 import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -85,15 +90,9 @@ fun BrowseScreen(
     onPlay: (url: String, title: String, tvgId: String?) -> Unit,
     onOpenMovie: (channelId: Long) -> Unit,
     onOpenSeries: (seriesKey: String) -> Unit,
+    onOpenXtreamSeries: (seriesId: Long) -> Unit,
 ) {
-    val viewModel: BrowseViewModel = viewModel(
-        key = "browse-$playlistId",
-        factory = viewModelFactory {
-            initializer {
-                BrowseViewModel(this[APPLICATION_KEY]!! as android.app.Application, playlistId)
-            }
-        },
-    )
+    val viewModel = playlistViewModel(playlistId, ::BrowseViewModel)
 
     val playlist by viewModel.playlist.collectAsState()
     val tab by viewModel.tab.collectAsState()
@@ -103,6 +102,9 @@ fun BrowseScreen(
     val seriesGroups by viewModel.seriesGroups.collectAsState()
     val nowAiring by viewModel.nowAiring.collectAsState()
     val downloadsByUrl by viewModel.downloadsByUrl.collectAsState()
+    val isXtreamNative by viewModel.isXtreamNative.collectAsState()
+    val xtreamSeries by viewModel.xtreamSeries.collectAsState()
+    val gridView by viewModel.gridView.collectAsState()
     val account by viewModel.account.collectAsState()
     val liveCount by viewModel.liveCount.collectAsState()
     val movieCount by viewModel.movieCount.collectAsState()
@@ -188,6 +190,12 @@ fun BrowseScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { viewModel.toggleGridView() }) {
+                        Icon(
+                            if (gridView) Icons.AutoMirrored.Rounded.ViewList else Icons.Rounded.GridView,
+                            contentDescription = if (gridView) "List view" else "Grid view",
+                        )
+                    }
                     IconButton(onClick = onSearch) {
                         Icon(Icons.Rounded.Search, contentDescription = "Search")
                     }
@@ -212,8 +220,39 @@ fun BrowseScreen(
             when {
                 group == null -> GroupList(groups) { viewModel.group.value = it }
 
+                // Native Xtream playlists list the panel's series catalog.
+                tab == ChannelKind.SERIES && isXtreamNative ->
+                    if (gridView) {
+                        PosterGrid(
+                            items = xtreamSeries.map {
+                                PosterItem(it.seriesId.toString(), it.cover, it.name, it.genre)
+                            },
+                            fallback = kindIcon(ChannelKind.SERIES),
+                            onClick = { id -> onOpenXtreamSeries(id.toLong()) },
+                        )
+                    } else {
+                        XtreamSeriesList(xtreamSeries) { onOpenXtreamSeries(it) }
+                    }
+
                 // Series open their own page (poster, season picker, episodes).
-                tab == ChannelKind.SERIES -> SeriesList(seriesGroups) { onOpenSeries(it) }
+                tab == ChannelKind.SERIES ->
+                    if (gridView) {
+                        PosterGrid(
+                            items = seriesGroups.map {
+                                PosterItem(it.seriesKey, it.logo, it.seriesKey, "${it.count} episodes")
+                            },
+                            fallback = kindIcon(ChannelKind.SERIES),
+                            onClick = { onOpenSeries(it) },
+                        )
+                    } else {
+                        SeriesList(seriesGroups) { onOpenSeries(it) }
+                    }
+
+                tab == ChannelKind.MOVIE && gridView -> PosterGrid(
+                    items = channels.map { PosterItem(it.id.toString(), it.logo, it.name, null) },
+                    fallback = kindIcon(ChannelKind.MOVIE),
+                    onClick = { onOpenMovie(it.toLong()) },
+                )
 
                 // Movies open a detail page with play/download; live plays directly.
                 else -> ChannelList(
@@ -232,7 +271,72 @@ fun BrowseScreen(
     }
 
     guideChannel?.let { channel ->
-        GuideSheet(channel = channel, viewModel = viewModel, onDismiss = { guideChannel = null })
+        GuideSheet(
+            channel = channel,
+            viewModel = viewModel,
+            onDismiss = { guideChannel = null },
+            onPlayCatchup = { url, title ->
+                guideChannel = null
+                onPlay(url, title, null)
+            },
+        )
+    }
+}
+
+@Composable
+private fun XtreamSeriesList(series: List<XtreamSeriesEntity>, onSelect: (Long) -> Unit) {
+    if (series.isEmpty()) {
+        EmptyState("No series found", "This category has no series.")
+        return
+    }
+    LazyColumn(
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        items(series, key = { it.seriesId }) { item ->
+            Card(
+                onClick = { onSelect(item.seriesId) },
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ChannelLogo(item.cover, kindIcon(ChannelKind.SERIES))
+                    Spacer(Modifier.width(14.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            item.name,
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        item.genre?.let {
+                            Text(
+                                it,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                    item.rating?.let {
+                        Text(
+                            "★ %.1f".format(it),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Icon(
+                        Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -424,14 +528,26 @@ private fun ChannelRow(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun GuideSheet(channel: ChannelEntity, viewModel: BrowseViewModel, onDismiss: () -> Unit) {
+private fun GuideSheet(
+    channel: ChannelEntity,
+    viewModel: BrowseViewModel,
+    onDismiss: () -> Unit,
+    onPlayCatchup: (url: String, title: String) -> Unit,
+) {
     var programmes by remember(channel.id) { mutableStateOf<List<ProgrammeEntity>?>(null) }
-    LaunchedEffect(channel.id) {
-        programmes = viewModel.upcomingProgrammes(channel.tvgId ?: return@LaunchedEffect)
-    }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(channel.id) { programmes = viewModel.guideFor(channel) }
+
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
             Text(channel.name, style = MaterialTheme.typography.titleLarge)
+            if (channel.catchupDays > 0) {
+                Text(
+                    "Catch-up · ${channel.catchupDays} day archive — tap a past programme to replay it",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Mint,
+                )
+            }
             Spacer(Modifier.height(12.dp))
             val list = programmes
             when {
@@ -441,23 +557,47 @@ private fun GuideSheet(channel: ChannelEntity, viewModel: BrowseViewModel, onDis
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 else -> {
-                    val timeFormat = DateFormat.getTimeInstance(DateFormat.SHORT)
+                    val timeFormat = SimpleDateFormat(
+                        if (channel.catchupDays > 0) "EEE HH:mm" else "HH:mm",
+                        Locale.getDefault(),
+                    )
                     val now = System.currentTimeMillis()
                     LazyColumn {
                         items(list, key = { it.id }) { programme ->
                             val isNow = programme.startMs <= now && programme.endMs > now
-                            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                            val isPast = programme.endMs <= now
+                            val replayable = isPast && channel.catchupDays > 0
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .then(
+                                        if (replayable) Modifier.clickable {
+                                            scope.launch {
+                                                val url = viewModel.catchupUrl(channel, programme)
+                                                if (url != null) {
+                                                    onPlayCatchup(url, "${channel.name} · ${programme.title}")
+                                                }
+                                            }
+                                        } else Modifier
+                                    )
+                                    .padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
                                 Text(
                                     timeFormat.format(Date(programme.startMs)),
                                     style = MaterialTheme.typography.labelLarge,
                                     color = if (isNow) Mint else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.width(64.dp),
+                                    modifier = Modifier.width(if (channel.catchupDays > 0) 88.dp else 64.dp),
                                 )
                                 Column(Modifier.weight(1f)) {
                                     Text(
                                         programme.title,
                                         style = MaterialTheme.typography.bodyMedium,
-                                        color = if (isNow) Mint else MaterialTheme.colorScheme.onSurface,
+                                        color = when {
+                                            isNow -> Mint
+                                            isPast && !replayable -> MaterialTheme.colorScheme.onSurfaceVariant
+                                            else -> MaterialTheme.colorScheme.onSurface
+                                        },
                                     )
                                     programme.description?.let {
                                         Text(
@@ -468,6 +608,13 @@ private fun GuideSheet(channel: ChannelEntity, viewModel: BrowseViewModel, onDis
                                             overflow = TextOverflow.Ellipsis,
                                         )
                                     }
+                                }
+                                if (replayable) {
+                                    Icon(
+                                        Icons.Rounded.Replay,
+                                        contentDescription = "Replay",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                    )
                                 }
                             }
                         }

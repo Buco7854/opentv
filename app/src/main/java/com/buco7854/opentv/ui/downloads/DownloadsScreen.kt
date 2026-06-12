@@ -15,8 +15,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Cancel
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.Card
@@ -56,7 +56,8 @@ class DownloadsViewModel(app: Application) : AndroidViewModel(app) {
     val downloads = graph.downloads.downloads
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    fun cancel(item: DownloadEntity) = viewModelScope.launch { graph.downloads.cancel(item) }
+    fun pause(item: DownloadEntity) = viewModelScope.launch { graph.downloads.pause(item) }
+    fun resume(item: DownloadEntity) = viewModelScope.launch { graph.downloads.resume(item) }
     fun retry(item: DownloadEntity) = viewModelScope.launch { graph.downloads.retry(item) }
     fun delete(item: DownloadEntity) = viewModelScope.launch { graph.downloads.delete(item) }
 }
@@ -108,7 +109,8 @@ fun DownloadsScreen(
                 DownloadCard(
                     item = item,
                     onPlay = { onPlay(DownloadStorage.playableUri(item.filePath), item.title) },
-                    onCancel = { viewModel.cancel(item) },
+                    onPause = { viewModel.pause(item) },
+                    onResume = { viewModel.resume(item) },
                     onRetry = { viewModel.retry(item) },
                     onDelete = { viewModel.delete(item) },
                 )
@@ -121,7 +123,8 @@ fun DownloadsScreen(
 private fun DownloadCard(
     item: DownloadEntity,
     onPlay: () -> Unit,
-    onCancel: () -> Unit,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
     onRetry: () -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -138,11 +141,12 @@ private fun DownloadCard(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    val progressText = "${formatBytes(item.downloadedBytes)}" +
+                        (if (item.totalBytes > 0) " of ${formatBytes(item.totalBytes)}" else "")
                     val statusText = when (item.status) {
                         DownloadStatus.QUEUED -> "Queued"
-                        DownloadStatus.RUNNING ->
-                            "${formatBytes(item.downloadedBytes)}" +
-                                (if (item.totalBytes > 0) " of ${formatBytes(item.totalBytes)}" else "")
+                        DownloadStatus.RUNNING -> progressText
+                        DownloadStatus.PAUSED -> "Paused · $progressText"
                         DownloadStatus.DONE -> "Saved · ${formatBytes(item.totalBytes)}"
                         DownloadStatus.FAILED -> "Failed${item.error?.let { ": $it" } ?: ""}"
                         else -> "Cancelled"
@@ -163,8 +167,15 @@ private fun DownloadCard(
                     DownloadStatus.DONE -> IconButton(onClick = onPlay) {
                         Icon(Icons.Rounded.PlayArrow, contentDescription = "Play", tint = Mint)
                     }
-                    DownloadStatus.QUEUED, DownloadStatus.RUNNING -> IconButton(onClick = onCancel) {
-                        Icon(Icons.Rounded.Cancel, contentDescription = "Cancel")
+                    DownloadStatus.QUEUED, DownloadStatus.RUNNING -> IconButton(onClick = onPause) {
+                        Icon(Icons.Rounded.Pause, contentDescription = "Pause")
+                    }
+                    DownloadStatus.PAUSED -> IconButton(onClick = onResume) {
+                        Icon(
+                            Icons.Rounded.PlayArrow,
+                            contentDescription = "Resume",
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
                     }
                     else -> IconButton(onClick = onRetry) {
                         Icon(Icons.Rounded.Refresh, contentDescription = "Retry")
@@ -178,7 +189,9 @@ private fun DownloadCard(
                     )
                 }
             }
-            if (item.status == DownloadStatus.RUNNING && item.totalBytes > 0) {
+            if ((item.status == DownloadStatus.RUNNING || item.status == DownloadStatus.PAUSED) &&
+                item.totalBytes > 0
+            ) {
                 Spacer(Modifier.height(10.dp))
                 LinearProgressIndicator(
                     progress = { (item.downloadedBytes.toFloat() / item.totalBytes).coerceIn(0f, 1f) },

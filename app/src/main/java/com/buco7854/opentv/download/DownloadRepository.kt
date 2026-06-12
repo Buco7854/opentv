@@ -50,10 +50,14 @@ class DownloadRepository(
     suspend fun enqueue(channel: ChannelEntity): String? {
         val existing = db.downloadDao().findByUrlWithStatus(
             channel.url,
-            listOf(DownloadStatus.QUEUED, DownloadStatus.RUNNING, DownloadStatus.DONE),
+            listOf(DownloadStatus.QUEUED, DownloadStatus.RUNNING, DownloadStatus.DONE, DownloadStatus.PAUSED),
         )
         if (existing != null) {
-            return if (existing.status == DownloadStatus.DONE) "Already downloaded" else "Already downloading"
+            return when (existing.status) {
+                DownloadStatus.DONE -> "Already downloaded"
+                DownloadStatus.PAUSED -> "Paused — resume it from Downloads"
+                else -> "Already downloading"
+            }
         }
         val id = db.downloadDao().insert(
             DownloadEntity(title = channel.name, url = channel.url, filePath = "")
@@ -69,6 +73,18 @@ class DownloadRepository(
         WorkManager.getInstance(context).cancelUniqueWork(workName(item.id))
         db.downloadDao().update(item.copy(status = DownloadStatus.CANCELLED))
     }
+
+    /**
+     * Pause keeps the partial file; resume continues from the same byte via a
+     * Range request. The PAUSED status is written before cancelling the work so
+     * the worker's cancellation handler doesn't mark the row CANCELLED.
+     */
+    suspend fun pause(item: DownloadEntity) {
+        db.downloadDao().update(item.copy(status = DownloadStatus.PAUSED))
+        WorkManager.getInstance(context).cancelUniqueWork(workName(item.id))
+    }
+
+    suspend fun resume(item: DownloadEntity) = retry(item)
 
     suspend fun retry(item: DownloadEntity) {
         db.downloadDao().update(item.copy(status = DownloadStatus.QUEUED, error = null))

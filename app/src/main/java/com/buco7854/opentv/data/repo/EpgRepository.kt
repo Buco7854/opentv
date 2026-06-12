@@ -15,7 +15,8 @@ class EpgRepository(private val db: AppDatabase) {
         const val MIN_REFRESH_INTERVAL_MS = 12L * 60 * 60 * 1000
         const val FAILURE_RETRY_INTERVAL_MS = 5L * 60 * 1000
         const val FORCED_MIN_INTERVAL_MS = 30_000L
-        const val WINDOW_BACK_MS = 3L * 60 * 60 * 1000
+        /** Keep several days of past guide data so catch-up has programmes to offer. */
+        const val WINDOW_BACK_MS = 3L * 24 * 60 * 60 * 1000
         const val WINDOW_AHEAD_MS = 48L * 60 * 60 * 1000
     }
 
@@ -81,6 +82,12 @@ class EpgRepository(private val db: AppDatabase) {
 
     suspend fun upcoming(playlistId: Long, tvgId: String, limit: Int = 16): List<ProgrammeEntity> =
         withContext(Dispatchers.IO) {
-            db.epgDao().upcoming(playlistId, tvgId, System.currentTimeMillis(), limit)
+            db.epgDao().guideSince(playlistId, tvgId, System.currentTimeMillis(), limit)
+        }
+
+    /** Guide including past programmes (for catch-up), from [sinceMs] onwards. */
+    suspend fun guide(playlistId: Long, tvgId: String, sinceMs: Long, limit: Int = 300): List<ProgrammeEntity> =
+        withContext(Dispatchers.IO) {
+            db.epgDao().guideSince(playlistId, tvgId, sinceMs, limit)
         }
 }

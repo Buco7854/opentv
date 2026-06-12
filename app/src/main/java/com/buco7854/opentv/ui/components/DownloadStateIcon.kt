@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.DownloadDone
+import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -43,6 +44,14 @@ fun DownloadStateIcon(state: DownloadEntity?, onDownload: () -> Unit) {
                     strokeWidth = 2.5.dp,
                 )
             }
+        }
+
+        DownloadStatus.PAUSED -> Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+            Icon(
+                Icons.Rounded.Pause,
+                contentDescription = "Paused",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
 
         DownloadStatus.DONE -> Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
