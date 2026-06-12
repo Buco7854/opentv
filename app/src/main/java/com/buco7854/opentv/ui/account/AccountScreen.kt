@@ -208,14 +208,6 @@ private fun ConnectionsCard(account: AccountInfo) {
                 color = if (atLimit) MaterialTheme.colorScheme.error else Mint,
                 trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
             )
-            if (atLimit) {
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    "At the limit — another stream now may get the account flagged.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
         }
     }
 }
