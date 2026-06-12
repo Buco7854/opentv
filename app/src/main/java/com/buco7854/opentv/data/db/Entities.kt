@@ -1,0 +1,95 @@
+package com.buco7854.opentv.data.db
+
+import androidx.room.Entity
+import androidx.room.Index
+import androidx.room.PrimaryKey
+
+object ChannelKind {
+    const val LIVE = 0
+    const val MOVIE = 1
+    const val SERIES = 2
+}
+
+object DownloadStatus {
+    const val QUEUED = 0
+    const val RUNNING = 1
+    const val DONE = 2
+    const val FAILED = 3
+    const val CANCELLED = 4
+}
+
+@Entity(tableName = "playlists")
+data class PlaylistEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    /** Remote URL, or null for playlists imported from a local file. */
+    val url: String?,
+    val epgUrl: String? = null,
+    // HTTP validators so refreshes can use conditional requests (304 = no re-download).
+    val etag: String? = null,
+    val lastModified: String? = null,
+    val lastRefreshedMs: Long = 0,
+    val epgEtag: String? = null,
+    val epgLastModified: String? = null,
+    val epgLastRefreshedMs: Long = 0,
+    // Xtream-codes credentials auto-detected from the playlist URL (for connection monitoring).
+    val xtreamBase: String? = null,
+    val xtreamUser: String? = null,
+    val xtreamPass: String? = null,
+    val channelCount: Int = 0,
+)
+
+@Entity(
+    tableName = "channels",
+    indices = [
+        Index("playlistId"),
+        Index(value = ["playlistId", "kind", "groupTitle"]),
+        Index(value = ["playlistId", "seriesKey"]),
+    ]
+)
+data class ChannelEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val playlistId: Long,
+    val name: String,
+    val url: String,
+    val logo: String?,
+    val groupTitle: String,
+    val tvgId: String?,
+    val kind: Int,
+    /** Normalized series title used to group episodes together. */
+    val seriesKey: String?,
+    val season: Int?,
+    val episode: Int?,
+    /** Original position in the M3U file, preserved for stable ordering. */
+    val position: Int,
+)
+
+@Entity(
+    tableName = "programmes",
+    indices = [
+        Index("playlistId"),
+        Index(value = ["playlistId", "tvgId", "startMs"]),
+    ]
+)
+data class ProgrammeEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val playlistId: Long,
+    val tvgId: String,
+    val title: String,
+    val description: String?,
+    val startMs: Long,
+    val endMs: Long,
+)
+
+@Entity(tableName = "downloads", indices = [Index("url")])
+data class DownloadEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val title: String,
+    val url: String,
+    val filePath: String,
+    val status: Int = DownloadStatus.QUEUED,
+    val totalBytes: Long = 0,
+    val downloadedBytes: Long = 0,
+    val error: String? = null,
+    val createdMs: Long = System.currentTimeMillis(),
+)

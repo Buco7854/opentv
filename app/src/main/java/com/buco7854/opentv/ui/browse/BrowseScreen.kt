@@ -1,0 +1,460 @@
+package com.buco7854.opentv.ui.browse
+
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.CalendarMonth
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
+import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
+import com.buco7854.opentv.data.db.ChannelEntity
+import com.buco7854.opentv.data.db.ChannelKind
+import com.buco7854.opentv.data.db.ProgrammeEntity
+import com.buco7854.opentv.ui.components.ChannelLogo
+import com.buco7854.opentv.ui.components.EmptyState
+import com.buco7854.opentv.ui.components.kindIcon
+import com.buco7854.opentv.ui.theme.Mint
+import java.text.DateFormat
+import java.util.Date
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun BrowseScreen(
+    playlistId: Long,
+    onBack: () -> Unit,
+    onSearch: () -> Unit,
+    onPlay: (url: String, title: String, tvgId: String?) -> Unit,
+) {
+    val viewModel: BrowseViewModel = viewModel(
+        key = "browse-$playlistId",
+        factory = viewModelFactory {
+            initializer {
+                BrowseViewModel(this[APPLICATION_KEY]!! as android.app.Application, playlistId)
+            }
+        },
+    )
+
+    val playlist by viewModel.playlist.collectAsState()
+    val tab by viewModel.tab.collectAsState()
+    val group by viewModel.group.collectAsState()
+    val series by viewModel.series.collectAsState()
+    val groups by viewModel.groups.collectAsState()
+    val channels by viewModel.channels.collectAsState()
+    val seriesGroups by viewModel.seriesGroups.collectAsState()
+    val episodes by viewModel.episodes.collectAsState()
+    val nowAiring by viewModel.nowAiring.collectAsState()
+    val account by viewModel.account.collectAsState()
+    val liveCount by viewModel.liveCount.collectAsState()
+    val movieCount by viewModel.movieCount.collectAsState()
+    val seriesCount by viewModel.seriesCount.collectAsState()
+    val message by viewModel.message.collectAsState()
+
+    val snackbar = remember { SnackbarHostState() }
+    var guideChannel by remember { mutableStateOf<ChannelEntity?>(null) }
+
+    LaunchedEffect(message) {
+        message?.let {
+            snackbar.showSnackbar(it)
+            viewModel.consumeMessage()
+        }
+    }
+
+    BackHandler {
+        when {
+            series != null -> viewModel.series.value = null
+            group != null -> viewModel.group.value = null
+            else -> onBack()
+        }
+    }
+
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text(
+                            series ?: group ?: playlist?.name ?: "Browse",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        account?.let { info ->
+                            val warn = info.maxConnections in 1..info.activeConnections
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.clickable { viewModel.refreshAccount(force = true) },
+                            ) {
+                                Icon(
+                                    Icons.Rounded.Person,
+                                    contentDescription = null,
+                                    tint = if (warn) MaterialTheme.colorScheme.error else Mint,
+                                    modifier = Modifier.size(14.dp),
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    "${info.activeConnections}/${info.maxConnections} connections",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (warn) MaterialTheme.colorScheme.error else Mint,
+                                )
+                            }
+                        }
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = {
+                        when {
+                            series != null -> viewModel.series.value = null
+                            group != null -> viewModel.group.value = null
+                            else -> onBack()
+                        }
+                    }) {
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = onSearch) {
+                        Icon(Icons.Rounded.Search, contentDescription = "Search")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+            )
+        },
+    ) { padding ->
+        Column(Modifier.padding(padding).fillMaxSize()) {
+            TabRow(
+                selectedTabIndex = tab,
+                containerColor = MaterialTheme.colorScheme.background,
+            ) {
+                Tab(selected = tab == ChannelKind.LIVE, onClick = { viewModel.selectTab(ChannelKind.LIVE) },
+                    text = { Text("Live · $liveCount") })
+                Tab(selected = tab == ChannelKind.MOVIE, onClick = { viewModel.selectTab(ChannelKind.MOVIE) },
+                    text = { Text("Movies · $movieCount") })
+                Tab(selected = tab == ChannelKind.SERIES, onClick = { viewModel.selectTab(ChannelKind.SERIES) },
+                    text = { Text("Series · $seriesCount") })
+            }
+
+            when {
+                group == null -> GroupList(groups) { viewModel.group.value = it }
+
+                tab == ChannelKind.SERIES && series == null -> SeriesList(seriesGroups) {
+                    viewModel.series.value = it
+                }
+
+                tab == ChannelKind.SERIES -> ChannelList(
+                    channels = episodes,
+                    nowAiring = emptyMap(),
+                    onPlay = { onPlay(it.url, it.name, null) },
+                    onDownload = { viewModel.download(it) },
+                    onGuide = null,
+                )
+
+                else -> ChannelList(
+                    channels = channels,
+                    nowAiring = if (tab == ChannelKind.LIVE) nowAiring else emptyMap(),
+                    onPlay = { onPlay(it.url, it.name, it.tvgId) },
+                    onDownload = if (tab == ChannelKind.MOVIE) ({ viewModel.download(it) }) else null,
+                    onGuide = if (tab == ChannelKind.LIVE) ({ guideChannel = it }) else null,
+                )
+            }
+        }
+    }
+
+    guideChannel?.let { channel ->
+        GuideSheet(channel = channel, viewModel = viewModel, onDismiss = { guideChannel = null })
+    }
+}
+
+@Composable
+private fun GroupList(groups: List<com.buco7854.opentv.data.db.GroupCount>, onSelect: (String) -> Unit) {
+    if (groups.isEmpty()) {
+        EmptyState("Nothing here yet", "This playlist has no items of this type.")
+        return
+    }
+    LazyColumn(
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        items(groups, key = { it.groupTitle }) { groupCount ->
+            Card(
+                onClick = { onSelect(groupCount.groupTitle) },
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Rounded.Folder,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.width(14.dp))
+                    Text(
+                        groupCount.groupTitle,
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        "${groupCount.count}",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Icon(
+                        Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SeriesList(series: List<com.buco7854.opentv.data.db.SeriesGroup>, onSelect: (String) -> Unit) {
+    if (series.isEmpty()) {
+        EmptyState("No series found", "No episodes were detected in this category.")
+        return
+    }
+    LazyColumn(
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        items(series, key = { it.seriesKey }) { item ->
+            Card(
+                onClick = { onSelect(item.seriesKey) },
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ChannelLogo(item.logo, kindIcon(ChannelKind.SERIES))
+                    Spacer(Modifier.width(14.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            item.seriesKey,
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            "${item.count} episodes",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Icon(
+                        Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChannelList(
+    channels: List<ChannelEntity>,
+    nowAiring: Map<String, ProgrammeEntity>,
+    onPlay: (ChannelEntity) -> Unit,
+    onDownload: ((ChannelEntity) -> Unit)?,
+    onGuide: ((ChannelEntity) -> Unit)?,
+) {
+    if (channels.isEmpty()) {
+        EmptyState("Empty category", "No items in this category.")
+        return
+    }
+    LazyColumn(
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        items(channels, key = { it.id }) { channel ->
+            ChannelRow(
+                channel = channel,
+                airing = channel.tvgId?.let { nowAiring[it] },
+                onPlay = { onPlay(channel) },
+                onDownload = onDownload?.let { handler -> { handler(channel) } },
+                onGuide = if (onGuide != null && channel.tvgId != null) ({ onGuide(channel) }) else null,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ChannelRow(
+    channel: ChannelEntity,
+    airing: ProgrammeEntity?,
+    onPlay: () -> Unit,
+    onDownload: (() -> Unit)?,
+    onGuide: (() -> Unit)?,
+) {
+    Card(
+        onClick = onPlay,
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            ChannelLogo(channel.logo, kindIcon(channel.kind))
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                val episodeTag = if (channel.season != null && channel.episode != null)
+                    "S%02dE%02d · ".format(channel.season, channel.episode) else ""
+                Text(
+                    episodeTag + channel.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (airing != null) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        airing.title,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Mint,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    val progress = ((System.currentTimeMillis() - airing.startMs).toFloat() /
+                        (airing.endMs - airing.startMs).coerceAtLeast(1)).coerceIn(0f, 1f)
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier.fillMaxWidth().height(3.dp),
+                        trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    )
+                }
+            }
+            if (onGuide != null) {
+                IconButton(onClick = onGuide) {
+                    Icon(
+                        Icons.Rounded.CalendarMonth,
+                        contentDescription = "Guide",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            if (onDownload != null) {
+                IconButton(onClick = onDownload) {
+                    Icon(
+                        Icons.Rounded.Download,
+                        contentDescription = "Download",
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun GuideSheet(channel: ChannelEntity, viewModel: BrowseViewModel, onDismiss: () -> Unit) {
+    var programmes by remember(channel.id) { mutableStateOf<List<ProgrammeEntity>?>(null) }
+    LaunchedEffect(channel.id) {
+        programmes = viewModel.upcomingProgrammes(channel.tvgId ?: return@LaunchedEffect)
+    }
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
+            Text(channel.name, style = MaterialTheme.typography.titleLarge)
+            Spacer(Modifier.height(12.dp))
+            val list = programmes
+            when {
+                list == null -> Text("Loading…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                list.isEmpty() -> Text(
+                    "No guide data for this channel. Add an XMLTV EPG URL to your playlist.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                else -> {
+                    val timeFormat = DateFormat.getTimeInstance(DateFormat.SHORT)
+                    val now = System.currentTimeMillis()
+                    LazyColumn {
+                        items(list, key = { it.id }) { programme ->
+                            val isNow = programme.startMs <= now && programme.endMs > now
+                            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                                Text(
+                                    timeFormat.format(Date(programme.startMs)),
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = if (isNow) Mint else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.width(64.dp),
+                                )
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        programme.title,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = if (isNow) Mint else MaterialTheme.colorScheme.onSurface,
+                                    )
+                                    programme.description?.let {
+                                        Text(
+                                            it,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
