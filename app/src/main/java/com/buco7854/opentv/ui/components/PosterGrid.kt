@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -90,7 +91,13 @@ fun PosterGrid(
                             }
                         }
                     }
-                    Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                    // Fixed minimum keeps card heights uniform whether the title
+                    // wraps or not, while the subtitle stays snug under the title.
+                    Column(
+                        Modifier
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                            .heightIn(min = if (item.subtitle != null) 56.dp else 40.dp),
+                    ) {
                         Text(
                             item.title,
                             style = MaterialTheme.typography.labelLarge,

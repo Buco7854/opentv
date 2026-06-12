@@ -101,6 +101,7 @@ fun BrowseScreen(
     onOpenMovie: (channelId: Long) -> Unit,
     onOpenSeries: (seriesKey: String) -> Unit,
     onOpenXtreamSeries: (seriesId: Long) -> Unit,
+    onOpenFavorites: () -> Unit,
 ) {
     val viewModel = playlistViewModel(playlistId, ::BrowseViewModel)
 
@@ -208,7 +209,7 @@ fun BrowseScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { viewModel.group.value = BrowseViewModel.FAVORITES_GROUP }) {
+                    IconButton(onClick = onOpenFavorites) {
                         Icon(Icons.Rounded.Favorite, contentDescription = "Favorites")
                     }
                     IconButton(onClick = { viewModel.toggleGridView() }) {
@@ -450,7 +451,7 @@ private fun GroupList(
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    if (onCorrect != null && groupCount.groupTitle != BrowseViewModel.FAVORITES_GROUP) {
+                    if (onCorrect != null) {
                         IconButton(onClick = { onCorrect(groupCount.groupTitle) }) {
                             Icon(
                                 Icons.Rounded.MoreVert,

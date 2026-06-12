@@ -15,7 +15,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -31,6 +34,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -202,13 +206,20 @@ fun SearchScreen(
                     "Looks across all categories: live, movies and series.",
                 )
                 results.isEmpty -> EmptyState("No results", "Nothing matches \"$query\".")
-                else -> LazyColumn(
+                else -> {
+                    val expandedSections = remember { mutableStateMapOf<String, Boolean>() }
+                    fun expanded(key: String) = expandedSections.getOrDefault(key, true)
+                    LazyColumn(
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     if (results.categories.isNotEmpty()) {
-                        item { SectionHeader("Categories") }
-                        items(results.categories, key = { "cat-${it.kind}-${it.groupTitle}" }) { hit ->
+                        item {
+                            SectionHeader("Categories", results.categories.size, expanded("cat")) {
+                                expandedSections["cat"] = !expanded("cat")
+                            }
+                        }
+                        if (expanded("cat")) items(results.categories, key = { "cat-${it.kind}-${it.groupTitle}" }) { hit ->
                             ResultRow(
                                 title = hit.groupTitle,
                                 subtitle = "${hit.count} items",
@@ -220,8 +231,12 @@ fun SearchScreen(
                         }
                     }
                     if (results.live.isNotEmpty()) {
-                        item { SectionHeader("Live") }
-                        items(results.live, key = { it.id }) { channel ->
+                        item {
+                            SectionHeader("Live", results.live.size, expanded("live")) {
+                                expandedSections["live"] = !expanded("live")
+                            }
+                        }
+                        if (expanded("live")) items(results.live, key = { it.id }) { channel ->
                             ResultRow(
                                 title = channel.name,
                                 subtitle = channel.groupTitle,
@@ -233,8 +248,12 @@ fun SearchScreen(
                         }
                     }
                     if (results.movies.isNotEmpty()) {
-                        item { SectionHeader("Movies") }
-                        items(results.movies, key = { it.id }) { channel ->
+                        item {
+                            SectionHeader("Movies", results.movies.size, expanded("movies")) {
+                                expandedSections["movies"] = !expanded("movies")
+                            }
+                        }
+                        if (expanded("movies")) items(results.movies, key = { it.id }) { channel ->
                             ResultRow(
                                 title = channel.name,
                                 subtitle = channel.groupTitle,
@@ -246,8 +265,12 @@ fun SearchScreen(
                         }
                     }
                     if (results.series.isNotEmpty()) {
-                        item { SectionHeader("Series") }
-                        items(results.series, key = { "series-${it.xtreamSeriesId ?: it.seriesKey}" }) { hit ->
+                        item {
+                            SectionHeader("Series", results.series.size, expanded("series")) {
+                                expandedSections["series"] = !expanded("series")
+                            }
+                        }
+                        if (expanded("series")) items(results.series, key = { "series-${it.xtreamSeriesId ?: it.seriesKey}" }) { hit ->
                             ResultRow(
                                 title = hit.seriesKey,
                                 subtitle = hit.groupTitle +
@@ -263,19 +286,33 @@ fun SearchScreen(
                         }
                     }
                 }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun SectionHeader(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.titleMedium,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
-    )
+private fun SectionHeader(text: String, count: Int, expanded: Boolean, onToggle: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle)
+            .padding(top = 8.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "$text · $count",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.weight(1f),
+        )
+        Icon(
+            if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+            contentDescription = if (expanded) "Collapse" else "Expand",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
 
 @Composable

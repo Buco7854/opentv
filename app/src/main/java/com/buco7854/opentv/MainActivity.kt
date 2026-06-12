@@ -22,6 +22,7 @@ import com.buco7854.opentv.ui.details.SeriesDetailScreen
 import com.buco7854.opentv.ui.details.XtreamSeriesScreen
 import com.buco7854.opentv.ui.diag.LogScreen
 import com.buco7854.opentv.ui.downloads.DownloadsScreen
+import com.buco7854.opentv.ui.favorites.FavoritesScreen
 import com.buco7854.opentv.ui.home.HomeScreen
 import com.buco7854.opentv.ui.player.PlayerScreen
 import com.buco7854.opentv.ui.search.SearchScreen
@@ -49,6 +50,7 @@ object Routes {
     fun movie(channelId: Long) = "movie/$channelId"
     fun account(playlistId: Long) = "account/$playlistId"
     fun episode(channelId: Long) = "episode/$channelId"
+    fun favorites(playlistId: Long) = "favorites/$playlistId"
     fun series(playlistId: Long, seriesKey: String) = "series/$playlistId/${Uri.encode(seriesKey)}"
     fun xtreamSeries(playlistId: Long, seriesId: Long) = "xseries/$playlistId/$seriesId"
     fun player(url: String, title: String, playlistId: Long = -1, tvgId: String? = null) =
@@ -102,6 +104,21 @@ fun AppNav() {
                 initialGroup = entry.arguments!!.getString("g").orEmpty().ifEmpty { null },
                 onBack = { nav.popBackStack() },
                 onSearch = { nav.navigate(Routes.search(playlistId)) },
+                onPlay = { url, title, tvgId -> nav.navigate(Routes.player(url, title, playlistId, tvgId)) },
+                onOpenMovie = { nav.navigate(Routes.movie(it)) },
+                onOpenSeries = { nav.navigate(Routes.series(playlistId, it)) },
+                onOpenXtreamSeries = { nav.navigate(Routes.xtreamSeries(playlistId, it)) },
+                onOpenFavorites = { nav.navigate(Routes.favorites(playlistId)) },
+            )
+        }
+        composable(
+            route = "favorites/{playlistId}",
+            arguments = listOf(navArgument("playlistId") { type = NavType.LongType }),
+        ) { entry ->
+            val playlistId = entry.arguments!!.getLong("playlistId")
+            FavoritesScreen(
+                playlistId = playlistId,
+                onBack = { nav.popBackStack() },
                 onPlay = { url, title, tvgId -> nav.navigate(Routes.player(url, title, playlistId, tvgId)) },
                 onOpenMovie = { nav.navigate(Routes.movie(it)) },
                 onOpenSeries = { nav.navigate(Routes.series(playlistId, it)) },
