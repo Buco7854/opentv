@@ -6,6 +6,7 @@ import com.buco7854.opentv.data.net.Http
 import com.buco7854.opentv.data.repo.AccountRepository
 import com.buco7854.opentv.data.repo.EpgRepository
 import com.buco7854.opentv.data.repo.PlaylistRepository
+import com.buco7854.opentv.diag.ErrorLog
 import com.buco7854.opentv.download.DownloadRepository
 import com.buco7854.opentv.download.DownloadWorker
 
@@ -27,6 +28,7 @@ class OpenTvApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        ErrorLog.install(this)
         Http.init(this)
         graph = AppGraph(this)
         DownloadWorker.ensureNotificationChannel(this)

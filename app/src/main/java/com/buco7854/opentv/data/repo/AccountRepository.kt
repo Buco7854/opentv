@@ -4,6 +4,7 @@ import com.buco7854.opentv.data.db.PlaylistEntity
 import com.buco7854.opentv.data.xtream.AccountInfo
 import com.buco7854.opentv.data.xtream.Xtream
 import com.buco7854.opentv.data.xtream.XtreamCredentials
+import com.buco7854.opentv.diag.ErrorLog
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -40,7 +41,10 @@ class AccountRepository {
                 val info = Xtream.fetchAccountInfo(creds)
                 cache[playlist.id] = CachedInfo(info, now)
                 info
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                // Stale data is better than nothing here, but the failure must
+                // still be visible somewhere - it lands in the error log.
+                ErrorLog.log("Connection status (${playlist.name})", e)
                 cached?.info
             }
         }

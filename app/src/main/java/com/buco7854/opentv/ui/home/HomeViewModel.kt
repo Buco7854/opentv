@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.data.db.PlaylistEntity
 import com.buco7854.opentv.data.xtream.AccountInfo
+import com.buco7854.opentv.diag.ErrorLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -52,7 +53,8 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                 graph.playlists.addFromUrl(name, url, epgUrl)
                 _message.value = "Playlist added"
             } catch (e: Exception) {
-                _message.value = "Failed to load playlist: ${e.message}"
+                ErrorLog.log("Add playlist", e)
+                _message.value = "Failed to load playlist: ${ErrorLog.describe(e)}"
             } finally {
                 _busy.value = false
             }
@@ -66,7 +68,8 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                 graph.playlists.addFromFile(name, uri, getApplication<Application>().contentResolver)
                 _message.value = "Playlist imported"
             } catch (e: Exception) {
-                _message.value = "Import failed: ${e.message}"
+                ErrorLog.log("Import playlist", e)
+                _message.value = "Import failed: ${ErrorLog.describe(e)}"
             } finally {
                 _busy.value = false
             }
@@ -80,7 +83,8 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                 graph.playlists.refresh(playlistId, force = true)
                 _message.value = "Playlist refreshed"
             } catch (e: Exception) {
-                _message.value = "Refresh failed: ${e.message}"
+                ErrorLog.log("Playlist refresh", e)
+                _message.value = "Refresh failed: ${ErrorLog.describe(e)}"
             } finally {
                 _busy.value = false
             }

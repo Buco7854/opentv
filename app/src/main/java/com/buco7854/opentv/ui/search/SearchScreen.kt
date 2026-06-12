@@ -47,6 +47,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.compose.runtime.LaunchedEffect
 import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.data.db.ChannelEntity
+import com.buco7854.opentv.diag.ErrorLog
 import com.buco7854.opentv.ui.components.ChannelLogo
 import com.buco7854.opentv.ui.components.EmptyState
 import com.buco7854.opentv.ui.components.Pill
@@ -73,7 +74,12 @@ class SearchViewModel(app: Application, private val playlistId: Long) : AndroidV
         .distinctUntilChanged()
         .mapLatest { q ->
             if (q.trim().length < 2) emptyList()
-            else OpenTvApp.graph.db.channelDao().search(playlistId, q.trim())
+            else try {
+                OpenTvApp.graph.db.channelDao().search(playlistId, q.trim())
+            } catch (e: Exception) {
+                ErrorLog.log("Search", e)
+                emptyList()
+            }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 }

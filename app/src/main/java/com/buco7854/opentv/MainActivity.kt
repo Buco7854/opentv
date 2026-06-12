@@ -15,6 +15,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.buco7854.opentv.ui.browse.BrowseScreen
+import com.buco7854.opentv.ui.diag.LogScreen
 import com.buco7854.opentv.ui.downloads.DownloadsScreen
 import com.buco7854.opentv.ui.home.HomeScreen
 import com.buco7854.opentv.ui.player.PlayerScreen
@@ -41,6 +42,7 @@ object Routes {
     fun player(url: String, title: String, playlistId: Long = -1, tvgId: String? = null) =
         "player?u=${Uri.encode(url)}&t=${Uri.encode(title)}&p=$playlistId&c=${Uri.encode(tvgId ?: "")}"
     const val DOWNLOADS = "downloads"
+    const val LOG = "log"
     const val HOME = "home"
 }
 
@@ -52,7 +54,11 @@ fun AppNav() {
             HomeScreen(
                 onOpenPlaylist = { nav.navigate(Routes.browse(it)) },
                 onOpenDownloads = { nav.navigate(Routes.DOWNLOADS) },
+                onOpenLog = { nav.navigate(Routes.LOG) },
             )
+        }
+        composable(Routes.LOG) {
+            LogScreen(onBack = { nav.popBackStack() })
         }
         composable(
             route = "browse/{playlistId}",

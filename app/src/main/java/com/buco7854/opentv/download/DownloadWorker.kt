@@ -13,6 +13,7 @@ import androidx.work.WorkerParameters
 import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.data.db.DownloadStatus
 import com.buco7854.opentv.data.net.Http
+import com.buco7854.opentv.diag.ErrorLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -106,7 +107,10 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
             }
             throw e
         } catch (e: Exception) {
-            dao.get(downloadId)?.let { dao.update(it.copy(status = DownloadStatus.FAILED, error = e.message)) }
+            ErrorLog.log("Download: ${item.title}", e)
+            dao.get(downloadId)?.let {
+                dao.update(it.copy(status = DownloadStatus.FAILED, error = ErrorLog.describe(e)))
+            }
             if (runAttemptCount < 3) Result.retry() else Result.failure()
         }
     }

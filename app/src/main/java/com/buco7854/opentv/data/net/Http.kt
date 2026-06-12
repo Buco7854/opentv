@@ -65,7 +65,10 @@ object Http {
         if (!response.isSuccessful) {
             val code = response.code
             response.close()
-            throw IOException("HTTP $code for $url")
+            // Strip the query string: playlist URLs carry credentials, and this
+            // message ends up in snackbars and the in-app error log.
+            val safeUrl = url.substringBefore('?')
+            throw IOException("HTTP $code for $safeUrl")
         }
         return FetchResult.Success(response, response.header("ETag"), response.header("Last-Modified"))
     }

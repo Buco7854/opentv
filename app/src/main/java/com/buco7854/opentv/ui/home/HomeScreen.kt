@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Person
@@ -67,6 +68,7 @@ import java.util.Date
 fun HomeScreen(
     onOpenPlaylist: (Long) -> Unit,
     onOpenDownloads: () -> Unit,
+    onOpenLog: () -> Unit,
     viewModel: HomeViewModel = viewModel(),
 ) {
     val playlists by viewModel.playlists.collectAsState()
@@ -91,6 +93,9 @@ fun HomeScreen(
             TopAppBar(
                 title = { Text("OpenTV", style = MaterialTheme.typography.headlineMedium) },
                 actions = {
+                    IconButton(onClick = onOpenLog) {
+                        Icon(Icons.Rounded.BugReport, contentDescription = "Error log")
+                    }
                     IconButton(onClick = onOpenDownloads) {
                         Icon(Icons.Rounded.Download, contentDescription = "Downloads")
                     }

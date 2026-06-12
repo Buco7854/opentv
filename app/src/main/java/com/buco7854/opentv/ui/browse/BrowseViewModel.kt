@@ -10,6 +10,7 @@ import com.buco7854.opentv.data.db.GroupCount
 import com.buco7854.opentv.data.db.ProgrammeEntity
 import com.buco7854.opentv.data.db.SeriesGroup
 import com.buco7854.opentv.data.xtream.AccountInfo
+import com.buco7854.opentv.diag.ErrorLog
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -79,8 +80,18 @@ class BrowseViewModel(app: Application, val playlistId: Long) : AndroidViewModel
         viewModelScope.launch {
             // Both calls are throttled inside the repositories, so opening this
             // screen repeatedly does NOT spam the provider.
-            runCatching { graph.playlists.refresh(playlistId) }
-            runCatching { graph.epg.refresh(playlistId) }
+            try {
+                graph.playlists.refresh(playlistId)
+            } catch (e: Exception) {
+                ErrorLog.log("Playlist refresh", e)
+                _message.value = "Playlist refresh failed: ${ErrorLog.describe(e)}"
+            }
+            try {
+                graph.epg.refresh(playlistId)
+            } catch (e: Exception) {
+                ErrorLog.log("EPG refresh", e)
+                _message.value = "EPG refresh failed: ${ErrorLog.describe(e)}"
+            }
             reloadNowAiring()
             refreshAccount(force = false)
         }

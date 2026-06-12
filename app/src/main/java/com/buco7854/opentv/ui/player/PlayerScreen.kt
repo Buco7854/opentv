@@ -41,6 +41,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.data.net.Http
+import com.buco7854.opentv.diag.ErrorLog
 import com.buco7854.opentv.ui.theme.Mint
 import java.text.DateFormat
 import java.util.Date
@@ -88,7 +89,9 @@ fun PlayerScreen(
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onPlayerError(playbackError: PlaybackException) {
-                error = playbackError.errorCodeName
+                ErrorLog.log("Playback: $title", playbackError)
+                val cause = playbackError.cause?.message?.let { ": ${ErrorLog.redact(it)}" } ?: ""
+                error = playbackError.errorCodeName + cause
             }
         }
         player.addListener(listener)

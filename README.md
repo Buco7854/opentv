@@ -28,6 +28,11 @@ Media3/ExoPlayer and Room.
 - **Basic EPG (XMLTV)** — add an XMLTV URL (auto-detected from `url-tvg` when
   present); live channel lists show what's airing now with a progress bar, and a
   per-channel guide sheet shows the upcoming timeline. Gzipped EPG files supported.
+- **Error log** — every failure (playlist refresh, EPG, downloads, playback,
+  connection status, even crashes from the previous session) is surfaced as a
+  snackbar where relevant and recorded with its full stack trace in an in-app
+  error log (bug icon on the home screen), with copy-to-clipboard support.
+  Provider credentials are redacted from everything the log records.
 
 ## Designed to be gentle on your provider
 
