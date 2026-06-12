@@ -691,7 +691,7 @@ private fun GuideSheet(
             Text(channel.name, style = MaterialTheme.typography.titleLarge)
             if (channel.catchupDays > 0) {
                 Text(
-                    "Catch-up · ${channel.catchupDays} day archive — tap a past programme to replay it",
+                    "Catch-up · ${channel.catchupDays} day archive. Tap a past programme to replay it",
                     style = MaterialTheme.typography.bodySmall,
                     color = Mint,
                 )

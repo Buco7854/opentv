@@ -60,9 +60,9 @@ class BrowseViewModel(app: Application, val playlistId: Long) : AndroidViewModel
         viewModelScope.launch {
             graph.playlists.setGroupOverride(playlistId, groupTitle, kind)
             _message.value = if (kind == null) {
-                "Category back to automatic — applies at next refresh"
+                "Category back to automatic, applies at next refresh"
             } else {
-                "Category updated — series grouping refines at next refresh"
+                "Category updated. Series grouping refines at next refresh"
             }
         }
     }

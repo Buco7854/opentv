@@ -324,7 +324,7 @@ private fun AddPlaylistDialog(
                         )
                         Text(
                             "Uses the provider's API directly: server-side Live / Movies / Series " +
-                                "categories, series catalog with details, catch-up, and EPG — no guessing.",
+                                "categories, series catalog with details, catch-up, and EPG. No guessing.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -340,7 +340,7 @@ private fun AddPlaylistDialog(
                         OutlinedTextField(
                             value = epg,
                             onValueChange = { epg = it },
-                            label = { Text("EPG (XMLTV) URL — optional") },
+                            label = { Text("EPG (XMLTV) URL (optional)") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                         )
@@ -383,7 +383,7 @@ private fun AddPlaylistDialog(
                 Text(
                     "This M3U URL is served by an Xtream panel (${creds.base}). Using the " +
                         "panel's API instead gives exact Live/Movies/Series categories, the " +
-                        "series catalog with details, catch-up and automatic EPG — no " +
+                        "series catalog with details, catch-up and automatic EPG, with no " +
                         "classification guessing. Your login was read from the URL."
                 )
             },

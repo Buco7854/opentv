@@ -55,7 +55,7 @@ class DownloadRepository(
         if (existing != null) {
             return when (existing.status) {
                 DownloadStatus.DONE -> "Already downloaded"
-                DownloadStatus.PAUSED -> "Paused — resume it from Downloads"
+                DownloadStatus.PAUSED -> "Paused. Resume it from Downloads"
                 else -> "Already downloading"
             }
         }

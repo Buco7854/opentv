@@ -277,7 +277,7 @@ private fun DownloadButton(state: DownloadEntity?, onDownload: () -> Unit) {
         ) {
             Icon(Icons.Rounded.DownloadDone, contentDescription = null)
             Spacer(Modifier.width(8.dp))
-            Text("Downloaded — see Downloads")
+            Text("Downloaded, see Downloads")
         }
 
         else -> FilledTonalButton(onClick = onDownload, modifier = Modifier.fillMaxWidth()) {
