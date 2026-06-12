@@ -51,6 +51,10 @@ class MetaInfo(
     val posterUrl: String?,
     /** Structured cast with photos when the source provides them. */
     val castList: List<CastMember> = emptyList(),
+    /** Extra facts: genres, runtime, status, network/rated - " · " separated. */
+    val infoLine: String? = null,
+    /** Source-side id (TVMaze show id) enabling per-episode lookups. */
+    val sourceId: Long? = null,
 )
 
 private fun getJson(url: String): String {
@@ -101,6 +105,17 @@ object TvMaze {
             }.getOrDefault(emptyList())
         } else emptyList()
 
+        val genres = show.optJSONArray("genres")?.let { array ->
+            (0 until array.length()).mapNotNull { array.optString(it).takeIf { g -> g.isNotBlank() } }
+        }.orEmpty()
+        val infoLine = listOfNotNull(
+            genres.take(3).joinToString(" · ").takeIf { it.isNotEmpty() },
+            (show.optInt("averageRuntime", 0).takeIf { it > 0 }
+                ?: show.optInt("runtime", 0).takeIf { it > 0 })?.let { "$it min" },
+            show.optString("status").takeIf { it.isNotBlank() && it != "Running" },
+            show.optJSONObject("network")?.optString("name")?.takeIf { it.isNotBlank() },
+        ).joinToString(" · ").takeIf { it.isNotEmpty() }
+
         return MetaInfo(
             title = show.optString("name").takeIf { it.isNotBlank() },
             year = show.optString("premiered").take(4).takeIf { it.length == 4 },
@@ -113,6 +128,34 @@ object TvMaze {
                     ?: image.optString("medium").takeIf { it.isNotBlank() }
             },
             castList = cast,
+            infoLine = infoLine,
+            sourceId = id.takeIf { it > 0 },
+        )
+    }
+
+    /** Details for one episode (still image, synopsis, air date, runtime, rating). */
+    fun episode(showId: Long, season: Int, number: Int): MetaInfo? {
+        val url = "https://api.tvmaze.com/shows/$showId/episodebynumber".toHttpUrl()
+            .newBuilder()
+            .addQueryParameter("season", season.toString())
+            .addQueryParameter("number", number.toString())
+            .build()
+        val ep = try {
+            JSONObject(getJson(url.toString()))
+        } catch (_: IOException) {
+            return null // unknown episode numbering -> no details, not an error
+        }
+        return MetaInfo(
+            title = ep.optString("name").takeIf { it.isNotBlank() },
+            year = ep.optString("airdate").takeIf { it.isNotBlank() },
+            overview = ep.optString("summary").takeIf { it.isNotBlank() }?.stripHtml(),
+            rating = ep.optJSONObject("rating")?.optDouble("average", 0.0)?.takeIf { it > 0 },
+            credits = null,
+            posterUrl = ep.optJSONObject("image")?.let { image ->
+                image.optString("original").takeIf { it.isNotBlank() }
+                    ?: image.optString("medium").takeIf { it.isNotBlank() }
+            },
+            infoLine = ep.optInt("runtime", 0).takeIf { it > 0 }?.let { "$it min" },
         )
     }
 }
@@ -153,6 +196,14 @@ object ITunesStore {
             director?.let { "Director: $it" },
             genre?.let { "Genre: $it" },
         ).joinToString(" · ").takeIf { it.isNotEmpty() }
+        val durationMs = movie.optLong("trackTimeMillis", 0)
+        val infoLine = listOfNotNull(
+            durationMs.takeIf { it > 0 }?.let {
+                val minutes = (it / 60_000).toInt()
+                if (minutes >= 60) "%dh %02dmin".format(minutes / 60, minutes % 60) else "$minutes min"
+            },
+            movie.optString("contentAdvisoryRating").takeIf { it.isNotBlank() && it != "Unrated" },
+        ).joinToString(" · ").takeIf { it.isNotEmpty() }
 
         return MetaInfo(
             title = movie.optString("trackName").takeIf { it.isNotBlank() },
@@ -162,6 +213,7 @@ object ITunesStore {
             credits = credits,
             posterUrl = movie.optString("artworkUrl100").takeIf { it.isNotBlank() }
                 ?.replace("100x100", "600x600"),
+            infoLine = infoLine,
         )
     }
 }

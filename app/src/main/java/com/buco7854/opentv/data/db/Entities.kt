@@ -67,6 +67,10 @@ data class ChannelEntity(
     val xtreamStreamId: Long? = null,
     /** Days of catch-up archive the provider keeps for this live channel; 0 = none. */
     val catchupDays: Int = 0,
+    // Episode details when the source provides them (Xtream get_series_info).
+    val description: String? = null,
+    val durationSecs: Int? = null,
+    val airDate: String? = null,
 )
 
 /**
@@ -148,6 +152,10 @@ data class MetadataEntity(
     /** JSON cast list with photo urls (see data/meta/Cast.kt). */
     val castJson: String? = null,
     val posterUrl: String? = null,
+    /** Extra facts line, " · " separated: genres, runtime, status, network/rated. */
+    val infoLine: String? = null,
+    /** Source-side id (TVMaze show id) enabling per-episode lookups. */
+    val sourceId: Long? = null,
     val fetchedAtMs: Long,
 )
 

@@ -66,7 +66,7 @@ class XtreamRepository(private val db: AppDatabase) {
                             playlistId = playlistId,
                             name = ep.title,
                             url = Xtream.episodeUrl(creds, ep.episodeId, ep.containerExtension),
-                            logo = series.cover,
+                            logo = ep.image ?: series.cover,
                             groupTitle = series.categoryName,
                             tvgId = null,
                             kind = ChannelKind.SERIES,
@@ -74,6 +74,9 @@ class XtreamRepository(private val db: AppDatabase) {
                             season = ep.season,
                             episode = ep.episodeNum,
                             position = index,
+                            description = ep.plot,
+                            durationSecs = ep.durationSecs,
+                            airDate = ep.airDate,
                         )
                     }
                 )

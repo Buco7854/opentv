@@ -59,6 +59,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.buco7854.opentv.data.db.PlaylistEntity
+import com.buco7854.opentv.ui.components.focusHighlight
 import com.buco7854.opentv.ui.theme.Mint
 import com.buco7854.opentv.ui.theme.Periwinkle
 import java.text.DateFormat
@@ -219,6 +220,7 @@ private fun PlaylistCard(
         onClick = onClick,
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        modifier = Modifier.focusHighlight(RoundedCornerShape(20.dp)),
     ) {
         Column(Modifier.padding(18.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {

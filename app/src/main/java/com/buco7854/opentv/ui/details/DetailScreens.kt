@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.DownloadDone
 import androidx.compose.material.icons.rounded.Movie
@@ -71,6 +72,7 @@ import com.buco7854.opentv.ui.components.ChannelLogo
 import com.buco7854.opentv.ui.components.DownloadStateIcon
 import com.buco7854.opentv.ui.components.FavoriteIcon
 import com.buco7854.opentv.ui.components.Pill
+import com.buco7854.opentv.ui.components.focusHighlight
 import com.buco7854.opentv.ui.components.mediaTags
 import kotlinx.coroutines.launch
 
@@ -85,12 +87,12 @@ internal suspend fun toggleFavorite(playlistId: Long, key: String, kind: Int, cu
     return !current
 }
 
-/** The metadata an M3U playlist actually carries, mined from the entry itself. */
+/** Facts from the playlist entry plus whatever enrichment found. */
 private fun metaChips(channel: ChannelEntity, meta: MetadataEntity?): List<String> = buildList {
     add(channel.groupTitle)
     (meta?.year ?: YEAR_TAG.find(channel.name)?.value)?.let { add(it) }
     meta?.rating?.let { add("★ %.1f".format(it)) }
-    QUALITY_TAG.find(channel.name)?.let { add(it.value.uppercase()) }
+    meta?.infoLine?.split(" · ")?.take(2)?.forEach { add(it) }
 }
 
 @Composable
@@ -314,8 +316,28 @@ fun SeriesDetailScreen(
 
     val seasons = remember(episodes) { episodes.mapNotNull { it.season }.distinct().sorted() }
     var selectedSeason by remember { mutableStateOf<Int?>(null) } // null = all seasons
+    var detailsEpisode by remember { mutableStateOf<ChannelEntity?>(null) }
     val shown = remember(episodes, selectedSeason) {
         selectedSeason?.let { s -> episodes.filter { it.season == s } } ?: episodes
+    }
+
+    detailsEpisode?.let { episode ->
+        EpisodeDetailsSheet(
+            episode = episode,
+            seriesTitle = seriesKey,
+            downloadState = downloadsByUrl[episode.url],
+            onDismiss = { detailsEpisode = null },
+            onPlay = {
+                detailsEpisode = null
+                onPlay(episode.url, episode.name)
+            },
+            onDownload = {
+                scope.launch {
+                    val blocked = OpenTvApp.graph.downloads.enqueue(episode)
+                    snackbar.showSnackbar(blocked ?: "Download started: ${episode.name}")
+                }
+            },
+        )
     }
 
     Scaffold(
@@ -358,6 +380,12 @@ fun SeriesDetailScreen(
                     if (seasons.size > 1) Pill("${seasons.size} seasons")
                     meta?.rating?.let { Pill("★ %.1f".format(it)) }
                 }
+                meta?.infoLine?.let { line ->
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        line.split(" · ").take(4).forEach { Pill(it) }
+                    }
+                }
                 MetadataBlock(meta)
                 Spacer(Modifier.height(18.dp))
                 if (seasons.isNotEmpty()) {
@@ -374,6 +402,7 @@ fun SeriesDetailScreen(
                     episode = episode,
                     downloadState = downloadsByUrl[episode.url],
                     onPlay = { onPlay(episode.url, episode.name) },
+                    onDetails = { detailsEpisode = episode },
                     onDownload = {
                         scope.launch {
                             val blocked = OpenTvApp.graph.downloads.enqueue(episode)
@@ -414,30 +443,64 @@ internal fun SeasonPicker(seasons: List<Int>, selected: Int?, onSelect: (Int?) -
     }
 }
 
+internal fun episodeTag(episode: ChannelEntity): String? = when {
+    episode.season != null && episode.episode != null ->
+        "S%02dE%02d".format(episode.season, episode.episode)
+    episode.episode != null -> "EP %d".format(episode.episode)
+    else -> null
+}
+
+internal fun formatDuration(secs: Int): String {
+    val minutes = secs / 60
+    return if (minutes >= 60) "%dh %02dmin".format(minutes / 60, minutes % 60) else "$minutes min"
+}
+
+@Composable
+private fun EpisodeThumb(image: String?, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .width(116.dp)
+            .height(66.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (image.isNullOrBlank()) {
+            Icon(
+                Icons.Rounded.VideoLibrary,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            AsyncImage(
+                model = image,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+    }
+}
+
 @Composable
 internal fun EpisodeRow(
     episode: ChannelEntity,
     downloadState: DownloadEntity?,
     onPlay: () -> Unit,
+    onDetails: () -> Unit,
     onDownload: () -> Unit,
 ) {
     Card(
         onClick = onPlay,
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-        modifier = Modifier.padding(vertical = 4.dp),
+        modifier = Modifier.padding(vertical = 4.dp).focusHighlight(),
     ) {
-        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            ChannelLogo(episode.logo, Icons.Rounded.VideoLibrary)
-            Spacer(Modifier.width(14.dp))
+        Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            EpisodeThumb(episode.logo)
+            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                val tag = when {
-                    episode.season != null && episode.episode != null ->
-                        "S%02dE%02d".format(episode.season, episode.episode)
-                    episode.episode != null -> "EP %d".format(episode.episode)
-                    else -> null
-                }
-                tag?.let {
+                episodeTag(episode)?.let {
                     Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                 }
                 Text(
@@ -446,8 +509,108 @@ internal fun EpisodeRow(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
+                val metaLine = listOfNotNull(
+                    episode.durationSecs?.let { formatDuration(it) },
+                    episode.airDate,
+                ).joinToString(" · ")
+                if (metaLine.isNotEmpty()) {
+                    Text(
+                        metaLine,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            IconButton(onClick = onDetails) {
+                Icon(
+                    Icons.Outlined.Info,
+                    contentDescription = "Episode details",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             DownloadStateIcon(state = downloadState, onDownload = onDownload)
+        }
+    }
+}
+
+/**
+ * Episode details: stored panel data (Xtream) when present, otherwise lazily
+ * enriched from TVMaze's episode endpoint (cached).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun EpisodeDetailsSheet(
+    episode: ChannelEntity,
+    seriesTitle: String,
+    downloadState: DownloadEntity?,
+    onDismiss: () -> Unit,
+    onPlay: () -> Unit,
+    onDownload: () -> Unit,
+) {
+    var info by remember(episode.id) { mutableStateOf<MetadataEntity?>(null) }
+    LaunchedEffect(episode.id) {
+        if (episode.description == null && episode.season != null && episode.episode != null) {
+            info = OpenTvApp.graph.metadata.episodeInfo(seriesTitle, episode.season, episode.episode)
+        }
+    }
+    val image = info?.posterUrl ?: episode.logo
+    val plot = episode.description ?: info?.overview
+
+    androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(180.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (image.isNullOrBlank()) {
+                    Icon(
+                        Icons.Rounded.VideoLibrary,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(48.dp),
+                    )
+                } else {
+                    AsyncImage(
+                        model = image,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+            Text(info?.title ?: episode.name, style = MaterialTheme.typography.titleLarge)
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                episodeTag(episode)?.let { Pill(it) }
+                (episode.airDate ?: info?.year)?.let { Pill(it) }
+                (episode.durationSecs?.let { formatDuration(it) } ?: info?.infoLine)?.let { Pill(it) }
+                info?.rating?.let { Pill("★ %.1f".format(it)) }
+            }
+            plot?.let {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 8,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.height(18.dp))
+            Button(onClick = onPlay, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Rounded.PlayArrow, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Play")
+            }
+            Spacer(Modifier.height(8.dp))
+            DownloadButton(state = downloadState, onDownload = onDownload)
         }
     }
 }

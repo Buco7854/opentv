@@ -77,6 +77,7 @@ import com.buco7854.opentv.ui.components.FavoriteIcon
 import com.buco7854.opentv.ui.components.mediaTags
 import com.buco7854.opentv.ui.components.PosterGrid
 import com.buco7854.opentv.ui.components.PosterItem
+import com.buco7854.opentv.ui.components.focusHighlight
 import com.buco7854.opentv.ui.components.kindIcon
 import com.buco7854.opentv.ui.components.EmptyState
 import com.buco7854.opentv.ui.components.playlistViewModel
@@ -354,6 +355,7 @@ private fun XtreamSeriesList(
                 onClick = { onSelect(item.seriesId) },
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+                modifier = Modifier.focusHighlight(RoundedCornerShape(16.dp)),
             ) {
                 Row(
                     Modifier.fillMaxWidth().padding(12.dp),
@@ -446,6 +448,7 @@ private fun GroupList(
                 onClick = { onSelect(groupCount.groupTitle) },
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+                modifier = Modifier.focusHighlight(RoundedCornerShape(16.dp)),
             ) {
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
@@ -549,6 +552,7 @@ private fun SeriesList(
                 onClick = { onSelect(item.seriesKey) },
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+                modifier = Modifier.focusHighlight(RoundedCornerShape(16.dp)),
             ) {
                 Row(
                     Modifier.fillMaxWidth().padding(12.dp),
@@ -633,6 +637,7 @@ private fun ChannelRow(
         onClick = onPlay,
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        modifier = Modifier.focusHighlight(RoundedCornerShape(16.dp)),
     ) {
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             ChannelLogo(channel.logo, kindIcon(channel.kind))

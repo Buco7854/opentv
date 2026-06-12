@@ -50,6 +50,7 @@ import com.buco7854.opentv.ui.components.ChannelLogo
 import com.buco7854.opentv.ui.components.EmptyState
 import com.buco7854.opentv.ui.components.Pill
 import com.buco7854.opentv.ui.components.kindIcon
+import com.buco7854.opentv.ui.components.focusHighlight
 import com.buco7854.opentv.ui.components.kindLabel
 import com.buco7854.opentv.ui.components.playlistViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -290,6 +291,7 @@ private fun ResultRow(
         onClick = onClick,
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        modifier = Modifier.focusHighlight(RoundedCornerShape(16.dp)),
     ) {
         Row(
             Modifier.fillMaxWidth().padding(12.dp),

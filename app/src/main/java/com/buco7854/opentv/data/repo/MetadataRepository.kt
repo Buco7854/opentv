@@ -55,6 +55,8 @@ class MetadataRepository(private val db: AppDatabase) {
                         castNames = info?.credits,
                         castJson = info?.castList?.takeIf { it.isNotEmpty() }?.let { encodeCast(it) },
                         posterUrl = info?.posterUrl,
+                        infoLine = info?.infoLine,
+                        sourceId = info?.sourceId,
                         fetchedAtMs = now,
                     )
                     db.metadataDao().upsert(entity)
@@ -63,6 +65,42 @@ class MetadataRepository(private val db: AppDatabase) {
                     ErrorLog.log("Metadata lookup", e)
                     db.metadataDao().get(cacheKey)
                         ?.takeIf { it.overview != null || it.castNames != null }
+                }
+            }
+        }
+
+    /**
+     * Per-episode details for an M3U series (still, synopsis, air date, runtime,
+     * rating) via TVMaze's episode endpoint. One request per episode opened,
+     * cached like everything else; misses cached too.
+     */
+    suspend fun episodeInfo(seriesRawName: String, season: Int, episode: Int): MetadataEntity? =
+        withContext(Dispatchers.IO) {
+            val showId = forTitle(isSeries = true, rawName = seriesRawName)?.sourceId
+                ?: return@withContext null
+            val cacheKey = "tvep:$showId:$season:$episode"
+            mutex.withLock {
+                val now = System.currentTimeMillis()
+                db.metadataDao().get(cacheKey)
+                    ?.takeIf { now - it.fetchedAtMs < CACHE_MS }
+                    ?.let { return@withLock it.takeIf { m -> m.overview != null || m.posterUrl != null } }
+                try {
+                    val info = TvMaze.episode(showId, season, episode)
+                    val entity = MetadataEntity(
+                        cacheKey = cacheKey,
+                        title = info?.title,
+                        year = info?.year, // full air date for episodes
+                        overview = info?.overview,
+                        rating = info?.rating,
+                        posterUrl = info?.posterUrl,
+                        infoLine = info?.infoLine,
+                        fetchedAtMs = now,
+                    )
+                    db.metadataDao().upsert(entity)
+                    entity.takeIf { info != null }
+                } catch (e: Exception) {
+                    ErrorLog.log("Episode details", e)
+                    null
                 }
             }
         }

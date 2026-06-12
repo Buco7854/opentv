@@ -57,6 +57,10 @@ class XtreamEpisode(
     val season: Int,
     val episodeNum: Int,
     val containerExtension: String,
+    val image: String? = null,
+    val plot: String? = null,
+    val durationSecs: Int? = null,
+    val airDate: String? = null,
 )
 
 class XtreamVodInfo(
@@ -274,6 +278,14 @@ object Xtream {
                     val ep = array.optJSONObject(i) ?: continue
                     val id = ep.optString("id")
                     if (id.isBlank()) continue
+                    val info = ep.optJSONObject("info")
+                    // duration comes as seconds ("duration_secs") or "HH:MM:SS"
+                    val durationSecs = info?.optInt("duration_secs", 0)?.takeIf { it > 0 }
+                        ?: info?.optString("duration")?.split(':')
+                            ?.mapNotNull { it.toIntOrNull() }
+                            ?.takeIf { it.size == 3 }
+                            ?.let { (h, m, s) -> h * 3600 + m * 60 + s }
+                            ?.takeIf { it > 0 }
                     episodes.add(
                         XtreamEpisode(
                             episodeId = id,
@@ -281,6 +293,11 @@ object Xtream {
                             season = ep.optInt("season", seasonHint ?: 1),
                             episodeNum = ep.optInt("episode_num", i + 1),
                             containerExtension = ep.optString("container_extension").ifBlank { "mp4" },
+                            image = info?.optString("movie_image")?.takeIf { it.isNotBlank() },
+                            plot = info?.optString("plot")?.takeIf { it.isNotBlank() },
+                            durationSecs = durationSecs,
+                            airDate = info?.optString("releasedate")?.takeIf { it.isNotBlank() }
+                                ?: info?.optString("air_date")?.takeIf { it.isNotBlank() },
                         )
                     )
                 }
