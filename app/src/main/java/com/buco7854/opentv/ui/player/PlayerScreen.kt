@@ -122,6 +122,9 @@ fun PlayerScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var nowNext by remember { mutableStateOf<Pair<String, String?>?>(null) }
     var showGuide by remember { mutableStateOf(false) }
+    // Runtime live detection from the actual stream (dynamic media window) -
+    // far more reliable than guessing from the URL/extension.
+    var isLiveStream by remember(url) { mutableStateOf(false) }
     var showSubtitleTracks by remember { mutableStateOf(false) }
     var showAudioTracks by remember { mutableStateOf(false) }
     var showSpeed by remember { mutableStateOf(false) }
@@ -190,6 +193,10 @@ fun PlayerScreen(
                 ErrorLog.log("Playback: $title", playbackError)
                 val cause = playbackError.cause?.message?.let { ": ${ErrorLog.redact(it)}" } ?: ""
                 error = playbackError.errorCodeName + cause
+            }
+
+            override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
+                isLiveStream = player.isCurrentMediaItemDynamic || player.isCurrentMediaItemLive
             }
         }
         player.addListener(listener)
@@ -353,8 +360,11 @@ fun PlayerScreen(
                 IconButton(onClick = { showAudioTracks = true }) {
                     Icon(Icons.Rounded.Audiotrack, contentDescription = "Audio track", tint = Color.White)
                 }
-                IconButton(onClick = { showSpeed = true }) {
-                    Icon(Icons.Rounded.Speed, contentDescription = "Playback speed", tint = Color.White)
+                // Speed makes no sense on live streams (they'd drift or stall).
+                if (!isLiveStream) {
+                    IconButton(onClick = { showSpeed = true }) {
+                        Icon(Icons.Rounded.Speed, contentDescription = "Playback speed", tint = Color.White)
+                    }
                 }
                 IconButton(onClick = { showStyle = true }) {
                     Icon(Icons.Rounded.Tune, contentDescription = "Subtitle appearance", tint = Color.White)

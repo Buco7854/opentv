@@ -59,6 +59,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.buco7854.opentv.data.db.PlaylistEntity
+import com.buco7854.opentv.data.xtream.Xtream
+import com.buco7854.opentv.data.xtream.XtreamCredentials
 import com.buco7854.opentv.ui.components.focusHighlight
 import com.buco7854.opentv.ui.theme.Mint
 import com.buco7854.opentv.ui.theme.Periwinkle
@@ -273,6 +275,7 @@ private fun AddPlaylistDialog(
     var server by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var xtreamSuggestion by remember { mutableStateOf<XtreamCredentials?>(null) }
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) onAddFile(name, uri)
@@ -357,7 +360,13 @@ private fun AddPlaylistDialog(
                         0 -> if (server.isNotBlank() && username.isNotBlank() && password.isNotBlank()) {
                             onAddXtream(name, server, username, password)
                         }
-                        1 -> if (url.isNotBlank()) onAddUrl(name, url, epg)
+                        1 -> if (url.isNotBlank()) {
+                            // get.php URLs carry an Xtream login: offer the
+                            // better integration before falling back to M3U.
+                            val creds = Xtream.detect(url.trim())
+                            if (creds != null) xtreamSuggestion = creds
+                            else onAddUrl(name, url, epg)
+                        }
                         else -> filePicker.launch(arrayOf("*/*"))
                     }
                 },
@@ -365,4 +374,31 @@ private fun AddPlaylistDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+
+    xtreamSuggestion?.let { creds ->
+        AlertDialog(
+            onDismissRequest = { xtreamSuggestion = null },
+            title = { Text("Xtream account detected") },
+            text = {
+                Text(
+                    "This M3U URL is served by an Xtream panel (${creds.base}). Using the " +
+                        "panel's API instead gives exact Live/Movies/Series categories, the " +
+                        "series catalog with details, catch-up and automatic EPG — no " +
+                        "classification guessing. Your login was read from the URL."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    xtreamSuggestion = null
+                    onAddXtream(name, creds.base, creds.user, creds.pass)
+                }) { Text("Use Xtream") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    xtreamSuggestion = null
+                    onAddUrl(name, url, epg)
+                }) { Text("Keep M3U") }
+            },
+        )
+    }
 }
