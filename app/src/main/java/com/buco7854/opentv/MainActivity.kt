@@ -20,6 +20,7 @@ import com.buco7854.opentv.ui.downloads.DownloadsScreen
 import com.buco7854.opentv.ui.home.HomeScreen
 import com.buco7854.opentv.ui.player.PlayerScreen
 import com.buco7854.opentv.ui.search.SearchScreen
+import com.buco7854.opentv.ui.settings.SettingsScreen
 import com.buco7854.opentv.ui.theme.OpenTvTheme
 
 class MainActivity : ComponentActivity() {
@@ -43,6 +44,7 @@ object Routes {
         "player?u=${Uri.encode(url)}&t=${Uri.encode(title)}&p=$playlistId&c=${Uri.encode(tvgId ?: "")}"
     const val DOWNLOADS = "downloads"
     const val LOG = "log"
+    const val SETTINGS = "settings"
     const val HOME = "home"
 }
 
@@ -55,10 +57,14 @@ fun AppNav() {
                 onOpenPlaylist = { nav.navigate(Routes.browse(it)) },
                 onOpenDownloads = { nav.navigate(Routes.DOWNLOADS) },
                 onOpenLog = { nav.navigate(Routes.LOG) },
+                onOpenSettings = { nav.navigate(Routes.SETTINGS) },
             )
         }
         composable(Routes.LOG) {
             LogScreen(onBack = { nav.popBackStack() })
+        }
+        composable(Routes.SETTINGS) {
+            SettingsScreen(onBack = { nav.popBackStack() })
         }
         composable(
             route = "browse/{playlistId}",

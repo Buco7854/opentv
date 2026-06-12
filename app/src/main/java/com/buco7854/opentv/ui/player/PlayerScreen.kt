@@ -27,8 +27,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Slider
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -46,9 +44,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -64,6 +60,7 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -73,8 +70,10 @@ import androidx.media3.ui.PlayerView
 import androidx.media3.ui.SubtitleView
 import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.data.net.Http
+import com.buco7854.opentv.data.prefs.PlayerSettings
 import com.buco7854.opentv.data.prefs.SubtitleStyle
 import com.buco7854.opentv.diag.ErrorLog
+import com.buco7854.opentv.ui.components.SubtitleStyleControls
 import com.buco7854.opentv.ui.theme.Mint
 import kotlinx.coroutines.launch
 import java.text.DateFormat
@@ -106,17 +105,35 @@ fun PlayerScreen(
     var nowNext by remember { mutableStateOf<Pair<String, String?>?>(null) }
     var showTracks by remember { mutableStateOf(false) }
     var showStyle by remember { mutableStateOf(false) }
-    var resizeMode by remember { mutableIntStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
     var playerView by remember { mutableStateOf<PlayerView?>(null) }
 
-    val subtitleStyle by OpenTvApp.graph.playerPrefs.subtitleStyle
-        .collectAsState(initial = SubtitleStyle())
+    val settingsState by OpenTvApp.graph.playerPrefs.settings.collectAsState(initial = null)
+    // Wait for the (near-instant) first DataStore emission so the player is
+    // built once, with the user's settings, instead of being rebuilt mid-play.
+    val settings = settingsState ?: run {
+        Box(Modifier.fillMaxSize().background(Color.Black))
+        return
+    }
+    val buildSettings = remember { settings }
+    var resizeMode by remember { mutableIntStateOf(buildSettings.resizeMode) }
 
     val player = remember(url) {
         val httpFactory = OkHttpDataSource.Factory(Http.ok).setUserAgent(Http.USER_AGENT)
         val dataSourceFactory = DefaultDataSource.Factory(context, httpFactory)
-        ExoPlayer.Builder(context, DefaultRenderersFactory(context))
+        val renderersFactory = DefaultRenderersFactory(context)
+            .setEnableDecoderFallback(buildSettings.decoderFallback)
+        val loadControl = when (buildSettings.bufferPreset) {
+            PlayerSettings.BUFFER_FAST_START ->
+                DefaultLoadControl.Builder().setBufferDurationsMs(10_000, 30_000, 1_000, 2_000).build()
+            PlayerSettings.BUFFER_STABLE ->
+                DefaultLoadControl.Builder().setBufferDurationsMs(30_000, 120_000, 2_500, 5_000).build()
+            else -> DefaultLoadControl()
+        }
+        ExoPlayer.Builder(context, renderersFactory)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+            .setLoadControl(loadControl)
+            .setSeekBackIncrementMs(buildSettings.seekSeconds * 1000L)
+            .setSeekForwardIncrementMs(buildSettings.seekSeconds * 1000L)
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
@@ -127,6 +144,10 @@ fun PlayerScreen(
             .setHandleAudioBecomingNoisy(true)
             .build()
             .apply {
+                trackSelectionParameters = trackSelectionParameters.buildUpon()
+                    .setPreferredAudioLanguage(buildSettings.preferredAudioLang.ifEmpty { null })
+                    .setPreferredTextLanguage(buildSettings.preferredTextLang.ifEmpty { null })
+                    .build()
                 setMediaItem(MediaItem.fromUri(url))
                 playWhenReady = true
                 prepare()
@@ -175,8 +196,8 @@ fun PlayerScreen(
     }
 
     // Re-apply persisted subtitle styling whenever it changes.
-    LaunchedEffect(playerView, subtitleStyle) {
-        playerView?.subtitleView?.let { applySubtitleStyle(it, subtitleStyle) }
+    LaunchedEffect(playerView, settings.subtitleStyle) {
+        playerView?.subtitleView?.let { applySubtitleStyle(it, settings.subtitleStyle) }
     }
 
     BackHandler { onBack() }
@@ -232,6 +253,7 @@ fun PlayerScreen(
                     AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_FILL
                     else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
                 }
+                scope.launch { OpenTvApp.graph.playerPrefs.save(settings.copy(resizeMode = resizeMode)) }
             }) {
                 Icon(Icons.Rounded.AspectRatio, contentDescription = "Video scaling", tint = Color.White)
             }
@@ -249,8 +271,8 @@ fun PlayerScreen(
     }
     if (showStyle) {
         SubtitleStyleSheet(
-            style = subtitleStyle,
-            onChange = { scope.launch { OpenTvApp.graph.playerPrefs.save(it) } },
+            style = settings.subtitleStyle,
+            onChange = { scope.launch { OpenTvApp.graph.playerPrefs.save(settings.copy(subtitleStyle = it)) } },
             onDismiss = { showStyle = false },
         )
     }
@@ -422,58 +444,7 @@ private fun SubtitleStyleSheet(
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
             SheetHeading("Subtitle appearance")
-
-            // Live preview approximating how subtitles will render.
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .background(Color.Black)
-                    .padding(vertical = 18.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    "Preview subtitle",
-                    color = Color.White,
-                    fontSize = (16 * style.scale).sp,
-                    fontWeight = if (style.bold) FontWeight.Bold else FontWeight.Normal,
-                    modifier = if (style.background) {
-                        Modifier.background(Color.Black.copy(alpha = 0.7f)).padding(horizontal = 6.dp)
-                    } else Modifier,
-                )
-            }
-
-            Spacer(Modifier.height(16.dp))
-            Text("Size · ${(style.scale * 100).toInt()}%", style = MaterialTheme.typography.labelLarge)
-            Slider(
-                value = style.scale,
-                onValueChange = { onChange(SubtitleStyle(it, style.background, style.bold)) },
-                valueRange = 0.5f..2f,
-                steps = 5,
-            )
-
-            Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                FilterChip(
-                    selected = !style.background,
-                    onClick = { onChange(SubtitleStyle(style.scale, false, style.bold)) },
-                    label = { Text("Outline") },
-                    modifier = Modifier.padding(end = 8.dp),
-                )
-                FilterChip(
-                    selected = style.background,
-                    onClick = { onChange(SubtitleStyle(style.scale, true, style.bold)) },
-                    label = { Text("Background") },
-                )
-            }
-
-            Spacer(Modifier.height(12.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Bold text", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                Switch(
-                    checked = style.bold,
-                    onCheckedChange = { onChange(SubtitleStyle(style.scale, style.background, it)) },
-                )
-            }
+            SubtitleStyleControls(style = style, onChange = onChange)
         }
     }
 }

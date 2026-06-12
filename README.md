@@ -30,6 +30,10 @@ Media3/ExoPlayer and Room.
   "subtitles off" and playback speed. Subtitle appearance is configurable — size
   (50–200%), outline vs. background style, bold — with a live preview, persisted
   across sessions. A scaling button cycles Fit / Zoom / Stretch.
+- **Player settings** (gear icon on home) — preferred audio & subtitle language
+  (auto-applied when a stream has a matching track), seek step (5/10/30 s),
+  buffering profile (fast start / balanced / stable), software decoder fallback,
+  default video scaling, and subtitle appearance. All persisted.
 - **Basic EPG (XMLTV)** — add an XMLTV URL (auto-detected from `url-tvg` when
   present); live channel lists show what's airing now with a progress bar, and a
   per-channel guide sheet shows the upcoming timeline. Gzipped EPG files supported.
