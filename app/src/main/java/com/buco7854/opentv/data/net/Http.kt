@@ -5,6 +5,7 @@ import okhttp3.Cache
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
+import java.io.BufferedInputStream
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
@@ -69,17 +70,18 @@ object Http {
         return FetchResult.Success(response, response.header("ETag"), response.header("Last-Modified"))
     }
 
-    /** Unwraps gzip for servers (and .gz files) that return compressed bodies. */
-    fun bodyStream(response: Response, url: String): InputStream {
-        val raw = response.body!!.byteStream()
-        val gzipped = response.header("Content-Encoding").equals("gzip", ignoreCase = true) ||
-            url.substringBefore('?').endsWith(".gz", ignoreCase = true)
-        return if (gzipped) {
-            try {
-                GZIPInputStream(raw)
-            } catch (_: IOException) {
-                raw // OkHttp may have already transparently decompressed it
-            }
-        } else raw
+    /**
+     * Unwraps gzip for servers and .gz files that return compressed bodies.
+     * Detection is by magic bytes (0x1f 0x8b) rather than headers: it covers
+     * `.gz` EPG files, Content-Encoding responses, and bodies OkHttp already
+     * decompressed, without ever mangling a plain-text stream.
+     */
+    fun bodyStream(response: Response): InputStream {
+        val raw = BufferedInputStream(response.body!!.byteStream())
+        raw.mark(2)
+        val first = raw.read()
+        val second = raw.read()
+        raw.reset()
+        return if (first == 0x1f && second == 0x8b) GZIPInputStream(raw) else raw
     }
 }

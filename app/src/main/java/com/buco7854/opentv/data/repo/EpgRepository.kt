@@ -5,7 +5,6 @@ import com.buco7854.opentv.data.db.ProgrammeEntity
 import com.buco7854.opentv.data.epg.XmltvParser
 import com.buco7854.opentv.data.net.Http
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -45,12 +44,12 @@ class EpgRepository(private val db: AppDatabase) {
                 is Http.FetchResult.Success -> result.response.use { response ->
                     db.epgDao().deleteForPlaylist(playlistId)
                     XmltvParser.parse(
-                        input = Http.bodyStream(response, epgUrl),
+                        input = Http.bodyStream(response),
                         playlistId = playlistId,
                         wantedChannelIds = wantedIds,
                         windowStartMs = now - WINDOW_BACK_MS,
                         windowEndMs = now + WINDOW_AHEAD_MS,
-                    ) { batch -> runBlocking { db.epgDao().insertAll(batch) } }
+                    ) { batch -> db.epgDao().insertAll(batch) }
                     db.playlistDao().update(
                         playlist.copy(
                             epgEtag = result.etag,

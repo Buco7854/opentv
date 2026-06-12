@@ -9,9 +9,15 @@ Media3/ExoPlayer and Room.
   `.m3u`/`.m3u8` file from device storage.
 - **Categories & search** — `group-title` tags become browsable folders, split into
   **Live / Movies / Series** tabs. A global search bar scans every category at once.
-- **Smart VOD detection** — entries are classified by Xtream-style URL segments
-  (`/live/`, `/movie/`, `/series/`), file extension, and `SxxExx` patterns in titles,
-  so series episodes are grouped per show and sorted by season/episode.
+- **Smart VOD detection** — M3U is a flat format, so content type is always a guess;
+  OpenTV layers signals in order of reliability instead of trusting the file extension
+  alone: Xtream URL segments (`/live/`, `/movie/`, `/series/`) first, then episode
+  markers in titles (`S01E02`, `1x05`, `EP 7`, `Season 1 Episode 2` — these beat a
+  `.ts` extension, so series served as TS streams don't pollute live TV), then
+  `group-title` keywords (SERIES/VOD/FILM/…), then extension, then a trailing year
+  tag. Decorative separator rows (`#### SPORTS ####`) are dropped instead of being
+  counted as channels. Episodes are grouped per show and sorted by season/episode.
+  The classifier is covered by unit tests (`ContentClassifierTest`).
 - **VOD downloads** — save movies and episodes to local storage for offline viewing,
   with resume support, progress notifications, and a downloads manager.
 - **Connection monitoring** — for Xtream-based playlists the app reads
@@ -50,6 +56,17 @@ frugal with requests:
 ```
 
 Requires JDK 17+ and the Android SDK (platform 35).
+
+## Security notes
+
+- Cleartext HTTP is allowed (`usesCleartextTraffic`) because the majority of IPTV
+  providers only serve plain HTTP. Use an HTTPS playlist URL when your provider
+  offers one.
+- Xtream credentials (parsed from the playlist URL) are stored only in the app's
+  private database; `allowBackup` is disabled so they are never copied into cloud
+  device backups.
+- Downloads are written to app-specific external storage (no storage permissions
+  needed), with file names sanitized from playlist-controlled titles and URLs.
 
 ## Notes
 

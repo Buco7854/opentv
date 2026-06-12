@@ -32,8 +32,9 @@ interface PlaylistDao {
 
 @Dao
 interface ChannelDao {
+    /** Blocking on purpose: called in batches from streaming parsers already on Dispatchers.IO. */
     @Insert
-    suspend fun insertAll(channels: List<ChannelEntity>)
+    fun insertAll(channels: List<ChannelEntity>)
 
     @Query("DELETE FROM channels WHERE playlistId = :playlistId")
     suspend fun deleteForPlaylist(playlistId: Long)
@@ -82,8 +83,9 @@ interface ChannelDao {
 
 @Dao
 interface EpgDao {
+    /** Blocking on purpose: called in batches from streaming parsers already on Dispatchers.IO. */
     @Insert
-    suspend fun insertAll(programmes: List<ProgrammeEntity>)
+    fun insertAll(programmes: List<ProgrammeEntity>)
 
     @Query("DELETE FROM programmes WHERE playlistId = :playlistId")
     suspend fun deleteForPlaylist(playlistId: Long)

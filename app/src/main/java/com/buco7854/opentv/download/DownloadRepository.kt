@@ -24,8 +24,14 @@ class DownloadRepository(private val context: Context, private val db: AppDataba
             context.getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: context.filesDir,
             "OpenTV"
         )
-        val extension = channel.url.substringBefore('?').substringAfterLast('.', "mp4").take(5)
-        val safeName = channel.name.replace(Regex("""[\\/:*?"<>|]"""), "_").take(120)
+        // Extension must come from the last path segment only, and be sanitized -
+        // otherwise a URL like "http://host/vod/123" would yield slashes in the
+        // "extension" and the file would land outside the downloads directory.
+        val lastSegment = channel.url.substringBefore('?').substringBefore('#').substringAfterLast('/')
+        val extension = lastSegment.substringAfterLast('.', "")
+            .filter { it.isLetterOrDigit() }.take(5).ifEmpty { "mp4" }
+        val safeName = channel.name.map { if (it.isLetterOrDigit() || it in " ._-()[]") it else '_' }
+            .joinToString("").trim().take(120).ifEmpty { "video" }
         return File(dir, "$safeName.$extension")
     }
 

@@ -5,7 +5,6 @@ import android.net.Uri
 import com.buco7854.opentv.data.db.AppDatabase
 import com.buco7854.opentv.data.db.ChannelEntity
 import com.buco7854.opentv.data.db.PlaylistEntity
-import com.buco7854.opentv.data.m3u.M3uEntry
 import com.buco7854.opentv.data.m3u.M3uParser
 import com.buco7854.opentv.data.net.Http
 import com.buco7854.opentv.data.xtream.Xtream
@@ -80,7 +79,7 @@ class PlaylistRepository(private val db: AppDatabase) {
                 }
                 is Http.FetchResult.Success -> result.response.use { response ->
                     var epgFromFile: String? = null
-                    val reader = BufferedReader(InputStreamReader(Http.bodyStream(response, url)))
+                    val reader = BufferedReader(InputStreamReader(Http.bodyStream(response)))
                     db.channelDao().deleteForPlaylist(playlistId)
                     val count = ingest(playlistId, reader) { epgFromFile = it }
                     db.playlistDao().update(
@@ -97,24 +96,19 @@ class PlaylistRepository(private val db: AppDatabase) {
         }
     }
 
-    /** Streams entries into Room in batches so huge playlists stay cheap. */
-    private suspend fun ingest(
+    /**
+     * Streams entries straight from the reader into Room in batches of 500, so a
+     * 50k-entry playlist is never held in memory in full. Must be called on
+     * Dispatchers.IO (the DAO insert is blocking).
+     */
+    private fun ingest(
         playlistId: Long,
         reader: BufferedReader,
         onEpgUrl: (String?) -> Unit,
     ): Int {
         val batch = ArrayList<ChannelEntity>(500)
         var position = 0
-        suspend fun flush() {
-            if (batch.isNotEmpty()) {
-                db.channelDao().insertAll(ArrayList(batch))
-                batch.clear()
-            }
-        }
-        // M3uParser's callback is synchronous; collect entries then flush in chunks.
-        val pending = ArrayList<M3uEntry>(500)
-        M3uParser.parse(reader, onHeader = { onEpgUrl(it.epgUrl) }) { pending.add(it) }
-        for (entry in pending) {
+        M3uParser.parse(reader, onHeader = { onEpgUrl(it.epgUrl) }) { entry ->
             batch.add(
                 ChannelEntity(
                     playlistId = playlistId,
@@ -130,9 +124,12 @@ class PlaylistRepository(private val db: AppDatabase) {
                     position = position++,
                 )
             )
-            if (batch.size >= 500) flush()
+            if (batch.size >= 500) {
+                db.channelDao().insertAll(ArrayList(batch))
+                batch.clear()
+            }
         }
-        flush()
+        if (batch.isNotEmpty()) db.channelDao().insertAll(batch)
         return position
     }
 

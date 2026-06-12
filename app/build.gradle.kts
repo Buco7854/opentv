@@ -62,4 +62,5 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.work.runtime.ktx)
     implementation(libs.datastore.preferences)
+    testImplementation(libs.junit)
 }

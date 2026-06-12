@@ -100,13 +100,8 @@ class BrowseViewModel(app: Application, val playlistId: Long) : AndroidViewModel
 
     fun refreshAccount(force: Boolean) {
         viewModelScope.launch {
-            playlist.value?.let { p ->
-                _account.value = graph.account.accountInfo(p, force) ?: _account.value
-            } ?: run {
-                graph.db.playlistDao().get(playlistId)?.let { p ->
-                    _account.value = graph.account.accountInfo(p, force)
-                }
-            }
+            val p = graph.db.playlistDao().get(playlistId) ?: return@launch
+            graph.account.accountInfo(p, force)?.let { _account.value = it }
         }
     }
 

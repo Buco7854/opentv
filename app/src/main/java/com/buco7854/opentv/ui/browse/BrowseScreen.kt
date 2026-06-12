@@ -1,6 +1,12 @@
 package com.buco7854.opentv.ui.browse
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -102,6 +108,21 @@ fun BrowseScreen(
     val snackbar = remember { SnackbarHostState() }
     var guideChannel by remember { mutableStateOf<ChannelEntity?>(null) }
 
+    // Downloads show a progress notification; on Android 13+ that needs a runtime grant.
+    val context = LocalContext.current
+    val notificationPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* download proceeds either way; the notification is just hidden if denied */ }
+    val download: (ChannelEntity) -> Unit = { channel ->
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        viewModel.download(channel)
+    }
+
     LaunchedEffect(message) {
         message?.let {
             snackbar.showSnackbar(it)
@@ -194,7 +215,7 @@ fun BrowseScreen(
                     channels = episodes,
                     nowAiring = emptyMap(),
                     onPlay = { onPlay(it.url, it.name, null) },
-                    onDownload = { viewModel.download(it) },
+                    onDownload = download,
                     onGuide = null,
                 )
 
@@ -202,7 +223,7 @@ fun BrowseScreen(
                     channels = channels,
                     nowAiring = if (tab == ChannelKind.LIVE) nowAiring else emptyMap(),
                     onPlay = { onPlay(it.url, it.name, it.tvgId) },
-                    onDownload = if (tab == ChannelKind.MOVIE) ({ viewModel.download(it) }) else null,
+                    onDownload = if (tab == ChannelKind.MOVIE) download else null,
                     onGuide = if (tab == ChannelKind.LIVE) ({ guideChannel = it }) else null,
                 )
             }
