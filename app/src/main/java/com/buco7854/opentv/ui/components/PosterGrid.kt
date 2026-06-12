@@ -33,6 +33,8 @@ class PosterItem(
     val image: String?,
     val title: String,
     val subtitle: String?,
+    /** Quality tags rendered as a badge over the poster (e.g. "4K"). */
+    val tags: List<String> = emptyList(),
 )
 
 /** Portrait-card grid: the alternative to row lists for movies and series. */
@@ -80,6 +82,11 @@ fun PosterGrid(
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.fillMaxSize(),
                             )
+                        }
+                        item.tags.firstOrNull()?.let { tag ->
+                            Box(Modifier.align(Alignment.TopEnd).padding(6.dp)) {
+                                QualityBadge(tag)
+                            }
                         }
                     }
                     Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {

@@ -28,6 +28,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.ViewList
 import androidx.compose.material.icons.rounded.CalendarMonth
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.MoreVert
@@ -42,6 +43,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -68,9 +70,11 @@ import com.buco7854.opentv.data.db.ChannelKind
 import com.buco7854.opentv.data.db.DownloadEntity
 import com.buco7854.opentv.data.db.ProgrammeEntity
 import com.buco7854.opentv.data.db.XtreamSeriesEntity
+import com.buco7854.opentv.ui.components.BadgeRow
 import com.buco7854.opentv.ui.components.ChannelLogo
 import com.buco7854.opentv.ui.components.DownloadStateIcon
 import com.buco7854.opentv.ui.components.FavoriteIcon
+import com.buco7854.opentv.ui.components.mediaTags
 import com.buco7854.opentv.ui.components.PosterGrid
 import com.buco7854.opentv.ui.components.PosterItem
 import com.buco7854.opentv.ui.components.kindIcon
@@ -87,6 +91,8 @@ import java.util.Locale
 @Composable
 fun BrowseScreen(
     playlistId: Long,
+    initialTab: Int? = null,
+    initialGroup: String? = null,
     onBack: () -> Unit,
     onSearch: () -> Unit,
     onPlay: (url: String, title: String, tvgId: String?) -> Unit,
@@ -95,6 +101,12 @@ fun BrowseScreen(
     onOpenXtreamSeries: (seriesId: Long) -> Unit,
 ) {
     val viewModel = playlistViewModel(playlistId, ::BrowseViewModel)
+
+    // Deep link from search ("open this category"): applied once on entry.
+    LaunchedEffect(Unit) {
+        if (initialTab != null) viewModel.selectTab(initialTab)
+        if (initialGroup != null) viewModel.group.value = initialGroup
+    }
 
     val playlist by viewModel.playlist.collectAsState()
     val tab by viewModel.tab.collectAsState()
@@ -273,7 +285,9 @@ fun BrowseScreen(
                     }
 
                 tab == ChannelKind.MOVIE && gridView -> PosterGrid(
-                    items = channels.map { PosterItem(it.id.toString(), it.logo, it.name, null) },
+                    items = channels.map {
+                        PosterItem(it.id.toString(), it.logo, it.name, null, tags = mediaTags(it.name, 1))
+                    },
                     fallback = kindIcon(ChannelKind.MOVIE),
                     onClick = { onOpenMovie(it.toLong()) },
                 )
@@ -396,11 +410,38 @@ private fun GroupList(
         EmptyState("Nothing here yet", "This playlist has no items of this type.")
         return
     }
-    LazyColumn(
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        items(groups, key = { it.groupTitle }) { groupCount ->
+    // Providers often ship hundreds of categories; a local filter beats scrolling.
+    var filter by remember { mutableStateOf("") }
+    val shown = if (filter.isBlank()) groups
+    else groups.filter { it.groupTitle.contains(filter, ignoreCase = true) }
+
+    Column {
+        if (groups.size > 8) {
+            OutlinedTextField(
+                value = filter,
+                onValueChange = { filter = it },
+                placeholder = { Text("Filter categories…") },
+                leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                trailingIcon = {
+                    if (filter.isNotEmpty()) {
+                        IconButton(onClick = { filter = "" }) {
+                            Icon(Icons.Rounded.Close, contentDescription = "Clear")
+                        }
+                    }
+                },
+                singleLine = true,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .padding(top = 12.dp),
+            )
+        }
+        LazyColumn(
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            items(shown, key = { it.groupTitle }) { groupCount ->
             Card(
                 onClick = { onSelect(groupCount.groupTitle) },
                 shape = RoundedCornerShape(16.dp),
@@ -445,6 +486,7 @@ private fun GroupList(
                     }
                 }
             }
+        }
         }
     }
 }
@@ -598,12 +640,20 @@ private fun ChannelRow(
             Column(Modifier.weight(1f)) {
                 val episodeTag = if (channel.season != null && channel.episode != null)
                     "S%02dE%02d · ".format(channel.season, channel.episode) else ""
-                Text(
-                    episodeTag + channel.name,
-                    style = MaterialTheme.typography.titleSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        episodeTag + channel.name,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    val tags = mediaTags(channel.name, 1)
+                    if (tags.isNotEmpty()) {
+                        Spacer(Modifier.width(6.dp))
+                        BadgeRow(tags)
+                    }
+                }
                 if (airing != null) {
                     Spacer(Modifier.height(2.dp))
                     Text(

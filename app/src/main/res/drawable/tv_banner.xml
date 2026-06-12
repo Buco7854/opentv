@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+    <path android:pathData="M0,0 h320 v180 h-320 z" android:fillColor="#0A0D18" />
+    <!-- Rounded TV frame -->
+    <path
+        android:pathData="M118,58 h84 a10,10 0 0 1 10,10 v44 a10,10 0 0 1 -10,10 h-84 a10,10 0 0 1 -10,-10 v-44 a10,10 0 0 1 10,-10 z"
+        android:strokeColor="#8FA8FF"
+        android:strokeWidth="6"
+        android:fillColor="#1A2036" />
+    <!-- Antenna -->
+    <path
+        android:pathData="M146,40 L160,58 L174,40"
+        android:strokeColor="#8FA8FF"
+        android:strokeWidth="6"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+    <!-- Play triangle -->
+    <path
+        android:pathData="M150,74 L174,90 L150,106 Z"
+        android:fillColor="#5BE3B5" />
+</vector>

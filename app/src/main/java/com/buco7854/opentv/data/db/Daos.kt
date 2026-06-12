@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.Flow
 
 data class GroupCount(val groupTitle: String, val count: Int)
 data class SeriesGroup(val seriesKey: String, val count: Int, val logo: String?, val groupTitle: String)
+data class GroupHit(val groupTitle: String, val kind: Int, val count: Int)
 
 @Dao
 interface PlaylistDao {
@@ -76,6 +77,13 @@ interface ChannelDao {
             "ORDER BY kind, name LIMIT 400"
     )
     suspend fun search(playlistId: Long, query: String): List<ChannelEntity>
+
+    @Query(
+        "SELECT groupTitle, kind, COUNT(*) as count FROM channels WHERE playlistId = :playlistId " +
+            "AND groupTitle LIKE '%' || :query || '%' ESCAPE '\\' " +
+            "GROUP BY groupTitle, kind ORDER BY count DESC LIMIT 30"
+    )
+    suspend fun searchGroups(playlistId: Long, query: String): List<GroupHit>
 
     @Query("SELECT COUNT(*) FROM channels WHERE playlistId = :playlistId AND kind = :kind")
     fun observeCount(playlistId: Long, kind: Int): Flow<Int>
@@ -161,6 +169,13 @@ interface XtreamSeriesDao {
             "WHERE playlistId = :playlistId AND seriesId = :seriesId"
     )
     suspend fun setEpisodesFetched(playlistId: Long, seriesId: Long, fetchedAtMs: Long)
+
+    @Query(
+        "SELECT categoryName as groupTitle, 2 as kind, COUNT(*) as count FROM xtream_series " +
+            "WHERE playlistId = :playlistId AND categoryName LIKE '%' || :query || '%' ESCAPE '\\' " +
+            "GROUP BY categoryName ORDER BY count DESC LIMIT 20"
+    )
+    suspend fun searchCategories(playlistId: Long, query: String): List<GroupHit>
 }
 
 @Dao

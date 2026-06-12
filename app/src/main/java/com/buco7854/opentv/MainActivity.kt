@@ -42,7 +42,8 @@ class MainActivity : ComponentActivity() {
 }
 
 object Routes {
-    fun browse(playlistId: Long) = "browse/$playlistId"
+    fun browse(playlistId: Long, tab: Int? = null, group: String? = null) =
+        "browse/$playlistId?t=${tab ?: -1}&g=${Uri.encode(group ?: "")}"
     fun search(playlistId: Long) = "search/$playlistId"
     fun movie(channelId: Long) = "movie/$channelId"
     fun account(playlistId: Long) = "account/$playlistId"
@@ -85,12 +86,18 @@ fun AppNav() {
             SettingsScreen(onBack = { nav.popBackStack() })
         }
         composable(
-            route = "browse/{playlistId}",
-            arguments = listOf(navArgument("playlistId") { type = NavType.LongType }),
+            route = "browse/{playlistId}?t={t}&g={g}",
+            arguments = listOf(
+                navArgument("playlistId") { type = NavType.LongType },
+                navArgument("t") { type = NavType.IntType; defaultValue = -1 },
+                navArgument("g") { type = NavType.StringType; defaultValue = "" },
+            ),
         ) { entry ->
             val playlistId = entry.arguments!!.getLong("playlistId")
             BrowseScreen(
                 playlistId = playlistId,
+                initialTab = entry.arguments!!.getInt("t").takeIf { it >= 0 },
+                initialGroup = entry.arguments!!.getString("g").orEmpty().ifEmpty { null },
                 onBack = { nav.popBackStack() },
                 onSearch = { nav.navigate(Routes.search(playlistId)) },
                 onPlay = { url, title, tvgId -> nav.navigate(Routes.player(url, title, playlistId, tvgId)) },
@@ -149,6 +156,9 @@ fun AppNav() {
                 onOpenMovie = { nav.navigate(Routes.movie(it)) },
                 onOpenSeries = { nav.navigate(Routes.series(playlistId, it)) },
                 onOpenXtreamSeries = { nav.navigate(Routes.xtreamSeries(playlistId, it)) },
+                onOpenCategory = { kind, group ->
+                    nav.navigate(Routes.browse(playlistId, kind, group))
+                },
             )
         }
         composable(Routes.DOWNLOADS) {

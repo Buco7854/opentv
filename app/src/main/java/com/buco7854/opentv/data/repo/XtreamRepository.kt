@@ -6,6 +6,8 @@ import com.buco7854.opentv.data.db.ChannelKind
 import com.buco7854.opentv.data.db.MetadataEntity
 import com.buco7854.opentv.data.db.PlaylistEntity
 import com.buco7854.opentv.data.db.XtreamSeriesEntity
+import com.buco7854.opentv.data.meta.castFromNames
+import com.buco7854.opentv.data.meta.encodeCast
 import com.buco7854.opentv.data.xtream.Xtream
 import com.buco7854.opentv.data.xtream.XtreamCredentials
 import com.buco7854.opentv.diag.ErrorLog
@@ -105,6 +107,7 @@ class XtreamRepository(private val db: AppDatabase) {
                 overview = info?.plot,
                 rating = info?.rating,
                 castNames = credits,
+                castJson = castFromNames(info?.cast).takeIf { it.isNotEmpty() }?.let { encodeCast(it) },
                 posterUrl = info?.image ?: channel.logo,
                 fetchedAtMs = now,
             )

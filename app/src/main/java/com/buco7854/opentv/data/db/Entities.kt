@@ -145,6 +145,8 @@ data class MetadataEntity(
     val overview: String? = null,
     val rating: Double? = null,
     val castNames: String? = null,
+    /** JSON cast list with photo urls (see data/meta/Cast.kt). */
+    val castJson: String? = null,
     val posterUrl: String? = null,
     val fetchedAtMs: Long,
 )

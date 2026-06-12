@@ -5,6 +5,7 @@ import com.buco7854.opentv.data.db.MetadataEntity
 import com.buco7854.opentv.data.meta.ITunesStore
 import com.buco7854.opentv.data.meta.TitleCleaner
 import com.buco7854.opentv.data.meta.TvMaze
+import com.buco7854.opentv.data.meta.encodeCast
 import com.buco7854.opentv.diag.ErrorLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -52,6 +53,7 @@ class MetadataRepository(private val db: AppDatabase) {
                         overview = info?.overview,
                         rating = info?.rating,
                         castNames = info?.credits,
+                        castJson = info?.castList?.takeIf { it.isNotEmpty() }?.let { encodeCast(it) },
                         posterUrl = info?.posterUrl,
                         fetchedAtMs = now,
                     )

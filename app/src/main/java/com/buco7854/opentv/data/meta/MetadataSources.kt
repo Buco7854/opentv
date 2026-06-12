@@ -49,6 +49,8 @@ class MetaInfo(
     /** Pre-labelled credits line, e.g. "Cast: A, B, C" or "Director: X". */
     val credits: String?,
     val posterUrl: String?,
+    /** Structured cast with photos when the source provides them. */
+    val castList: List<CastMember> = emptyList(),
 )
 
 private fun getJson(url: String): String {
@@ -79,27 +81,38 @@ object TvMaze {
             .optJSONObject(0)?.optJSONObject("show") ?: return null
 
         val id = show.optLong("id", -1)
-        val cast = if (id > 0) {
+        val cast: List<CastMember> = if (id > 0) {
             runCatching {
                 val people = JSONArray(getJson("https://api.tvmaze.com/shows/$id/cast"))
-                (0 until minOf(people.length(), 8))
-                    .mapNotNull { people.optJSONObject(it)?.optJSONObject("person")?.optString("name") }
-                    .filter { it.isNotBlank() }
-                    .joinToString(", ")
-                    .takeIf { it.isNotEmpty() }
-            }.getOrNull()
-        } else null
+                buildList {
+                    for (i in 0 until minOf(people.length(), 10)) {
+                        val person = people.optJSONObject(i)?.optJSONObject("person") ?: continue
+                        val name = person.optString("name")
+                        if (name.isBlank()) continue
+                        add(
+                            CastMember(
+                                name = name,
+                                photo = person.optJSONObject("image")
+                                    ?.optString("medium")?.takeIf { it.isNotBlank() },
+                            )
+                        )
+                    }
+                }.distinctBy { it.name }
+            }.getOrDefault(emptyList())
+        } else emptyList()
 
         return MetaInfo(
             title = show.optString("name").takeIf { it.isNotBlank() },
             year = show.optString("premiered").take(4).takeIf { it.length == 4 },
             overview = show.optString("summary").takeIf { it.isNotBlank() }?.stripHtml(),
             rating = show.optJSONObject("rating")?.optDouble("average", 0.0)?.takeIf { it > 0 },
-            credits = cast?.let { "Cast: $it" },
+            credits = cast.takeIf { it.isNotEmpty() }
+                ?.joinToString(", ") { it.name }?.let { "Cast: $it" },
             posterUrl = show.optJSONObject("image")?.let { image ->
                 image.optString("original").takeIf { it.isNotBlank() }
                     ?: image.optString("medium").takeIf { it.isNotBlank() }
             },
+            castList = cast,
         )
     }
 }

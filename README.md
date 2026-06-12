@@ -21,6 +21,13 @@ Media3/ExoPlayer and Room.
 - **Favorites** — heart anything (live channels, movies, series) from rows or
   detail pages; a "★ Favorites" group is pinned on top of each tab. Favorites
   are keyed by stable identity so they survive playlist refreshes.
+- **Cast with faces & quality badges** — series pages show a cast strip with
+  actor photos (TVMaze, keyless; panel casts shown as initials); quality tags
+  (4K/FHD/HDR/…) render as badges on rows, poster cards and detail pages.
+- **Category search & filter** — global search matches category names too
+  (tap to jump straight into the category), and long category lists get an
+  inline filter field.
+- **Android TV** — leanback launcher entry, TV banner, D-pad navigable.
 - **Categories & search** — `group-title` tags become browsable folders, split into
   **Live / Movies / Series** tabs. A global search bar scans every category at once.
 - **Smart VOD detection** — M3U is a flat format, so content type is always a guess;

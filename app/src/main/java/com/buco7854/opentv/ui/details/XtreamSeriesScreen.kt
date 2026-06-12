@@ -37,9 +37,11 @@ import androidx.compose.ui.unit.dp
 import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.data.db.DownloadStatus
 import com.buco7854.opentv.data.db.XtreamSeriesEntity
+import com.buco7854.opentv.data.meta.castFromNames
 import com.buco7854.opentv.data.repo.xtreamFavoriteKey
 import com.buco7854.opentv.data.repo.xtreamSeriesKey
 import com.buco7854.opentv.diag.ErrorLog
+import com.buco7854.opentv.ui.components.CastRow
 import com.buco7854.opentv.ui.components.FavoriteIcon
 import com.buco7854.opentv.ui.components.Pill
 import kotlinx.coroutines.launch
@@ -148,13 +150,16 @@ fun XtreamSeriesScreen(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                series?.castNames?.let {
-                    Spacer(Modifier.height(10.dp))
+                val cast = castFromNames(series?.castNames)
+                if (cast.isNotEmpty()) {
+                    Spacer(Modifier.height(14.dp))
                     Text(
-                        "Cast: $it",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        "Cast",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
                     )
+                    Spacer(Modifier.height(8.dp))
+                    CastRow(cast)
                 }
                 Spacer(Modifier.height(18.dp))
                 when {

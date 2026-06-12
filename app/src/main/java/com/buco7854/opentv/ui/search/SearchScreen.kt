@@ -44,11 +44,13 @@ import androidx.compose.runtime.LaunchedEffect
 import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.data.db.ChannelEntity
 import com.buco7854.opentv.data.db.ChannelKind
+import com.buco7854.opentv.data.db.GroupHit
 import com.buco7854.opentv.diag.ErrorLog
 import com.buco7854.opentv.ui.components.ChannelLogo
 import com.buco7854.opentv.ui.components.EmptyState
 import com.buco7854.opentv.ui.components.Pill
 import com.buco7854.opentv.ui.components.kindIcon
+import com.buco7854.opentv.ui.components.kindLabel
 import com.buco7854.opentv.ui.components.playlistViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
@@ -71,11 +73,13 @@ data class SeriesHit(
 )
 
 data class SearchResults(
+    val categories: List<GroupHit> = emptyList(),
     val live: List<ChannelEntity> = emptyList(),
     val movies: List<ChannelEntity> = emptyList(),
     val series: List<SeriesHit> = emptyList(),
 ) {
-    val isEmpty get() = live.isEmpty() && movies.isEmpty() && series.isEmpty()
+    val isEmpty
+        get() = categories.isEmpty() && live.isEmpty() && movies.isEmpty() && series.isEmpty()
 }
 
 @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
@@ -122,7 +126,12 @@ class SearchViewModel(app: Application, private val playlistId: Long) : AndroidV
                             xtreamSeriesId = it.seriesId,
                         )
                     }
+                // Categories match on the group title itself - the fast path
+                // when a playlist has hundreds of them.
+                val categories = (OpenTvApp.graph.db.channelDao().searchGroups(playlistId, escaped) +
+                    OpenTvApp.graph.db.xtreamSeriesDao().searchCategories(playlistId, escaped))
                 SearchResults(
+                    categories = categories,
                     live = rows.filter { it.kind == ChannelKind.LIVE },
                     movies = rows.filter { it.kind == ChannelKind.MOVIE },
                     series = xtreamSeries + m3uSeries,
@@ -144,6 +153,7 @@ fun SearchScreen(
     onOpenMovie: (channelId: Long) -> Unit,
     onOpenSeries: (seriesKey: String) -> Unit,
     onOpenXtreamSeries: (seriesId: Long) -> Unit,
+    onOpenCategory: (kind: Int, group: String) -> Unit,
 ) {
     val viewModel = playlistViewModel(playlistId, ::SearchViewModel)
     val query by viewModel.query.collectAsState()
@@ -195,6 +205,19 @@ fun SearchScreen(
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
+                    if (results.categories.isNotEmpty()) {
+                        item { SectionHeader("Categories") }
+                        items(results.categories, key = { "cat-${it.kind}-${it.groupTitle}" }) { hit ->
+                            ResultRow(
+                                title = hit.groupTitle,
+                                subtitle = "${hit.count} items",
+                                logo = null,
+                                kind = hit.kind,
+                                badge = kindLabel(hit.kind),
+                                onClick = { onOpenCategory(hit.kind, hit.groupTitle) },
+                            )
+                        }
+                    }
                     if (results.live.isNotEmpty()) {
                         item { SectionHeader("Live") }
                         items(results.live, key = { it.id }) { channel ->

@@ -64,10 +64,14 @@ import com.buco7854.opentv.data.db.DownloadEntity
 import com.buco7854.opentv.data.db.DownloadStatus
 import com.buco7854.opentv.data.db.FavoriteEntity
 import com.buco7854.opentv.data.db.MetadataEntity
+import com.buco7854.opentv.data.meta.decodeCast
+import com.buco7854.opentv.ui.components.BadgeRow
+import com.buco7854.opentv.ui.components.CastRow
 import com.buco7854.opentv.ui.components.ChannelLogo
 import com.buco7854.opentv.ui.components.DownloadStateIcon
 import com.buco7854.opentv.ui.components.FavoriteIcon
 import com.buco7854.opentv.ui.components.Pill
+import com.buco7854.opentv.ui.components.mediaTags
 import kotlinx.coroutines.launch
 
 private val YEAR_TAG = Regex("""\b(19|20)\d{2}\b""")
@@ -118,7 +122,7 @@ internal fun Poster(logo: String?, fallback: androidx.compose.ui.graphics.vector
 }
 
 @Composable
-private fun MetadataBlock(meta: MetadataEntity?) {
+internal fun MetadataBlock(meta: MetadataEntity?) {
     if (meta == null) return
     meta.overview?.let {
         Spacer(Modifier.height(14.dp))
@@ -130,14 +134,27 @@ private fun MetadataBlock(meta: MetadataEntity?) {
             overflow = TextOverflow.Ellipsis,
         )
     }
-    // Pre-labelled line: "Cast: A, B, C" (series) or "Director: X · Genre: Y" (movies).
-    meta.castNames?.let {
-        Spacer(Modifier.height(10.dp))
-        Text(
-            it,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+    val cast = decodeCast(meta.castJson)
+    if (cast.isNotEmpty()) {
+        Spacer(Modifier.height(14.dp))
+        Text("Cast", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.height(8.dp))
+        CastRow(cast)
+        // Non-cast credits (director, genre) still deserve a line.
+        meta.castNames?.takeIf { !it.startsWith("Cast:") }?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    } else {
+        // Pre-labelled line: "Cast: A, B, C" (series) or "Director: X · Genre: Y" (movies).
+        meta.castNames?.let {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -201,8 +218,12 @@ fun MovieDetailScreen(
                 Spacer(Modifier.height(18.dp))
                 Text(movie.name, style = MaterialTheme.typography.headlineMedium)
                 Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    metaChips(movie, meta).take(4).forEach { Pill(it) }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    metaChips(movie, meta).take(3).forEach { Pill(it) }
+                    BadgeRow(mediaTags(movie.name))
                 }
                 MetadataBlock(meta)
                 Spacer(Modifier.height(24.dp))
