@@ -1,4 +1,4 @@
-package com.buco7854.opentv.data.tmdb
+package com.buco7854.opentv.data.meta
 
 import org.junit.Assert.assertEquals
 import org.junit.Test

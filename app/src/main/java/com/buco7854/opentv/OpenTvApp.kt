@@ -20,7 +20,7 @@ class AppGraph(app: Application) {
     val account = AccountRepository()
     val downloads = DownloadRepository(app, db)
     val playerPrefs = PlayerPrefs(app)
-    val metadata = MetadataRepository(db, playerPrefs)
+    val metadata = MetadataRepository(db)
 }
 
 class OpenTvApp : Application() {

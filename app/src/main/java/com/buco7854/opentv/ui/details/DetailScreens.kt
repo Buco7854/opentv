@@ -107,31 +107,23 @@ private fun Poster(logo: String?, fallback: androidx.compose.ui.graphics.vector.
 }
 
 @Composable
-private fun MetadataBlock(meta: MetadataEntity?, tmdbKeyMissing: Boolean) {
-    if (meta != null) {
-        meta.overview?.let {
-            Spacer(Modifier.height(14.dp))
-            Text(
-                it,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 6,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        meta.castNames?.let {
-            Spacer(Modifier.height(10.dp))
-            Text("Cast", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-            Text(
-                it,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    } else if (tmdbKeyMissing) {
-        Spacer(Modifier.height(12.dp))
+private fun MetadataBlock(meta: MetadataEntity?) {
+    if (meta == null) return
+    meta.overview?.let {
+        Spacer(Modifier.height(14.dp))
         Text(
-            "Tip: add a free TMDB API key in Settings to show synopsis, rating and cast here.",
+            it,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 6,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+    // Pre-labelled line: "Cast: A, B, C" (series) or "Director: X · Genre: Y" (movies).
+    meta.castNames?.let {
+        Spacer(Modifier.height(10.dp))
+        Text(
+            it,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -147,7 +139,6 @@ fun MovieDetailScreen(
 ) {
     var channel by remember { mutableStateOf<ChannelEntity?>(null) }
     var meta by remember { mutableStateOf<MetadataEntity?>(null) }
-    val tmdbKey by OpenTvApp.graph.playerPrefs.tmdbApiKey.collectAsState(initial = null)
     val downloads by OpenTvApp.graph.downloads.downloads.collectAsState(initial = emptyList())
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -187,7 +178,7 @@ fun MovieDetailScreen(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     metaChips(movie, meta).take(4).forEach { Pill(it) }
                 }
-                MetadataBlock(meta, tmdbKeyMissing = tmdbKey != null && tmdbKey!!.isBlank())
+                MetadataBlock(meta)
                 Spacer(Modifier.height(24.dp))
                 Button(
                     onClick = { onPlay(movie.url, movie.name) },
@@ -260,7 +251,6 @@ fun SeriesDetailScreen(
         .observeEpisodes(playlistId, seriesKey)
         .collectAsState(initial = emptyList())
     var meta by remember { mutableStateOf<MetadataEntity?>(null) }
-    val tmdbKey by OpenTvApp.graph.playerPrefs.tmdbApiKey.collectAsState(initial = null)
     val downloads by OpenTvApp.graph.downloads.downloads.collectAsState(initial = emptyList())
     val downloadsByUrl = remember(downloads) {
         downloads.filter { it.status != DownloadStatus.CANCELLED && it.status != DownloadStatus.FAILED }
@@ -311,7 +301,7 @@ fun SeriesDetailScreen(
                     if (seasons.size > 1) Pill("${seasons.size} seasons")
                     meta?.rating?.let { Pill("★ %.1f".format(it)) }
                 }
-                MetadataBlock(meta, tmdbKeyMissing = tmdbKey != null && tmdbKey!!.isBlank())
+                MetadataBlock(meta)
                 Spacer(Modifier.height(18.dp))
                 if (seasons.isNotEmpty()) {
                     SeasonPicker(

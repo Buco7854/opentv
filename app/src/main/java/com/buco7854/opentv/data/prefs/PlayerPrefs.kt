@@ -32,11 +32,14 @@ data class PlayerSettings(
     /** Fall back to software decoders when the hardware codec fails. */
     val decoderFallback: Boolean = true,
     val bufferPreset: Int = BUFFER_BALANCED,
+    /** Simultaneous download transfers; DOWNLOADS_AUTO derives it from the provider's connection limit. */
+    val downloadLimit: Int = DOWNLOADS_AUTO,
 ) {
     companion object {
         const val BUFFER_FAST_START = 0
         const val BUFFER_BALANCED = 1
         const val BUFFER_STABLE = 2
+        const val DOWNLOADS_AUTO = 0
     }
 }
 
@@ -52,14 +55,7 @@ class PlayerPrefs(private val context: Context) {
         val RESIZE_MODE = intPreferencesKey("resize_mode")
         val DECODER_FALLBACK = booleanPreferencesKey("decoder_fallback")
         val BUFFER_PRESET = intPreferencesKey("buffer_preset")
-        val TMDB_KEY = stringPreferencesKey("tmdb_api_key")
-    }
-
-    /** User-supplied TMDB API key; "" disables metadata enrichment. */
-    val tmdbApiKey: Flow<String> = context.playerDataStore.data.map { it[Keys.TMDB_KEY] ?: "" }
-
-    suspend fun setTmdbApiKey(key: String) {
-        context.playerDataStore.edit { it[Keys.TMDB_KEY] = key.trim() }
+        val DOWNLOAD_LIMIT = intPreferencesKey("download_limit")
     }
 
     val settings: Flow<PlayerSettings> = context.playerDataStore.data.map { prefs ->
@@ -75,6 +71,7 @@ class PlayerPrefs(private val context: Context) {
             resizeMode = prefs[Keys.RESIZE_MODE] ?: 0,
             decoderFallback = prefs[Keys.DECODER_FALLBACK] ?: true,
             bufferPreset = prefs[Keys.BUFFER_PRESET] ?: PlayerSettings.BUFFER_BALANCED,
+            downloadLimit = prefs[Keys.DOWNLOAD_LIMIT] ?: PlayerSettings.DOWNLOADS_AUTO,
         )
     }
 
@@ -89,6 +86,7 @@ class PlayerPrefs(private val context: Context) {
             prefs[Keys.RESIZE_MODE] = settings.resizeMode
             prefs[Keys.DECODER_FALLBACK] = settings.decoderFallback
             prefs[Keys.BUFFER_PRESET] = settings.bufferPreset
+            prefs[Keys.DOWNLOAD_LIMIT] = settings.downloadLimit
         }
     }
 }

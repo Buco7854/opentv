@@ -19,8 +19,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Request
@@ -40,12 +38,6 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
         const val KEY_DOWNLOAD_ID = "download_id"
         const val CHANNEL_ID = "downloads"
 
-        /**
-         * One provider transfer at a time, app-wide: parallel downloads are a
-         * fast way to blow through a provider's connection limit.
-         */
-        private val transferMutex = Mutex()
-
         fun ensureNotificationChannel(context: Context) {
             if (Build.VERSION.SDK_INT >= 26) {
                 val manager = context.getSystemService(NotificationManager::class.java)
@@ -61,6 +53,35 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
     /** Thrown when playback starts on the host we're downloading from. */
     private class YieldToPlaybackException : IOException("Paused while streaming from this provider")
 
+    /** How many simultaneous transfers this download may share, and whether it
+     *  must yield to playback (no slot reserved for the player). */
+    private class GateConfig(val limit: Int, val yieldToPlayback: Boolean)
+
+    /**
+     * Connection budget. Auto mode asks the provider's own account API for
+     * max_connections and keeps one slot reserved for watching; a manual limit
+     * uses exactly that many slots but pauses while streaming from the same
+     * host, since no slot is reserved.
+     */
+    private suspend fun resolveGate(host: String?): GateConfig {
+        val preference = OpenTvApp.graph.playerPrefs.settings.first().downloadLimit
+        if (preference > 0) return GateConfig(limit = preference, yieldToPlayback = true)
+        if (host != null) {
+            val playlist = OpenTvApp.graph.db.playlistDao().getAll().firstOrNull {
+                it.xtreamBase?.toHttpUrlOrNull()?.host == host
+            }
+            if (playlist != null) {
+                // Served from the 60s cache when fresh - not a per-download request storm.
+                val info = OpenTvApp.graph.account.accountInfo(playlist)
+                if (info != null && info.maxConnections > 0) {
+                    return GateConfig(limit = maxOf(1, info.maxConnections - 1), yieldToPlayback = false)
+                }
+            }
+        }
+        // Unknown provider: be conservative.
+        return GateConfig(limit = 1, yieldToPlayback = true)
+    }
+
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val downloadId = inputData.getLong(KEY_DOWNLOAD_ID, -1)
         val item = dao.get(downloadId) ?: return@withContext Result.failure()
@@ -72,9 +93,11 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
             // Expedited/foreground may be unavailable; keep downloading in the background.
         }
 
-        // Connection-limit safety: never open a download connection to a
-        // provider the player is currently streaming from. Wait it out.
-        if (host != null && PlaybackMonitor.activeHost.value == host) {
+        val gate = resolveGate(host)
+
+        // Connection-limit safety: without a reserved playback slot, never open
+        // a download connection to a provider the player is streaming from.
+        if (gate.yieldToPlayback && host != null && PlaybackMonitor.activeHost.value == host) {
             runCatching { setForeground(waitingInfo(item.title)) }
             PlaybackMonitor.activeHost.first { it != host }
         }
@@ -83,7 +106,7 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
         file.parentFile?.mkdirs()
 
         try {
-            transferMutex.withLock {
+            DownloadGate.withSlot(gate.limit) {
                 val existing = if (file.exists()) file.length() else 0L
                 val requestBuilder = Request.Builder()
                     .url(item.url)
@@ -121,7 +144,9 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
                                 lastUpdate = now
                                 // Player started streaming from this provider:
                                 // yield the connection, resume later via Range.
-                                if (host != null && PlaybackMonitor.activeHost.value == host) {
+                                if (gate.yieldToPlayback && host != null &&
+                                    PlaybackMonitor.activeHost.value == host
+                                ) {
                                     throw YieldToPlaybackException()
                                 }
                                 dao.updateProgress(item.id, downloaded, total, DownloadStatus.RUNNING)

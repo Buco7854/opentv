@@ -22,7 +22,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -133,28 +132,17 @@ fun SettingsScreen(onBack: () -> Unit) {
                 )
             }
 
-            SectionTitle("Metadata (TMDB)")
-            val savedKey by prefs.tmdbApiKey.collectAsState(initial = null)
-            var keyDraft by remember { mutableStateOf<String?>(null) }
-            OutlinedTextField(
-                value = keyDraft ?: savedKey ?: "",
-                onValueChange = { keyDraft = it },
-                label = { Text("TMDB API key") },
-                singleLine = true,
-                trailingIcon = {
-                    TextButton(
-                        onClick = {
-                            keyDraft?.let { scope.launch { prefs.setTmdbApiKey(it) } }
-                            keyDraft = null
-                        },
-                        enabled = keyDraft != null && keyDraft != savedKey,
-                    ) { Text("Save") }
-                },
-                modifier = Modifier.fillMaxWidth(),
+            SectionTitle("Downloads")
+            Text("Simultaneous downloads", style = MaterialTheme.typography.labelLarge)
+            ChipRow(
+                options = listOf(PlayerSettings.DOWNLOADS_AUTO to "Auto", 1 to "1", 2 to "2", 3 to "3"),
+                selected = current.downloadLimit,
+                onSelect = { update(current.copy(downloadLimit = it)) },
             )
             Hint(
-                "Optional. A free API key from themoviedb.org enables synopsis, rating and " +
-                    "cast on movie and series pages. Lookups are cached for 30 days per title."
+                "Auto reads your provider's connection limit and keeps one slot free for " +
+                    "watching. With a manual value, downloads pause while you stream from the " +
+                    "same provider so you never exceed your plan's limit."
             )
 
             SectionTitle("Subtitle appearance")

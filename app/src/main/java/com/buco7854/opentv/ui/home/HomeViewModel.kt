@@ -76,12 +76,20 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Full refresh for one playlist: M3U list, EPG, and account status. */
     fun refresh(playlistId: Long) {
         viewModelScope.launch {
             _busy.value = true
             try {
                 graph.playlists.refresh(playlistId, force = true)
-                _message.value = "Playlist refreshed"
+                runCatching { graph.epg.refresh(playlistId, force = true) }
+                    .onFailure { ErrorLog.log("EPG refresh", it) }
+                graph.db.playlistDao().get(playlistId)?.let { playlist ->
+                    graph.account.accountInfo(playlist, force = true)?.let { info ->
+                        _accounts.value = _accounts.value + (playlistId to info)
+                    }
+                }
+                _message.value = "Playlist, guide and account refreshed"
             } catch (e: Exception) {
                 ErrorLog.log("Playlist refresh", e)
                 _message.value = "Refresh failed: ${ErrorLog.describe(e)}"
