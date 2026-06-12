@@ -11,17 +11,24 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AspectRatio
+import androidx.compose.material.icons.rounded.Audiotrack
 import androidx.compose.material.icons.rounded.ScreenRotation
+import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Subtitles
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -81,6 +88,7 @@ import com.buco7854.opentv.data.net.Http
 import com.buco7854.opentv.data.prefs.PlayerSettings
 import com.buco7854.opentv.data.prefs.SubtitleStyle
 import com.buco7854.opentv.diag.ErrorLog
+import com.buco7854.opentv.playback.PlaybackMonitor
 import com.buco7854.opentv.ui.components.SubtitleStyleControls
 import com.buco7854.opentv.ui.theme.Mint
 import kotlinx.coroutines.delay
@@ -112,7 +120,9 @@ fun PlayerScreen(
     val scope = rememberCoroutineScope()
     var error by remember { mutableStateOf<String?>(null) }
     var nowNext by remember { mutableStateOf<Pair<String, String?>?>(null) }
-    var showTracks by remember { mutableStateOf(false) }
+    var showSubtitleTracks by remember { mutableStateOf(false) }
+    var showAudioTracks by remember { mutableStateOf(false) }
+    var showSpeed by remember { mutableStateOf(false) }
     var showStyle by remember { mutableStateOf(false) }
     var playerView by remember { mutableStateOf<PlayerView?>(null) }
     var scaleHint by remember { mutableStateOf<String?>(null) }
@@ -181,7 +191,10 @@ fun PlayerScreen(
             }
         }
         player.addListener(listener)
+        // Let the download worker know this provider host is busy streaming.
+        PlaybackMonitor.playbackStarted(url)
         onDispose {
+            PlaybackMonitor.playbackStopped()
             player.removeListener(listener)
             player.release()
         }
@@ -274,67 +287,95 @@ fun PlayerScreen(
             )
         }
 
-        Row(
+        Column(
             Modifier
                 .fillMaxWidth()
                 .align(Alignment.TopStart)
                 .background(
-                    Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.65f), Color.Transparent))
+                    Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.7f), Color.Transparent))
+                )
+                // Keep the title and controls clear of the status bar / camera
+                // cutout - without this the first line is clipped on notched phones.
+                .windowInsetsPadding(
+                    WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
                 )
                 .padding(horizontal = 20.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
-                Text(title, style = MaterialTheme.typography.titleMedium, color = Color.White)
-                nowNext?.let { (now, next) ->
-                    Text(now, style = MaterialTheme.typography.bodySmall, color = Mint)
-                    next?.let {
-                        Text(it, style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.7f))
+            Text(title, style = MaterialTheme.typography.titleMedium, color = Color.White)
+            nowNext?.let { (now, next) ->
+                Text(now, style = MaterialTheme.typography.bodySmall, color = Mint)
+                next?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.7f))
+                }
+            }
+            error?.let {
+                Text(
+                    "Playback error: $it",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            Row {
+                IconButton(onClick = {
+                    val activity = context as? Activity
+                    val landscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+                    activity?.requestedOrientation =
+                        if (landscape) ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+                        else ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                }) {
+                    Icon(Icons.Rounded.ScreenRotation, contentDescription = "Rotate screen", tint = Color.White)
+                }
+                IconButton(onClick = {
+                    resizeMode = when (resizeMode) {
+                        AspectRatioFrameLayout.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                        AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+                        else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
                     }
+                    scaleHint = when (resizeMode) {
+                        AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> "Zoom"
+                        AspectRatioFrameLayout.RESIZE_MODE_FILL -> "Stretch"
+                        else -> "Fit"
+                    }
+                    scope.launch { OpenTvApp.graph.playerPrefs.save(settings.copy(resizeMode = resizeMode)) }
+                }) {
+                    Icon(Icons.Rounded.AspectRatio, contentDescription = "Video scaling", tint = Color.White)
                 }
-                error?.let {
-                    Text(
-                        "Playback error: $it",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
+                IconButton(onClick = { showSubtitleTracks = true }) {
+                    Icon(Icons.Rounded.Subtitles, contentDescription = "Subtitles", tint = Color.White)
                 }
-            }
-            IconButton(onClick = {
-                val activity = context as? Activity
-                val landscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-                activity?.requestedOrientation =
-                    if (landscape) ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
-                    else ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-            }) {
-                Icon(Icons.Rounded.ScreenRotation, contentDescription = "Rotate screen", tint = Color.White)
-            }
-            IconButton(onClick = {
-                resizeMode = when (resizeMode) {
-                    AspectRatioFrameLayout.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                    AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_FILL
-                    else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+                IconButton(onClick = { showAudioTracks = true }) {
+                    Icon(Icons.Rounded.Audiotrack, contentDescription = "Audio track", tint = Color.White)
                 }
-                scaleHint = when (resizeMode) {
-                    AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> "Zoom"
-                    AspectRatioFrameLayout.RESIZE_MODE_FILL -> "Stretch"
-                    else -> "Fit"
+                IconButton(onClick = { showSpeed = true }) {
+                    Icon(Icons.Rounded.Speed, contentDescription = "Playback speed", tint = Color.White)
                 }
-                scope.launch { OpenTvApp.graph.playerPrefs.save(settings.copy(resizeMode = resizeMode)) }
-            }) {
-                Icon(Icons.Rounded.AspectRatio, contentDescription = "Video scaling", tint = Color.White)
-            }
-            IconButton(onClick = { showTracks = true }) {
-                Icon(Icons.Rounded.Subtitles, contentDescription = "Audio & subtitles", tint = Color.White)
-            }
-            IconButton(onClick = { showStyle = true }) {
-                Icon(Icons.Rounded.Tune, contentDescription = "Subtitle appearance", tint = Color.White)
+                IconButton(onClick = { showStyle = true }) {
+                    Icon(Icons.Rounded.Tune, contentDescription = "Subtitle appearance", tint = Color.White)
+                }
             }
         }
     }
 
-    if (showTracks) {
-        TracksSheet(player = player, onDismiss = { showTracks = false })
+    if (showSubtitleTracks) {
+        TrackSheet(
+            player = player,
+            trackType = C.TRACK_TYPE_TEXT,
+            heading = "Subtitles",
+            allowOff = true,
+            onDismiss = { showSubtitleTracks = false },
+        )
+    }
+    if (showAudioTracks) {
+        TrackSheet(
+            player = player,
+            trackType = C.TRACK_TYPE_AUDIO,
+            heading = "Audio",
+            allowOff = false,
+            onDismiss = { showAudioTracks = false },
+        )
+    }
+    if (showSpeed) {
+        SpeedSheet(player = player, onDismiss = { showSpeed = false })
     }
     if (showStyle) {
         SubtitleStyleSheet(
@@ -394,7 +435,13 @@ private fun disableSubtitles(player: Player) {
 
 @kotlin.OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TracksSheet(player: Player, onDismiss: () -> Unit) {
+private fun TrackSheet(
+    player: Player,
+    trackType: Int,
+    heading: String,
+    allowOff: Boolean,
+    onDismiss: () -> Unit,
+) {
     var tracks by remember { mutableStateOf(player.currentTracks) }
     DisposableEffect(player) {
         val listener = object : Player.Listener {
@@ -406,10 +453,7 @@ private fun TracksSheet(player: Player, onDismiss: () -> Unit) {
         onDispose { player.removeListener(listener) }
     }
 
-    val audioGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
-    val textGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
-    val speeds = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
-    var currentSpeed by remember { mutableStateOf(player.playbackParameters.speed) }
+    val groups = tracks.groups.filter { it.type == trackType }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -418,19 +462,21 @@ private fun TracksSheet(player: Player, onDismiss: () -> Unit) {
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 28.dp)
         ) {
-            SheetHeading("Subtitles")
-            val anyTextSelected = textGroups.any { it.isSelected }
-            TrackOption(label = "Off", selected = !anyTextSelected) {
-                disableSubtitles(player)
+            SheetHeading(heading)
+            if (allowOff) {
+                val anySelected = groups.any { it.isSelected }
+                TrackOption(label = "Off", selected = !anySelected) {
+                    disableSubtitles(player)
+                }
             }
-            if (textGroups.isEmpty()) {
+            if (groups.isEmpty()) {
                 Text(
-                    "This stream has no embedded subtitle tracks.",
+                    "This stream has no selectable ${heading.lowercase()} tracks.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            textGroups.forEach { group ->
+            groups.forEach { group ->
                 for (i in 0 until group.length) {
                     if (!group.isTrackSupported(i)) continue
                     TrackOption(
@@ -439,28 +485,18 @@ private fun TracksSheet(player: Player, onDismiss: () -> Unit) {
                     ) { selectTrack(player, group, i) }
                 }
             }
+        }
+    }
+}
 
-            Spacer(Modifier.height(16.dp))
-            SheetHeading("Audio")
-            if (audioGroups.isEmpty()) {
-                Text(
-                    "No selectable audio tracks.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            audioGroups.forEach { group ->
-                for (i in 0 until group.length) {
-                    if (!group.isTrackSupported(i)) continue
-                    TrackOption(
-                        label = trackLabel(group.getTrackFormat(i), i),
-                        selected = group.isTrackSelected(i),
-                    ) { selectTrack(player, group, i) }
-                }
-            }
-
-            Spacer(Modifier.height(16.dp))
-            SheetHeading("Speed")
+@kotlin.OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SpeedSheet(player: Player, onDismiss: () -> Unit) {
+    val speeds = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
+    var currentSpeed by remember { mutableStateOf(player.playbackParameters.speed) }
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
+            SheetHeading("Playback speed")
             Row(Modifier.fillMaxWidth()) {
                 speeds.forEach { speed ->
                     FilterChip(

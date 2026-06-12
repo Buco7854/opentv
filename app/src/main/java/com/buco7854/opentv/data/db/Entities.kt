@@ -81,6 +81,23 @@ data class ProgrammeEntity(
     val endMs: Long,
 )
 
+/**
+ * Cached TMDB enrichment (synopsis, rating, cast) for a cleaned title.
+ * Negative lookups are cached too (all-null fields) so unmatchable titles
+ * don't generate a TMDB request on every detail-page open.
+ */
+@Entity(tableName = "metadata")
+data class MetadataEntity(
+    @PrimaryKey val cacheKey: String,
+    val title: String? = null,
+    val year: String? = null,
+    val overview: String? = null,
+    val rating: Double? = null,
+    val castNames: String? = null,
+    val posterUrl: String? = null,
+    val fetchedAtMs: Long,
+)
+
 @Entity(tableName = "downloads", indices = [Index("url")])
 data class DownloadEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,

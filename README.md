@@ -59,6 +59,11 @@ frugal with requests:
   logos are cached on disk by Coil so each logo is fetched once.
 - **Resumable downloads** — interrupted VOD downloads resume with `Range` requests
   instead of restarting from zero.
+- **Connection-aware downloads** — only one download transfer runs at a time, and
+  downloads wait (or yield mid-transfer, resuming later) whenever you're streaming
+  from the same provider, so the app never holds two connections to one panel.
+- **Optional TMDB metadata** — synopsis/rating/cast lookups (with your own API key)
+  are cached for 30 days per title, including negative results.
 - **Streaming parsers** — M3U and XMLTV are parsed as streams in a single pass
   (batched into Room), so 50k-entry playlists don't blow up memory or require
   re-fetching.

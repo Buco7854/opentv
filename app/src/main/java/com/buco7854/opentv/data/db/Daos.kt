@@ -2,6 +2,7 @@ package com.buco7854.opentv.data.db
 
 import androidx.room.Dao
 import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
@@ -107,6 +108,15 @@ interface EpgDao {
 
     @Query("SELECT COUNT(*) FROM programmes WHERE playlistId = :playlistId")
     suspend fun count(playlistId: Long): Int
+}
+
+@Dao
+interface MetadataDao {
+    @Query("SELECT * FROM metadata WHERE cacheKey = :cacheKey")
+    suspend fun get(cacheKey: String): MetadataEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(metadata: MetadataEntity)
 }
 
 @Dao

@@ -19,12 +19,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.DownloadDone
 import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.VideoLibrary
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -57,7 +59,11 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.data.db.ChannelEntity
+import com.buco7854.opentv.data.db.DownloadEntity
+import com.buco7854.opentv.data.db.DownloadStatus
+import com.buco7854.opentv.data.db.MetadataEntity
 import com.buco7854.opentv.ui.components.ChannelLogo
+import com.buco7854.opentv.ui.components.DownloadStateIcon
 import com.buco7854.opentv.ui.components.Pill
 import kotlinx.coroutines.launch
 
@@ -65,13 +71,11 @@ private val YEAR_TAG = Regex("""\b(19|20)\d{2}\b""")
 private val QUALITY_TAG = Regex("""(?i)\b(4K|UHD|2160p|1080p|FHD|720p|HEVC|HD|SD)\b""")
 
 /** The metadata an M3U playlist actually carries, mined from the entry itself. */
-private fun metaChips(channel: ChannelEntity): List<String> = buildList {
+private fun metaChips(channel: ChannelEntity, meta: MetadataEntity?): List<String> = buildList {
     add(channel.groupTitle)
-    YEAR_TAG.find(channel.name)?.let { add(it.value) }
+    (meta?.year ?: YEAR_TAG.find(channel.name)?.value)?.let { add(it) }
+    meta?.rating?.let { add("★ %.1f".format(it)) }
     QUALITY_TAG.find(channel.name)?.let { add(it.value.uppercase()) }
-    val extension = channel.url.substringBefore('?').substringAfterLast('/')
-        .substringAfterLast('.', "").take(5)
-    if (extension.isNotEmpty()) add(extension.uppercase())
 }
 
 @Composable
@@ -102,6 +106,38 @@ private fun Poster(logo: String?, fallback: androidx.compose.ui.graphics.vector.
     }
 }
 
+@Composable
+private fun MetadataBlock(meta: MetadataEntity?, tmdbKeyMissing: Boolean) {
+    if (meta != null) {
+        meta.overview?.let {
+            Spacer(Modifier.height(14.dp))
+            Text(
+                it,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 6,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        meta.castNames?.let {
+            Spacer(Modifier.height(10.dp))
+            Text("Cast", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    } else if (tmdbKeyMissing) {
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "Tip: add a free TMDB API key in Settings to show synopsis, rating and cast here.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MovieDetailScreen(
@@ -110,9 +146,16 @@ fun MovieDetailScreen(
     onPlay: (url: String, title: String) -> Unit,
 ) {
     var channel by remember { mutableStateOf<ChannelEntity?>(null) }
-    LaunchedEffect(channelId) { channel = OpenTvApp.graph.db.channelDao().get(channelId) }
+    var meta by remember { mutableStateOf<MetadataEntity?>(null) }
+    val tmdbKey by OpenTvApp.graph.playerPrefs.tmdbApiKey.collectAsState(initial = null)
+    val downloads by OpenTvApp.graph.downloads.downloads.collectAsState(initial = emptyList())
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+
+    LaunchedEffect(channelId) {
+        channel = OpenTvApp.graph.db.channelDao().get(channelId)
+        channel?.let { meta = OpenTvApp.graph.metadata.forTitle(isSeries = false, rawName = it.name) }
+    }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
@@ -129,42 +172,78 @@ fun MovieDetailScreen(
         },
     ) { padding ->
         val movie = channel ?: return@Scaffold
-        Column(
-            Modifier
-                .padding(padding)
-                .padding(horizontal = 20.dp)
-                .fillMaxSize()
+        val downloadState = downloads.firstOrNull {
+            it.url == movie.url && it.status != DownloadStatus.CANCELLED && it.status != DownloadStatus.FAILED
+        }
+        LazyColumn(
+            Modifier.padding(padding).fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp),
         ) {
-            Poster(movie.logo, Icons.Rounded.Movie)
-            Spacer(Modifier.height(18.dp))
-            Text(movie.name, style = MaterialTheme.typography.headlineMedium)
-            Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                metaChips(movie).take(4).forEach { Pill(it) }
+            item {
+                Poster(meta?.posterUrl ?: movie.logo, Icons.Rounded.Movie)
+                Spacer(Modifier.height(18.dp))
+                Text(movie.name, style = MaterialTheme.typography.headlineMedium)
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    metaChips(movie, meta).take(4).forEach { Pill(it) }
+                }
+                MetadataBlock(meta, tmdbKeyMissing = tmdbKey != null && tmdbKey!!.isBlank())
+                Spacer(Modifier.height(24.dp))
+                Button(
+                    onClick = { onPlay(movie.url, movie.name) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Rounded.PlayArrow, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Play")
+                }
+                Spacer(Modifier.height(10.dp))
+                DownloadButton(
+                    state = downloadState,
+                    onDownload = {
+                        scope.launch {
+                            val blocked = OpenTvApp.graph.downloads.enqueue(movie)
+                            snackbar.showSnackbar(blocked ?: "Download started")
+                        }
+                    },
+                )
+                Spacer(Modifier.height(24.dp))
             }
-            Spacer(Modifier.height(24.dp))
-            Button(
-                onClick = { onPlay(movie.url, movie.name) },
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Icon(Icons.Rounded.PlayArrow, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("Play")
-            }
-            Spacer(Modifier.height(10.dp))
-            FilledTonalButton(
-                onClick = {
-                    scope.launch {
-                        val blocked = OpenTvApp.graph.downloads.enqueue(movie)
-                        snackbar.showSnackbar(blocked ?: "Download started")
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Icon(Icons.Rounded.Download, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("Download for offline viewing")
-            }
+        }
+    }
+}
+
+/** Full-width download button reflecting live state: idle / progress / done. */
+@Composable
+private fun DownloadButton(state: DownloadEntity?, onDownload: () -> Unit) {
+    when (state?.status) {
+        DownloadStatus.RUNNING, DownloadStatus.QUEUED -> FilledTonalButton(
+            onClick = {},
+            enabled = false,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+            Spacer(Modifier.width(10.dp))
+            val percent = if (state.totalBytes > 0) {
+                " ${(state.downloadedBytes * 100 / state.totalBytes).toInt()}%"
+            } else ""
+            Text(if (state.status == DownloadStatus.QUEUED) "Queued…" else "Downloading…$percent")
+        }
+
+        DownloadStatus.DONE -> FilledTonalButton(
+            onClick = {},
+            enabled = false,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Icon(Icons.Rounded.DownloadDone, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("Downloaded — see Downloads")
+        }
+
+        else -> FilledTonalButton(onClick = onDownload, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Rounded.Download, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("Download for offline viewing")
         }
     }
 }
@@ -180,8 +259,19 @@ fun SeriesDetailScreen(
     val episodes by OpenTvApp.graph.db.channelDao()
         .observeEpisodes(playlistId, seriesKey)
         .collectAsState(initial = emptyList())
+    var meta by remember { mutableStateOf<MetadataEntity?>(null) }
+    val tmdbKey by OpenTvApp.graph.playerPrefs.tmdbApiKey.collectAsState(initial = null)
+    val downloads by OpenTvApp.graph.downloads.downloads.collectAsState(initial = emptyList())
+    val downloadsByUrl = remember(downloads) {
+        downloads.filter { it.status != DownloadStatus.CANCELLED && it.status != DownloadStatus.FAILED }
+            .associateBy { it.url }
+    }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+
+    LaunchedEffect(seriesKey) {
+        meta = OpenTvApp.graph.metadata.forTitle(isSeries = true, rawName = seriesKey)
+    }
 
     val seasons = remember(episodes) { episodes.mapNotNull { it.season }.distinct().sorted() }
     var selectedSeason by remember { mutableStateOf<Int?>(null) } // null = all seasons
@@ -208,7 +298,10 @@ fun SeriesDetailScreen(
             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp),
         ) {
             item {
-                Poster(episodes.firstOrNull { it.logo != null }?.logo, Icons.Rounded.VideoLibrary)
+                Poster(
+                    meta?.posterUrl ?: episodes.firstOrNull { it.logo != null }?.logo,
+                    Icons.Rounded.VideoLibrary,
+                )
                 Spacer(Modifier.height(18.dp))
                 Text(seriesKey, style = MaterialTheme.typography.headlineMedium)
                 Spacer(Modifier.height(10.dp))
@@ -216,7 +309,9 @@ fun SeriesDetailScreen(
                     episodes.firstOrNull()?.let { Pill(it.groupTitle) }
                     Pill("${episodes.size} episodes")
                     if (seasons.size > 1) Pill("${seasons.size} seasons")
+                    meta?.rating?.let { Pill("★ %.1f".format(it)) }
                 }
+                MetadataBlock(meta, tmdbKeyMissing = tmdbKey != null && tmdbKey!!.isBlank())
                 Spacer(Modifier.height(18.dp))
                 if (seasons.isNotEmpty()) {
                     SeasonPicker(
@@ -230,6 +325,7 @@ fun SeriesDetailScreen(
             items(shown, key = { it.id }) { episode ->
                 EpisodeRow(
                     episode = episode,
+                    downloadState = downloadsByUrl[episode.url],
                     onPlay = { onPlay(episode.url, episode.name) },
                     onDownload = {
                         scope.launch {
@@ -272,7 +368,12 @@ private fun SeasonPicker(seasons: List<Int>, selected: Int?, onSelect: (Int?) ->
 }
 
 @Composable
-private fun EpisodeRow(episode: ChannelEntity, onPlay: () -> Unit, onDownload: () -> Unit) {
+private fun EpisodeRow(
+    episode: ChannelEntity,
+    downloadState: DownloadEntity?,
+    onPlay: () -> Unit,
+    onDownload: () -> Unit,
+) {
     Card(
         onClick = onPlay,
         shape = RoundedCornerShape(16.dp),
@@ -299,9 +400,7 @@ private fun EpisodeRow(episode: ChannelEntity, onPlay: () -> Unit, onDownload: (
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            IconButton(onClick = onDownload) {
-                Icon(Icons.Rounded.Download, contentDescription = "Download", tint = MaterialTheme.colorScheme.primary)
-            }
+            DownloadStateIcon(state = downloadState, onDownload = onDownload)
         }
     }
 }

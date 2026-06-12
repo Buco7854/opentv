@@ -33,8 +33,8 @@ object ErrorLog {
 
     private val nextId = java.util.concurrent.atomic.AtomicLong(1)
 
-    // Credentials as query parameters: get.php?username=U&password=P
-    private val REDACT_QUERY = Regex("""(?i)\b(username|password|token|pass)=[^&\s"'<>]+""")
+    // Credentials as query parameters: get.php?username=U&password=P, api_key=...
+    private val REDACT_QUERY = Regex("""(?i)\b(username|password|token|pass|api_key)=[^&\s"'<>]+""")
     // Xtream path credentials: /live|movie(s)|series/USER/PASS/...
     private val REDACT_KIND_PATH = Regex("""(?i)/(live|movies?|series)/[^/\s"'<>]+/[^/\s"'<>]+/""")
     // Bare Xtream stream paths: http://host/USER/PASS/1234.ts

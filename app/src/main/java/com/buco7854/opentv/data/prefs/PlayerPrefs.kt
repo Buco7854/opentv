@@ -52,6 +52,14 @@ class PlayerPrefs(private val context: Context) {
         val RESIZE_MODE = intPreferencesKey("resize_mode")
         val DECODER_FALLBACK = booleanPreferencesKey("decoder_fallback")
         val BUFFER_PRESET = intPreferencesKey("buffer_preset")
+        val TMDB_KEY = stringPreferencesKey("tmdb_api_key")
+    }
+
+    /** User-supplied TMDB API key; "" disables metadata enrichment. */
+    val tmdbApiKey: Flow<String> = context.playerDataStore.data.map { it[Keys.TMDB_KEY] ?: "" }
+
+    suspend fun setTmdbApiKey(key: String) {
+        context.playerDataStore.edit { it[Keys.TMDB_KEY] = key.trim() }
     }
 
     val settings: Flow<PlayerSettings> = context.playerDataStore.data.map { prefs ->

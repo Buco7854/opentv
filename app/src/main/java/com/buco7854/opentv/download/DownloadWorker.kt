@@ -14,10 +14,15 @@ import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.data.db.DownloadStatus
 import com.buco7854.opentv.data.net.Http
 import com.buco7854.opentv.diag.ErrorLog
+import com.buco7854.opentv.playback.PlaybackMonitor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Request
 import java.io.File
 import java.io.IOException
@@ -35,6 +40,12 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
         const val KEY_DOWNLOAD_ID = "download_id"
         const val CHANNEL_ID = "downloads"
 
+        /**
+         * One provider transfer at a time, app-wide: parallel downloads are a
+         * fast way to blow through a provider's connection limit.
+         */
+        private val transferMutex = Mutex()
+
         fun ensureNotificationChannel(context: Context) {
             if (Build.VERSION.SDK_INT >= 26) {
                 val manager = context.getSystemService(NotificationManager::class.java)
@@ -47,9 +58,13 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
 
     private val dao = OpenTvApp.graph.db.downloadDao()
 
+    /** Thrown when playback starts on the host we're downloading from. */
+    private class YieldToPlaybackException : IOException("Paused while streaming from this provider")
+
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val downloadId = inputData.getLong(KEY_DOWNLOAD_ID, -1)
         val item = dao.get(downloadId) ?: return@withContext Result.failure()
+        val host = item.url.toHttpUrlOrNull()?.host
 
         try {
             setForeground(foregroundInfo(item.title, 0, 0))
@@ -57,15 +72,23 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
             // Expedited/foreground may be unavailable; keep downloading in the background.
         }
 
+        // Connection-limit safety: never open a download connection to a
+        // provider the player is currently streaming from. Wait it out.
+        if (host != null && PlaybackMonitor.activeHost.value == host) {
+            runCatching { setForeground(waitingInfo(item.title)) }
+            PlaybackMonitor.activeHost.first { it != host }
+        }
+
         val file = File(item.filePath)
         file.parentFile?.mkdirs()
-        val existing = if (file.exists()) file.length() else 0L
 
         try {
-            val requestBuilder = Request.Builder()
-                .url(item.url)
-                .header("User-Agent", Http.USER_AGENT)
-            if (existing > 0) requestBuilder.header("Range", "bytes=$existing-")
+            transferMutex.withLock {
+                val existing = if (file.exists()) file.length() else 0L
+                val requestBuilder = Request.Builder()
+                    .url(item.url)
+                    .header("User-Agent", Http.USER_AGENT)
+                if (existing > 0) requestBuilder.header("Range", "bytes=$existing-")
 
             Http.ok.newCall(requestBuilder.build()).execute().use { response ->
                 if (!response.isSuccessful) throw HttpStatusException(response.code)
@@ -96,6 +119,11 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
                             val now = System.currentTimeMillis()
                             if (now - lastUpdate > 750) {
                                 lastUpdate = now
+                                // Player started streaming from this provider:
+                                // yield the connection, resume later via Range.
+                                if (host != null && PlaybackMonitor.activeHost.value == host) {
+                                    throw YieldToPlaybackException()
+                                }
                                 dao.updateProgress(item.id, downloaded, total, DownloadStatus.RUNNING)
                                 runCatching {
                                     setForeground(foregroundInfo(item.title, downloaded, total))
@@ -106,7 +134,11 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
                 }
                 dao.updateProgress(item.id, downloaded, downloaded, DownloadStatus.DONE)
             }
+            }
             Result.success()
+        } catch (e: YieldToPlaybackException) {
+            dao.get(downloadId)?.let { dao.update(it.copy(status = DownloadStatus.QUEUED)) }
+            Result.retry()
         } catch (e: CancellationException) {
             withContext(NonCancellable) {
                 dao.get(downloadId)?.let { dao.update(it.copy(status = DownloadStatus.CANCELLED)) }
@@ -152,6 +184,21 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
     }
 
     private class HttpStatusException(val code: Int) : IOException("HTTP $code")
+
+    private fun waitingInfo(title: String): ForegroundInfo {
+        val notification: Notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentTitle("Waiting to download $title")
+            .setContentText("Paused while you're streaming from this provider")
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .build()
+        return if (Build.VERSION.SDK_INT >= 29) {
+            ForegroundInfo(id.hashCode(), notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            ForegroundInfo(id.hashCode(), notification)
+        }
+    }
 
     private fun foregroundInfo(title: String, downloaded: Long, total: Long): ForegroundInfo {
         val notification: Notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)

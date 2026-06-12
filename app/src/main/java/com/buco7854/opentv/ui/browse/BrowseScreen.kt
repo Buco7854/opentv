@@ -65,8 +65,10 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
 import com.buco7854.opentv.data.db.ChannelEntity
 import com.buco7854.opentv.data.db.ChannelKind
+import com.buco7854.opentv.data.db.DownloadEntity
 import com.buco7854.opentv.data.db.ProgrammeEntity
 import com.buco7854.opentv.ui.components.ChannelLogo
+import com.buco7854.opentv.ui.components.DownloadStateIcon
 import com.buco7854.opentv.ui.components.EmptyState
 import com.buco7854.opentv.ui.components.kindIcon
 import com.buco7854.opentv.ui.theme.Mint
@@ -100,6 +102,7 @@ fun BrowseScreen(
     val channels by viewModel.channels.collectAsState()
     val seriesGroups by viewModel.seriesGroups.collectAsState()
     val nowAiring by viewModel.nowAiring.collectAsState()
+    val downloadsByUrl by viewModel.downloadsByUrl.collectAsState()
     val account by viewModel.account.collectAsState()
     val liveCount by viewModel.liveCount.collectAsState()
     val movieCount by viewModel.movieCount.collectAsState()
@@ -216,6 +219,7 @@ fun BrowseScreen(
                 else -> ChannelList(
                     channels = channels,
                     nowAiring = if (tab == ChannelKind.LIVE) nowAiring else emptyMap(),
+                    downloadsByUrl = if (tab == ChannelKind.MOVIE) downloadsByUrl else emptyMap(),
                     onPlay = {
                         if (tab == ChannelKind.MOVIE) onOpenMovie(it.id)
                         else onPlay(it.url, it.name, it.tvgId)
@@ -331,6 +335,7 @@ private fun SeriesList(series: List<com.buco7854.opentv.data.db.SeriesGroup>, on
 private fun ChannelList(
     channels: List<ChannelEntity>,
     nowAiring: Map<String, ProgrammeEntity>,
+    downloadsByUrl: Map<String, DownloadEntity>,
     onPlay: (ChannelEntity) -> Unit,
     onDownload: ((ChannelEntity) -> Unit)?,
     onGuide: ((ChannelEntity) -> Unit)?,
@@ -347,6 +352,7 @@ private fun ChannelList(
             ChannelRow(
                 channel = channel,
                 airing = channel.tvgId?.let { nowAiring[it] },
+                downloadState = downloadsByUrl[channel.url],
                 onPlay = { onPlay(channel) },
                 onDownload = onDownload?.let { handler -> { handler(channel) } },
                 onGuide = if (onGuide != null && channel.tvgId != null) ({ onGuide(channel) }) else null,
@@ -359,6 +365,7 @@ private fun ChannelList(
 private fun ChannelRow(
     channel: ChannelEntity,
     airing: ProgrammeEntity?,
+    downloadState: DownloadEntity?,
     onPlay: () -> Unit,
     onDownload: (() -> Unit)?,
     onGuide: (() -> Unit)?,
@@ -409,13 +416,7 @@ private fun ChannelRow(
                 }
             }
             if (onDownload != null) {
-                IconButton(onClick = onDownload) {
-                    Icon(
-                        Icons.Rounded.Download,
-                        contentDescription = "Download",
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
-                }
+                DownloadStateIcon(state = downloadState, onDownload = onDownload)
             }
         }
     }

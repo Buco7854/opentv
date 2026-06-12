@@ -6,6 +6,7 @@ import com.buco7854.opentv.data.net.Http
 import com.buco7854.opentv.data.prefs.PlayerPrefs
 import com.buco7854.opentv.data.repo.AccountRepository
 import com.buco7854.opentv.data.repo.EpgRepository
+import com.buco7854.opentv.data.repo.MetadataRepository
 import com.buco7854.opentv.data.repo.PlaylistRepository
 import com.buco7854.opentv.diag.ErrorLog
 import com.buco7854.opentv.download.DownloadRepository
@@ -19,6 +20,7 @@ class AppGraph(app: Application) {
     val account = AccountRepository()
     val downloads = DownloadRepository(app, db)
     val playerPrefs = PlayerPrefs(app)
+    val metadata = MetadataRepository(db, playerPrefs)
 }
 
 class OpenTvApp : Application() {

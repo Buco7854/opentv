@@ -6,6 +6,8 @@ import androidx.lifecycle.viewModelScope
 import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.data.db.ChannelEntity
 import com.buco7854.opentv.data.db.ChannelKind
+import com.buco7854.opentv.data.db.DownloadEntity
+import com.buco7854.opentv.data.db.DownloadStatus
 import com.buco7854.opentv.data.db.GroupCount
 import com.buco7854.opentv.data.db.ProgrammeEntity
 import com.buco7854.opentv.data.db.SeriesGroup
@@ -18,6 +20,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -50,6 +53,14 @@ class BrowseViewModel(app: Application, val playlistId: Long) : AndroidViewModel
             else channelDao.observeSeriesInGroup(playlistId, g)
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /** url -> active download, for the live progress icon on movie rows. */
+    val downloadsByUrl: StateFlow<Map<String, DownloadEntity>> = graph.downloads.downloads
+        .map { list ->
+            list.filter { it.status != DownloadStatus.CANCELLED && it.status != DownloadStatus.FAILED }
+                .associateBy { it.url }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
     val liveCount = channelDao.observeCount(playlistId, ChannelKind.LIVE)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
