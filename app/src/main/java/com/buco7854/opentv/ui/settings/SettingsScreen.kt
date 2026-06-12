@@ -1,5 +1,8 @@
 package com.buco7854.opentv.ui.settings
 
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -22,6 +25,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -33,9 +37,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.data.prefs.PlayerSettings
+import com.buco7854.opentv.download.DownloadStorage
 import com.buco7854.opentv.ui.components.SubtitleStyleControls
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -143,6 +149,36 @@ fun SettingsScreen(onBack: () -> Unit) {
                 "Auto reads your provider's connection limit and keeps one slot free for " +
                     "watching. With a manual value, downloads pause while you stream from the " +
                     "same provider so you never exceed your plan's limit."
+            )
+            Text("Download location", style = MaterialTheme.typography.labelLarge)
+            Spacer(Modifier.height(6.dp))
+            val context = LocalContext.current
+            val folderPicker = rememberLauncherForActivityResult(
+                ActivityResultContracts.OpenDocumentTree()
+            ) { uri ->
+                if (uri != null) {
+                    context.contentResolver.takePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                    )
+                    update(current.copy(downloadDirUri = uri.toString()))
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    DownloadStorage.describeTree(current.downloadDirUri),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                if (current.downloadDirUri.isNotEmpty()) {
+                    TextButton(onClick = { update(current.copy(downloadDirUri = "")) }) { Text("Reset") }
+                }
+                TextButton(onClick = { folderPicker.launch(null) }) { Text("Choose folder") }
+            }
+            Hint(
+                "App storage is private and removed when the app is uninstalled. A chosen " +
+                    "folder is visible to file managers and other apps, and the files stay " +
+                    "yours to move or keep. Applies to new downloads."
             )
 
             SectionTitle("Subtitle appearance")

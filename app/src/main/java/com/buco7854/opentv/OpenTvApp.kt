@@ -18,8 +18,8 @@ class AppGraph(app: Application) {
     val playlists = PlaylistRepository(db)
     val epg = EpgRepository(db)
     val account = AccountRepository()
-    val downloads = DownloadRepository(app, db)
     val playerPrefs = PlayerPrefs(app)
+    val downloads = DownloadRepository(app, db, playerPrefs)
     val metadata = MetadataRepository(db)
 }
 

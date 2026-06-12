@@ -22,9 +22,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Request
-import java.io.File
 import java.io.IOException
-import java.io.RandomAccessFile
 
 /**
  * Streams a VOD file to local storage with a single HTTP request, resuming
@@ -102,12 +100,9 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
             PlaybackMonitor.activeHost.first { it != host }
         }
 
-        val file = File(item.filePath)
-        file.parentFile?.mkdirs()
-
         try {
             DownloadGate.withSlot(gate.limit) {
-                val existing = if (file.exists()) file.length() else 0L
+                val existing = DownloadStorage.length(applicationContext, item.filePath)
                 val requestBuilder = Request.Builder()
                     .url(item.url)
                     .header("User-Agent", Http.USER_AGENT)
@@ -129,15 +124,18 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
 
                 dao.updateProgress(item.id, downloaded, total, DownloadStatus.RUNNING)
 
-                RandomAccessFile(file, "rw").use { out ->
-                    if (resuming) out.seek(existing) else out.setLength(0)
+                DownloadStorage.openSink(
+                    applicationContext,
+                    item.filePath,
+                    resumeAt = if (resuming) existing else 0L,
+                ).use { sink ->
                     val buffer = ByteArray(256 * 1024)
                     var lastUpdate = 0L
                     body.byteStream().use { input ->
                         while (true) {
                             val read = input.read(buffer)
                             if (read == -1) break
-                            out.write(buffer, 0, read)
+                            sink.write(buffer, 0, read)
                             downloaded += read
                             val now = System.currentTimeMillis()
                             if (now - lastUpdate > 750) {
@@ -170,13 +168,14 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
             }
             throw e
         } catch (e: Exception) {
-            handleFailure(item.id, item.title, file, e)
+            handleFailure(item.id, item.title, item.filePath, e)
         }
     }
 
-    private suspend fun handleFailure(downloadId: Long, title: String, file: File, e: Exception): Result {
+    private suspend fun handleFailure(downloadId: Long, title: String, path: String, e: Exception): Result {
         ErrorLog.log("Download: $title", e)
         val code = (e as? HttpStatusException)?.code
+        val savedBytes = DownloadStorage.length(applicationContext, path)
         suspend fun markFailed() {
             dao.get(downloadId)?.let {
                 dao.update(it.copy(status = DownloadStatus.FAILED, error = ErrorLog.describe(e)))
@@ -185,8 +184,8 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
         return when {
             // Range beyond EOF: the file was already fully downloaded (e.g. a
             // crash happened between the last write and the DONE update).
-            code == 416 && file.length() > 0 -> {
-                dao.updateProgress(downloadId, file.length(), file.length(), DownloadStatus.DONE)
+            code == 416 && savedBytes > 0 -> {
+                dao.updateProgress(downloadId, savedBytes, savedBytes, DownloadStatus.DONE)
                 Result.success()
             }
             // Permanent client errors (401/403/404...): retrying only hammers

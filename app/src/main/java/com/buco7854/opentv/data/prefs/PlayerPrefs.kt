@@ -34,6 +34,8 @@ data class PlayerSettings(
     val bufferPreset: Int = BUFFER_BALANCED,
     /** Simultaneous download transfers; DOWNLOADS_AUTO derives it from the provider's connection limit. */
     val downloadLimit: Int = DOWNLOADS_AUTO,
+    /** SAF tree URI for downloads; "" = app-private storage. */
+    val downloadDirUri: String = "",
 ) {
     companion object {
         const val BUFFER_FAST_START = 0
@@ -56,6 +58,7 @@ class PlayerPrefs(private val context: Context) {
         val DECODER_FALLBACK = booleanPreferencesKey("decoder_fallback")
         val BUFFER_PRESET = intPreferencesKey("buffer_preset")
         val DOWNLOAD_LIMIT = intPreferencesKey("download_limit")
+        val DOWNLOAD_DIR = stringPreferencesKey("download_dir_uri")
     }
 
     val settings: Flow<PlayerSettings> = context.playerDataStore.data.map { prefs ->
@@ -72,6 +75,7 @@ class PlayerPrefs(private val context: Context) {
             decoderFallback = prefs[Keys.DECODER_FALLBACK] ?: true,
             bufferPreset = prefs[Keys.BUFFER_PRESET] ?: PlayerSettings.BUFFER_BALANCED,
             downloadLimit = prefs[Keys.DOWNLOAD_LIMIT] ?: PlayerSettings.DOWNLOADS_AUTO,
+            downloadDirUri = prefs[Keys.DOWNLOAD_DIR] ?: "",
         )
     }
 
@@ -87,6 +91,7 @@ class PlayerPrefs(private val context: Context) {
             prefs[Keys.DECODER_FALLBACK] = settings.decoderFallback
             prefs[Keys.BUFFER_PRESET] = settings.bufferPreset
             prefs[Keys.DOWNLOAD_LIMIT] = settings.downloadLimit
+            prefs[Keys.DOWNLOAD_DIR] = settings.downloadDirUri
         }
     }
 }

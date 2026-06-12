@@ -43,12 +43,12 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.data.db.DownloadEntity
 import com.buco7854.opentv.data.db.DownloadStatus
+import com.buco7854.opentv.download.DownloadStorage
 import com.buco7854.opentv.ui.components.EmptyState
 import com.buco7854.opentv.ui.theme.Mint
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import java.io.File
 import java.util.Locale
 
 class DownloadsViewModel(app: Application) : AndroidViewModel(app) {
@@ -107,7 +107,7 @@ fun DownloadsScreen(
             items(downloads, key = { it.id }) { item ->
                 DownloadCard(
                     item = item,
-                    onPlay = { onPlay(File(item.filePath).toURI().toString(), item.title) },
+                    onPlay = { onPlay(DownloadStorage.playableUri(item.filePath), item.title) },
                     onCancel = { viewModel.cancel(item) },
                     onRetry = { viewModel.retry(item) },
                     onDelete = { viewModel.delete(item) },
