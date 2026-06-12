@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AspectRatio
+import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.Audiotrack
 import androidx.compose.material.icons.rounded.ScreenRotation
 import androidx.compose.material.icons.rounded.Speed
@@ -120,6 +121,7 @@ fun PlayerScreen(
     val scope = rememberCoroutineScope()
     var error by remember { mutableStateOf<String?>(null) }
     var nowNext by remember { mutableStateOf<Pair<String, String?>?>(null) }
+    var showGuide by remember { mutableStateOf(false) }
     var showSubtitleTracks by remember { mutableStateOf(false) }
     var showAudioTracks by remember { mutableStateOf(false) }
     var showSpeed by remember { mutableStateOf(false) }
@@ -316,6 +318,11 @@ fun PlayerScreen(
                 )
             }
             Row {
+                if (tvgId != null && playlistId > 0) {
+                    IconButton(onClick = { showGuide = true }) {
+                        Icon(Icons.Rounded.CalendarMonth, contentDescription = "Guide", tint = Color.White)
+                    }
+                }
                 IconButton(onClick = {
                     val activity = context as? Activity
                     val landscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
@@ -356,6 +363,14 @@ fun PlayerScreen(
         }
     }
 
+    if (showGuide && tvgId != null && playlistId > 0) {
+        PlayerGuideSheet(
+            playlistId = playlistId,
+            tvgId = tvgId,
+            title = title,
+            onDismiss = { showGuide = false },
+        )
+    }
     if (showSubtitleTracks) {
         TrackSheet(
             player = player,
@@ -508,6 +523,80 @@ private fun SpeedSheet(player: Player, onDismiss: () -> Unit) {
                         label = { Text(if (speed == 1f) "1×" else "${speed}×") },
                         modifier = Modifier.padding(end = 6.dp),
                     )
+                }
+            }
+        }
+    }
+}
+
+/** Channel guide, viewable without leaving playback. Local DB only. */
+@kotlin.OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PlayerGuideSheet(
+    playlistId: Long,
+    tvgId: String,
+    title: String,
+    onDismiss: () -> Unit,
+) {
+    var programmes by remember { mutableStateOf<List<com.buco7854.opentv.data.db.ProgrammeEntity>?>(null) }
+    LaunchedEffect(tvgId) {
+        programmes = OpenTvApp.graph.epg.guide(
+            playlistId,
+            tvgId,
+            sinceMs = System.currentTimeMillis() - 2L * 60 * 60 * 1000,
+            limit = 100,
+        )
+    }
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp)
+        ) {
+            SheetHeading(title)
+            val list = programmes
+            when {
+                list == null -> Text("Loading…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                list.isEmpty() -> Text(
+                    "No guide data for this channel.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                else -> {
+                    val timeFormat = DateFormat.getTimeInstance(DateFormat.SHORT)
+                    val now = System.currentTimeMillis()
+                    list.forEach { programme ->
+                        val isNow = programme.startMs <= now && programme.endMs > now
+                        val isPast = programme.endMs <= now
+                        Row(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                            Text(
+                                timeFormat.format(Date(programme.startMs)),
+                                style = MaterialTheme.typography.labelLarge,
+                                color = if (isNow) Mint else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.width(64.dp),
+                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    programme.title,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = when {
+                                        isNow -> Mint
+                                        isPast -> MaterialTheme.colorScheme.onSurfaceVariant
+                                        else -> MaterialTheme.colorScheme.onSurface
+                                    },
+                                )
+                                programme.description?.let {
+                                    Text(
+                                        it,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 2,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
