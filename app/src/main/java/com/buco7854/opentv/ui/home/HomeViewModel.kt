@@ -6,7 +6,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.data.db.PlaylistEntity
-import com.buco7854.opentv.data.xtream.AccountInfo
 import com.buco7854.opentv.diag.ErrorLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -21,9 +20,6 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     val playlists: StateFlow<List<PlaylistEntity>> = graph.playlists.playlists
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    private val _accounts = MutableStateFlow<Map<Long, AccountInfo>>(emptyMap())
-    val accounts: StateFlow<Map<Long, AccountInfo>> = _accounts
-
     private val _busy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = _busy
 
@@ -32,18 +28,6 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
 
     fun consumeMessage() {
         _message.value = null
-    }
-
-    /** Fetch connection status for Xtream playlists; AccountRepository caches for 60s. */
-    fun loadAccountInfo(playlists: List<PlaylistEntity>) {
-        viewModelScope.launch {
-            for (playlist in playlists) {
-                if (playlist.xtreamBase == null) continue
-                graph.account.accountInfo(playlist)?.let { info ->
-                    _accounts.value = _accounts.value + (playlist.id to info)
-                }
-            }
-        }
     }
 
     fun addFromUrl(name: String, url: String, epgUrl: String) {
@@ -76,7 +60,8 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Full refresh for one playlist: M3U list, EPG, and account status. */
+    /** Refresh one playlist's content: M3U list and EPG. Account status lives
+     *  on its own page with its own refresh. */
     fun refresh(playlistId: Long) {
         viewModelScope.launch {
             _busy.value = true
@@ -84,12 +69,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                 graph.playlists.refresh(playlistId, force = true)
                 runCatching { graph.epg.refresh(playlistId, force = true) }
                     .onFailure { ErrorLog.log("EPG refresh", it) }
-                graph.db.playlistDao().get(playlistId)?.let { playlist ->
-                    graph.account.accountInfo(playlist, force = true)?.let { info ->
-                        _accounts.value = _accounts.value + (playlistId to info)
-                    }
-                }
-                _message.value = "Playlist, guide and account refreshed"
+                _message.value = "Playlist and guide refreshed"
             } catch (e: Exception) {
                 ErrorLog.log("Playlist refresh", e)
                 _message.value = "Refresh failed: ${ErrorLog.describe(e)}"

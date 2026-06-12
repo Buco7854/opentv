@@ -14,6 +14,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.buco7854.opentv.ui.account.AccountScreen
 import com.buco7854.opentv.ui.browse.BrowseScreen
 import com.buco7854.opentv.ui.details.MovieDetailScreen
 import com.buco7854.opentv.ui.details.SeriesDetailScreen
@@ -43,6 +44,7 @@ object Routes {
     fun browse(playlistId: Long) = "browse/$playlistId"
     fun search(playlistId: Long) = "search/$playlistId"
     fun movie(channelId: Long) = "movie/$channelId"
+    fun account(playlistId: Long) = "account/$playlistId"
     fun series(playlistId: Long, seriesKey: String) = "series/$playlistId/${Uri.encode(seriesKey)}"
     fun player(url: String, title: String, playlistId: Long = -1, tvgId: String? = null) =
         "player?u=${Uri.encode(url)}&t=${Uri.encode(title)}&p=$playlistId&c=${Uri.encode(tvgId ?: "")}"
@@ -62,6 +64,16 @@ fun AppNav() {
                 onOpenDownloads = { nav.navigate(Routes.DOWNLOADS) },
                 onOpenLog = { nav.navigate(Routes.LOG) },
                 onOpenSettings = { nav.navigate(Routes.SETTINGS) },
+                onOpenAccount = { nav.navigate(Routes.account(it)) },
+            )
+        }
+        composable(
+            route = "account/{playlistId}",
+            arguments = listOf(navArgument("playlistId") { type = NavType.LongType }),
+        ) { entry ->
+            AccountScreen(
+                playlistId = entry.arguments!!.getLong("playlistId"),
+                onBack = { nav.popBackStack() },
             )
         }
         composable(Routes.LOG) {

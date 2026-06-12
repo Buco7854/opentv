@@ -16,6 +16,9 @@ class AccountInfo(
     val maxConnections: Int,
     val status: String,
     val expiresAtMs: Long?,
+    val username: String? = null,
+    val isTrial: Boolean = false,
+    val createdAtMs: Long? = null,
 )
 
 /**
@@ -62,6 +65,9 @@ object Xtream {
                 maxConnections = info.optString("max_connections", "0").toIntOrNull() ?: 0,
                 status = info.optString("status", "Unknown"),
                 expiresAtMs = info.optString("exp_date").toLongOrNull()?.times(1000),
+                username = info.optString("username").takeIf { it.isNotBlank() },
+                isTrial = info.optString("is_trial") == "1",
+                createdAtMs = info.optString("created_at").toLongOrNull()?.times(1000),
             )
         }
     }

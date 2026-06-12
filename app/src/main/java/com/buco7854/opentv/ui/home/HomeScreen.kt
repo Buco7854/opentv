@@ -58,7 +58,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.buco7854.opentv.data.db.PlaylistEntity
-import com.buco7854.opentv.data.xtream.AccountInfo
 import com.buco7854.opentv.ui.theme.Mint
 import com.buco7854.opentv.ui.theme.Periwinkle
 import java.text.DateFormat
@@ -71,10 +70,10 @@ fun HomeScreen(
     onOpenDownloads: () -> Unit,
     onOpenLog: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenAccount: (Long) -> Unit,
     viewModel: HomeViewModel = viewModel(),
 ) {
     val playlists by viewModel.playlists.collectAsState()
-    val accounts by viewModel.accounts.collectAsState()
     val busy by viewModel.busy.collectAsState()
     val message by viewModel.message.collectAsState()
     val snackbar = remember { SnackbarHostState() }
@@ -87,10 +86,6 @@ fun HomeScreen(
             viewModel.consumeMessage()
         }
     }
-    // Keyed on the id set, not the rows: refresh-driven row updates must not
-    // re-trigger provider API calls (the 60s repo cache is the second guard).
-    LaunchedEffect(playlists.map { it.id }) { viewModel.loadAccountInfo(playlists) }
-
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
@@ -127,10 +122,10 @@ fun HomeScreen(
                     items(playlists, key = { it.id }) { playlist ->
                         PlaylistCard(
                             playlist = playlist,
-                            account = accounts[playlist.id],
                             refreshEnabled = !busy,
                             onClick = { onOpenPlaylist(playlist.id) },
                             onRefresh = { viewModel.refresh(playlist.id) },
+                            onOpenAccount = { onOpenAccount(playlist.id) },
                             onDelete = { pendingDelete = playlist },
                         )
                     }
@@ -209,10 +204,10 @@ private fun EmptyHome() {
 @Composable
 private fun PlaylistCard(
     playlist: PlaylistEntity,
-    account: AccountInfo?,
     refreshEnabled: Boolean,
     onClick: () -> Unit,
     onRefresh: () -> Unit,
+    onOpenAccount: () -> Unit,
     onDelete: () -> Unit,
 ) {
     Card(
@@ -237,6 +232,13 @@ private fun PlaylistCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                if (playlist.xtreamBase != null) {
+                    // Account & connection details live on their own page so the
+                    // provider API is only queried when the user asks for it.
+                    IconButton(onClick = onOpenAccount) {
+                        Icon(Icons.Rounded.Person, contentDescription = "Account", tint = Mint)
+                    }
+                }
                 if (playlist.url != null) {
                     IconButton(onClick = onRefresh, enabled = refreshEnabled) {
                         Icon(Icons.Rounded.Refresh, contentDescription = "Refresh", tint = MaterialTheme.colorScheme.primary)
@@ -246,37 +248,6 @@ private fun PlaylistCard(
                     Icon(Icons.Rounded.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            if (account != null) {
-                Spacer(Modifier.height(10.dp))
-                ConnectionStatusRow(account)
-            }
-        }
-    }
-}
-
-@Composable
-fun ConnectionStatusRow(account: AccountInfo) {
-    val nearLimit = account.maxConnections in 1..account.activeConnections
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(
-            Icons.Rounded.Person,
-            contentDescription = null,
-            tint = if (nearLimit) MaterialTheme.colorScheme.error else Mint,
-            modifier = Modifier.size(18.dp),
-        )
-        Spacer(Modifier.size(6.dp))
-        Text(
-            "${account.activeConnections} / ${account.maxConnections} connections",
-            style = MaterialTheme.typography.labelLarge,
-            color = if (nearLimit) MaterialTheme.colorScheme.error else Mint,
-        )
-        Spacer(Modifier.weight(1f))
-        account.expiresAtMs?.let {
-            Text(
-                "expires ${DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(it))}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
     }
 }
