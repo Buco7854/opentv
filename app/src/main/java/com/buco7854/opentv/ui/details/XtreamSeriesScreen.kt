@@ -56,7 +56,6 @@ fun XtreamSeriesScreen(
     playlistId: Long,
     seriesId: Long,
     onBack: () -> Unit,
-    onPlay: (url: String, title: String) -> Unit,
     onOpenEpisode: (channelId: Long) -> Unit,
 ) {
     val graph = OpenTvApp.graph
@@ -188,8 +187,7 @@ fun XtreamSeriesScreen(
                 EpisodeRow(
                     episode = episode,
                     downloadState = downloadsByUrl[episode.url],
-                    onPlay = { onPlay(episode.url, episode.name) },
-                    onDetails = { onOpenEpisode(episode.id) },
+                    onOpen = { onOpenEpisode(episode.id) },
                     onDownload = {
                         scope.launch {
                             val blocked = graph.downloads.enqueue(episode)

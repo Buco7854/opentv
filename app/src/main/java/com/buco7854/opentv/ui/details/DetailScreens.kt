@@ -18,7 +18,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.DownloadDone
 import androidx.compose.material.icons.rounded.Movie
@@ -65,6 +64,7 @@ import com.buco7854.opentv.data.db.DownloadEntity
 import com.buco7854.opentv.data.db.DownloadStatus
 import com.buco7854.opentv.data.db.FavoriteEntity
 import com.buco7854.opentv.data.db.MetadataEntity
+import com.buco7854.opentv.data.meta.castFromNames
 import com.buco7854.opentv.data.meta.decodeCast
 import com.buco7854.opentv.ui.components.BadgeRow
 import com.buco7854.opentv.ui.components.CastRow
@@ -294,7 +294,6 @@ fun SeriesDetailScreen(
     playlistId: Long,
     seriesKey: String,
     onBack: () -> Unit,
-    onPlay: (url: String, title: String) -> Unit,
     onOpenEpisode: (channelId: Long) -> Unit,
 ) {
     val episodes by OpenTvApp.graph.db.channelDao()
@@ -382,8 +381,7 @@ fun SeriesDetailScreen(
                 EpisodeRow(
                     episode = episode,
                     downloadState = downloadsByUrl[episode.url],
-                    onPlay = { onPlay(episode.url, episode.name) },
-                    onDetails = { onOpenEpisode(episode.id) },
+                    onOpen = { onOpenEpisode(episode.id) },
                     onDownload = {
                         scope.launch {
                             val blocked = OpenTvApp.graph.downloads.enqueue(episode)
@@ -467,12 +465,11 @@ private fun EpisodeThumb(image: String?, modifier: Modifier = Modifier) {
 internal fun EpisodeRow(
     episode: ChannelEntity,
     downloadState: DownloadEntity?,
-    onPlay: () -> Unit,
-    onDetails: () -> Unit,
+    onOpen: () -> Unit,
     onDownload: () -> Unit,
 ) {
     Card(
-        onClick = onPlay,
+        onClick = onOpen,
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
         modifier = Modifier.padding(vertical = 4.dp).focusHighlight(),
@@ -504,13 +501,8 @@ internal fun EpisodeRow(
                     )
                 }
             }
-            IconButton(onClick = onDetails) {
-                Icon(
-                    Icons.Outlined.Info,
-                    contentDescription = "Episode details",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            // Single trailing action keeps titles readable; the card itself
+            // opens the episode page where Play lives.
             DownloadStateIcon(state = downloadState, onDownload = onDownload)
         }
     }
@@ -532,6 +524,7 @@ fun EpisodeDetailScreen(
     var episode by remember { mutableStateOf<ChannelEntity?>(null) }
     var seriesTitle by remember { mutableStateOf<String?>(null) }
     var info by remember { mutableStateOf<MetadataEntity?>(null) }
+    var seriesCast by remember { mutableStateOf<List<com.buco7854.opentv.data.meta.CastMember>>(emptyList()) }
     val downloads by graph.downloads.downloads.collectAsState(initial = emptyList())
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -542,10 +535,16 @@ fun EpisodeDetailScreen(
         // The series name behind this episode: Xtream episodes key by series id,
         // M3U episodes key by the series title itself.
         val key = ep.seriesKey
-        seriesTitle = if (key != null && key.startsWith("xs:")) {
-            key.removePrefix("xs:").toLongOrNull()
-                ?.let { graph.db.xtreamSeriesDao().get(ep.playlistId, it)?.name }
-        } else key
+        if (key != null && key.startsWith("xs:")) {
+            val xtreamSeries = key.removePrefix("xs:").toLongOrNull()
+                ?.let { graph.db.xtreamSeriesDao().get(ep.playlistId, it) }
+            seriesTitle = xtreamSeries?.name
+            seriesCast = castFromNames(xtreamSeries?.castNames)
+        } else {
+            seriesTitle = key
+            // Cached series lookup - no extra network beyond the series page.
+            seriesCast = key?.let { decodeCast(graph.metadata.forTitle(true, it)?.castJson) }.orEmpty()
+        }
         if (ep.description == null && ep.season != null && ep.episode != null && seriesTitle != null) {
             info = graph.metadata.episodeInfo(seriesTitle!!, ep.season, ep.episode)
         }
@@ -624,6 +623,16 @@ fun EpisodeDetailScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+                if (seriesCast.isNotEmpty()) {
+                    Spacer(Modifier.height(14.dp))
+                    Text(
+                        "Cast",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    CastRow(seriesCast)
                 }
                 Spacer(Modifier.height(24.dp))
                 Button(

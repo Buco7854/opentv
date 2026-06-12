@@ -29,6 +29,7 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.ViewList
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.MoreVert
@@ -207,6 +208,9 @@ fun BrowseScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { viewModel.group.value = BrowseViewModel.FAVORITES_GROUP }) {
+                        Icon(Icons.Rounded.Favorite, contentDescription = "Favorites")
+                    }
                     IconButton(onClick = { viewModel.toggleGridView() }) {
                         Icon(
                             if (gridView) Icons.AutoMirrored.Rounded.ViewList else Icons.Rounded.GridView,
@@ -326,6 +330,7 @@ fun BrowseScreen(
         GuideSheet(
             channel = channel,
             viewModel = viewModel,
+            hasEpgConfigured = playlist?.epgUrl != null,
             onDismiss = { guideChannel = null },
             onPlayCatchup = { url, title ->
                 guideChannel = null
@@ -412,38 +417,11 @@ private fun GroupList(
         EmptyState("Nothing here yet", "This playlist has no items of this type.")
         return
     }
-    // Providers often ship hundreds of categories; a local filter beats scrolling.
-    var filter by remember { mutableStateOf("") }
-    val shown = if (filter.isBlank()) groups
-    else groups.filter { it.groupTitle.contains(filter, ignoreCase = true) }
-
-    Column {
-        if (groups.size > 8) {
-            OutlinedTextField(
-                value = filter,
-                onValueChange = { filter = it },
-                placeholder = { Text("Filter categories…") },
-                leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
-                trailingIcon = {
-                    if (filter.isNotEmpty()) {
-                        IconButton(onClick = { filter = "" }) {
-                            Icon(Icons.Rounded.Close, contentDescription = "Clear")
-                        }
-                    }
-                },
-                singleLine = true,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-                    .padding(top = 12.dp),
-            )
-        }
-        LazyColumn(
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            items(shown, key = { it.groupTitle }) { groupCount ->
+    LazyColumn(
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        items(groups, key = { it.groupTitle }) { groupCount ->
             Card(
                 onClick = { onSelect(groupCount.groupTitle) },
                 shape = RoundedCornerShape(16.dp),
@@ -489,7 +467,6 @@ private fun GroupList(
                     }
                 }
             }
-        }
         }
     }
 }
@@ -700,6 +677,7 @@ private fun ChannelRow(
 private fun GuideSheet(
     channel: ChannelEntity,
     viewModel: BrowseViewModel,
+    hasEpgConfigured: Boolean,
     onDismiss: () -> Unit,
     onPlayCatchup: (url: String, title: String) -> Unit,
 ) {
@@ -722,7 +700,9 @@ private fun GuideSheet(
             when {
                 list == null -> Text("Loading…", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 list.isEmpty() -> Text(
-                    "No guide data for this channel. Add an XMLTV EPG URL to your playlist.",
+                    // Don't tell users with an auto-wired EPG (Xtream) to add one.
+                    if (hasEpgConfigured) "No guide data for this channel."
+                    else "No guide data for this channel. Add an XMLTV EPG URL to your playlist.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 else -> {

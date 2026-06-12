@@ -36,8 +36,8 @@ data class PlayerSettings(
     val downloadLimit: Int = DOWNLOADS_AUTO,
     /** SAF tree URI for downloads; "" = app-private storage. */
     val downloadDirUri: String = "",
-    /** Browse movies/series as a poster grid instead of row lists. */
-    val gridBrowse: Boolean = false,
+    /** Browse movies/series as a poster grid (default) or row lists. */
+    val gridBrowse: Boolean = true,
 ) {
     companion object {
         const val BUFFER_FAST_START = 0
@@ -79,7 +79,7 @@ class PlayerPrefs(private val context: Context) {
             bufferPreset = prefs[Keys.BUFFER_PRESET] ?: PlayerSettings.BUFFER_BALANCED,
             downloadLimit = prefs[Keys.DOWNLOAD_LIMIT] ?: PlayerSettings.DOWNLOADS_AUTO,
             downloadDirUri = prefs[Keys.DOWNLOAD_DIR] ?: "",
-            gridBrowse = prefs[Keys.GRID_BROWSE] ?: false,
+            gridBrowse = prefs[Keys.GRID_BROWSE] ?: true,
         )
     }
 

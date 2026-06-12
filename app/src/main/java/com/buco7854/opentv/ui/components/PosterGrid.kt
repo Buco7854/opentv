@@ -95,7 +95,6 @@ fun PosterGrid(
                             item.title,
                             style = MaterialTheme.typography.labelLarge,
                             maxLines = 2,
-                            minLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )
                         item.subtitle?.let {

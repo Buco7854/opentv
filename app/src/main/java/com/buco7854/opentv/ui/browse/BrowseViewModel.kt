@@ -182,7 +182,7 @@ class BrowseViewModel(app: Application, val playlistId: Long) : AndroidViewModel
     /** Poster-grid vs row-list browsing, persisted across sessions. */
     val gridView: StateFlow<Boolean> = graph.playerPrefs.settings
         .map { it.gridBrowse }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
 
     fun toggleGridView() {
         viewModelScope.launch {

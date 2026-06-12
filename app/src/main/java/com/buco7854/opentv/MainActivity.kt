@@ -119,7 +119,6 @@ fun AppNav() {
                 playlistId = entry.arguments!!.getLong("playlistId"),
                 seriesId = entry.arguments!!.getLong("seriesId"),
                 onBack = { nav.popBackStack() },
-                onPlay = { url, title -> nav.navigate(Routes.player(url, title)) },
                 onOpenEpisode = { nav.navigate(Routes.episode(it)) },
             )
         }
@@ -154,7 +153,6 @@ fun AppNav() {
                 playlistId = entry.arguments!!.getLong("playlistId"),
                 seriesKey = entry.arguments!!.getString("seriesKey")!!,
                 onBack = { nav.popBackStack() },
-                onPlay = { url, title -> nav.navigate(Routes.player(url, title)) },
                 onOpenEpisode = { nav.navigate(Routes.episode(it)) },
             )
         }
