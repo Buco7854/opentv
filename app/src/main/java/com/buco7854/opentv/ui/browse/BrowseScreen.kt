@@ -81,6 +81,8 @@ fun BrowseScreen(
     onBack: () -> Unit,
     onSearch: () -> Unit,
     onPlay: (url: String, title: String, tvgId: String?) -> Unit,
+    onOpenMovie: (channelId: Long) -> Unit,
+    onOpenSeries: (seriesKey: String) -> Unit,
 ) {
     val viewModel: BrowseViewModel = viewModel(
         key = "browse-$playlistId",
@@ -94,11 +96,9 @@ fun BrowseScreen(
     val playlist by viewModel.playlist.collectAsState()
     val tab by viewModel.tab.collectAsState()
     val group by viewModel.group.collectAsState()
-    val series by viewModel.series.collectAsState()
     val groups by viewModel.groups.collectAsState()
     val channels by viewModel.channels.collectAsState()
     val seriesGroups by viewModel.seriesGroups.collectAsState()
-    val episodes by viewModel.episodes.collectAsState()
     val nowAiring by viewModel.nowAiring.collectAsState()
     val account by viewModel.account.collectAsState()
     val liveCount by viewModel.liveCount.collectAsState()
@@ -141,11 +141,7 @@ fun BrowseScreen(
     }
 
     BackHandler {
-        when {
-            series != null -> viewModel.series.value = null
-            group != null -> viewModel.group.value = null
-            else -> onBack()
-        }
+        if (group != null) viewModel.group.value = null else onBack()
     }
 
     Scaffold(
@@ -155,7 +151,7 @@ fun BrowseScreen(
                 title = {
                     Column {
                         Text(
-                            series ?: group ?: playlist?.name ?: "Browse",
+                            group ?: playlist?.name ?: "Browse",
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -183,11 +179,7 @@ fun BrowseScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = {
-                        when {
-                            series != null -> viewModel.series.value = null
-                            group != null -> viewModel.group.value = null
-                            else -> onBack()
-                        }
+                        if (group != null) viewModel.group.value = null else onBack()
                     }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
                     }
@@ -217,22 +209,17 @@ fun BrowseScreen(
             when {
                 group == null -> GroupList(groups) { viewModel.group.value = it }
 
-                tab == ChannelKind.SERIES && series == null -> SeriesList(seriesGroups) {
-                    viewModel.series.value = it
-                }
+                // Series open their own page (poster, season picker, episodes).
+                tab == ChannelKind.SERIES -> SeriesList(seriesGroups) { onOpenSeries(it) }
 
-                tab == ChannelKind.SERIES -> ChannelList(
-                    channels = episodes,
-                    nowAiring = emptyMap(),
-                    onPlay = { onPlay(it.url, it.name, null) },
-                    onDownload = download,
-                    onGuide = null,
-                )
-
+                // Movies open a detail page with play/download; live plays directly.
                 else -> ChannelList(
                     channels = channels,
                     nowAiring = if (tab == ChannelKind.LIVE) nowAiring else emptyMap(),
-                    onPlay = { onPlay(it.url, it.name, it.tvgId) },
+                    onPlay = {
+                        if (tab == ChannelKind.MOVIE) onOpenMovie(it.id)
+                        else onPlay(it.url, it.name, it.tvgId)
+                    },
                     onDownload = if (tab == ChannelKind.MOVIE) download else null,
                     onGuide = if (tab == ChannelKind.LIVE) ({ guideChannel = it }) else null,
                 )

@@ -1,6 +1,8 @@
 package com.buco7854.opentv.ui.player
 
 import android.app.Activity
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.graphics.Typeface
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
@@ -15,9 +17,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AspectRatio
+import androidx.compose.material.icons.rounded.ScreenRotation
 import androidx.compose.material.icons.rounded.Subtitles
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -42,6 +46,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
@@ -78,6 +83,7 @@ import com.buco7854.opentv.data.prefs.SubtitleStyle
 import com.buco7854.opentv.diag.ErrorLog
 import com.buco7854.opentv.ui.components.SubtitleStyleControls
 import com.buco7854.opentv.ui.theme.Mint
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
@@ -109,6 +115,15 @@ fun PlayerScreen(
     var showTracks by remember { mutableStateOf(false) }
     var showStyle by remember { mutableStateOf(false) }
     var playerView by remember { mutableStateOf<PlayerView?>(null) }
+    var scaleHint by remember { mutableStateOf<String?>(null) }
+    val configuration = LocalConfiguration.current
+
+    LaunchedEffect(scaleHint) {
+        if (scaleHint != null) {
+            delay(1400)
+            scaleHint = null
+        }
+    }
 
     val settingsState by OpenTvApp.graph.playerPrefs.settings.collectAsState(initial = null)
     // Wait for the (near-instant) first DataStore emission so the player is
@@ -192,15 +207,18 @@ fun PlayerScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // Immersive fullscreen while the player is open.
+    // Immersive fullscreen while the player is open; restore bars and free
+    // orientation when leaving.
     DisposableEffect(Unit) {
-        val window = (context as? Activity)?.window
+        val activity = context as? Activity
+        val window = activity?.window
         val controller = window?.let { WindowInsetsControllerCompat(it, view) }
         controller?.hide(WindowInsetsCompat.Type.systemBars())
         controller?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         window?.let { WindowCompat.setDecorFitsSystemWindows(it, false) }
         onDispose {
             controller?.show(WindowInsetsCompat.Type.systemBars())
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
     }
 
@@ -244,6 +262,18 @@ fun PlayerScreen(
             modifier = Modifier.fillMaxSize(),
         )
 
+        scaleHint?.let { hint ->
+            Text(
+                hint,
+                color = Color.White,
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
+                    .padding(horizontal = 18.dp, vertical = 8.dp),
+            )
+        }
+
         Row(
             Modifier
                 .fillMaxWidth()
@@ -271,10 +301,24 @@ fun PlayerScreen(
                 }
             }
             IconButton(onClick = {
+                val activity = context as? Activity
+                val landscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+                activity?.requestedOrientation =
+                    if (landscape) ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+                    else ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            }) {
+                Icon(Icons.Rounded.ScreenRotation, contentDescription = "Rotate screen", tint = Color.White)
+            }
+            IconButton(onClick = {
                 resizeMode = when (resizeMode) {
                     AspectRatioFrameLayout.RESIZE_MODE_FIT -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                     AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> AspectRatioFrameLayout.RESIZE_MODE_FILL
                     else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+                }
+                scaleHint = when (resizeMode) {
+                    AspectRatioFrameLayout.RESIZE_MODE_ZOOM -> "Zoom"
+                    AspectRatioFrameLayout.RESIZE_MODE_FILL -> "Stretch"
+                    else -> "Fit"
                 }
                 scope.launch { OpenTvApp.graph.playerPrefs.save(settings.copy(resizeMode = resizeMode)) }
             }) {

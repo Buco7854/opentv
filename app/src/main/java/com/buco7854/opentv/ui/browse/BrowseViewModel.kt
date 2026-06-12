@@ -32,7 +32,6 @@ class BrowseViewModel(app: Application, val playlistId: Long) : AndroidViewModel
 
     val tab = MutableStateFlow(ChannelKind.LIVE)
     val group = MutableStateFlow<String?>(null)
-    val series = MutableStateFlow<String?>(null)
 
     val groups: StateFlow<List<GroupCount>> = tab
         .flatMapLatest { channelDao.observeGroups(playlistId, it) }
@@ -49,12 +48,6 @@ class BrowseViewModel(app: Application, val playlistId: Long) : AndroidViewModel
         .flatMapLatest { (t, g) ->
             if (g == null || t != ChannelKind.SERIES) flowOf(emptyList())
             else channelDao.observeSeriesInGroup(playlistId, g)
-        }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    val episodes: StateFlow<List<ChannelEntity>> = series
-        .flatMapLatest { s ->
-            if (s == null) flowOf(emptyList()) else channelDao.observeEpisodes(playlistId, s)
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -100,7 +93,6 @@ class BrowseViewModel(app: Application, val playlistId: Long) : AndroidViewModel
     fun selectTab(kind: Int) {
         tab.value = kind
         group.value = null
-        series.value = null
     }
 
     fun reloadNowAiring() {

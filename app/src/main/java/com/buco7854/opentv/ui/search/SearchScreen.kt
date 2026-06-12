@@ -47,12 +47,12 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.compose.runtime.LaunchedEffect
 import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.data.db.ChannelEntity
+import com.buco7854.opentv.data.db.ChannelKind
 import com.buco7854.opentv.diag.ErrorLog
 import com.buco7854.opentv.ui.components.ChannelLogo
 import com.buco7854.opentv.ui.components.EmptyState
 import com.buco7854.opentv.ui.components.Pill
 import com.buco7854.opentv.ui.components.kindIcon
-import com.buco7854.opentv.ui.components.kindLabel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -63,30 +63,57 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 
+/** One row per series, however many episodes matched. */
+data class SeriesHit(val seriesKey: String, val count: Int, val logo: String?, val groupTitle: String)
+
+data class SearchResults(
+    val live: List<ChannelEntity> = emptyList(),
+    val movies: List<ChannelEntity> = emptyList(),
+    val series: List<SeriesHit> = emptyList(),
+) {
+    val isEmpty get() = live.isEmpty() && movies.isEmpty() && series.isEmpty()
+}
+
 @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 class SearchViewModel(app: Application, private val playlistId: Long) : AndroidViewModel(app) {
 
     val query = MutableStateFlow("")
 
     /** Debounced so we only hit the DB ~3 times a second max while typing. */
-    val results: StateFlow<List<ChannelEntity>> = query
+    val results: StateFlow<SearchResults> = query
         .debounce(250)
         .distinctUntilChanged()
         .mapLatest { q ->
-            if (q.trim().length < 2) emptyList()
+            if (q.trim().length < 2) SearchResults()
             else try {
                 // Escape LIKE wildcards so "100%" doesn't match everything.
                 val escaped = q.trim()
                     .replace("\\", "\\\\")
                     .replace("%", "\\%")
                     .replace("_", "\\_")
-                OpenTvApp.graph.db.channelDao().search(playlistId, escaped)
+                val rows = OpenTvApp.graph.db.channelDao().search(playlistId, escaped)
+                SearchResults(
+                    live = rows.filter { it.kind == ChannelKind.LIVE },
+                    movies = rows.filter { it.kind == ChannelKind.MOVIE },
+                    // Episodes collapse into one row per show; the series page
+                    // handles seasons and episode listing.
+                    series = rows.filter { it.kind == ChannelKind.SERIES }
+                        .groupBy { it.seriesKey ?: it.name }
+                        .map { (key, episodes) ->
+                            SeriesHit(
+                                seriesKey = key,
+                                count = episodes.size,
+                                logo = episodes.firstOrNull { it.logo != null }?.logo,
+                                groupTitle = episodes.first().groupTitle,
+                            )
+                        },
+                )
             } catch (e: Exception) {
                 ErrorLog.log("Search", e)
-                emptyList()
+                SearchResults()
             }
         }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SearchResults())
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -95,6 +122,8 @@ fun SearchScreen(
     playlistId: Long,
     onBack: () -> Unit,
     onPlay: (url: String, title: String) -> Unit,
+    onOpenMovie: (channelId: Long) -> Unit,
+    onOpenSeries: (seriesKey: String) -> Unit,
 ) {
     val viewModel: SearchViewModel = viewModel(
         key = "search-$playlistId",
@@ -146,44 +175,102 @@ fun SearchScreen(
                     "Search everything",
                     "Looks across all categories: live, movies and series.",
                 )
-                results.isEmpty() -> EmptyState("No results", "Nothing matches \"$query\".")
+                results.isEmpty -> EmptyState("No results", "Nothing matches \"$query\".")
                 else -> LazyColumn(
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    items(results, key = { it.id }) { channel ->
-                        Card(
-                            onClick = { onPlay(channel.url, channel.name) },
-                            shape = RoundedCornerShape(16.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-                        ) {
-                            Row(
-                                Modifier.fillMaxWidth().padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                ChannelLogo(channel.logo, kindIcon(channel.kind))
-                                Spacer(Modifier.width(14.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text(
-                                        channel.name,
-                                        style = MaterialTheme.typography.titleSmall,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    Text(
-                                        channel.groupTitle,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                                Pill(kindLabel(channel.kind))
-                            }
+                    if (results.live.isNotEmpty()) {
+                        item { SectionHeader("Live") }
+                        items(results.live, key = { it.id }) { channel ->
+                            ResultRow(
+                                title = channel.name,
+                                subtitle = channel.groupTitle,
+                                logo = channel.logo,
+                                kind = channel.kind,
+                                badge = "Live",
+                                onClick = { onPlay(channel.url, channel.name) },
+                            )
+                        }
+                    }
+                    if (results.movies.isNotEmpty()) {
+                        item { SectionHeader("Movies") }
+                        items(results.movies, key = { it.id }) { channel ->
+                            ResultRow(
+                                title = channel.name,
+                                subtitle = channel.groupTitle,
+                                logo = channel.logo,
+                                kind = channel.kind,
+                                badge = "Movie",
+                                onClick = { onOpenMovie(channel.id) },
+                            )
+                        }
+                    }
+                    if (results.series.isNotEmpty()) {
+                        item { SectionHeader("Series") }
+                        items(results.series, key = { "series-" + it.seriesKey }) { hit ->
+                            ResultRow(
+                                title = hit.seriesKey,
+                                subtitle = "${hit.groupTitle} · ${hit.count} matching episodes",
+                                logo = hit.logo,
+                                kind = ChannelKind.SERIES,
+                                badge = "Series",
+                                onClick = { onOpenSeries(hit.seriesKey) },
+                            )
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun SectionHeader(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.titleMedium,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
+    )
+}
+
+@Composable
+private fun ResultRow(
+    title: String,
+    subtitle: String,
+    logo: String?,
+    kind: Int,
+    badge: String,
+    onClick: () -> Unit,
+) {
+    Card(
+        onClick = onClick,
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ChannelLogo(logo, kindIcon(kind))
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Pill(badge)
         }
     }
 }

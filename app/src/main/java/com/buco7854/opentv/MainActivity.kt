@@ -15,6 +15,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.buco7854.opentv.ui.browse.BrowseScreen
+import com.buco7854.opentv.ui.details.MovieDetailScreen
+import com.buco7854.opentv.ui.details.SeriesDetailScreen
 import com.buco7854.opentv.ui.diag.LogScreen
 import com.buco7854.opentv.ui.downloads.DownloadsScreen
 import com.buco7854.opentv.ui.home.HomeScreen
@@ -40,6 +42,8 @@ class MainActivity : ComponentActivity() {
 object Routes {
     fun browse(playlistId: Long) = "browse/$playlistId"
     fun search(playlistId: Long) = "search/$playlistId"
+    fun movie(channelId: Long) = "movie/$channelId"
+    fun series(playlistId: Long, seriesKey: String) = "series/$playlistId/${Uri.encode(seriesKey)}"
     fun player(url: String, title: String, playlistId: Long = -1, tvgId: String? = null) =
         "player?u=${Uri.encode(url)}&t=${Uri.encode(title)}&p=$playlistId&c=${Uri.encode(tvgId ?: "")}"
     const val DOWNLOADS = "downloads"
@@ -76,6 +80,32 @@ fun AppNav() {
                 onBack = { nav.popBackStack() },
                 onSearch = { nav.navigate(Routes.search(playlistId)) },
                 onPlay = { url, title, tvgId -> nav.navigate(Routes.player(url, title, playlistId, tvgId)) },
+                onOpenMovie = { nav.navigate(Routes.movie(it)) },
+                onOpenSeries = { nav.navigate(Routes.series(playlistId, it)) },
+            )
+        }
+        composable(
+            route = "movie/{channelId}",
+            arguments = listOf(navArgument("channelId") { type = NavType.LongType }),
+        ) { entry ->
+            MovieDetailScreen(
+                channelId = entry.arguments!!.getLong("channelId"),
+                onBack = { nav.popBackStack() },
+                onPlay = { url, title -> nav.navigate(Routes.player(url, title)) },
+            )
+        }
+        composable(
+            route = "series/{playlistId}/{seriesKey}",
+            arguments = listOf(
+                navArgument("playlistId") { type = NavType.LongType },
+                navArgument("seriesKey") { type = NavType.StringType },
+            ),
+        ) { entry ->
+            SeriesDetailScreen(
+                playlistId = entry.arguments!!.getLong("playlistId"),
+                seriesKey = entry.arguments!!.getString("seriesKey")!!,
+                onBack = { nav.popBackStack() },
+                onPlay = { url, title -> nav.navigate(Routes.player(url, title)) },
             )
         }
         composable(
@@ -87,6 +117,8 @@ fun AppNav() {
                 playlistId = playlistId,
                 onBack = { nav.popBackStack() },
                 onPlay = { url, title -> nav.navigate(Routes.player(url, title, playlistId)) },
+                onOpenMovie = { nav.navigate(Routes.movie(it)) },
+                onOpenSeries = { nav.navigate(Routes.series(playlistId, it)) },
             )
         }
         composable(Routes.DOWNLOADS) {
