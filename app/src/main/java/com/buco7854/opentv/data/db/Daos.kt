@@ -103,6 +103,19 @@ interface ChannelDao {
     )
     fun observeAllSeries(playlistId: Long): Flow<List<SeriesGroup>>
 
+    /** Immediate best-effort retag of a corrected category (refined at next refresh). */
+    @Query(
+        "UPDATE channels SET kind = :kind, seriesKey = NULL, season = NULL, episode = NULL " +
+            "WHERE playlistId = :playlistId AND groupTitle = :groupTitle"
+    )
+    suspend fun retagGroup(playlistId: Long, groupTitle: String, kind: Int)
+
+    @Query(
+        "UPDATE channels SET kind = 2, seriesKey = name WHERE playlistId = :playlistId " +
+            "AND groupTitle = :groupTitle"
+    )
+    suspend fun retagGroupAsSeries(playlistId: Long, groupTitle: String)
+
     @Query("DELETE FROM channels WHERE playlistId = :playlistId AND seriesKey = :seriesKey")
     suspend fun deleteEpisodes(playlistId: Long, seriesKey: String)
 }
@@ -175,6 +188,21 @@ interface EpgDao {
 
     @Query("SELECT COUNT(*) FROM programmes WHERE playlistId = :playlistId")
     suspend fun count(playlistId: Long): Int
+}
+
+@Dao
+interface GroupOverrideDao {
+    @Query("SELECT * FROM group_overrides WHERE playlistId = :playlistId")
+    suspend fun forPlaylist(playlistId: Long): List<GroupOverrideEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(override: GroupOverrideEntity)
+
+    @Query("DELETE FROM group_overrides WHERE playlistId = :playlistId AND groupTitle = :groupTitle")
+    suspend fun remove(playlistId: Long, groupTitle: String)
+
+    @Query("DELETE FROM group_overrides WHERE playlistId = :playlistId")
+    suspend fun deleteForPlaylist(playlistId: Long)
 }
 
 @Dao

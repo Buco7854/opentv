@@ -58,6 +58,18 @@ class BrowseViewModel(app: Application, val playlistId: Long) : AndroidViewModel
         .map { list -> list.map { it.key }.toSet() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
 
+    /** User correction for a misclassified M3U category; null = back to automatic. */
+    fun setGroupKind(groupTitle: String, kind: Int?) {
+        viewModelScope.launch {
+            graph.playlists.setGroupOverride(playlistId, groupTitle, kind)
+            _message.value = if (kind == null) {
+                "Category back to automatic — applies at next refresh"
+            } else {
+                "Category updated — series grouping refines at next refresh"
+            }
+        }
+    }
+
     fun toggleFavorite(key: String, kind: Int) {
         viewModelScope.launch {
             val dao = graph.db.favoriteDao()

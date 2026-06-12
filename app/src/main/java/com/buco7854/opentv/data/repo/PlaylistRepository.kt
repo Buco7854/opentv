@@ -5,8 +5,10 @@ import android.net.Uri
 import com.buco7854.opentv.data.db.AppDatabase
 import com.buco7854.opentv.data.db.ChannelEntity
 import com.buco7854.opentv.data.db.ChannelKind
+import com.buco7854.opentv.data.db.GroupOverrideEntity
 import com.buco7854.opentv.data.db.PlaylistEntity
 import com.buco7854.opentv.data.db.XtreamSeriesEntity
+import com.buco7854.opentv.data.m3u.ContentClassifier
 import com.buco7854.opentv.data.m3u.M3uParser
 import com.buco7854.opentv.data.net.Http
 import com.buco7854.opentv.data.xtream.Xtream
@@ -84,7 +86,7 @@ class PlaylistRepository(private val db: AppDatabase) {
             val id = db.playlistDao().insert(PlaylistEntity(name = name.ifBlank { "Imported playlist" }, url = null))
             var epgFromFile: String? = null
             val count = resolver.openInputStream(uri)?.use { stream ->
-                ingest(id, BufferedReader(InputStreamReader(stream))) { epgFromFile = it }
+                ingest(id, BufferedReader(InputStreamReader(stream)), emptyMap()) { epgFromFile = it }
             } ?: 0
             val playlist = db.playlistDao().get(id)!!
             db.playlistDao().update(
@@ -133,13 +135,15 @@ class PlaylistRepository(private val db: AppDatabase) {
                 }
                 is Http.FetchResult.Success -> result.response.use { response ->
                     var epgFromFile: String? = null
+                    val overrides = db.groupOverrideDao().forPlaylist(playlistId)
+                        .associate { it.groupTitle to it.kind }
                     val reader = BufferedReader(InputStreamReader(Http.bodyStream(response)))
                     // Drop the validators BEFORE wiping: if ingest dies mid-stream,
                     // the next refresh must re-download rather than get a 304
                     // against a now-empty channel table.
                     db.playlistDao().update(playlist.copy(etag = null, lastModified = null))
                     db.channelDao().deleteForPlaylist(playlistId)
-                    val count = ingest(playlistId, reader) { epgFromFile = it }
+                    val count = ingest(playlistId, reader, overrides) { epgFromFile = it }
                     db.playlistDao().update(
                         playlist.copy(
                             etag = result.etag,
@@ -265,11 +269,34 @@ class PlaylistRepository(private val db: AppDatabase) {
     private fun ingest(
         playlistId: Long,
         reader: BufferedReader,
+        overrides: Map<String, Int>,
         onEpgUrl: (String?) -> Unit,
     ): Int {
         val batch = ArrayList<ChannelEntity>(500)
         var position = 0
         M3uParser.parse(reader, onHeader = { onEpgUrl(it.epgUrl) }) { entry ->
+            // User corrections beat the heuristics: a whole category can be
+            // forced to LIVE / MOVIE / SERIES.
+            var kind = entry.kind
+            var seriesKey = entry.seriesKey
+            var season = entry.season
+            var episode = entry.episode
+            when (val forced = overrides[entry.groupTitle]) {
+                null, kind -> {}
+                ChannelKind.SERIES -> {
+                    val c = ContentClassifier.asSeries(entry.name)
+                    kind = ChannelKind.SERIES
+                    seriesKey = c.seriesKey
+                    season = c.season
+                    episode = c.episode
+                }
+                else -> {
+                    kind = forced
+                    seriesKey = null
+                    season = null
+                    episode = null
+                }
+            }
             batch.add(
                 ChannelEntity(
                     playlistId = playlistId,
@@ -278,12 +305,12 @@ class PlaylistRepository(private val db: AppDatabase) {
                     logo = entry.logo,
                     groupTitle = entry.groupTitle,
                     tvgId = entry.tvgId,
-                    kind = entry.kind,
-                    seriesKey = entry.seriesKey,
-                    season = entry.season,
-                    episode = entry.episode,
+                    kind = kind,
+                    seriesKey = seriesKey,
+                    season = season,
+                    episode = episode,
                     position = position++,
-                    catchupDays = entry.catchupDays,
+                    catchupDays = if (kind == ChannelKind.LIVE) entry.catchupDays else 0,
                 )
             )
             if (batch.size >= 500) {
@@ -295,11 +322,31 @@ class PlaylistRepository(private val db: AppDatabase) {
         return position
     }
 
+    /**
+     * Record a user correction for a misclassified category and retag the
+     * existing rows immediately. Series regrouping (SxxExx extraction) is
+     * approximate until the next refresh re-ingests with the override.
+     */
+    suspend fun setGroupOverride(playlistId: Long, groupTitle: String, kind: Int?) =
+        withContext(Dispatchers.IO) {
+            if (kind == null) {
+                db.groupOverrideDao().remove(playlistId, groupTitle)
+            } else {
+                db.groupOverrideDao().upsert(GroupOverrideEntity(playlistId, groupTitle, kind))
+                if (kind == ChannelKind.SERIES) {
+                    db.channelDao().retagGroupAsSeries(playlistId, groupTitle)
+                } else {
+                    db.channelDao().retagGroup(playlistId, groupTitle, kind)
+                }
+            }
+        }
+
     suspend fun delete(playlistId: Long) = withContext(Dispatchers.IO) {
         db.channelDao().deleteForPlaylist(playlistId)
         db.epgDao().deleteForPlaylist(playlistId)
         db.xtreamSeriesDao().deleteForPlaylist(playlistId)
         db.favoriteDao().deleteForPlaylist(playlistId)
+        db.groupOverrideDao().deleteForPlaylist(playlistId)
         db.playlistDao().delete(playlistId)
     }
 

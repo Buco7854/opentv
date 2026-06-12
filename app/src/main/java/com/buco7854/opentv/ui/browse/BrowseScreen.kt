@@ -30,6 +30,7 @@ import androidx.compose.material.icons.automirrored.rounded.ViewList
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.GridView
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Replay
 import androidx.compose.material.icons.rounded.Search
@@ -115,6 +116,7 @@ fun BrowseScreen(
 
     val snackbar = remember { SnackbarHostState() }
     var guideChannel by remember { mutableStateOf<ChannelEntity?>(null) }
+    var correctingGroup by remember { mutableStateOf<String?>(null) }
 
     // Downloads show a progress notification; on Android 13+ that needs a runtime grant.
     val context = LocalContext.current
@@ -220,7 +222,12 @@ fun BrowseScreen(
             }
 
             when {
-                group == null -> GroupList(groups) { viewModel.group.value = it }
+                group == null -> GroupList(
+                    groups = groups,
+                    // Xtream categories come from the panel; only M3U guessing needs correcting.
+                    onCorrect = if (isXtreamNative) null else ({ correctingGroup = it }),
+                    onSelect = { viewModel.group.value = it },
+                )
 
                 // Native Xtream playlists list the panel's series catalog.
                 tab == ChannelKind.SERIES && isXtreamNative ->
@@ -287,6 +294,17 @@ fun BrowseScreen(
                 )
             }
         }
+    }
+
+    correctingGroup?.let { groupTitle ->
+        GroupKindDialog(
+            groupTitle = groupTitle,
+            onDismiss = { correctingGroup = null },
+            onSelect = { kind ->
+                correctingGroup = null
+                viewModel.setGroupKind(groupTitle, kind)
+            },
+        )
     }
 
     guideChannel?.let { channel ->
@@ -369,7 +387,11 @@ private fun XtreamSeriesList(
 }
 
 @Composable
-private fun GroupList(groups: List<com.buco7854.opentv.data.db.GroupCount>, onSelect: (String) -> Unit) {
+private fun GroupList(
+    groups: List<com.buco7854.opentv.data.db.GroupCount>,
+    onCorrect: ((String) -> Unit)?,
+    onSelect: (String) -> Unit,
+) {
     if (groups.isEmpty()) {
         EmptyState("Nothing here yet", "This playlist has no items of this type.")
         return
@@ -385,7 +407,7 @@ private fun GroupList(groups: List<com.buco7854.opentv.data.db.GroupCount>, onSe
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
             ) {
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(
@@ -397,7 +419,7 @@ private fun GroupList(groups: List<com.buco7854.opentv.data.db.GroupCount>, onSe
                     Text(
                         groupCount.groupTitle,
                         style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).padding(vertical = 10.dp),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -406,15 +428,63 @@ private fun GroupList(groups: List<com.buco7854.opentv.data.db.GroupCount>, onSe
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Icon(
-                        Icons.AutoMirrored.Rounded.KeyboardArrowRight,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    if (onCorrect != null && groupCount.groupTitle != BrowseViewModel.FAVORITES_GROUP) {
+                        IconButton(onClick = { onCorrect(groupCount.groupTitle) }) {
+                            Icon(
+                                Icons.Rounded.MoreVert,
+                                contentDescription = "Correct category type",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    } else {
+                        Icon(
+                            Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
     }
+}
+
+/** "This category is actually…" correction dialog for misclassified M3U groups. */
+@Composable
+private fun GroupKindDialog(
+    groupTitle: String,
+    onDismiss: () -> Unit,
+    onSelect: (kind: Int?) -> Unit,
+) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(groupTitle, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+        text = {
+            Column {
+                Text(
+                    "Wrongly classified? Tell the app what this whole category really contains. " +
+                        "Remembered and re-applied at every refresh.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(12.dp))
+                listOf(
+                    ChannelKind.LIVE to "Live TV",
+                    ChannelKind.MOVIE to "Movies",
+                    ChannelKind.SERIES to "Series",
+                ).forEach { (kind, label) ->
+                    androidx.compose.material3.TextButton(onClick = { onSelect(kind) }) { Text(label) }
+                }
+                androidx.compose.material3.TextButton(onClick = { onSelect(null) }) {
+                    Text("Automatic (use detection)")
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 @Composable

@@ -14,8 +14,9 @@ import androidx.room.RoomDatabase
         MetadataEntity::class,
         XtreamSeriesEntity::class,
         FavoriteEntity::class,
+        GroupOverrideEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -26,6 +27,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun metadataDao(): MetadataDao
     abstract fun xtreamSeriesDao(): XtreamSeriesDao
     abstract fun favoriteDao(): FavoriteDao
+    abstract fun groupOverrideDao(): GroupOverrideDao
 
     companion object {
         fun build(context: Context): AppDatabase =

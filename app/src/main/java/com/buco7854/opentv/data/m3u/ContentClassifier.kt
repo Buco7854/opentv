@@ -109,16 +109,22 @@ object ContentClassifier {
         if (kind != ChannelKind.SERIES) {
             return Classification(kind, null, null, null)
         }
+        return asSeries(name)
+    }
 
-        val seriesKey = episodeMatch
+    /** Treat [name] as a series episode regardless of other signals (used by
+     *  classify and by user-corrected categories). */
+    fun asSeries(name: String): Classification {
+        val marker = findEpisodeMarker(name)
+        val seriesKey = marker
             ?.let { name.substring(0, it.range.first).trim(' ', '-', '_', ':', '.', ',', '|') }
             ?.takeIf { it.isNotEmpty() }
             ?: name.trim()
         return Classification(
             kind = ChannelKind.SERIES,
             seriesKey = seriesKey.replace(Regex("""\s+"""), " "),
-            season = episodeMatch?.season,
-            episode = episodeMatch?.episode,
+            season = marker?.season,
+            episode = marker?.episode,
         )
     }
 

@@ -107,6 +107,18 @@ data class ProgrammeEntity(
 )
 
 /**
+ * User correction for a misclassified M3U category: "everything in this
+ * group-title is actually LIVE/MOVIE/SERIES". Applied at every refresh, so it
+ * permanently overrides the heuristics for messy providers.
+ */
+@Entity(tableName = "group_overrides", primaryKeys = ["playlistId", "groupTitle"])
+data class GroupOverrideEntity(
+    val playlistId: Long,
+    val groupTitle: String,
+    val kind: Int,
+)
+
+/**
  * A favorite, keyed by stable identity so it survives playlist refreshes
  * (channels are wiped and re-inserted on refresh, urls and series ids are
  * not). Key is the stream url for live/movies, the seriesKey for M3U series,
