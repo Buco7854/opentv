@@ -18,6 +18,9 @@ Media3/ExoPlayer and Room.
   `.m3u`/`.m3u8` file from device storage.
 - **List or poster grid** — browse movies and series as rows or as a portrait
   poster-card grid; one toggle in the browse bar, persisted.
+- **Favorites** — heart anything (live channels, movies, series) from rows or
+  detail pages; a "★ Favorites" group is pinned on top of each tab. Favorites
+  are keyed by stable identity so they survive playlist refreshes.
 - **Categories & search** — `group-title` tags become browsable folders, split into
   **Live / Movies / Series** tabs. A global search bar scans every category at once.
 - **Smart VOD detection** — M3U is a flat format, so content type is always a guess;

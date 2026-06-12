@@ -69,6 +69,7 @@ import com.buco7854.opentv.data.db.ProgrammeEntity
 import com.buco7854.opentv.data.db.XtreamSeriesEntity
 import com.buco7854.opentv.ui.components.ChannelLogo
 import com.buco7854.opentv.ui.components.DownloadStateIcon
+import com.buco7854.opentv.ui.components.FavoriteIcon
 import com.buco7854.opentv.ui.components.PosterGrid
 import com.buco7854.opentv.ui.components.PosterItem
 import com.buco7854.opentv.ui.components.kindIcon
@@ -105,6 +106,7 @@ fun BrowseScreen(
     val isXtreamNative by viewModel.isXtreamNative.collectAsState()
     val xtreamSeries by viewModel.xtreamSeries.collectAsState()
     val gridView by viewModel.gridView.collectAsState()
+    val favoriteKeys by viewModel.favoriteKeys.collectAsState()
     val account by viewModel.account.collectAsState()
     val liveCount by viewModel.liveCount.collectAsState()
     val movieCount by viewModel.movieCount.collectAsState()
@@ -231,7 +233,17 @@ fun BrowseScreen(
                             onClick = { id -> onOpenXtreamSeries(id.toLong()) },
                         )
                     } else {
-                        XtreamSeriesList(xtreamSeries) { onOpenXtreamSeries(it) }
+                        XtreamSeriesList(
+                            series = xtreamSeries,
+                            favoriteKeys = favoriteKeys,
+                            onToggleFavorite = {
+                                viewModel.toggleFavorite(
+                                    BrowseViewModel.xtreamFavKey(it),
+                                    ChannelKind.SERIES,
+                                )
+                            },
+                            onSelect = { onOpenXtreamSeries(it) },
+                        )
                     }
 
                 // Series open their own page (poster, season picker, episodes).
@@ -245,7 +257,12 @@ fun BrowseScreen(
                             onClick = { onOpenSeries(it) },
                         )
                     } else {
-                        SeriesList(seriesGroups) { onOpenSeries(it) }
+                        SeriesList(
+                            series = seriesGroups,
+                            favoriteKeys = favoriteKeys,
+                            onToggleFavorite = { viewModel.toggleFavorite(it, ChannelKind.SERIES) },
+                            onSelect = { onOpenSeries(it) },
+                        )
                     }
 
                 tab == ChannelKind.MOVIE && gridView -> PosterGrid(
@@ -259,6 +276,8 @@ fun BrowseScreen(
                     channels = channels,
                     nowAiring = if (tab == ChannelKind.LIVE) nowAiring else emptyMap(),
                     downloadsByUrl = if (tab == ChannelKind.MOVIE) downloadsByUrl else emptyMap(),
+                    favoriteKeys = favoriteKeys,
+                    onToggleFavorite = { viewModel.toggleFavorite(it.url, it.kind) },
                     onPlay = {
                         if (tab == ChannelKind.MOVIE) onOpenMovie(it.id)
                         else onPlay(it.url, it.name, it.tvgId)
@@ -284,7 +303,12 @@ fun BrowseScreen(
 }
 
 @Composable
-private fun XtreamSeriesList(series: List<XtreamSeriesEntity>, onSelect: (Long) -> Unit) {
+private fun XtreamSeriesList(
+    series: List<XtreamSeriesEntity>,
+    favoriteKeys: Set<String>,
+    onToggleFavorite: (Long) -> Unit,
+    onSelect: (Long) -> Unit,
+) {
     if (series.isEmpty()) {
         EmptyState("No series found", "This category has no series.")
         return
@@ -329,6 +353,10 @@ private fun XtreamSeriesList(series: List<XtreamSeriesEntity>, onSelect: (Long) 
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                    FavoriteIcon(
+                        isFavorite = BrowseViewModel.xtreamFavKey(item.seriesId) in favoriteKeys,
+                        onToggle = { onToggleFavorite(item.seriesId) },
+                    )
                     Icon(
                         Icons.AutoMirrored.Rounded.KeyboardArrowRight,
                         contentDescription = null,
@@ -390,7 +418,12 @@ private fun GroupList(groups: List<com.buco7854.opentv.data.db.GroupCount>, onSe
 }
 
 @Composable
-private fun SeriesList(series: List<com.buco7854.opentv.data.db.SeriesGroup>, onSelect: (String) -> Unit) {
+private fun SeriesList(
+    series: List<com.buco7854.opentv.data.db.SeriesGroup>,
+    favoriteKeys: Set<String>,
+    onToggleFavorite: (String) -> Unit,
+    onSelect: (String) -> Unit,
+) {
     if (series.isEmpty()) {
         EmptyState("No series found", "No episodes were detected in this category.")
         return
@@ -424,6 +457,10 @@ private fun SeriesList(series: List<com.buco7854.opentv.data.db.SeriesGroup>, on
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                    FavoriteIcon(
+                        isFavorite = item.seriesKey in favoriteKeys,
+                        onToggle = { onToggleFavorite(item.seriesKey) },
+                    )
                     Icon(
                         Icons.AutoMirrored.Rounded.KeyboardArrowRight,
                         contentDescription = null,
@@ -440,6 +477,8 @@ private fun ChannelList(
     channels: List<ChannelEntity>,
     nowAiring: Map<String, ProgrammeEntity>,
     downloadsByUrl: Map<String, DownloadEntity>,
+    favoriteKeys: Set<String>,
+    onToggleFavorite: (ChannelEntity) -> Unit,
     onPlay: (ChannelEntity) -> Unit,
     onDownload: ((ChannelEntity) -> Unit)?,
     onGuide: ((ChannelEntity) -> Unit)?,
@@ -457,6 +496,8 @@ private fun ChannelList(
                 channel = channel,
                 airing = channel.tvgId?.let { nowAiring[it] },
                 downloadState = downloadsByUrl[channel.url],
+                isFavorite = channel.url in favoriteKeys,
+                onToggleFavorite = { onToggleFavorite(channel) },
                 onPlay = { onPlay(channel) },
                 onDownload = onDownload?.let { handler -> { handler(channel) } },
                 onGuide = if (onGuide != null && channel.tvgId != null) ({ onGuide(channel) }) else null,
@@ -470,6 +511,8 @@ private fun ChannelRow(
     channel: ChannelEntity,
     airing: ProgrammeEntity?,
     downloadState: DownloadEntity?,
+    isFavorite: Boolean,
+    onToggleFavorite: () -> Unit,
     onPlay: () -> Unit,
     onDownload: (() -> Unit)?,
     onGuide: (() -> Unit)?,
@@ -510,6 +553,7 @@ private fun ChannelRow(
                     )
                 }
             }
+            FavoriteIcon(isFavorite = isFavorite, onToggle = onToggleFavorite)
             if (onGuide != null) {
                 IconButton(onClick = onGuide) {
                     Icon(

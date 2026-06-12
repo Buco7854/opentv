@@ -299,6 +299,7 @@ class PlaylistRepository(private val db: AppDatabase) {
         db.channelDao().deleteForPlaylist(playlistId)
         db.epgDao().deleteForPlaylist(playlistId)
         db.xtreamSeriesDao().deleteForPlaylist(playlistId)
+        db.favoriteDao().deleteForPlaylist(playlistId)
         db.playlistDao().delete(playlistId)
     }
 

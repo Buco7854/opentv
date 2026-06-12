@@ -13,8 +13,9 @@ import androidx.room.RoomDatabase
         DownloadEntity::class,
         MetadataEntity::class,
         XtreamSeriesEntity::class,
+        FavoriteEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -24,6 +25,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun downloadDao(): DownloadDao
     abstract fun metadataDao(): MetadataDao
     abstract fun xtreamSeriesDao(): XtreamSeriesDao
+    abstract fun favoriteDao(): FavoriteDao
 
     companion object {
         fun build(context: Context): AppDatabase =

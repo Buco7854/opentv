@@ -17,6 +17,9 @@ import kotlinx.coroutines.withContext
 /** seriesKey used for episodes cached from the panel, unique per series. */
 fun xtreamSeriesKey(seriesId: Long) = "xs:$seriesId"
 
+/** Stable favorites key for an Xtream catalog series. */
+fun xtreamFavoriteKey(seriesId: Long) = "x:$seriesId"
+
 /**
  * On-demand Xtream data: series episodes and VOD details. Both are fetched
  * only when the user opens the corresponding page, and cached - one request

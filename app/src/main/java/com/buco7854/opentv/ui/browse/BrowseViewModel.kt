@@ -8,12 +8,14 @@ import com.buco7854.opentv.data.db.ChannelEntity
 import com.buco7854.opentv.data.db.ChannelKind
 import com.buco7854.opentv.data.db.DownloadEntity
 import com.buco7854.opentv.data.db.DownloadStatus
+import com.buco7854.opentv.data.db.FavoriteEntity
 import com.buco7854.opentv.data.db.GroupCount
 import com.buco7854.opentv.data.db.PlaylistEntity
 import com.buco7854.opentv.data.db.ProgrammeEntity
 import com.buco7854.opentv.data.db.SeriesGroup
 import com.buco7854.opentv.data.db.XtreamSeriesEntity
 import com.buco7854.opentv.data.xtream.AccountInfo
+import com.buco7854.opentv.data.repo.xtreamFavoriteKey
 import com.buco7854.opentv.diag.ErrorLog
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -41,42 +43,97 @@ class BrowseViewModel(app: Application, val playlistId: Long) : AndroidViewModel
 
     private fun PlaylistEntity?.isXtreamNative() = this != null && url == null && xtreamBase != null
 
+    companion object {
+        /** Pseudo-group pinned on top of each tab's category list. */
+        const val FAVORITES_GROUP = "★ Favorites"
+
+        fun xtreamFavKey(seriesId: Long) = xtreamFavoriteKey(seriesId)
+    }
+
+    private val favorites = graph.db.favoriteDao().observeAll(playlistId)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /** Stable keys of everything favorited, for heart-icon state. */
+    val favoriteKeys: StateFlow<Set<String>> = favorites
+        .map { list -> list.map { it.key }.toSet() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
+
+    fun toggleFavorite(key: String, kind: Int) {
+        viewModelScope.launch {
+            val dao = graph.db.favoriteDao()
+            if (dao.get(playlistId, key) != null) dao.remove(playlistId, key)
+            else dao.add(FavoriteEntity(playlistId = playlistId, key = key, kind = kind))
+        }
+    }
+
     /** True when this playlist is API-driven (added via Xtream login). */
     val isXtreamNative: StateFlow<Boolean> = playlist
         .map { it.isXtreamNative() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
-    val groups: StateFlow<List<GroupCount>> = combine(tab, playlist) { t, p -> t to p }
-        .flatMapLatest { (t, p) ->
+    val groups: StateFlow<List<GroupCount>> = combine(tab, playlist, favorites) { t, p, favs ->
+        Triple(t, p, favs.count { it.kind == t })
+    }
+        .flatMapLatest { (t, p, favCount) ->
             // Native Xtream playlists keep series in their own catalog table.
-            if (t == ChannelKind.SERIES && p.isXtreamNative()) {
+            val base = if (t == ChannelKind.SERIES && p.isXtreamNative()) {
                 graph.db.xtreamSeriesDao().observeCategories(playlistId)
             } else {
                 channelDao.observeGroups(playlistId, t)
+            }
+            base.map { list ->
+                if (favCount > 0) listOf(GroupCount(FAVORITES_GROUP, favCount)) + list else list
             }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val xtreamSeries: StateFlow<List<XtreamSeriesEntity>> =
-        combine(tab, group, playlist) { t, g, p -> Triple(t, g, p) }
-            .flatMapLatest { (t, g, p) ->
-                if (t == ChannelKind.SERIES && g != null && p.isXtreamNative()) {
-                    graph.db.xtreamSeriesDao().observeInCategory(playlistId, g)
-                } else flowOf(emptyList())
+        combine(tab, group, playlist, favorites) { t, g, p, favs ->
+            Triple(t to g, p, favs)
+        }
+            .flatMapLatest { (tg, p, favs) ->
+                val (t, g) = tg
+                when {
+                    t != ChannelKind.SERIES || g == null || !p.isXtreamNative() -> flowOf(emptyList())
+                    g == FAVORITES_GROUP -> {
+                        val keys = favs.filter { it.kind == ChannelKind.SERIES }.map { it.key }.toSet()
+                        graph.db.xtreamSeriesDao().observeAll(playlistId)
+                            .map { list -> list.filter { xtreamFavKey(it.seriesId) in keys } }
+                    }
+                    else -> graph.db.xtreamSeriesDao().observeInCategory(playlistId, g)
+                }
             }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val channels: StateFlow<List<ChannelEntity>> = combine(tab, group) { t, g -> t to g }
-        .flatMapLatest { (t, g) ->
-            if (g == null || t == ChannelKind.SERIES) flowOf(emptyList())
-            else channelDao.observeInGroup(playlistId, t, g)
+    val channels: StateFlow<List<ChannelEntity>> = combine(tab, group, favorites) { t, g, favs ->
+        Triple(t, g, favs)
+    }
+        .flatMapLatest { (t, g, favs) ->
+            when {
+                g == null || t == ChannelKind.SERIES -> flowOf(emptyList())
+                g == FAVORITES_GROUP -> {
+                    val urls = favs.filter { it.kind == t }.map { it.key }
+                    if (urls.isEmpty()) flowOf(emptyList())
+                    else channelDao.observeByUrls(playlistId, t, urls.take(900))
+                }
+                else -> channelDao.observeInGroup(playlistId, t, g)
+            }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val seriesGroups: StateFlow<List<SeriesGroup>> = combine(tab, group) { t, g -> t to g }
-        .flatMapLatest { (t, g) ->
-            if (g == null || t != ChannelKind.SERIES) flowOf(emptyList())
-            else channelDao.observeSeriesInGroup(playlistId, g)
+    val seriesGroups: StateFlow<List<SeriesGroup>> = combine(tab, group, favorites) { t, g, favs ->
+        Triple(t, g, favs)
+    }
+        .flatMapLatest { (t, g, favs) ->
+            when {
+                g == null || t != ChannelKind.SERIES -> flowOf(emptyList())
+                g == FAVORITES_GROUP -> {
+                    val keys = favs.filter { it.kind == ChannelKind.SERIES }.map { it.key }.toSet()
+                    channelDao.observeAllSeries(playlistId)
+                        .map { list -> list.filter { it.seriesKey in keys } }
+                }
+                else -> channelDao.observeSeriesInGroup(playlistId, g)
+            }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 

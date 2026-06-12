@@ -107,6 +107,20 @@ data class ProgrammeEntity(
 )
 
 /**
+ * A favorite, keyed by stable identity so it survives playlist refreshes
+ * (channels are wiped and re-inserted on refresh, urls and series ids are
+ * not). Key is the stream url for live/movies, the seriesKey for M3U series,
+ * or "x:{seriesId}" for Xtream catalog series.
+ */
+@Entity(tableName = "favorites", primaryKeys = ["playlistId", "key"])
+data class FavoriteEntity(
+    val playlistId: Long,
+    val key: String,
+    val kind: Int,
+    val addedMs: Long = System.currentTimeMillis(),
+)
+
+/**
  * Cached TMDB enrichment (synopsis, rating, cast) for a cleaned title.
  * Negative lookups are cached too (all-null fields) so unmatchable titles
  * don't generate a TMDB request on every detail-page open.

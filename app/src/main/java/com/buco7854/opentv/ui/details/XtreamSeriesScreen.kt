@@ -37,8 +37,10 @@ import androidx.compose.ui.unit.dp
 import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.data.db.DownloadStatus
 import com.buco7854.opentv.data.db.XtreamSeriesEntity
+import com.buco7854.opentv.data.repo.xtreamFavoriteKey
 import com.buco7854.opentv.data.repo.xtreamSeriesKey
 import com.buco7854.opentv.diag.ErrorLog
+import com.buco7854.opentv.ui.components.FavoriteIcon
 import com.buco7854.opentv.ui.components.Pill
 import kotlinx.coroutines.launch
 
@@ -58,6 +60,7 @@ fun XtreamSeriesScreen(
     var series by remember { mutableStateOf<XtreamSeriesEntity?>(null) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
+    var isFavorite by remember { mutableStateOf(false) }
     val episodes by graph.db.channelDao()
         .observeEpisodes(playlistId, xtreamSeriesKey(seriesId))
         .collectAsState(initial = emptyList())
@@ -71,6 +74,7 @@ fun XtreamSeriesScreen(
 
     LaunchedEffect(seriesId) {
         series = graph.xtream.series(playlistId, seriesId)
+        isFavorite = graph.db.favoriteDao().get(playlistId, xtreamFavoriteKey(seriesId)) != null
         try {
             graph.xtream.ensureEpisodes(playlistId, seriesId)
         } catch (e: Exception) {
@@ -94,6 +98,18 @@ fun XtreamSeriesScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    FavoriteIcon(isFavorite = isFavorite) {
+                        scope.launch {
+                            isFavorite = toggleFavorite(
+                                playlistId,
+                                xtreamFavoriteKey(seriesId),
+                                com.buco7854.opentv.data.db.ChannelKind.SERIES,
+                                isFavorite,
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),

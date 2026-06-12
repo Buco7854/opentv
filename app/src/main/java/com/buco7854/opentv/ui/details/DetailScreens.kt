@@ -59,16 +59,27 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.data.db.ChannelEntity
+import com.buco7854.opentv.data.db.ChannelKind
 import com.buco7854.opentv.data.db.DownloadEntity
 import com.buco7854.opentv.data.db.DownloadStatus
+import com.buco7854.opentv.data.db.FavoriteEntity
 import com.buco7854.opentv.data.db.MetadataEntity
 import com.buco7854.opentv.ui.components.ChannelLogo
 import com.buco7854.opentv.ui.components.DownloadStateIcon
+import com.buco7854.opentv.ui.components.FavoriteIcon
 import com.buco7854.opentv.ui.components.Pill
 import kotlinx.coroutines.launch
 
 private val YEAR_TAG = Regex("""\b(19|20)\d{2}\b""")
 private val QUALITY_TAG = Regex("""(?i)\b(4K|UHD|2160p|1080p|FHD|720p|HEVC|HD|SD)\b""")
+
+/** Flips the favorite for [key]; returns the new state. */
+internal suspend fun toggleFavorite(playlistId: Long, key: String, kind: Int, current: Boolean): Boolean {
+    val dao = OpenTvApp.graph.db.favoriteDao()
+    if (current) dao.remove(playlistId, key)
+    else dao.add(FavoriteEntity(playlistId = playlistId, key = key, kind = kind))
+    return !current
+}
 
 /** The metadata an M3U playlist actually carries, mined from the entry itself. */
 private fun metaChips(channel: ChannelEntity, meta: MetadataEntity?): List<String> = buildList {
@@ -139,6 +150,7 @@ fun MovieDetailScreen(
 ) {
     var channel by remember { mutableStateOf<ChannelEntity?>(null) }
     var meta by remember { mutableStateOf<MetadataEntity?>(null) }
+    var isFavorite by remember { mutableStateOf(false) }
     val downloads by OpenTvApp.graph.downloads.downloads.collectAsState(initial = emptyList())
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -146,6 +158,7 @@ fun MovieDetailScreen(
     LaunchedEffect(channelId) {
         channel = OpenTvApp.graph.db.channelDao().get(channelId)
         channel?.let { c ->
+            isFavorite = OpenTvApp.graph.db.favoriteDao().get(c.playlistId, c.url) != null
             // Xtream movies have panel-provided details; keyless lookups are the fallback.
             meta = c.xtreamStreamId?.let { OpenTvApp.graph.xtream.vodMetadata(c) }
                 ?: OpenTvApp.graph.metadata.forTitle(isSeries = false, rawName = c.name)
@@ -160,6 +173,15 @@ fun MovieDetailScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    channel?.let { c ->
+                        FavoriteIcon(isFavorite = isFavorite) {
+                            scope.launch {
+                                isFavorite = toggleFavorite(c.playlistId, c.url, c.kind, isFavorite)
+                            }
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
@@ -255,6 +277,7 @@ fun SeriesDetailScreen(
         .observeEpisodes(playlistId, seriesKey)
         .collectAsState(initial = emptyList())
     var meta by remember { mutableStateOf<MetadataEntity?>(null) }
+    var isFavorite by remember { mutableStateOf(false) }
     val downloads by OpenTvApp.graph.downloads.downloads.collectAsState(initial = emptyList())
     val downloadsByUrl = remember(downloads) {
         downloads.filter { it.status != DownloadStatus.CANCELLED && it.status != DownloadStatus.FAILED }
@@ -264,6 +287,7 @@ fun SeriesDetailScreen(
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(seriesKey) {
+        isFavorite = OpenTvApp.graph.db.favoriteDao().get(playlistId, seriesKey) != null
         meta = OpenTvApp.graph.metadata.forTitle(isSeries = true, rawName = seriesKey)
     }
 
@@ -281,6 +305,14 @@ fun SeriesDetailScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    FavoriteIcon(isFavorite = isFavorite) {
+                        scope.launch {
+                            isFavorite =
+                                toggleFavorite(playlistId, seriesKey, ChannelKind.SERIES, isFavorite)
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),

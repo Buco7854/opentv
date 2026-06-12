@@ -89,6 +89,20 @@ interface ChannelDao {
     @Query("SELECT COUNT(*) FROM channels WHERE playlistId = :playlistId AND seriesKey = :seriesKey")
     suspend fun countEpisodes(playlistId: Long, seriesKey: String): Int
 
+    /** Favorites view: channels of one kind matched by their stable urls. */
+    @Query(
+        "SELECT * FROM channels WHERE playlistId = :playlistId AND kind = :kind " +
+            "AND url IN (:urls) ORDER BY name"
+    )
+    fun observeByUrls(playlistId: Long, kind: Int, urls: List<String>): Flow<List<ChannelEntity>>
+
+    @Query(
+        "SELECT seriesKey, COUNT(*) as count, MIN(logo) as logo, MIN(groupTitle) as groupTitle " +
+            "FROM channels WHERE playlistId = :playlistId AND kind = 2 " +
+            "GROUP BY seriesKey ORDER BY seriesKey"
+    )
+    fun observeAllSeries(playlistId: Long): Flow<List<SeriesGroup>>
+
     @Query("DELETE FROM channels WHERE playlistId = :playlistId AND seriesKey = :seriesKey")
     suspend fun deleteEpisodes(playlistId: Long, seriesKey: String)
 }
@@ -119,6 +133,9 @@ interface XtreamSeriesDao {
 
     @Query("SELECT COUNT(*) FROM xtream_series WHERE playlistId = :playlistId")
     fun observeCount(playlistId: Long): Flow<Int>
+
+    @Query("SELECT * FROM xtream_series WHERE playlistId = :playlistId ORDER BY name")
+    fun observeAll(playlistId: Long): Flow<List<XtreamSeriesEntity>>
 
     @Query(
         "SELECT * FROM xtream_series WHERE playlistId = :playlistId " +
@@ -158,6 +175,24 @@ interface EpgDao {
 
     @Query("SELECT COUNT(*) FROM programmes WHERE playlistId = :playlistId")
     suspend fun count(playlistId: Long): Int
+}
+
+@Dao
+interface FavoriteDao {
+    @Query("SELECT * FROM favorites WHERE playlistId = :playlistId")
+    fun observeAll(playlistId: Long): Flow<List<FavoriteEntity>>
+
+    @Query("SELECT * FROM favorites WHERE playlistId = :playlistId AND `key` = :key")
+    suspend fun get(playlistId: Long, key: String): FavoriteEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun add(favorite: FavoriteEntity)
+
+    @Query("DELETE FROM favorites WHERE playlistId = :playlistId AND `key` = :key")
+    suspend fun remove(playlistId: Long, key: String)
+
+    @Query("DELETE FROM favorites WHERE playlistId = :playlistId")
+    suspend fun deleteForPlaylist(playlistId: Long)
 }
 
 @Dao
