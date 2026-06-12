@@ -3,6 +3,7 @@ package com.buco7854.opentv
 import android.app.Application
 import com.buco7854.opentv.data.db.AppDatabase
 import com.buco7854.opentv.data.net.Http
+import com.buco7854.opentv.data.prefs.PlayerPrefs
 import com.buco7854.opentv.data.repo.AccountRepository
 import com.buco7854.opentv.data.repo.EpgRepository
 import com.buco7854.opentv.data.repo.PlaylistRepository
@@ -17,6 +18,7 @@ class AppGraph(app: Application) {
     val epg = EpgRepository(db)
     val account = AccountRepository()
     val downloads = DownloadRepository(app, db)
+    val playerPrefs = PlayerPrefs(app)
 }
 
 class OpenTvApp : Application() {

@@ -25,6 +25,11 @@ Media3/ExoPlayer and Room.
   expiry), so you never trip your provider's connection limit.
 - **Hardware-accelerated playback** — Media3/ExoPlayer with the device's MediaCodec
   hardware decoders (HLS, TS, MP4, MKV).
+- **Subtitles & track selection** — embedded subtitle and audio tracks (HLS
+  renditions, MKV/TS streams) are selectable from an in-player sheet, including
+  "subtitles off" and playback speed. Subtitle appearance is configurable — size
+  (50–200%), outline vs. background style, bold — with a live preview, persisted
+  across sessions. A scaling button cycles Fit / Zoom / Stretch.
 - **Basic EPG (XMLTV)** — add an XMLTV URL (auto-detected from `url-tvg` when
   present); live channel lists show what's airing now with a progress bar, and a
   per-channel guide sheet shows the upcoming timeline. Gzipped EPG files supported.
