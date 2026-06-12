@@ -57,6 +57,7 @@ fun XtreamSeriesScreen(
     seriesId: Long,
     onBack: () -> Unit,
     onPlay: (url: String, title: String) -> Unit,
+    onOpenEpisode: (channelId: Long) -> Unit,
 ) {
     val graph = OpenTvApp.graph
     var series by remember { mutableStateOf<XtreamSeriesEntity?>(null) }
@@ -88,28 +89,8 @@ fun XtreamSeriesScreen(
 
     val seasons = remember(episodes) { episodes.mapNotNull { it.season }.distinct().sorted() }
     var selectedSeason by remember { mutableStateOf<Int?>(null) }
-    var detailsEpisode by remember { mutableStateOf<com.buco7854.opentv.data.db.ChannelEntity?>(null) }
     val shown = remember(episodes, selectedSeason) {
         selectedSeason?.let { s -> episodes.filter { it.season == s } } ?: episodes
-    }
-
-    detailsEpisode?.let { episode ->
-        EpisodeDetailsSheet(
-            episode = episode,
-            seriesTitle = series?.name ?: episode.name,
-            downloadState = downloadsByUrl[episode.url],
-            onDismiss = { detailsEpisode = null },
-            onPlay = {
-                detailsEpisode = null
-                onPlay(episode.url, episode.name)
-            },
-            onDownload = {
-                scope.launch {
-                    val blocked = graph.downloads.enqueue(episode)
-                    snackbar.showSnackbar(blocked ?: "Download started: ${episode.name}")
-                }
-            },
-        )
     }
 
     Scaffold(
@@ -208,7 +189,7 @@ fun XtreamSeriesScreen(
                     episode = episode,
                     downloadState = downloadsByUrl[episode.url],
                     onPlay = { onPlay(episode.url, episode.name) },
-                    onDetails = { detailsEpisode = episode },
+                    onDetails = { onOpenEpisode(episode.id) },
                     onDownload = {
                         scope.launch {
                             val blocked = graph.downloads.enqueue(episode)

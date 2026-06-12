@@ -16,6 +16,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.buco7854.opentv.ui.account.AccountScreen
 import com.buco7854.opentv.ui.browse.BrowseScreen
+import com.buco7854.opentv.ui.details.EpisodeDetailScreen
 import com.buco7854.opentv.ui.details.MovieDetailScreen
 import com.buco7854.opentv.ui.details.SeriesDetailScreen
 import com.buco7854.opentv.ui.details.XtreamSeriesScreen
@@ -47,6 +48,7 @@ object Routes {
     fun search(playlistId: Long) = "search/$playlistId"
     fun movie(channelId: Long) = "movie/$channelId"
     fun account(playlistId: Long) = "account/$playlistId"
+    fun episode(channelId: Long) = "episode/$channelId"
     fun series(playlistId: Long, seriesKey: String) = "series/$playlistId/${Uri.encode(seriesKey)}"
     fun xtreamSeries(playlistId: Long, seriesId: Long) = "xseries/$playlistId/$seriesId"
     fun player(url: String, title: String, playlistId: Long = -1, tvgId: String? = null) =
@@ -118,6 +120,17 @@ fun AppNav() {
                 seriesId = entry.arguments!!.getLong("seriesId"),
                 onBack = { nav.popBackStack() },
                 onPlay = { url, title -> nav.navigate(Routes.player(url, title)) },
+                onOpenEpisode = { nav.navigate(Routes.episode(it)) },
+            )
+        }
+        composable(
+            route = "episode/{channelId}",
+            arguments = listOf(navArgument("channelId") { type = NavType.LongType }),
+        ) { entry ->
+            EpisodeDetailScreen(
+                channelId = entry.arguments!!.getLong("channelId"),
+                onBack = { nav.popBackStack() },
+                onPlay = { url, title -> nav.navigate(Routes.player(url, title)) },
             )
         }
         composable(
@@ -142,6 +155,7 @@ fun AppNav() {
                 seriesKey = entry.arguments!!.getString("seriesKey")!!,
                 onBack = { nav.popBackStack() },
                 onPlay = { url, title -> nav.navigate(Routes.player(url, title)) },
+                onOpenEpisode = { nav.navigate(Routes.episode(it)) },
             )
         }
         composable(

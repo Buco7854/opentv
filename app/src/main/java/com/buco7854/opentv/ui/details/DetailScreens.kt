@@ -295,6 +295,7 @@ fun SeriesDetailScreen(
     seriesKey: String,
     onBack: () -> Unit,
     onPlay: (url: String, title: String) -> Unit,
+    onOpenEpisode: (channelId: Long) -> Unit,
 ) {
     val episodes by OpenTvApp.graph.db.channelDao()
         .observeEpisodes(playlistId, seriesKey)
@@ -316,28 +317,8 @@ fun SeriesDetailScreen(
 
     val seasons = remember(episodes) { episodes.mapNotNull { it.season }.distinct().sorted() }
     var selectedSeason by remember { mutableStateOf<Int?>(null) } // null = all seasons
-    var detailsEpisode by remember { mutableStateOf<ChannelEntity?>(null) }
     val shown = remember(episodes, selectedSeason) {
         selectedSeason?.let { s -> episodes.filter { it.season == s } } ?: episodes
-    }
-
-    detailsEpisode?.let { episode ->
-        EpisodeDetailsSheet(
-            episode = episode,
-            seriesTitle = seriesKey,
-            downloadState = downloadsByUrl[episode.url],
-            onDismiss = { detailsEpisode = null },
-            onPlay = {
-                detailsEpisode = null
-                onPlay(episode.url, episode.name)
-            },
-            onDownload = {
-                scope.launch {
-                    val blocked = OpenTvApp.graph.downloads.enqueue(episode)
-                    snackbar.showSnackbar(blocked ?: "Download started: ${episode.name}")
-                }
-            },
-        )
     }
 
     Scaffold(
@@ -402,7 +383,7 @@ fun SeriesDetailScreen(
                     episode = episode,
                     downloadState = downloadsByUrl[episode.url],
                     onPlay = { onPlay(episode.url, episode.name) },
-                    onDetails = { detailsEpisode = episode },
+                    onDetails = { onOpenEpisode(episode.id) },
                     onDownload = {
                         scope.launch {
                             val blocked = OpenTvApp.graph.downloads.enqueue(episode)
@@ -536,81 +517,135 @@ internal fun EpisodeRow(
 }
 
 /**
- * Episode details: stored panel data (Xtream) when present, otherwise lazily
- * enriched from TVMaze's episode endpoint (cached).
+ * Full episode page, consistent with movie/series pages: large still, facts,
+ * synopsis, play/download. Stored panel data (Xtream) when present, otherwise
+ * lazily enriched from TVMaze's episode endpoint (cached).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun EpisodeDetailsSheet(
-    episode: ChannelEntity,
-    seriesTitle: String,
-    downloadState: DownloadEntity?,
-    onDismiss: () -> Unit,
-    onPlay: () -> Unit,
-    onDownload: () -> Unit,
+fun EpisodeDetailScreen(
+    channelId: Long,
+    onBack: () -> Unit,
+    onPlay: (url: String, title: String) -> Unit,
 ) {
-    var info by remember(episode.id) { mutableStateOf<MetadataEntity?>(null) }
-    LaunchedEffect(episode.id) {
-        if (episode.description == null && episode.season != null && episode.episode != null) {
-            info = OpenTvApp.graph.metadata.episodeInfo(seriesTitle, episode.season, episode.episode)
+    val graph = OpenTvApp.graph
+    var episode by remember { mutableStateOf<ChannelEntity?>(null) }
+    var seriesTitle by remember { mutableStateOf<String?>(null) }
+    var info by remember { mutableStateOf<MetadataEntity?>(null) }
+    val downloads by graph.downloads.downloads.collectAsState(initial = emptyList())
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(channelId) {
+        val ep = graph.db.channelDao().get(channelId) ?: return@LaunchedEffect
+        episode = ep
+        // The series name behind this episode: Xtream episodes key by series id,
+        // M3U episodes key by the series title itself.
+        val key = ep.seriesKey
+        seriesTitle = if (key != null && key.startsWith("xs:")) {
+            key.removePrefix("xs:").toLongOrNull()
+                ?.let { graph.db.xtreamSeriesDao().get(ep.playlistId, it)?.name }
+        } else key
+        if (ep.description == null && ep.season != null && ep.episode != null && seriesTitle != null) {
+            info = graph.metadata.episodeInfo(seriesTitle!!, ep.season, ep.episode)
         }
     }
-    val image = info?.posterUrl ?: episode.logo
-    val plot = episode.description ?: info?.overview
 
-    androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(180.dp)
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainerHighest),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (image.isNullOrBlank()) {
-                    Icon(
-                        Icons.Rounded.VideoLibrary,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(48.dp),
-                    )
-                } else {
-                    AsyncImage(
-                        model = image,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize(),
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
+        topBar = {
+            TopAppBar(
+                title = {},
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+            )
+        },
+    ) { padding ->
+        val ep = episode ?: return@Scaffold
+        val downloadState = downloads.firstOrNull {
+            it.url == ep.url && it.status != DownloadStatus.CANCELLED && it.status != DownloadStatus.FAILED
+        }
+        val image = info?.posterUrl ?: ep.logo
+        val plot = ep.description ?: info?.overview
+
+        LazyColumn(
+            Modifier.padding(padding).fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp),
+        ) {
+            item {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(220.dp)
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (image.isNullOrBlank()) {
+                        Icon(
+                            Icons.Rounded.VideoLibrary,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(64.dp),
+                        )
+                    } else {
+                        AsyncImage(
+                            model = image,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                }
+                Spacer(Modifier.height(18.dp))
+                seriesTitle?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
                     )
                 }
-            }
-            Spacer(Modifier.height(14.dp))
-            Text(info?.title ?: episode.name, style = MaterialTheme.typography.titleLarge)
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                episodeTag(episode)?.let { Pill(it) }
-                (episode.airDate ?: info?.year)?.let { Pill(it) }
-                (episode.durationSecs?.let { formatDuration(it) } ?: info?.infoLine)?.let { Pill(it) }
-                info?.rating?.let { Pill("★ %.1f".format(it)) }
-            }
-            plot?.let {
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    it,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 8,
-                    overflow = TextOverflow.Ellipsis,
+                Text(info?.title ?: ep.name, style = MaterialTheme.typography.headlineMedium)
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    episodeTag(ep)?.let { Pill(it) }
+                    (ep.airDate ?: info?.year)?.let { Pill(it) }
+                    (ep.durationSecs?.let { formatDuration(it) } ?: info?.infoLine)?.let { Pill(it) }
+                    info?.rating?.let { Pill("★ %.1f".format(it)) }
+                }
+                plot?.let {
+                    Spacer(Modifier.height(14.dp))
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.height(24.dp))
+                Button(
+                    onClick = { onPlay(ep.url, ep.name) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Rounded.PlayArrow, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Play")
+                }
+                Spacer(Modifier.height(10.dp))
+                DownloadButton(
+                    state = downloadState,
+                    onDownload = {
+                        scope.launch {
+                            val blocked = graph.downloads.enqueue(ep)
+                            snackbar.showSnackbar(blocked ?: "Download started")
+                        }
+                    },
                 )
+                Spacer(Modifier.height(24.dp))
             }
-            Spacer(Modifier.height(18.dp))
-            Button(onClick = onPlay, modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Rounded.PlayArrow, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("Play")
-            }
-            Spacer(Modifier.height(8.dp))
-            DownloadButton(state = downloadState, onDownload = onDownload)
         }
     }
 }
