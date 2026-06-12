@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Deep navy gradient base -->
+    <path android:pathData="M0,0 h108 v108 h-108 z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="0" android:startY="0"
+                android:endX="108" android:endY="108">
+                <item android:offset="0" android:color="#FF131A33" />
+                <item android:offset="0.55" android:color="#FF0C1020" />
+                <item android:offset="1" android:color="#FF080A14" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- Soft periwinkle glow behind the mark -->
+    <path android:pathData="M54,52 m-34,0 a34,34 0 1 0 68,0 a34,34 0 1 0 -68,0">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="54" android:centerY="52"
+                android:gradientRadius="34">
+                <item android:offset="0" android:color="#2E8FA8FF" />
+                <item android:offset="0.7" android:color="#148FA8FF" />
+                <item android:offset="1" android:color="#008FA8FF" />
+            </gradient>
+        </aapt:attr>
+    </path>
+</vector>
