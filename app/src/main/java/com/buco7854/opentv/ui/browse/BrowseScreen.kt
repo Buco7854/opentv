@@ -70,6 +70,7 @@ import com.buco7854.opentv.ui.components.ChannelLogo
 import com.buco7854.opentv.ui.components.EmptyState
 import com.buco7854.opentv.ui.components.kindIcon
 import com.buco7854.opentv.ui.theme.Mint
+import kotlinx.coroutines.delay
 import java.text.DateFormat
 import java.util.Date
 
@@ -127,6 +128,15 @@ fun BrowseScreen(
         message?.let {
             snackbar.showSnackbar(it)
             viewModel.consumeMessage()
+        }
+    }
+
+    // Keep "now airing" rows and their progress bars fresh during long
+    // sessions. Local DB query only - no network involved.
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(60_000)
+            viewModel.reloadNowAiring()
         }
     }
 

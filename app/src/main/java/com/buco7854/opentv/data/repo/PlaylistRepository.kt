@@ -20,9 +20,18 @@ class PlaylistRepository(private val db: AppDatabase) {
     companion object {
         /** Don't re-download a playlist more often than this unless the user forces it. */
         const val MIN_REFRESH_INTERVAL_MS = 6L * 60 * 60 * 1000
+        /** After a failed attempt, don't auto-retry sooner than this. */
+        const val FAILURE_RETRY_INTERVAL_MS = 5L * 60 * 1000
+        /** Even explicit refresh taps are rate-limited to protect the provider. */
+        const val FORCED_MIN_INTERVAL_MS = 30_000L
     }
 
     private val refreshMutex = Mutex()
+
+    /** Last attempt (success OR failure) per playlist, in-memory. Successful
+     *  refreshes persist lastRefreshedMs; this map adds failure backoff and
+     *  forced-tap rate limiting without a schema change. */
+    private val lastAttemptMs = HashMap<Long, Long>()
 
     val playlists = db.playlistDao().observeAll()
 
@@ -71,7 +80,14 @@ class PlaylistRepository(private val db: AppDatabase) {
             val playlist = db.playlistDao().get(playlistId) ?: return@withLock
             val url = playlist.url ?: return@withLock // local imports have nothing to refresh
             val now = System.currentTimeMillis()
-            if (!force && now - playlist.lastRefreshedMs < MIN_REFRESH_INTERVAL_MS) return@withLock
+            val lastAttempt = lastAttemptMs[playlistId] ?: 0L
+            if (force) {
+                if (now - lastAttempt < FORCED_MIN_INTERVAL_MS) return@withLock
+            } else {
+                if (now - playlist.lastRefreshedMs < MIN_REFRESH_INTERVAL_MS) return@withLock
+                if (now - lastAttempt < FAILURE_RETRY_INTERVAL_MS) return@withLock
+            }
+            lastAttemptMs[playlistId] = now
 
             when (val result = Http.conditionalGet(url, playlist.etag, playlist.lastModified)) {
                 is Http.FetchResult.NotModified -> {
@@ -80,6 +96,10 @@ class PlaylistRepository(private val db: AppDatabase) {
                 is Http.FetchResult.Success -> result.response.use { response ->
                     var epgFromFile: String? = null
                     val reader = BufferedReader(InputStreamReader(Http.bodyStream(response)))
+                    // Drop the validators BEFORE wiping: if ingest dies mid-stream,
+                    // the next refresh must re-download rather than get a 304
+                    // against a now-empty channel table.
+                    db.playlistDao().update(playlist.copy(etag = null, lastModified = null))
                     db.channelDao().deleteForPlaylist(playlistId)
                     val count = ingest(playlistId, reader) { epgFromFile = it }
                     db.playlistDao().update(

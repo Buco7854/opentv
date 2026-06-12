@@ -13,11 +13,14 @@ class EpgRepository(private val db: AppDatabase) {
 
     companion object {
         const val MIN_REFRESH_INTERVAL_MS = 12L * 60 * 60 * 1000
+        const val FAILURE_RETRY_INTERVAL_MS = 5L * 60 * 1000
+        const val FORCED_MIN_INTERVAL_MS = 30_000L
         const val WINDOW_BACK_MS = 3L * 60 * 60 * 1000
         const val WINDOW_AHEAD_MS = 48L * 60 * 60 * 1000
     }
 
     private val refreshMutex = Mutex()
+    private val lastAttemptMs = HashMap<Long, Long>()
 
     /**
      * Download and ingest the XMLTV guide. Same frugality rules as playlists:
@@ -28,7 +31,14 @@ class EpgRepository(private val db: AppDatabase) {
             val playlist = db.playlistDao().get(playlistId) ?: return@withLock
             val epgUrl = playlist.epgUrl ?: return@withLock
             val now = System.currentTimeMillis()
-            if (!force && now - playlist.epgLastRefreshedMs < MIN_REFRESH_INTERVAL_MS) return@withLock
+            val lastAttempt = lastAttemptMs[playlistId] ?: 0L
+            if (force) {
+                if (now - lastAttempt < FORCED_MIN_INTERVAL_MS) return@withLock
+            } else {
+                if (now - playlist.epgLastRefreshedMs < MIN_REFRESH_INTERVAL_MS) return@withLock
+                if (now - lastAttempt < FAILURE_RETRY_INTERVAL_MS) return@withLock
+            }
+            lastAttemptMs[playlistId] = now
 
             // Only live channels need guide data; everything else in the XMLTV file is skipped.
             val wantedIds = db.channelDao().distinctLiveTvgIds(playlistId).toHashSet()
@@ -42,6 +52,9 @@ class EpgRepository(private val db: AppDatabase) {
                     db.playlistDao().update(playlist.copy(epgLastRefreshedMs = now))
                 }
                 is Http.FetchResult.Success -> result.response.use { response ->
+                    // Same 304-trap guard as playlists: invalidate validators
+                    // before wiping so a failed ingest forces a re-download.
+                    db.playlistDao().update(playlist.copy(epgEtag = null, epgLastModified = null))
                     db.epgDao().deleteForPlaylist(playlistId)
                     XmltvParser.parse(
                         input = Http.bodyStream(response),

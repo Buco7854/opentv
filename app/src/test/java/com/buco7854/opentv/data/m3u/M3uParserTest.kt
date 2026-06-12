@@ -37,6 +37,22 @@ class M3uParserTest {
     }
 
     @Test
+    fun `names containing commas are not truncated`() {
+        val (_, entries) = parse(
+            """
+            #EXTM3U
+            #EXTINF:-1 tvg-id="x" group-title="UK, Ireland | News",News, Weather & Sport
+            http://host/n.ts
+            #EXTINF:-1,Late Night, Live
+            http://host/l.ts
+            """.trimIndent()
+        )
+        assertEquals("News, Weather & Sport", entries[0].name)
+        assertEquals("UK, Ireland | News", entries[0].groupTitle)
+        assertEquals("Late Night, Live", entries[1].name)
+    }
+
+    @Test
     fun `extgrp applies when no group-title and unknown directives are skipped`() {
         val (_, entries) = parse(
             """

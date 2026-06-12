@@ -121,8 +121,8 @@ class BrowseViewModel(app: Application, val playlistId: Long) : AndroidViewModel
 
     fun download(channel: ChannelEntity) {
         viewModelScope.launch {
-            val queued = graph.downloads.enqueue(channel)
-            _message.value = if (queued) "Download started: ${channel.name}" else "Already downloading"
+            val blocked = graph.downloads.enqueue(channel)
+            _message.value = blocked ?: "Download started: ${channel.name}"
         }
     }
 }

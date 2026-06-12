@@ -65,8 +65,10 @@ interface ChannelDao {
     )
     fun observeEpisodes(playlistId: Long, seriesKey: String): Flow<List<ChannelEntity>>
 
+    /** Caller must escape %, _ and \ in [query] (see SearchViewModel). */
     @Query(
-        "SELECT * FROM channels WHERE playlistId = :playlistId AND name LIKE '%' || :query || '%' " +
+        "SELECT * FROM channels WHERE playlistId = :playlistId " +
+            "AND name LIKE '%' || :query || '%' ESCAPE '\\' " +
             "ORDER BY kind, name LIMIT 400"
     )
     suspend fun search(playlistId: Long, query: String): List<ChannelEntity>
@@ -115,8 +117,8 @@ interface DownloadDao {
     @Query("SELECT * FROM downloads WHERE id = :id")
     suspend fun get(id: Long): DownloadEntity?
 
-    @Query("SELECT * FROM downloads WHERE url = :url AND status != 4 LIMIT 1")
-    suspend fun findActiveByUrl(url: String): DownloadEntity?
+    @Query("SELECT * FROM downloads WHERE url = :url AND status IN (:statuses) LIMIT 1")
+    suspend fun findByUrlWithStatus(url: String, statuses: List<Int>): DownloadEntity?
 
     @Insert
     suspend fun insert(d: DownloadEntity): Long

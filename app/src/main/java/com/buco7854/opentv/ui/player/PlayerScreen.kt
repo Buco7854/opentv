@@ -49,6 +49,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.Format
@@ -167,6 +170,26 @@ fun PlayerScreen(
             player.removeListener(listener)
             player.release()
         }
+    }
+
+    // Pause (and stop pulling the stream) when the app is backgrounded: an
+    // invisible stream wastes one of the account's concurrent-connection slots
+    // and unbounded provider traffic.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(player, lifecycleOwner) {
+        var wasPlaying = false
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_STOP -> {
+                    wasPlaying = player.playWhenReady
+                    player.pause()
+                }
+                Lifecycle.Event.ON_START -> if (wasPlaying) player.play()
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     // Immersive fullscreen while the player is open.

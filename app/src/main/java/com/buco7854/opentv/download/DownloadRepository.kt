@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Environment
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
@@ -19,7 +20,7 @@ class DownloadRepository(private val context: Context, private val db: AppDataba
 
     val downloads = db.downloadDao().observeAll()
 
-    private fun targetFile(channel: ChannelEntity): File {
+    private fun targetFile(channel: ChannelEntity, downloadId: Long): File {
         val dir = File(
             context.getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: context.filesDir,
             "OpenTV"
@@ -32,46 +33,62 @@ class DownloadRepository(private val context: Context, private val db: AppDataba
             .filter { it.isLetterOrDigit() }.take(5).ifEmpty { "mp4" }
         val safeName = channel.name.map { if (it.isLetterOrDigit() || it in " ._-()[]") it else '_' }
             .joinToString("").trim().take(120).ifEmpty { "video" }
-        return File(dir, "$safeName.$extension")
+        // The row id makes the path unique: identically-named VODs (quality
+        // variants, duplicates across groups) must never share a file.
+        return File(dir, "$safeName-$downloadId.$extension")
     }
 
-    /** Queue a VOD download; duplicates of an in-flight/finished URL are ignored. */
-    suspend fun enqueue(channel: ChannelEntity): Boolean {
-        if (db.downloadDao().findActiveByUrl(channel.url) != null) return false
-        val file = targetFile(channel)
-        val id = db.downloadDao().insert(
-            DownloadEntity(title = channel.name, url = channel.url, filePath = file.absolutePath)
+    /**
+     * Queue a VOD download. Returns null when queued, or a user-facing reason
+     * when the same URL is already queued, running, or finished.
+     */
+    suspend fun enqueue(channel: ChannelEntity): String? {
+        val existing = db.downloadDao().findByUrlWithStatus(
+            channel.url,
+            listOf(DownloadStatus.QUEUED, DownloadStatus.RUNNING, DownloadStatus.DONE),
         )
-        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
-            .setInputData(workDataOf(DownloadWorker.KEY_DOWNLOAD_ID to id))
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
-            .addTag(workTag(id))
-            .build()
-        WorkManager.getInstance(context).enqueue(request)
-        return true
+        if (existing != null) {
+            return if (existing.status == DownloadStatus.DONE) "Already downloaded" else "Already downloading"
+        }
+        val id = db.downloadDao().insert(
+            DownloadEntity(title = channel.name, url = channel.url, filePath = "")
+        )
+        db.downloadDao().get(id)?.let {
+            db.downloadDao().update(it.copy(filePath = targetFile(channel, id).absolutePath))
+        }
+        enqueueWork(id)
+        return null
     }
 
     suspend fun cancel(item: DownloadEntity) {
-        WorkManager.getInstance(context).cancelAllWorkByTag(workTag(item.id))
+        WorkManager.getInstance(context).cancelUniqueWork(workName(item.id))
         db.downloadDao().update(item.copy(status = DownloadStatus.CANCELLED))
     }
 
     suspend fun retry(item: DownloadEntity) {
         db.downloadDao().update(item.copy(status = DownloadStatus.QUEUED, error = null))
-        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
-            .setInputData(workDataOf(DownloadWorker.KEY_DOWNLOAD_ID to item.id))
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-            .addTag(workTag(item.id))
-            .build()
-        WorkManager.getInstance(context).enqueue(request)
+        enqueueWork(item.id)
     }
 
     suspend fun delete(item: DownloadEntity) {
-        WorkManager.getInstance(context).cancelAllWorkByTag(workTag(item.id))
-        File(item.filePath).delete()
+        WorkManager.getInstance(context).cancelUniqueWork(workName(item.id))
+        File(item.filePath).takeIf { item.filePath.isNotEmpty() }?.delete()
         db.downloadDao().delete(item.id)
     }
 
-    private fun workTag(id: Long) = "download-$id"
+    /**
+     * Unique work keyed by download id: a double-tap or a retry while the old
+     * worker still runs can never produce two workers writing the same file.
+     */
+    private fun enqueueWork(id: Long) {
+        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
+            .setInputData(workDataOf(DownloadWorker.KEY_DOWNLOAD_ID to id))
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
+            .build()
+        WorkManager.getInstance(context)
+            .enqueueUniqueWork(workName(id), ExistingWorkPolicy.KEEP, request)
+    }
+
+    private fun workName(id: Long) = "download-$id"
 }

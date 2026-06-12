@@ -19,6 +19,7 @@ import java.util.Date
 object ErrorLog {
 
     class Entry(
+        val id: Long,
         val timeMs: Long,
         val tag: String,
         val message: String,
@@ -30,9 +31,22 @@ object ErrorLog {
     private val _entries = MutableStateFlow<List<Entry>>(emptyList())
     val entries: StateFlow<List<Entry>> = _entries
 
-    private val REDACT = Regex("""(?i)\b(username|password|token|pass)=[^&\s"'<>]+""")
+    private val nextId = java.util.concurrent.atomic.AtomicLong(1)
 
-    fun redact(text: String): String = REDACT.replace(text) { "${it.groupValues[1]}=•••" }
+    // Credentials as query parameters: get.php?username=U&password=P
+    private val REDACT_QUERY = Regex("""(?i)\b(username|password|token|pass)=[^&\s"'<>]+""")
+    // Xtream path credentials: /live|movie(s)|series/USER/PASS/...
+    private val REDACT_KIND_PATH = Regex("""(?i)/(live|movies?|series)/[^/\s"'<>]+/[^/\s"'<>]+/""")
+    // Bare Xtream stream paths: http://host/USER/PASS/1234.ts
+    private val REDACT_BARE_PATH =
+        Regex("""(://[^/\s"'<>]+)/[^/\s"'<>]+/[^/\s"'<>]+/(\d+(?:\.\w{1,5})?)(?=[\s"'<>,)\]}]|$)""")
+
+    fun redact(text: String): String {
+        var result = REDACT_QUERY.replace(text) { "${it.groupValues[1]}=•••" }
+        result = REDACT_BARE_PATH.replace(result) { "${it.groupValues[1]}/•••/•••/${it.groupValues[2]}" }
+        result = REDACT_KIND_PATH.replace(result) { "/${it.groupValues[1]}/•••/•••/" }
+        return result
+    }
 
     /** One-line, redacted human description of a throwable, for snackbars. */
     fun describe(error: Throwable): String =
@@ -59,7 +73,8 @@ object ErrorLog {
         val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             runCatching {
-                crashFile.writeText("${Date()} · thread ${thread.name}\n${throwable.stackTraceToString()}")
+                // Redacted at write time too: nothing credentialed ever rests on disk.
+                crashFile.writeText(redact("${Date()} · thread ${thread.name}\n${throwable.stackTraceToString()}"))
             }
             previousHandler?.uncaughtException(thread, throwable)
         }
@@ -68,7 +83,7 @@ object ErrorLog {
     @Synchronized
     private fun add(tag: String, message: String, stackTrace: String?) {
         _entries.value =
-            (listOf(Entry(System.currentTimeMillis(), tag, message, stackTrace)) + _entries.value)
+            (listOf(Entry(nextId.getAndIncrement(), System.currentTimeMillis(), tag, message, stackTrace)) + _entries.value)
                 .take(MAX_ENTRIES)
     }
 }

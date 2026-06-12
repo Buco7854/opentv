@@ -5,7 +5,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Request
+import org.json.JSONException
 import org.json.JSONObject
+import java.io.IOException
 
 class XtreamCredentials(val base: String, val user: String, val pass: String)
 
@@ -44,8 +46,17 @@ object Xtream {
             .header("User-Agent", Http.USER_AGENT)
             .build()
         Http.ok.newCall(request).execute().use { response ->
-            val json = JSONObject(response.body!!.string())
-            val info = json.getJSONObject("user_info")
+            if (!response.isSuccessful) throw IOException("Provider API returned HTTP ${response.code}")
+            val text = response.body?.string().orEmpty()
+            // Panels answer with HTML error pages when the account is blocked;
+            // never let raw page content escape into an exception message.
+            val json = try {
+                JSONObject(text)
+            } catch (_: JSONException) {
+                throw IOException("Provider API returned an unexpected (non-JSON) response")
+            }
+            val info = json.optJSONObject("user_info")
+                ?: throw IOException("Provider API response is missing user_info")
             AccountInfo(
                 activeConnections = info.optString("active_cons", "0").toIntOrNull() ?: 0,
                 maxConnections = info.optString("max_connections", "0").toIntOrNull() ?: 0,

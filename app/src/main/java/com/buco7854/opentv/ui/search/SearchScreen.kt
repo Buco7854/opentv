@@ -75,7 +75,12 @@ class SearchViewModel(app: Application, private val playlistId: Long) : AndroidV
         .mapLatest { q ->
             if (q.trim().length < 2) emptyList()
             else try {
-                OpenTvApp.graph.db.channelDao().search(playlistId, q.trim())
+                // Escape LIKE wildcards so "100%" doesn't match everything.
+                val escaped = q.trim()
+                    .replace("\\", "\\\\")
+                    .replace("%", "\\%")
+                    .replace("_", "\\_")
+                OpenTvApp.graph.db.channelDao().search(playlistId, escaped)
             } catch (e: Exception) {
                 ErrorLog.log("Search", e)
                 emptyList()

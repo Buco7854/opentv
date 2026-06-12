@@ -68,14 +68,20 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
             if (existing > 0) requestBuilder.header("Range", "bytes=$existing-")
 
             Http.ok.newCall(requestBuilder.build()).execute().use { response ->
-                if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
+                if (!response.isSuccessful) throw HttpStatusException(response.code)
                 val body = response.body ?: throw IOException("Empty body")
 
                 val resuming = response.code == 206
                 var downloaded = if (resuming) existing else 0L
-                val total = if (resuming) existing + body.contentLength() else body.contentLength()
+                // contentLength() is -1 on chunked responses; 0 = "unknown" in the UI.
+                val bodyLength = body.contentLength()
+                val total = when {
+                    bodyLength < 0 -> 0L
+                    resuming -> existing + bodyLength
+                    else -> bodyLength
+                }
 
-                dao.updateProgress(item.id, downloaded, total.coerceAtLeast(0), DownloadStatus.RUNNING)
+                dao.updateProgress(item.id, downloaded, total, DownloadStatus.RUNNING)
 
                 RandomAccessFile(file, "rw").use { out ->
                     if (resuming) out.seek(existing) else out.setLength(0)
@@ -90,7 +96,7 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
                             val now = System.currentTimeMillis()
                             if (now - lastUpdate > 750) {
                                 lastUpdate = now
-                                dao.updateProgress(item.id, downloaded, total.coerceAtLeast(0), DownloadStatus.RUNNING)
+                                dao.updateProgress(item.id, downloaded, total, DownloadStatus.RUNNING)
                                 runCatching {
                                     setForeground(foregroundInfo(item.title, downloaded, total))
                                 }
@@ -107,13 +113,45 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
             }
             throw e
         } catch (e: Exception) {
-            ErrorLog.log("Download: ${item.title}", e)
+            handleFailure(item.id, item.title, file, e)
+        }
+    }
+
+    private suspend fun handleFailure(downloadId: Long, title: String, file: File, e: Exception): Result {
+        ErrorLog.log("Download: $title", e)
+        val code = (e as? HttpStatusException)?.code
+        suspend fun markFailed() {
             dao.get(downloadId)?.let {
                 dao.update(it.copy(status = DownloadStatus.FAILED, error = ErrorLog.describe(e)))
             }
-            if (runAttemptCount < 3) Result.retry() else Result.failure()
+        }
+        return when {
+            // Range beyond EOF: the file was already fully downloaded (e.g. a
+            // crash happened between the last write and the DONE update).
+            code == 416 && file.length() > 0 -> {
+                dao.updateProgress(downloadId, file.length(), file.length(), DownloadStatus.DONE)
+                Result.success()
+            }
+            // Permanent client errors (401/403/404...): retrying only hammers
+            // the provider. 408/429 are transient and may be retried.
+            code != null && code in 400..499 && code != 408 && code != 429 -> {
+                markFailed()
+                Result.failure()
+            }
+            runAttemptCount < 3 -> {
+                // Keep the row QUEUED while WorkManager backs off and retries;
+                // FAILED is reserved for the final give-up.
+                dao.get(downloadId)?.let { dao.update(it.copy(status = DownloadStatus.QUEUED)) }
+                Result.retry()
+            }
+            else -> {
+                markFailed()
+                Result.failure()
+            }
         }
     }
+
+    private class HttpStatusException(val code: Int) : IOException("HTTP $code")
 
     private fun foregroundInfo(title: String, downloaded: Long, total: Long): ForegroundInfo {
         val notification: Notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)

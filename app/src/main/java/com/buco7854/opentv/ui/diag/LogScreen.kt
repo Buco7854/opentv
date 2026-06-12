@@ -97,7 +97,7 @@ fun LogScreen(onBack: () -> Unit) {
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            items(entries) { entry ->
+            items(entries, key = { it.id }) { entry ->
                 var expanded by remember { mutableStateOf(false) }
                 Card(
                     onClick = { expanded = !expanded },

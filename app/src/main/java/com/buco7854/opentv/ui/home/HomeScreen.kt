@@ -87,7 +87,9 @@ fun HomeScreen(
             viewModel.consumeMessage()
         }
     }
-    LaunchedEffect(playlists) { viewModel.loadAccountInfo(playlists) }
+    // Keyed on the id set, not the rows: refresh-driven row updates must not
+    // re-trigger provider API calls (the 60s repo cache is the second guard).
+    LaunchedEffect(playlists.map { it.id }) { viewModel.loadAccountInfo(playlists) }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
@@ -126,6 +128,7 @@ fun HomeScreen(
                         PlaylistCard(
                             playlist = playlist,
                             account = accounts[playlist.id],
+                            refreshEnabled = !busy,
                             onClick = { onOpenPlaylist(playlist.id) },
                             onRefresh = { viewModel.refresh(playlist.id) },
                             onDelete = { pendingDelete = playlist },
@@ -207,6 +210,7 @@ private fun EmptyHome() {
 private fun PlaylistCard(
     playlist: PlaylistEntity,
     account: AccountInfo?,
+    refreshEnabled: Boolean,
     onClick: () -> Unit,
     onRefresh: () -> Unit,
     onDelete: () -> Unit,
@@ -234,7 +238,7 @@ private fun PlaylistCard(
                     )
                 }
                 if (playlist.url != null) {
-                    IconButton(onClick = onRefresh) {
+                    IconButton(onClick = onRefresh, enabled = refreshEnabled) {
                         Icon(Icons.Rounded.Refresh, contentDescription = "Refresh", tint = MaterialTheme.colorScheme.primary)
                     }
                 }

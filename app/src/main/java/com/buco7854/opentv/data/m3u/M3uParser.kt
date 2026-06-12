@@ -42,13 +42,21 @@ object M3uParser {
         while (line != null) {
             val trimmed = line.trim()
             when {
-                trimmed.startsWith("#EXTM3U") -> {
+                trimmed.startsWith("#EXTM3U", ignoreCase = true) -> {
                     val attrs = parseAttrs(trimmed)
                     onHeader(M3uHeader(attrs["url-tvg"] ?: attrs["x-tvg-url"]))
                 }
                 trimmed.startsWith("#EXTINF", ignoreCase = true) -> {
-                    val attrs = parseAttrs(trimmed)
-                    name = trimmed.substringAfterLast(',').trim()
+                    val matches = ATTR.findAll(trimmed).toList()
+                    val attrs = matches.associate {
+                        it.groupValues[1].lowercase(Locale.ROOT) to it.groupValues[2]
+                    }
+                    // The display name is everything after the first comma that
+                    // follows the attribute section - NOT after the last comma,
+                    // or titles like "News, Weather & Sport" get truncated.
+                    val searchFrom = (matches.lastOrNull()?.range?.last ?: trimmed.indexOf(':')) + 1
+                    val comma = trimmed.indexOf(',', startIndex = searchFrom.coerceIn(0, trimmed.length))
+                    name = if (comma >= 0) trimmed.substring(comma + 1).trim() else ""
                     if (name.isEmpty()) name = attrs["tvg-name"] ?: "Unknown"
                     logo = attrs["tvg-logo"]?.takeIf { it.isNotBlank() }
                     group = attrs["group-title"]?.takeIf { it.isNotBlank() }
