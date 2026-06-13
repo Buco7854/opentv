@@ -311,6 +311,7 @@ class PlaylistRepository(private val db: AppDatabase) {
                     episode = episode,
                     position = position++,
                     catchupDays = if (kind == ChannelKind.LIVE) entry.catchupDays else 0,
+                    catchupSource = if (kind == ChannelKind.LIVE) entry.catchupSource else null,
                 )
             )
             if (batch.size >= 500) {

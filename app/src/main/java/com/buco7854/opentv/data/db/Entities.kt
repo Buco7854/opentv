@@ -67,6 +67,8 @@ data class ChannelEntity(
     val xtreamStreamId: Long? = null,
     /** Days of catch-up archive the provider keeps for this live channel; 0 = none. */
     val catchupDays: Int = 0,
+    /** M3U `catchup-source` template (placeholders resolved at play time); null = none. */
+    val catchupSource: String? = null,
     // Episode details when the source provides them (Xtream get_series_info).
     val description: String? = null,
     val durationSecs: Int? = null,

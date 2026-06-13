@@ -116,11 +116,10 @@ object Xtream {
         "${c.base}/xmltv.php?username=${c.user}&password=${c.pass}"
 
     /** Catch-up (timeshift) stream for a past programme. */
-    fun catchupUrl(c: XtreamCredentials, streamId: Long, startMs: Long, durationMinutes: Int): String {
-        val format = java.text.SimpleDateFormat("yyyy-MM-dd:HH-mm", java.util.Locale.US)
-        val start = format.format(java.util.Date(startMs))
-        return "${c.base}/timeshift/${c.user}/${c.pass}/${durationMinutes.coerceAtLeast(1)}/$start/$streamId.ts"
-    }
+    fun catchupUrl(c: XtreamCredentials, streamId: Long, startMs: Long, durationMinutes: Int): String =
+        com.buco7854.opentv.data.catchup.Catchup.xtreamTimeshift(
+            c.base, c.user, c.pass, streamId, startMs, durationMinutes,
+        )
 
     private fun api(creds: XtreamCredentials, action: String?, vararg params: Pair<String, String>): String {
         val builder = creds.base.toHttpUrlOrNull()!!.newBuilder()

@@ -199,12 +199,21 @@ class BrowseViewModel(app: Application, val playlistId: Long) : AndroidViewModel
     suspend fun guideFor(channel: ChannelEntity): List<ProgrammeEntity> {
         val tvgId = channel.tvgId ?: return emptyList()
         val now = System.currentTimeMillis()
-        val since = if (channel.catchupDays > 0) now - channel.catchupDays * 86_400_000L else now
+        // catchup-source playlists don't always declare a day count; default to a week.
+        val days = when {
+            channel.catchupDays > 0 -> channel.catchupDays
+            channel.catchupSource != null -> 7
+            else -> 0
+        }
+        val since = if (days > 0) now - days * 86_400_000L else now
         return graph.epg.guide(playlistId, tvgId, since)
     }
 
-    suspend fun catchupUrl(channel: ChannelEntity, programme: ProgrammeEntity): String? =
-        graph.xtream.catchupUrlFor(channel, programme.startMs, programme.endMs)
+    fun catchupReplay(channel: ChannelEntity, programme: ProgrammeEntity, onResult: (String?) -> Unit) {
+        viewModelScope.launch {
+            onResult(graph.xtream.catchupUrlFor(channel, programme.startMs, programme.endMs))
+        }
+    }
 
     fun download(channel: ChannelEntity) {
         viewModelScope.launch {

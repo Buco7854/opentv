@@ -71,6 +71,7 @@ import com.buco7854.opentv.data.db.ChannelKind
 import com.buco7854.opentv.data.db.DownloadEntity
 import com.buco7854.opentv.data.db.ProgrammeEntity
 import com.buco7854.opentv.data.db.XtreamSeriesEntity
+import com.buco7854.opentv.data.repo.hasCatchup
 import com.buco7854.opentv.ui.components.BadgeRow
 import com.buco7854.opentv.ui.components.ChannelLogo
 import com.buco7854.opentv.ui.components.DownloadStateIcon
@@ -131,6 +132,7 @@ fun BrowseScreen(
     val message by viewModel.message.collectAsState()
 
     val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
     var guideChannel by remember { mutableStateOf<ChannelEntity?>(null) }
     var correctingGroup by remember { mutableStateOf<String?>(null) }
 
@@ -349,9 +351,15 @@ fun BrowseScreen(
             viewModel = viewModel,
             hasEpgConfigured = playlist?.epgUrl != null,
             onDismiss = { guideChannel = null },
-            onPlayCatchup = { url, title ->
-                guideChannel = null
-                onPlay(url, title, null)
+            onReplay = { programme ->
+                viewModel.catchupReplay(channel, programme) { url ->
+                    if (url != null) {
+                        guideChannel = null
+                        onPlay(url, "${channel.name} · ${programme.title}", null)
+                    } else {
+                        scope.launch { snackbar.showSnackbar("Catch-up isn't available for this channel.") }
+                    }
+                }
             },
         )
     }
@@ -677,9 +685,9 @@ private fun ChannelRow(
                 IconButton(onClick = onGuide) {
                     Icon(
                         Icons.Rounded.CalendarMonth,
-                        contentDescription = if (channel.catchupDays > 0) "Guide & catch-up" else "Guide",
+                        contentDescription = if (channel.hasCatchup()) "Guide & catch-up" else "Guide",
                         // Mint marks channels with a replay archive.
-                        tint = if (channel.catchupDays > 0) Mint
+                        tint = if (channel.hasCatchup()) Mint
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -698,18 +706,22 @@ private fun GuideSheet(
     viewModel: BrowseViewModel,
     hasEpgConfigured: Boolean,
     onDismiss: () -> Unit,
-    onPlayCatchup: (url: String, title: String) -> Unit,
+    onReplay: (ProgrammeEntity) -> Unit,
 ) {
     var programmes by remember(channel.id) { mutableStateOf<List<ProgrammeEntity>?>(null) }
-    val scope = rememberCoroutineScope()
+    val hasCatchup = channel.hasCatchup()
     LaunchedEffect(channel.id) { programmes = viewModel.guideFor(channel) }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
             Text(channel.name, style = MaterialTheme.typography.titleLarge)
-            if (channel.catchupDays > 0) {
+            if (hasCatchup) {
                 Text(
-                    "Catch-up · ${channel.catchupDays} day archive. Tap a past programme to replay it",
+                    if (channel.catchupDays > 0) {
+                        "Catch-up · ${channel.catchupDays} day archive. Tap a past programme to replay it"
+                    } else {
+                        "Catch-up available. Tap a past programme to replay it"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = Mint,
                 )
@@ -726,7 +738,7 @@ private fun GuideSheet(
                 )
                 else -> {
                     val timeFormat = SimpleDateFormat(
-                        if (channel.catchupDays > 0) "EEE HH:mm" else "HH:mm",
+                        if (hasCatchup) "EEE HH:mm" else "HH:mm",
                         Locale.getDefault(),
                     )
                     val now = System.currentTimeMillis()
@@ -734,19 +746,13 @@ private fun GuideSheet(
                         items(list, key = { it.id }) { programme ->
                             val isNow = programme.startMs <= now && programme.endMs > now
                             val isPast = programme.endMs <= now
-                            val replayable = isPast && channel.catchupDays > 0
+                            val replayable = isPast && hasCatchup
                             Row(
                                 Modifier
                                     .fillMaxWidth()
                                     .then(
-                                        if (replayable) Modifier.clickable {
-                                            scope.launch {
-                                                val url = viewModel.catchupUrl(channel, programme)
-                                                if (url != null) {
-                                                    onPlayCatchup(url, "${channel.name} · ${programme.title}")
-                                                }
-                                            }
-                                        } else Modifier
+                                        if (replayable) Modifier.clickable { onReplay(programme) }
+                                        else Modifier
                                     )
                                     .padding(vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
@@ -755,7 +761,7 @@ private fun GuideSheet(
                                     timeFormat.format(Date(programme.startMs)),
                                     style = MaterialTheme.typography.labelLarge,
                                     color = if (isNow) Mint else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.width(if (channel.catchupDays > 0) 88.dp else 64.dp),
+                                    modifier = Modifier.width(if (hasCatchup) 88.dp else 64.dp),
                                 )
                                 Column(Modifier.weight(1f)) {
                                     Text(

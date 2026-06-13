@@ -91,6 +91,9 @@ interface ChannelDao {
     @Query("SELECT * FROM channels WHERE id = :id")
     suspend fun get(id: Long): ChannelEntity?
 
+    @Query("SELECT * FROM channels WHERE playlistId = :playlistId AND url = :url LIMIT 1")
+    suspend fun getByUrl(playlistId: Long, url: String): ChannelEntity?
+
     @Query("SELECT DISTINCT tvgId FROM channels WHERE playlistId = :playlistId AND kind = 0 AND tvgId IS NOT NULL")
     suspend fun distinctLiveTvgIds(playlistId: Long): List<String>
 

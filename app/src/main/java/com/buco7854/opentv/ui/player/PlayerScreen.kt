@@ -7,6 +7,7 @@ import android.graphics.Typeface
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AspectRatio
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.Audiotrack
+import androidx.compose.material.icons.rounded.Replay
 import androidx.compose.material.icons.rounded.ScreenRotation
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Subtitles
@@ -85,16 +87,19 @@ import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.SubtitleView
 import com.buco7854.opentv.OpenTvApp
+import com.buco7854.opentv.data.db.ChannelEntity
 import com.buco7854.opentv.data.net.Http
 import com.buco7854.opentv.data.prefs.PlayerSettings
 import com.buco7854.opentv.data.prefs.SubtitleStyle
 import com.buco7854.opentv.diag.ErrorLog
+import com.buco7854.opentv.data.repo.hasCatchup
 import com.buco7854.opentv.playback.PlaybackMonitor
 import com.buco7854.opentv.ui.components.SubtitleStyleControls
 import com.buco7854.opentv.ui.theme.Mint
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.DateFormat
+import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
@@ -122,6 +127,13 @@ fun PlayerScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var nowNext by remember { mutableStateOf<Pair<String, String?>?>(null) }
     var showGuide by remember { mutableStateOf(false) }
+    // The channel behind this stream (for catch-up); title updates when a
+    // catch-up programme is loaded into the same player.
+    var channel by remember(url) { mutableStateOf<ChannelEntity?>(null) }
+    var currentTitle by remember(url) { mutableStateOf(title) }
+    LaunchedEffect(url, playlistId) {
+        if (playlistId > 0) channel = OpenTvApp.graph.db.channelDao().getByUrl(playlistId, url)
+    }
     // Runtime live detection from the actual stream (dynamic media window) -
     // far more reliable than guessing from the URL/extension.
     var isLiveStream by remember(url) { mutableStateOf(false) }
@@ -309,7 +321,7 @@ fun PlayerScreen(
                 )
                 .padding(horizontal = 20.dp, vertical = 8.dp),
         ) {
-            Text(title, style = MaterialTheme.typography.titleMedium, color = Color.White)
+            Text(currentTitle, style = MaterialTheme.typography.titleMedium, color = Color.White)
             nowNext?.let { (now, next) ->
                 Text(now, style = MaterialTheme.typography.bodySmall, color = Mint)
                 next?.let {
@@ -373,8 +385,24 @@ fun PlayerScreen(
         PlayerGuideSheet(
             playlistId = playlistId,
             tvgId = tvgId,
-            title = title,
+            title = currentTitle,
+            channel = channel,
             onDismiss = { showGuide = false },
+            onReplay = { programme ->
+                val ch = channel ?: return@PlayerGuideSheet
+                scope.launch {
+                    val catchupUrl = OpenTvApp.graph.xtream.catchupUrlFor(ch, programme.startMs, programme.endMs)
+                    if (catchupUrl != null) {
+                        showGuide = false
+                        currentTitle = "${ch.name} · ${programme.title}"
+                        player.setMediaItem(MediaItem.fromUri(catchupUrl))
+                        player.prepare()
+                        player.playWhenReady = true
+                    } else {
+                        scaleHint = "Catch-up unavailable"
+                    }
+                }
+            },
         )
     }
     if (showSubtitleTracks) {
@@ -545,22 +573,26 @@ private fun SpeedSheet(player: Player, onDismiss: () -> Unit) {
     }
 }
 
-/** Channel guide, viewable without leaving playback. Local DB only. */
+/** Channel guide, viewable without leaving playback; past programmes replay
+ *  via catch-up into the same player when the channel has an archive. */
 @kotlin.OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PlayerGuideSheet(
     playlistId: Long,
     tvgId: String,
     title: String,
+    channel: ChannelEntity?,
     onDismiss: () -> Unit,
+    onReplay: (com.buco7854.opentv.data.db.ProgrammeEntity) -> Unit,
 ) {
+    val hasCatchup = channel?.hasCatchup() == true
     var programmes by remember { mutableStateOf<List<com.buco7854.opentv.data.db.ProgrammeEntity>?>(null) }
-    LaunchedEffect(tvgId) {
+    LaunchedEffect(tvgId, hasCatchup) {
+        val back = if (hasCatchup) {
+            (channel?.catchupDays?.takeIf { it > 0 } ?: 7) * 86_400_000L
+        } else 2L * 60 * 60 * 1000
         programmes = OpenTvApp.graph.epg.guide(
-            playlistId,
-            tvgId,
-            sinceMs = System.currentTimeMillis() - 2L * 60 * 60 * 1000,
-            limit = 100,
+            playlistId, tvgId, sinceMs = System.currentTimeMillis() - back, limit = 200,
         )
     }
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -571,6 +603,14 @@ private fun PlayerGuideSheet(
                 .padding(bottom = 28.dp)
         ) {
             SheetHeading(title)
+            if (hasCatchup) {
+                Text(
+                    "Catch-up available. Tap a past programme to replay it.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Mint,
+                )
+                Spacer(Modifier.height(8.dp))
+            }
             val list = programmes
             when {
                 list == null -> Text("Loading…", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -579,17 +619,26 @@ private fun PlayerGuideSheet(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 else -> {
-                    val timeFormat = DateFormat.getTimeInstance(DateFormat.SHORT)
+                    val timeFormat = SimpleDateFormat(
+                        if (hasCatchup) "EEE HH:mm" else "HH:mm", Locale.getDefault(),
+                    )
                     val now = System.currentTimeMillis()
                     list.forEach { programme ->
                         val isNow = programme.startMs <= now && programme.endMs > now
                         val isPast = programme.endMs <= now
-                        Row(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                        val replayable = isPast && hasCatchup
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .then(if (replayable) Modifier.clickable { onReplay(programme) } else Modifier)
+                                .padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
                             Text(
                                 timeFormat.format(Date(programme.startMs)),
                                 style = MaterialTheme.typography.labelLarge,
                                 color = if (isNow) Mint else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.width(64.dp),
+                                modifier = Modifier.width(if (hasCatchup) 88.dp else 64.dp),
                             )
                             Column(Modifier.weight(1f)) {
                                 Text(
@@ -597,7 +646,7 @@ private fun PlayerGuideSheet(
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = when {
                                         isNow -> Mint
-                                        isPast -> MaterialTheme.colorScheme.onSurfaceVariant
+                                        isPast && !replayable -> MaterialTheme.colorScheme.onSurfaceVariant
                                         else -> MaterialTheme.colorScheme.onSurface
                                     },
                                 )
@@ -610,6 +659,13 @@ private fun PlayerGuideSheet(
                                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                     )
                                 }
+                            }
+                            if (replayable) {
+                                Icon(
+                                    Icons.Rounded.Replay,
+                                    contentDescription = "Replay",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
                             }
                         }
                     }

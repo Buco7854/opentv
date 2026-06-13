@@ -6,6 +6,7 @@ import com.buco7854.opentv.data.db.ChannelKind
 import com.buco7854.opentv.data.db.MetadataEntity
 import com.buco7854.opentv.data.db.PlaylistEntity
 import com.buco7854.opentv.data.db.XtreamSeriesEntity
+import com.buco7854.opentv.data.catchup.Catchup
 import com.buco7854.opentv.data.meta.castFromNames
 import com.buco7854.opentv.data.meta.encodeCast
 import com.buco7854.opentv.data.xtream.Xtream
@@ -127,19 +128,28 @@ class XtreamRepository(private val db: AppDatabase) {
         db.xtreamSeriesDao().get(playlistId, seriesId)
 
     /**
-     * Catch-up (timeshift) URL for a past programme on an archived channel, or
-     * null when the channel has no archive or no resolvable stream id.
+     * Catch-up (timeshift) URL for a past programme, or null when this channel
+     * has no usable catch-up. Handles two sources:
+     *  - M3U `catchup-source` templates (placeholders resolved per programme),
+     *  - Xtream panels (the /timeshift/ endpoint from the live stream id).
      */
     suspend fun catchupUrlFor(channel: ChannelEntity, startMs: Long, endMs: Long): String? =
         withContext(Dispatchers.IO) {
+            // 1. M3U catchup-source template wins when present.
+            channel.catchupSource?.let { template ->
+                return@withContext Catchup.fromTemplate(template, startMs, endMs)
+            }
+            // 2. Xtream timeshift endpoint from credentials + stream id.
             if (channel.catchupDays <= 0) return@withContext null
             val creds = credentialsOf(db.playlistDao().get(channel.playlistId)) ?: return@withContext null
-            // M3U-sourced channels carry the stream id in the URL's last segment.
             val streamId = channel.xtreamStreamId
                 ?: Regex("""/(\d+)\.\w{1,5}$""")
                     .find(channel.url.substringBefore('?'))?.groupValues?.get(1)?.toLongOrNull()
                 ?: return@withContext null
             val durationMinutes = ((endMs - startMs) / 60_000L).toInt()
-            Xtream.catchupUrl(creds, streamId, startMs, durationMinutes)
+            Catchup.xtreamTimeshift(creds.base, creds.user, creds.pass, streamId, startMs, durationMinutes)
         }
 }
+
+/** True when this channel can offer catch-up replay at all. */
+fun ChannelEntity.hasCatchup(): Boolean = catchupSource != null || catchupDays > 0

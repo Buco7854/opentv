@@ -15,6 +15,7 @@ class M3uEntry(
     val season: Int?,
     val episode: Int?,
     val catchupDays: Int,
+    val catchupSource: String?,
 )
 
 class M3uHeader(val epgUrl: String?)
@@ -38,6 +39,8 @@ object M3uParser {
         var group: String? = null
         var tvgId: String? = null
         var catchupDays = 0
+        var catchupSource: String? = null
+        var catchupAppend = false
         var extGrp: String? = null
         var pendingInfo = false
 
@@ -66,6 +69,10 @@ object M3uParser {
                     tvgId = attrs["tvg-id"]?.takeIf { it.isNotBlank() }
                     catchupDays = attrs["catchup-days"]?.toIntOrNull()
                         ?: attrs["tv-archive-duration"]?.toIntOrNull() ?: 0
+                    // `catchup-source` is the URL template; for catchup="append"
+                    // the source is appended to the stream URL (resolved below).
+                    catchupSource = attrs["catchup-source"]?.takeIf { it.isNotBlank() }
+                    catchupAppend = attrs["catchup"]?.lowercase(Locale.ROOT) == "append"
                     pendingInfo = true
                 }
                 trimmed.startsWith("#EXTGRP:", ignoreCase = true) -> {
@@ -75,10 +82,13 @@ object M3uParser {
                     // Decorative separator rows ("#### SPORTS ####") are not content;
                     // letting them through is how some players end up with phantom channels.
                     if (!ContentClassifier.isSeparator(name)) {
-                        onEntry(buildEntry(name, trimmed, logo, group ?: extGrp, tvgId, catchupDays))
+                        onEntry(
+                            buildEntry(name, trimmed, logo, group ?: extGrp, tvgId, catchupDays, catchupSource, catchupAppend)
+                        )
                     }
                     pendingInfo = false
-                    logo = null; group = null; tvgId = null; catchupDays = 0
+                    logo = null; group = null; tvgId = null
+                    catchupDays = 0; catchupSource = null; catchupAppend = false
                 }
             }
             line = reader.readLine()
@@ -95,8 +105,17 @@ object M3uParser {
         group: String?,
         tvgId: String?,
         catchupDays: Int,
+        catchupSource: String?,
+        catchupAppend: Boolean,
     ): M3uEntry {
         val classification = ContentClassifier.classify(name, url, group)
+        val isLive = classification.kind == ChannelKind.LIVE
+        // For catchup="append" the template is the stream URL plus the source.
+        val resolvedSource = when {
+            !isLive || catchupSource == null -> null
+            catchupAppend -> url + catchupSource
+            else -> catchupSource
+        }
         return M3uEntry(
             name = name,
             url = url,
@@ -107,7 +126,8 @@ object M3uParser {
             seriesKey = classification.seriesKey,
             season = classification.season,
             episode = classification.episode,
-            catchupDays = if (classification.kind == ChannelKind.LIVE) catchupDays else 0,
+            catchupDays = if (isLive) catchupDays else 0,
+            catchupSource = resolvedSource,
         )
     }
 }
