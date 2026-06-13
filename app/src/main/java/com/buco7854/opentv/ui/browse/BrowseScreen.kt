@@ -102,6 +102,7 @@ fun BrowseScreen(
     onOpenSeries: (seriesKey: String) -> Unit,
     onOpenXtreamSeries: (seriesId: Long) -> Unit,
     onOpenFavorites: () -> Unit,
+    onOpenAccount: () -> Unit,
 ) {
     val viewModel = playlistViewModel(playlistId, ::BrowseViewModel)
 
@@ -164,8 +165,17 @@ fun BrowseScreen(
         }
     }
 
+    // Playlists without categories collapse to one "Uncategorized" group:
+    // skip the pointless category level and show the content directly.
+    LaunchedEffect(groups, tab) {
+        if (group == null && groups.size == 1) {
+            viewModel.group.value = groups.first().groupTitle
+        }
+    }
+    val singleGroup = groups.size == 1
+
     BackHandler {
-        if (group != null) viewModel.group.value = null else onBack()
+        if (group != null && !singleGroup) viewModel.group.value = null else onBack()
     }
 
     Scaffold(
@@ -175,7 +185,7 @@ fun BrowseScreen(
                 title = {
                     Column {
                         Text(
-                            group ?: playlist?.name ?: "Browse",
+                            (if (singleGroup) null else group) ?: playlist?.name ?: "Browse",
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -203,7 +213,7 @@ fun BrowseScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = {
-                        if (group != null) viewModel.group.value = null else onBack()
+                        if (group != null && !singleGroup) viewModel.group.value = null else onBack()
                     }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
                     }
@@ -212,11 +222,17 @@ fun BrowseScreen(
                     IconButton(onClick = onOpenFavorites) {
                         Icon(Icons.Rounded.Favorite, contentDescription = "Favorites")
                     }
-                    IconButton(onClick = { viewModel.toggleGridView() }) {
-                        Icon(
-                            if (gridView) Icons.AutoMirrored.Rounded.ViewList else Icons.Rounded.GridView,
-                            contentDescription = if (gridView) "List view" else "Grid view",
-                        )
+                    if (group != null && tab != ChannelKind.LIVE) {
+                        IconButton(onClick = { viewModel.toggleGridView() }) {
+                            Icon(
+                                if (gridView) Icons.AutoMirrored.Rounded.ViewList else Icons.Rounded.GridView,
+                                contentDescription = if (gridView) "List view" else "Grid view",
+                            )
+                        }
+                    } else if (playlist?.xtreamBase != null) {
+                        IconButton(onClick = onOpenAccount) {
+                            Icon(Icons.Rounded.Person, contentDescription = "Account")
+                        }
                     }
                     IconButton(onClick = onSearch) {
                         Icon(Icons.Rounded.Search, contentDescription = "Search")
@@ -661,8 +677,10 @@ private fun ChannelRow(
                 IconButton(onClick = onGuide) {
                     Icon(
                         Icons.Rounded.CalendarMonth,
-                        contentDescription = "Guide",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        contentDescription = if (channel.catchupDays > 0) "Guide & catch-up" else "Guide",
+                        // Mint marks channels with a replay archive.
+                        tint = if (channel.catchupDays > 0) Mint
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }

@@ -109,6 +109,7 @@ fun AppNav() {
                 onOpenSeries = { nav.navigate(Routes.series(playlistId, it)) },
                 onOpenXtreamSeries = { nav.navigate(Routes.xtreamSeries(playlistId, it)) },
                 onOpenFavorites = { nav.navigate(Routes.favorites(playlistId)) },
+                onOpenAccount = { nav.navigate(Routes.account(playlistId)) },
             )
         }
         composable(

@@ -61,7 +61,4 @@
             </gradient>
         </aapt:attr>
     </path>
-    <path
-        android:pathData="M189,110 m-3.5,0 a3.5,3.5 0 1 0 7,0 a3.5,3.5 0 1 0 -7,0"
-        android:fillColor="#FF5BE3B5" />
 </vector>

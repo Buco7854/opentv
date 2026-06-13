@@ -53,8 +53,4 @@
             </gradient>
         </aapt:attr>
     </path>
-    <!-- Live dot accent -->
-    <path
-        android:pathData="M71,66 m-2.2,0 a2.2,2.2 0 1 0 4.4,0 a2.2,2.2 0 1 0 -4.4,0"
-        android:fillColor="#FF5BE3B5" />
 </vector>

@@ -1,6 +1,7 @@
 package com.buco7854.opentv.ui.favorites
 
 import android.app.Application
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -10,11 +11,18 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridScope
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.ViewList
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -28,6 +36,8 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -44,12 +54,16 @@ import com.buco7854.opentv.data.repo.xtreamFavoriteKey
 import com.buco7854.opentv.ui.components.ChannelLogo
 import com.buco7854.opentv.ui.components.EmptyState
 import com.buco7854.opentv.ui.components.FavoriteIcon
+import com.buco7854.opentv.ui.components.PosterCard
+import com.buco7854.opentv.ui.components.PosterItem
 import com.buco7854.opentv.ui.components.focusHighlight
 import com.buco7854.opentv.ui.components.kindIcon
+import com.buco7854.opentv.ui.components.mediaTags
 import com.buco7854.opentv.ui.components.playlistViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -90,6 +104,18 @@ class FavoritesViewModel(app: Application, private val playlistId: Long) : Andro
             .map { list -> list.filter { it.seriesId in ids } }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    /** Same persisted view-mode preference as browse. */
+    val gridView: StateFlow<Boolean> = graph.playerPrefs.settings
+        .map { it.gridBrowse }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+
+    fun toggleGridView() {
+        viewModelScope.launch {
+            val current = graph.playerPrefs.settings.first()
+            graph.playerPrefs.save(current.copy(gridBrowse = !current.gridBrowse))
+        }
+    }
+
     fun remove(key: String) {
         viewModelScope.launch { graph.db.favoriteDao().remove(playlistId, key) }
     }
@@ -111,6 +137,9 @@ fun FavoritesScreen(
     val movies by viewModel.movies.collectAsState()
     val m3uSeries by viewModel.m3uSeries.collectAsState()
     val xtreamSeries by viewModel.xtreamSeries.collectAsState()
+    val gridView by viewModel.gridView.collectAsState()
+    val expandedSections = remember { mutableStateMapOf<String, Boolean>() }
+    fun expanded(key: String) = expandedSections.getOrDefault(key, true)
 
     Scaffold(
         topBar = {
@@ -119,6 +148,14 @@ fun FavoritesScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { viewModel.toggleGridView() }) {
+                        Icon(
+                            if (gridView) Icons.AutoMirrored.Rounded.ViewList else Icons.Rounded.GridView,
+                            contentDescription = if (gridView) "List view" else "Grid view",
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
@@ -134,58 +171,152 @@ fun FavoritesScreen(
             }
             return@Scaffold
         }
-        LazyColumn(
-            Modifier.padding(padding),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            if (live.isNotEmpty()) {
-                item { SectionLabel("Live") }
-                items(live, key = { "l${it.id}" }) { channel ->
-                    FavoriteRow(
-                        logo = channel.logo,
-                        fallback = kindIcon(ChannelKind.LIVE),
-                        title = channel.name,
-                        subtitle = channel.groupTitle,
-                        onClick = { onPlay(channel.url, channel.name, channel.tvgId) },
-                        onRemove = { viewModel.remove(channel.url) },
-                    )
+
+        if (gridView) {
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 112.dp),
+                modifier = Modifier.padding(padding),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                fun LazyGridScope.gridSection(
+                    key: String,
+                    title: String,
+                    count: Int,
+                    content: LazyGridScope.() -> Unit,
+                ) {
+                    if (count == 0) return
+                    item(key = "h-$key", span = { GridItemSpan(maxLineSpan) }) {
+                        SectionHeader(title, count, expanded(key)) {
+                            expandedSections[key] = !expanded(key)
+                        }
+                    }
+                    if (expanded(key)) content()
+                }
+                gridSection("live", "Live", live.size) {
+                    items(live, key = { "l${it.id}" }) { channel ->
+                        PosterCard(
+                            item = PosterItem(
+                                "l${channel.id}", channel.logo, channel.name, channel.groupTitle,
+                                tags = mediaTags(channel.name, 1),
+                            ),
+                            fallback = kindIcon(ChannelKind.LIVE),
+                            onClick = { onPlay(channel.url, channel.name, channel.tvgId) },
+                        )
+                    }
+                }
+                gridSection("movies", "Movies", movies.size) {
+                    items(movies, key = { "m${it.id}" }) { channel ->
+                        PosterCard(
+                            item = PosterItem(
+                                "m${channel.id}", channel.logo, channel.name, null,
+                                tags = mediaTags(channel.name, 1),
+                            ),
+                            fallback = kindIcon(ChannelKind.MOVIE),
+                            onClick = { onOpenMovie(channel.id) },
+                        )
+                    }
+                }
+                gridSection("series", "Series", m3uSeries.size + xtreamSeries.size) {
+                    items(xtreamSeries, key = { "x${it.seriesId}" }) { series ->
+                        PosterCard(
+                            item = PosterItem(
+                                "x${series.seriesId}", series.cover, series.name,
+                                series.genre ?: series.categoryName,
+                            ),
+                            fallback = kindIcon(ChannelKind.SERIES),
+                            onClick = { onOpenXtreamSeries(series.seriesId) },
+                        )
+                    }
+                    items(m3uSeries, key = { "s${it.seriesKey}" }) { series ->
+                        PosterCard(
+                            item = PosterItem(
+                                "s${series.seriesKey}", series.logo, series.seriesKey,
+                                "${series.count} episodes",
+                            ),
+                            fallback = kindIcon(ChannelKind.SERIES),
+                            onClick = { onOpenSeries(series.seriesKey) },
+                        )
+                    }
                 }
             }
-            if (movies.isNotEmpty()) {
-                item { SectionLabel("Movies") }
-                items(movies, key = { "m${it.id}" }) { channel ->
-                    FavoriteRow(
-                        logo = channel.logo,
-                        fallback = kindIcon(ChannelKind.MOVIE),
-                        title = channel.name,
-                        subtitle = channel.groupTitle,
-                        onClick = { onOpenMovie(channel.id) },
-                        onRemove = { viewModel.remove(channel.url) },
-                    )
+        } else {
+            androidx.compose.foundation.lazy.LazyColumn(
+                Modifier.padding(padding),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (live.isNotEmpty()) {
+                    item(key = "h-live") {
+                        SectionHeader("Live", live.size, expanded("live")) {
+                            expandedSections["live"] = !expanded("live")
+                        }
+                    }
+                    if (expanded("live")) {
+                        items(live.size, key = { "l${live[it].id}" }) { index ->
+                            val channel = live[index]
+                            FavoriteRow(
+                                logo = channel.logo,
+                                fallback = kindIcon(ChannelKind.LIVE),
+                                title = channel.name,
+                                subtitle = channel.groupTitle,
+                                onClick = { onPlay(channel.url, channel.name, channel.tvgId) },
+                                onRemove = { viewModel.remove(channel.url) },
+                            )
+                        }
+                    }
                 }
-            }
-            if (m3uSeries.isNotEmpty() || xtreamSeries.isNotEmpty()) {
-                item { SectionLabel("Series") }
-                items(xtreamSeries, key = { "x${it.seriesId}" }) { series ->
-                    FavoriteRow(
-                        logo = series.cover,
-                        fallback = kindIcon(ChannelKind.SERIES),
-                        title = series.name,
-                        subtitle = series.genre ?: series.categoryName,
-                        onClick = { onOpenXtreamSeries(series.seriesId) },
-                        onRemove = { viewModel.remove(xtreamFavoriteKey(series.seriesId)) },
-                    )
+                if (movies.isNotEmpty()) {
+                    item(key = "h-movies") {
+                        SectionHeader("Movies", movies.size, expanded("movies")) {
+                            expandedSections["movies"] = !expanded("movies")
+                        }
+                    }
+                    if (expanded("movies")) {
+                        items(movies.size, key = { "m${movies[it].id}" }) { index ->
+                            val channel = movies[index]
+                            FavoriteRow(
+                                logo = channel.logo,
+                                fallback = kindIcon(ChannelKind.MOVIE),
+                                title = channel.name,
+                                subtitle = channel.groupTitle,
+                                onClick = { onOpenMovie(channel.id) },
+                                onRemove = { viewModel.remove(channel.url) },
+                            )
+                        }
+                    }
                 }
-                items(m3uSeries, key = { "s${it.seriesKey}" }) { series ->
-                    FavoriteRow(
-                        logo = series.logo,
-                        fallback = kindIcon(ChannelKind.SERIES),
-                        title = series.seriesKey,
-                        subtitle = "${series.count} episodes",
-                        onClick = { onOpenSeries(series.seriesKey) },
-                        onRemove = { viewModel.remove(series.seriesKey) },
-                    )
+                if (m3uSeries.isNotEmpty() || xtreamSeries.isNotEmpty()) {
+                    item(key = "h-series") {
+                        SectionHeader("Series", m3uSeries.size + xtreamSeries.size, expanded("series")) {
+                            expandedSections["series"] = !expanded("series")
+                        }
+                    }
+                    if (expanded("series")) {
+                        items(xtreamSeries.size, key = { "x${xtreamSeries[it].seriesId}" }) { index ->
+                            val series = xtreamSeries[index]
+                            FavoriteRow(
+                                logo = series.cover,
+                                fallback = kindIcon(ChannelKind.SERIES),
+                                title = series.name,
+                                subtitle = series.genre ?: series.categoryName,
+                                onClick = { onOpenXtreamSeries(series.seriesId) },
+                                onRemove = { viewModel.remove(xtreamFavoriteKey(series.seriesId)) },
+                            )
+                        }
+                        items(m3uSeries.size, key = { "s${m3uSeries[it].seriesKey}" }) { index ->
+                            val series = m3uSeries[index]
+                            FavoriteRow(
+                                logo = series.logo,
+                                fallback = kindIcon(ChannelKind.SERIES),
+                                title = series.seriesKey,
+                                subtitle = "${series.count} episodes",
+                                onClick = { onOpenSeries(series.seriesKey) },
+                                onRemove = { viewModel.remove(series.seriesKey) },
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -193,13 +324,26 @@ fun FavoritesScreen(
 }
 
 @Composable
-private fun SectionLabel(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.titleMedium,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
-    )
+private fun SectionHeader(title: String, count: Int, expanded: Boolean, onToggle: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle)
+            .padding(top = 8.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "$title · $count",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.weight(1f),
+        )
+        Icon(
+            if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+            contentDescription = if (expanded) "Collapse" else "Expand",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
 
 @Composable

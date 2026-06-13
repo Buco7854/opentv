@@ -56,12 +56,20 @@ fun PosterGrid(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         items(items, key = { it.id }) { item ->
-            Card(
-                onClick = { onClick(item.id) },
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-                modifier = Modifier.focusHighlight(RoundedCornerShape(16.dp)),
-            ) {
+            PosterCard(item = item, fallback = fallback, onClick = { onClick(item.id) })
+        }
+    }
+}
+
+/** Single portrait card, reusable outside the grid container (e.g. favorites). */
+@Composable
+fun PosterCard(item: PosterItem, fallback: ImageVector, onClick: () -> Unit) {
+    Card(
+        onClick = onClick,
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        modifier = Modifier.focusHighlight(RoundedCornerShape(16.dp)),
+    ) {
                 Column {
                     Box(
                         Modifier
@@ -116,6 +124,4 @@ fun PosterGrid(
                     }
                 }
             }
-        }
-    }
 }

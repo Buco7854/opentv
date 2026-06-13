@@ -31,9 +31,9 @@ import androidx.compose.material.icons.rounded.Audiotrack
 import androidx.compose.material.icons.rounded.ScreenRotation
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Subtitles
-import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -128,7 +128,6 @@ fun PlayerScreen(
     var showSubtitleTracks by remember { mutableStateOf(false) }
     var showAudioTracks by remember { mutableStateOf(false) }
     var showSpeed by remember { mutableStateOf(false) }
-    var showStyle by remember { mutableStateOf(false) }
     var playerView by remember { mutableStateOf<PlayerView?>(null) }
     var scaleHint by remember { mutableStateOf<String?>(null) }
     val configuration = LocalConfiguration.current
@@ -366,9 +365,6 @@ fun PlayerScreen(
                         Icon(Icons.Rounded.Speed, contentDescription = "Playback speed", tint = Color.White)
                     }
                 }
-                IconButton(onClick = { showStyle = true }) {
-                    Icon(Icons.Rounded.Tune, contentDescription = "Subtitle appearance", tint = Color.White)
-                }
             }
         }
     }
@@ -388,6 +384,21 @@ fun PlayerScreen(
             heading = "Subtitles",
             allowOff = true,
             onDismiss = { showSubtitleTracks = false },
+            extraContent = {
+                HorizontalDivider(
+                    modifier = Modifier.padding(vertical = 14.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                )
+                SheetHeading("Appearance")
+                SubtitleStyleControls(
+                    style = settings.subtitleStyle,
+                    onChange = {
+                        scope.launch {
+                            OpenTvApp.graph.playerPrefs.save(settings.copy(subtitleStyle = it))
+                        }
+                    },
+                )
+            },
         )
     }
     if (showAudioTracks) {
@@ -401,13 +412,6 @@ fun PlayerScreen(
     }
     if (showSpeed) {
         SpeedSheet(player = player, onDismiss = { showSpeed = false })
-    }
-    if (showStyle) {
-        SubtitleStyleSheet(
-            style = settings.subtitleStyle,
-            onChange = { scope.launch { OpenTvApp.graph.playerPrefs.save(settings.copy(subtitleStyle = it)) } },
-            onDismiss = { showStyle = false },
-        )
     }
 }
 
@@ -466,6 +470,7 @@ private fun TrackSheet(
     heading: String,
     allowOff: Boolean,
     onDismiss: () -> Unit,
+    extraContent: (@Composable () -> Unit)? = null,
 ) {
     var tracks by remember { mutableStateOf(player.currentTracks) }
     DisposableEffect(player) {
@@ -510,6 +515,7 @@ private fun TrackSheet(
                     ) { selectTrack(player, group, i) }
                 }
             }
+            extraContent?.invoke()
         }
     }
 }
@@ -633,20 +639,5 @@ private fun TrackOption(label: String, selected: Boolean, onClick: () -> Unit) {
     ) {
         RadioButton(selected = selected, onClick = onClick)
         Text(label, style = MaterialTheme.typography.bodyMedium)
-    }
-}
-
-@kotlin.OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun SubtitleStyleSheet(
-    style: SubtitleStyle,
-    onChange: (SubtitleStyle) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
-            SheetHeading("Subtitle appearance")
-            SubtitleStyleControls(style = style, onChange = onChange)
-        }
     }
 }
