@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -71,6 +72,7 @@ import com.buco7854.opentv.data.db.ChannelKind
 import com.buco7854.opentv.data.db.DownloadEntity
 import com.buco7854.opentv.data.db.ProgrammeEntity
 import com.buco7854.opentv.data.db.XtreamSeriesEntity
+import com.buco7854.opentv.data.repo.GuideEntry
 import com.buco7854.opentv.data.repo.hasCatchup
 import com.buco7854.opentv.ui.components.BadgeRow
 import com.buco7854.opentv.ui.components.ChannelLogo
@@ -351,11 +353,11 @@ fun BrowseScreen(
             viewModel = viewModel,
             hasEpgConfigured = playlist?.epgUrl != null,
             onDismiss = { guideChannel = null },
-            onReplay = { programme ->
-                viewModel.catchupReplay(channel, programme) { url ->
+            onReplay = { entry ->
+                viewModel.catchupReplay(channel, entry) { url ->
                     if (url != null) {
                         guideChannel = null
-                        onPlay(url, "${channel.name} · ${programme.title}", null)
+                        onPlay(url, "${channel.name} · ${entry.title}", null)
                     } else {
                         scope.launch { snackbar.showSnackbar("Catch-up isn't available for this channel.") }
                     }
@@ -706,28 +708,24 @@ private fun GuideSheet(
     viewModel: BrowseViewModel,
     hasEpgConfigured: Boolean,
     onDismiss: () -> Unit,
-    onReplay: (ProgrammeEntity) -> Unit,
+    onReplay: (GuideEntry) -> Unit,
 ) {
-    var programmes by remember(channel.id) { mutableStateOf<List<ProgrammeEntity>?>(null) }
+    var entries by remember(channel.id) { mutableStateOf<List<GuideEntry>?>(null) }
     val hasCatchup = channel.hasCatchup()
-    LaunchedEffect(channel.id) { programmes = viewModel.guideFor(channel) }
+    LaunchedEffect(channel.id) { entries = viewModel.guideFor(channel) }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
             Text(channel.name, style = MaterialTheme.typography.titleLarge)
             if (hasCatchup) {
                 Text(
-                    if (channel.catchupDays > 0) {
-                        "Catch-up · ${channel.catchupDays} day archive. Tap a past programme to replay it"
-                    } else {
-                        "Catch-up available. Tap a past programme to replay it"
-                    },
+                    "Catch-up available. Tap a past programme to replay it",
                     style = MaterialTheme.typography.bodySmall,
                     color = Mint,
                 )
             }
             Spacer(Modifier.height(12.dp))
-            val list = programmes
+            val list = entries
             when {
                 list == null -> Text("Loading…", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 list.isEmpty() -> Text(
@@ -743,37 +741,36 @@ private fun GuideSheet(
                     )
                     val now = System.currentTimeMillis()
                     LazyColumn {
-                        items(list, key = { it.id }) { programme ->
-                            val isNow = programme.startMs <= now && programme.endMs > now
-                            val isPast = programme.endMs <= now
-                            val replayable = isPast && hasCatchup
+                        itemsIndexed(list) { index, entry ->
+                            val isNow = entry.startMs <= now && entry.endMs > now
+                            val isPast = entry.endMs <= now
                             Row(
                                 Modifier
                                     .fillMaxWidth()
                                     .then(
-                                        if (replayable) Modifier.clickable { onReplay(programme) }
+                                        if (entry.replayable) Modifier.clickable { onReplay(entry) }
                                         else Modifier
                                     )
                                     .padding(vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Text(
-                                    timeFormat.format(Date(programme.startMs)),
+                                    timeFormat.format(Date(entry.startMs)),
                                     style = MaterialTheme.typography.labelLarge,
                                     color = if (isNow) Mint else MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.width(if (hasCatchup) 88.dp else 64.dp),
                                 )
                                 Column(Modifier.weight(1f)) {
                                     Text(
-                                        programme.title,
+                                        entry.title,
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = when {
                                             isNow -> Mint
-                                            isPast && !replayable -> MaterialTheme.colorScheme.onSurfaceVariant
+                                            isPast && !entry.replayable -> MaterialTheme.colorScheme.onSurfaceVariant
                                             else -> MaterialTheme.colorScheme.onSurface
                                         },
                                     )
-                                    programme.description?.let {
+                                    entry.description?.let {
                                         Text(
                                             it,
                                             style = MaterialTheme.typography.bodySmall,
@@ -783,7 +780,7 @@ private fun GuideSheet(
                                         )
                                     }
                                 }
-                                if (replayable) {
+                                if (entry.replayable) {
                                     Icon(
                                         Icons.Rounded.Replay,
                                         contentDescription = "Replay",

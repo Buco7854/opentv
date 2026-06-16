@@ -388,13 +388,13 @@ fun PlayerScreen(
             title = currentTitle,
             channel = channel,
             onDismiss = { showGuide = false },
-            onReplay = { programme ->
+            onReplay = { entry ->
                 val ch = channel ?: return@PlayerGuideSheet
                 scope.launch {
-                    val catchupUrl = OpenTvApp.graph.xtream.catchupUrlFor(ch, programme.startMs, programme.endMs)
+                    val catchupUrl = OpenTvApp.graph.xtream.catchupUrlFor(ch, entry.startMs, entry.endMs)
                     if (catchupUrl != null) {
                         showGuide = false
-                        currentTitle = "${ch.name} · ${programme.title}"
+                        currentTitle = "${ch.name} · ${entry.title}"
                         player.setMediaItem(MediaItem.fromUri(catchupUrl))
                         player.prepare()
                         player.playWhenReady = true
@@ -583,17 +583,12 @@ private fun PlayerGuideSheet(
     title: String,
     channel: ChannelEntity?,
     onDismiss: () -> Unit,
-    onReplay: (com.buco7854.opentv.data.db.ProgrammeEntity) -> Unit,
+    onReplay: (com.buco7854.opentv.data.repo.GuideEntry) -> Unit,
 ) {
     val hasCatchup = channel?.hasCatchup() == true
-    var programmes by remember { mutableStateOf<List<com.buco7854.opentv.data.db.ProgrammeEntity>?>(null) }
-    LaunchedEffect(tvgId, hasCatchup) {
-        val back = if (hasCatchup) {
-            (channel?.catchupDays?.takeIf { it > 0 } ?: 7) * 86_400_000L
-        } else 2L * 60 * 60 * 1000
-        programmes = OpenTvApp.graph.epg.guide(
-            playlistId, tvgId, sinceMs = System.currentTimeMillis() - back, limit = 200,
-        )
+    var entries by remember { mutableStateOf<List<com.buco7854.opentv.data.repo.GuideEntry>?>(null) }
+    LaunchedEffect(channel?.id, tvgId) {
+        entries = channel?.let { OpenTvApp.graph.xtream.guideFor(it) } ?: emptyList()
     }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -611,7 +606,7 @@ private fun PlayerGuideSheet(
                 )
                 Spacer(Modifier.height(8.dp))
             }
-            val list = programmes
+            val list = entries
             when {
                 list == null -> Text("Loading…", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 list.isEmpty() -> Text(
@@ -623,34 +618,33 @@ private fun PlayerGuideSheet(
                         if (hasCatchup) "EEE HH:mm" else "HH:mm", Locale.getDefault(),
                     )
                     val now = System.currentTimeMillis()
-                    list.forEach { programme ->
-                        val isNow = programme.startMs <= now && programme.endMs > now
-                        val isPast = programme.endMs <= now
-                        val replayable = isPast && hasCatchup
+                    list.forEach { entry ->
+                        val isNow = entry.startMs <= now && entry.endMs > now
+                        val isPast = entry.endMs <= now
                         Row(
                             Modifier
                                 .fillMaxWidth()
-                                .then(if (replayable) Modifier.clickable { onReplay(programme) } else Modifier)
+                                .then(if (entry.replayable) Modifier.clickable { onReplay(entry) } else Modifier)
                                 .padding(vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                timeFormat.format(Date(programme.startMs)),
+                                timeFormat.format(Date(entry.startMs)),
                                 style = MaterialTheme.typography.labelLarge,
                                 color = if (isNow) Mint else MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.width(if (hasCatchup) 88.dp else 64.dp),
                             )
                             Column(Modifier.weight(1f)) {
                                 Text(
-                                    programme.title,
+                                    entry.title,
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = when {
                                         isNow -> Mint
-                                        isPast && !replayable -> MaterialTheme.colorScheme.onSurfaceVariant
+                                        isPast && !entry.replayable -> MaterialTheme.colorScheme.onSurfaceVariant
                                         else -> MaterialTheme.colorScheme.onSurface
                                     },
                                 )
-                                programme.description?.let {
+                                entry.description?.let {
                                     Text(
                                         it,
                                         style = MaterialTheme.typography.bodySmall,
@@ -660,7 +654,7 @@ private fun PlayerGuideSheet(
                                     )
                                 }
                             }
-                            if (replayable) {
+                            if (entry.replayable) {
                                 Icon(
                                     Icons.Rounded.Replay,
                                     contentDescription = "Replay",

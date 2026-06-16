@@ -15,8 +15,9 @@ class EpgRepository(private val db: AppDatabase) {
         const val MIN_REFRESH_INTERVAL_MS = 12L * 60 * 60 * 1000
         const val FAILURE_RETRY_INTERVAL_MS = 5L * 60 * 1000
         const val FORCED_MIN_INTERVAL_MS = 30_000L
-        /** Keep several days of past guide data so catch-up has programmes to offer. */
-        const val WINDOW_BACK_MS = 3L * 24 * 60 * 60 * 1000
+        /** Keep over a week of past guide data so catch-up has programmes to
+         *  offer across a typical archive (XMLTV path; Xtream uses the live API). */
+        const val WINDOW_BACK_MS = 8L * 24 * 60 * 60 * 1000
         const val WINDOW_AHEAD_MS = 48L * 60 * 60 * 1000
     }
 

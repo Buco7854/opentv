@@ -51,6 +51,14 @@ class XtreamSeriesItem(
     val categoryId: String?,
 )
 
+class XtreamEpgEntry(
+    val title: String,
+    val description: String?,
+    val startMs: Long,
+    val endMs: Long,
+    val hasArchive: Boolean,
+)
+
 class XtreamEpisode(
     val episodeId: String,
     val title: String,
@@ -150,6 +158,47 @@ object Xtream {
         }
         return null
     }
+
+    private fun decodeMaybeBase64(value: String): String {
+        if (value.isBlank()) return value
+        return try {
+            String(java.util.Base64.getDecoder().decode(value), Charsets.UTF_8)
+        } catch (_: IllegalArgumentException) {
+            value // not base64 (some panels send plain text)
+        }
+    }
+
+    /**
+     * Per-channel EPG (get_simple_data_table). Unlike the bulk xmltv.php this
+     * includes past programmes and an explicit `has_archive` flag per entry,
+     * which is what catch-up needs to know exactly what can be replayed.
+     */
+    suspend fun fetchChannelEpg(creds: XtreamCredentials, streamId: Long): List<XtreamEpgEntry> =
+        withContext(Dispatchers.IO) {
+            val text = api(creds, "get_simple_data_table", "stream_id" to streamId.toString())
+            val listings = try {
+                JSONObject(text).optJSONArray("epg_listings")
+            } catch (_: JSONException) {
+                null
+            } ?: return@withContext emptyList()
+            buildList {
+                for (i in 0 until listings.length()) {
+                    val o = listings.optJSONObject(i) ?: continue
+                    val startSec = o.optString("start_timestamp").toLongOrNull()
+                    val endSec = o.optString("stop_timestamp").toLongOrNull()
+                    if (startSec == null || endSec == null) continue
+                    add(
+                        XtreamEpgEntry(
+                            title = decodeMaybeBase64(o.optString("title")).ifBlank { "Programme" },
+                            description = decodeMaybeBase64(o.optString("description")).takeIf { it.isNotBlank() },
+                            startMs = startSec * 1000,
+                            endMs = endSec * 1000,
+                            hasArchive = o.optInt("has_archive", 0) == 1,
+                        )
+                    )
+                }
+            }
+        }
 
     suspend fun fetchAccountInfo(creds: XtreamCredentials): AccountInfo = withContext(Dispatchers.IO) {
         val text = api(creds, action = null)

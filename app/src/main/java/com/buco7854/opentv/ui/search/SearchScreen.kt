@@ -48,9 +48,15 @@ import androidx.compose.runtime.LaunchedEffect
 import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.data.db.ChannelEntity
 import com.buco7854.opentv.data.db.ChannelKind
+import com.buco7854.opentv.data.db.DownloadEntity
+import com.buco7854.opentv.data.db.DownloadStatus
+import com.buco7854.opentv.data.db.FavoriteEntity
 import com.buco7854.opentv.data.db.GroupHit
 import com.buco7854.opentv.diag.ErrorLog
+import com.buco7854.opentv.data.repo.xtreamFavoriteKey
 import com.buco7854.opentv.ui.components.ChannelLogo
+import com.buco7854.opentv.ui.components.DownloadStateIcon
+import com.buco7854.opentv.ui.components.FavoriteIcon
 import com.buco7854.opentv.ui.components.EmptyState
 import com.buco7854.opentv.ui.components.Pill
 import com.buco7854.opentv.ui.components.kindIcon
@@ -64,8 +70,10 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 
 /** One row per series, however many episodes matched. */
 data class SeriesHit(
@@ -147,6 +155,32 @@ class SearchViewModel(app: Application, private val playlistId: Long) : AndroidV
             }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SearchResults())
+
+    private val graph = OpenTvApp.graph
+
+    /** Same favourite affordance as the browse rows. */
+    val favoriteKeys: StateFlow<Set<String>> = graph.db.favoriteDao().observeAll(playlistId)
+        .map { list -> list.map { it.key }.toSet() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
+
+    val downloadsByUrl: StateFlow<Map<String, DownloadEntity>> = graph.downloads.downloads
+        .map { list ->
+            list.filter { it.status != DownloadStatus.CANCELLED && it.status != DownloadStatus.FAILED }
+                .associateBy { it.url }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
+    fun toggleFavorite(key: String, kind: Int) {
+        viewModelScope.launch {
+            val dao = graph.db.favoriteDao()
+            if (dao.get(playlistId, key) != null) dao.remove(playlistId, key)
+            else dao.add(FavoriteEntity(playlistId = playlistId, key = key, kind = kind))
+        }
+    }
+
+    fun download(channel: ChannelEntity) {
+        viewModelScope.launch { graph.downloads.enqueue(channel) }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -163,6 +197,8 @@ fun SearchScreen(
     val viewModel = playlistViewModel(playlistId, ::SearchViewModel)
     val query by viewModel.query.collectAsState()
     val results by viewModel.results.collectAsState()
+    val favoriteKeys by viewModel.favoriteKeys.collectAsState()
+    val downloadsByUrl by viewModel.downloadsByUrl.collectAsState()
     val focusRequester = remember { FocusRequester() }
 
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
@@ -244,6 +280,8 @@ fun SearchScreen(
                                 kind = channel.kind,
                                 badge = "Live",
                                 onClick = { onPlay(channel.url, channel.name) },
+                                isFavorite = channel.url in favoriteKeys,
+                                onToggleFavorite = { viewModel.toggleFavorite(channel.url, channel.kind) },
                             )
                         }
                     }
@@ -261,6 +299,10 @@ fun SearchScreen(
                                 kind = channel.kind,
                                 badge = "Movie",
                                 onClick = { onOpenMovie(channel.id) },
+                                isFavorite = channel.url in favoriteKeys,
+                                onToggleFavorite = { viewModel.toggleFavorite(channel.url, channel.kind) },
+                                downloadState = downloadsByUrl[channel.url],
+                                onDownload = { viewModel.download(channel) },
                             )
                         }
                     }
@@ -271,6 +313,7 @@ fun SearchScreen(
                             }
                         }
                         if (expanded("series")) items(results.series, key = { "series-${it.xtreamSeriesId ?: it.seriesKey}" }) { hit ->
+                            val favKey = hit.xtreamSeriesId?.let { xtreamFavoriteKey(it) } ?: hit.seriesKey
                             ResultRow(
                                 title = hit.seriesKey,
                                 subtitle = hit.groupTitle +
@@ -282,6 +325,8 @@ fun SearchScreen(
                                     hit.xtreamSeriesId?.let { onOpenXtreamSeries(it) }
                                         ?: onOpenSeries(hit.seriesKey)
                                 },
+                                isFavorite = favKey in favoriteKeys,
+                                onToggleFavorite = { viewModel.toggleFavorite(favKey, ChannelKind.SERIES) },
                             )
                         }
                     }
@@ -323,6 +368,10 @@ private fun ResultRow(
     kind: Int,
     badge: String,
     onClick: () -> Unit,
+    isFavorite: Boolean? = null,
+    onToggleFavorite: (() -> Unit)? = null,
+    downloadState: DownloadEntity? = null,
+    onDownload: (() -> Unit)? = null,
 ) {
     Card(
         onClick = onClick,
@@ -331,7 +380,7 @@ private fun ResultRow(
         modifier = Modifier.focusHighlight(RoundedCornerShape(16.dp)),
     ) {
         Row(
-            Modifier.fillMaxWidth().padding(12.dp),
+            Modifier.fillMaxWidth().padding(start = 12.dp, top = 4.dp, bottom = 4.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             ChannelLogo(logo, kindIcon(kind))
@@ -351,7 +400,17 @@ private fun ResultRow(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Pill(badge)
+            // Compact badge when no actions; actions replace it to save width.
+            if (onToggleFavorite == null && onDownload == null) {
+                Pill(badge)
+                Spacer(Modifier.width(8.dp))
+            }
+            if (onToggleFavorite != null && isFavorite != null) {
+                FavoriteIcon(isFavorite = isFavorite, onToggle = onToggleFavorite)
+            }
+            if (onDownload != null) {
+                DownloadStateIcon(state = downloadState, onDownload = onDownload)
+            }
         }
     }
 }

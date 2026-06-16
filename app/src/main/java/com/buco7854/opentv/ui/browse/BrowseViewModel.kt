@@ -15,6 +15,7 @@ import com.buco7854.opentv.data.db.ProgrammeEntity
 import com.buco7854.opentv.data.db.SeriesGroup
 import com.buco7854.opentv.data.db.XtreamSeriesEntity
 import com.buco7854.opentv.data.xtream.AccountInfo
+import com.buco7854.opentv.data.repo.GuideEntry
 import com.buco7854.opentv.data.repo.xtreamFavoriteKey
 import com.buco7854.opentv.diag.ErrorLog
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -195,23 +196,12 @@ class BrowseViewModel(app: Application, val playlistId: Long) : AndroidViewModel
         }
     }
 
-    /** Guide for one channel; reaches back into the catch-up archive when available. */
-    suspend fun guideFor(channel: ChannelEntity): List<ProgrammeEntity> {
-        val tvgId = channel.tvgId ?: return emptyList()
-        val now = System.currentTimeMillis()
-        // catchup-source playlists don't always declare a day count; default to a week.
-        val days = when {
-            channel.catchupDays > 0 -> channel.catchupDays
-            channel.catchupSource != null -> 7
-            else -> 0
-        }
-        val since = if (days > 0) now - days * 86_400_000L else now
-        return graph.epg.guide(playlistId, tvgId, since)
-    }
+    /** Guide for one channel, with per-row catch-up availability. */
+    suspend fun guideFor(channel: ChannelEntity): List<GuideEntry> = graph.xtream.guideFor(channel)
 
-    fun catchupReplay(channel: ChannelEntity, programme: ProgrammeEntity, onResult: (String?) -> Unit) {
+    fun catchupReplay(channel: ChannelEntity, entry: GuideEntry, onResult: (String?) -> Unit) {
         viewModelScope.launch {
-            onResult(graph.xtream.catchupUrlFor(channel, programme.startMs, programme.endMs))
+            onResult(graph.xtream.catchupUrlFor(channel, entry.startMs, entry.endMs))
         }
     }
 

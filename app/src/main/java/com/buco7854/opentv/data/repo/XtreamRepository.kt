@@ -23,6 +23,15 @@ fun xtreamSeriesKey(seriesId: Long) = "xs:$seriesId"
 /** Stable favorites key for an Xtream catalog series. */
 fun xtreamFavoriteKey(seriesId: Long) = "x:$seriesId"
 
+/** One guide row, with whether it can be replayed via catch-up. */
+data class GuideEntry(
+    val title: String,
+    val description: String?,
+    val startMs: Long,
+    val endMs: Long,
+    val replayable: Boolean,
+)
+
 /**
  * On-demand Xtream data: series episodes and VOD details. Both are fetched
  * only when the user opens the corresponding page, and cached - one request
@@ -126,6 +135,53 @@ class XtreamRepository(private val db: AppDatabase) {
     /** Series row for the detail page header. */
     suspend fun series(playlistId: Long, seriesId: Long): XtreamSeriesEntity? =
         db.xtreamSeriesDao().get(playlistId, seriesId)
+
+    private class CachedEpg(val entries: List<com.buco7854.opentv.data.xtream.XtreamEpgEntry>, val atMs: Long)
+    private val epgCache = HashMap<String, CachedEpg>()
+
+    /**
+     * Full guide for one channel, with per-row catch-up availability.
+     *
+     * For Xtream channels we prefer the panel's per-channel table
+     * (get_simple_data_table): it includes past programmes and an explicit
+     * archive flag, so every replayable programme shows the button - the bulk
+     * xmltv.php often omits the past entirely. Falls back to the stored XMLTV
+     * (M3U, or when the panel call fails), where replay is offered on past
+     * programmes whenever the channel declares catch-up.
+     */
+    suspend fun guideFor(channel: ChannelEntity): List<GuideEntry> = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        val streamId = channel.xtreamStreamId
+        if (streamId != null) {
+            val creds = credentialsOf(db.playlistDao().get(channel.playlistId))
+            if (creds != null) {
+                val key = "${channel.playlistId}:$streamId"
+                val cached = epgCache[key]?.takeIf { now - it.atMs < 10 * 60_000L }?.entries
+                    ?: runCatching { Xtream.fetchChannelEpg(creds, streamId) }
+                        .getOrElse { ErrorLog.log("Channel EPG", it); emptyList() }
+                        .also { if (it.isNotEmpty()) epgCache[key] = CachedEpg(it, now) }
+                if (cached.isNotEmpty()) {
+                    return@withContext cached.map {
+                        GuideEntry(it.title, it.description, it.startMs, it.endMs,
+                            replayable = it.endMs <= now && it.hasArchive)
+                    }
+                }
+            }
+        }
+        // Fallback: stored XMLTV.
+        val tvgId = channel.tvgId ?: return@withContext emptyList()
+        val days = when {
+            channel.catchupDays > 0 -> channel.catchupDays
+            channel.catchupSource != null -> 7
+            else -> 0
+        }
+        val since = if (days > 0) now - days * 86_400_000L else now
+        val canReplay = channel.hasCatchup()
+        db.epgDao().guideSince(channel.playlistId, tvgId, since, 400).map {
+            GuideEntry(it.title, it.description, it.startMs, it.endMs,
+                replayable = canReplay && it.endMs <= now)
+        }
+    }
 
     /**
      * Catch-up (timeshift) URL for a past programme, or null when this channel
