@@ -15,7 +15,6 @@ import com.buco7854.opentv.data.db.ProgrammeEntity
 import com.buco7854.opentv.data.db.SeriesGroup
 import com.buco7854.opentv.data.db.XtreamSeriesEntity
 import com.buco7854.opentv.data.xtream.AccountInfo
-import com.buco7854.opentv.data.repo.GuideEntry
 import com.buco7854.opentv.data.repo.xtreamFavoriteKey
 import com.buco7854.opentv.diag.ErrorLog
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -193,15 +192,6 @@ class BrowseViewModel(app: Application, val playlistId: Long) : AndroidViewModel
         viewModelScope.launch {
             val p = graph.db.playlistDao().get(playlistId) ?: return@launch
             graph.account.accountInfo(p, force)?.let { _account.value = it }
-        }
-    }
-
-    /** Guide for one channel, with per-row catch-up availability. */
-    suspend fun guideFor(channel: ChannelEntity): List<GuideEntry> = graph.xtream.guideFor(channel)
-
-    fun catchupReplay(channel: ChannelEntity, entry: GuideEntry, onResult: (String?) -> Unit) {
-        viewModelScope.launch {
-            onResult(graph.xtream.catchupUrlFor(channel, entry.startMs, entry.endMs))
         }
     }
 

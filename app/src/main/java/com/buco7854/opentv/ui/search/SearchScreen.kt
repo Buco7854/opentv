@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
@@ -28,6 +29,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -35,6 +38,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,6 +63,7 @@ import com.buco7854.opentv.data.repo.xtreamFavoriteKey
 import com.buco7854.opentv.ui.components.ChannelLogo
 import com.buco7854.opentv.ui.components.DownloadStateIcon
 import com.buco7854.opentv.ui.components.FavoriteIcon
+import com.buco7854.opentv.ui.components.GuideSheet
 import com.buco7854.opentv.ui.components.EmptyState
 import com.buco7854.opentv.ui.components.Pill
 import com.buco7854.opentv.ui.components.kindIcon
@@ -200,10 +207,14 @@ fun SearchScreen(
     val favoriteKeys by viewModel.favoriteKeys.collectAsState()
     val downloadsByUrl by viewModel.downloadsByUrl.collectAsState()
     val focusRequester = remember { FocusRequester() }
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    var guideChannel by remember { mutableStateOf<ChannelEntity?>(null) }
 
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = { Text("Search") },
@@ -282,6 +293,7 @@ fun SearchScreen(
                                 onClick = { onPlay(channel.url, channel.name) },
                                 isFavorite = channel.url in favoriteKeys,
                                 onToggleFavorite = { viewModel.toggleFavorite(channel.url, channel.kind) },
+                                onGuide = if (channel.tvgId != null) ({ guideChannel = channel }) else null,
                             )
                         }
                     }
@@ -335,6 +347,21 @@ fun SearchScreen(
             }
         }
     }
+
+    guideChannel?.let { channel ->
+        GuideSheet(
+            channel = channel,
+            hasEpgConfigured = true,
+            onDismiss = { guideChannel = null },
+            onPlayCatchup = { url, title ->
+                guideChannel = null
+                onPlay(url, title)
+            },
+            onUnavailable = {
+                scope.launch { snackbar.showSnackbar("Catch-up isn't available for this programme.") }
+            },
+        )
+    }
 }
 
 @Composable
@@ -372,6 +399,7 @@ private fun ResultRow(
     onToggleFavorite: (() -> Unit)? = null,
     downloadState: DownloadEntity? = null,
     onDownload: (() -> Unit)? = null,
+    onGuide: (() -> Unit)? = null,
 ) {
     Card(
         onClick = onClick,
@@ -401,9 +429,18 @@ private fun ResultRow(
                 )
             }
             // Compact badge when no actions; actions replace it to save width.
-            if (onToggleFavorite == null && onDownload == null) {
+            if (onToggleFavorite == null && onDownload == null && onGuide == null) {
                 Pill(badge)
                 Spacer(Modifier.width(8.dp))
+            }
+            if (onGuide != null) {
+                IconButton(onClick = onGuide) {
+                    Icon(
+                        Icons.Rounded.CalendarMonth,
+                        contentDescription = "Guide",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             if (onToggleFavorite != null && isFavorite != null) {
                 FavoriteIcon(isFavorite = isFavorite, onToggle = onToggleFavorite)

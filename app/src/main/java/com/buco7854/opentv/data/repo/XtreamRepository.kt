@@ -161,9 +161,17 @@ class XtreamRepository(private val db: AppDatabase) {
                         .getOrElse { ErrorLog.log("Channel EPG", it); emptyList() }
                         .also { if (it.isNotEmpty()) epgCache[key] = CachedEpg(it, now) }
                 if (cached.isNotEmpty()) {
+                    // Panels are inconsistent about the per-programme has_archive
+                    // flag (often 0 even when the channel is fully archived), so a
+                    // past programme is replayable if the flag is set OR it falls
+                    // within the channel's declared archive window.
+                    val windowStart = if (channel.catchupDays > 0) {
+                        now - channel.catchupDays * 86_400_000L
+                    } else Long.MAX_VALUE
                     return@withContext cached.map {
-                        GuideEntry(it.title, it.description, it.startMs, it.endMs,
-                            replayable = it.endMs <= now && it.hasArchive)
+                        val replayable = it.endMs <= now &&
+                            (it.hasArchive || it.startMs >= windowStart)
+                        GuideEntry(it.title, it.description, it.startMs, it.endMs, replayable)
                     }
                 }
             }

@@ -78,6 +78,7 @@ import com.buco7854.opentv.ui.components.BadgeRow
 import com.buco7854.opentv.ui.components.ChannelLogo
 import com.buco7854.opentv.ui.components.DownloadStateIcon
 import com.buco7854.opentv.ui.components.FavoriteIcon
+import com.buco7854.opentv.ui.components.GuideSheet
 import com.buco7854.opentv.ui.components.mediaTags
 import com.buco7854.opentv.ui.components.PosterGrid
 import com.buco7854.opentv.ui.components.PosterItem
@@ -350,18 +351,14 @@ fun BrowseScreen(
     guideChannel?.let { channel ->
         GuideSheet(
             channel = channel,
-            viewModel = viewModel,
             hasEpgConfigured = playlist?.epgUrl != null,
             onDismiss = { guideChannel = null },
-            onReplay = { entry ->
-                viewModel.catchupReplay(channel, entry) { url ->
-                    if (url != null) {
-                        guideChannel = null
-                        onPlay(url, "${channel.name} · ${entry.title}", null)
-                    } else {
-                        scope.launch { snackbar.showSnackbar("Catch-up isn't available for this channel.") }
-                    }
-                }
+            onPlayCatchup = { url, title ->
+                guideChannel = null
+                onPlay(url, title, null)
+            },
+            onUnavailable = {
+                scope.launch { snackbar.showSnackbar("Catch-up isn't available for this programme.") }
             },
         )
     }
@@ -696,101 +693,6 @@ private fun ChannelRow(
             }
             if (onDownload != null) {
                 DownloadStateIcon(state = downloadState, onDownload = onDownload)
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun GuideSheet(
-    channel: ChannelEntity,
-    viewModel: BrowseViewModel,
-    hasEpgConfigured: Boolean,
-    onDismiss: () -> Unit,
-    onReplay: (GuideEntry) -> Unit,
-) {
-    var entries by remember(channel.id) { mutableStateOf<List<GuideEntry>?>(null) }
-    val hasCatchup = channel.hasCatchup()
-    LaunchedEffect(channel.id) { entries = viewModel.guideFor(channel) }
-
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
-            Text(channel.name, style = MaterialTheme.typography.titleLarge)
-            if (hasCatchup) {
-                Text(
-                    "Catch-up available. Tap a past programme to replay it",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Mint,
-                )
-            }
-            Spacer(Modifier.height(12.dp))
-            val list = entries
-            when {
-                list == null -> Text("Loading…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                list.isEmpty() -> Text(
-                    // Don't tell users with an auto-wired EPG (Xtream) to add one.
-                    if (hasEpgConfigured) "No guide data for this channel."
-                    else "No guide data for this channel. Add an XMLTV EPG URL to your playlist.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                else -> {
-                    val timeFormat = SimpleDateFormat(
-                        if (hasCatchup) "EEE HH:mm" else "HH:mm",
-                        Locale.getDefault(),
-                    )
-                    val now = System.currentTimeMillis()
-                    LazyColumn {
-                        itemsIndexed(list) { index, entry ->
-                            val isNow = entry.startMs <= now && entry.endMs > now
-                            val isPast = entry.endMs <= now
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .then(
-                                        if (entry.replayable) Modifier.clickable { onReplay(entry) }
-                                        else Modifier
-                                    )
-                                    .padding(vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    timeFormat.format(Date(entry.startMs)),
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = if (isNow) Mint else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.width(if (hasCatchup) 88.dp else 64.dp),
-                                )
-                                Column(Modifier.weight(1f)) {
-                                    Text(
-                                        entry.title,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = when {
-                                            isNow -> Mint
-                                            isPast && !entry.replayable -> MaterialTheme.colorScheme.onSurfaceVariant
-                                            else -> MaterialTheme.colorScheme.onSurface
-                                        },
-                                    )
-                                    entry.description?.let {
-                                        Text(
-                                            it,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            maxLines = 2,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    }
-                                }
-                                if (entry.replayable) {
-                                    Icon(
-                                        Icons.Rounded.Replay,
-                                        contentDescription = "Replay",
-                                        tint = MaterialTheme.colorScheme.primary,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
             }
         }
     }
