@@ -30,6 +30,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AspectRatio
 import androidx.compose.material.icons.rounded.CalendarMonth
+import androidx.compose.material.icons.rounded.PictureInPictureAlt
 import androidx.compose.material.icons.rounded.Audiotrack
 import androidx.compose.material.icons.rounded.Replay
 import androidx.compose.material.icons.rounded.ScreenRotation
@@ -147,6 +148,11 @@ fun PlayerScreen(
     var scaleHint by remember { mutableStateOf<String?>(null) }
     val configuration = LocalConfiguration.current
 
+    val inPip by PipController.isInPip.collectAsState()
+    val pipSupported = remember {
+        context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE)
+    }
+
     LaunchedEffect(scaleHint) {
         if (scaleHint != null) {
             delay(1400)
@@ -243,6 +249,25 @@ fun PlayerScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    fun enterPip() {
+        val activity = context as? Activity ?: return
+        if (!pipSupported) return
+        val size = player.videoSize
+        val params = android.app.PictureInPictureParams.Builder().apply {
+            if (size.width > 0 && size.height > 0) {
+                // System requires the ratio within ~[0.42, 2.39]; clamp to be safe.
+                val ratio = (size.width.toFloat() / size.height).coerceIn(0.42f, 2.39f)
+                setAspectRatio(android.util.Rational((ratio * 1000).toInt(), 1000))
+            }
+        }.build()
+        runCatching { activity.enterPictureInPictureMode(params) }
+    }
+    // Register auto-PiP (Home press) while this screen is on; keep playing in PiP.
+    DisposableEffect(pipSupported) {
+        if (pipSupported) PipController.onUserLeave = { enterPip() }
+        onDispose { PipController.onUserLeave = null }
+    }
+
     // Immersive fullscreen while the player is open; restore bars and free
     // orientation when leaving.
     DisposableEffect(Unit) {
@@ -294,10 +319,14 @@ fun PlayerScreen(
             update = {
                 it.player = player
                 it.resizeMode = resizeMode
+                // No chrome inside the PiP window.
+                it.useController = !inPip
+                if (inPip) it.hideController()
             },
             modifier = Modifier.fillMaxSize(),
         )
 
+      if (!inPip) {
         // Double-tap the left/right third to skip; single tap toggles controls.
         // Seek step is the configurable value used to build the player.
         val seekStep = settings.seekSeconds
@@ -335,6 +364,7 @@ fun PlayerScreen(
                     )
                 },
         )
+      }
 
         scaleHint?.let { hint ->
             Text(
@@ -348,6 +378,7 @@ fun PlayerScreen(
             )
         }
 
+        if (!inPip) {
         Column(
             Modifier
                 .fillMaxWidth()
@@ -377,6 +408,15 @@ fun PlayerScreen(
                 )
             }
             Row {
+                if (pipSupported) {
+                    IconButton(onClick = { enterPip() }) {
+                        Icon(
+                            Icons.Rounded.PictureInPictureAlt,
+                            contentDescription = "Picture in picture",
+                            tint = Color.White,
+                        )
+                    }
+                }
                 if (tvgId != null && playlistId > 0) {
                     IconButton(onClick = { showGuide = true }) {
                         Icon(Icons.Rounded.CalendarMonth, contentDescription = "Guide", tint = Color.White)
@@ -419,6 +459,7 @@ fun PlayerScreen(
                     }
                 }
             }
+        }
         }
     }
 

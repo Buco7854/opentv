@@ -63,6 +63,8 @@ and **look genuinely good** while doing it.
   speed; configurable subtitle size/style/bold with live preview.
 - **Gestures**: double-tap left/right to skip by your configured step; rotate,
   video-scaling (Fit/Zoom/Stretch), immersive fullscreen, lifecycle-aware pause.
+- **Picture-in-Picture**: a player button, plus auto-PiP when you press Home —
+  playback keeps going in a floating window.
 - **EPG (XMLTV)**: now/next with progress on live rows, a full per-channel guide
   (also inside the player), gzip supported.
 - **Catch-up / timeshift**: replay past programmes on archived channels (Xtream

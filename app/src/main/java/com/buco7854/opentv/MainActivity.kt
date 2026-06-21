@@ -24,6 +24,7 @@ import com.buco7854.opentv.ui.diag.LogScreen
 import com.buco7854.opentv.ui.downloads.DownloadsScreen
 import com.buco7854.opentv.ui.favorites.FavoritesScreen
 import com.buco7854.opentv.ui.home.HomeScreen
+import com.buco7854.opentv.ui.player.PipController
 import com.buco7854.opentv.ui.player.PlayerScreen
 import com.buco7854.opentv.ui.search.SearchScreen
 import com.buco7854.opentv.ui.settings.SettingsScreen
@@ -40,6 +41,21 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    // Auto-enter Picture-in-Picture when the user leaves (Home/Recents) while
+    // the player is active and has registered a handler.
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        PipController.onUserLeave?.invoke()
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: android.content.res.Configuration,
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        PipController.isInPip.value = isInPictureInPictureMode
     }
 }
 
