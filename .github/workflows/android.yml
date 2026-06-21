@@ -28,7 +28,26 @@ jobs:
       - name: Run unit tests
         run: ./gradlew testDebugUnitTest
 
+      # Decode the stable signing keystore from a repo secret when present, so
+      # every CI APK is signed identically and installs as an update. Absent
+      # (e.g. fork PRs), the build falls back to the default debug key.
+      - name: Decode signing keystore
+        env:
+          SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$SIGNING_KEYSTORE_BASE64" ]; then
+            echo "$SIGNING_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/stable.keystore"
+            echo "KEYSTORE_FILE=$RUNNER_TEMP/stable.keystore" >> "$GITHUB_ENV"
+            echo "Signing with the stable keystore."
+          else
+            echo "No SIGNING_KEYSTORE_BASE64 secret; using the default debug key."
+          fi
+
       - name: Build debug APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
         run: ./gradlew assembleDebug
 
       - name: Upload APK artifact

@@ -17,16 +17,17 @@ android {
         versionName = "0.1"
     }
 
-    // Release signing is configured only when a keystore is provided (via env or
-    // gradle properties), so open-source contributors and CI can still build a
-    // release variant for verification without holding the upload key.
+    // A stable signing key, supplied via env vars or gradle properties (e.g.
+    // decoded from a CI secret), lets every build sign identically so a new APK
+    // installs over the previous one without uninstalling. Without it, builds
+    // fall back to the default debug key (fine for local/PR verification).
     val keystorePath = System.getenv("KEYSTORE_FILE")
         ?: (project.findProperty("KEYSTORE_FILE") as String?)
     val hasKeystore = keystorePath != null && file(keystorePath).exists()
 
     signingConfigs {
         if (hasKeystore) {
-            create("release") {
+            create("stable") {
                 storeFile = file(keystorePath!!)
                 storePassword = System.getenv("KEYSTORE_PASSWORD")
                     ?: project.findProperty("KEYSTORE_PASSWORD") as String?
@@ -39,6 +40,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Sign debug APKs with the stable key when one is provided, so the
+            // builds CI hands you update in place instead of forcing a reinstall.
+            if (hasKeystore) signingConfig = signingConfigs.getByName("stable")
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
@@ -46,10 +52,10 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            // Real upload key when available; debug key otherwise so the
-            // release variant still assembles in CI / locally.
+            // Stable key when available; debug key otherwise so the release
+            // variant still assembles in CI / locally.
             signingConfig = if (hasKeystore) {
-                signingConfigs.getByName("release")
+                signingConfigs.getByName("stable")
             } else {
                 signingConfigs.getByName("debug")
             }
