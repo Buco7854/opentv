@@ -44,7 +44,11 @@ jobs:
         run: npm run docs:build
 
       - name: Configure Pages
+        # enablement turns on GitHub Pages (with the Actions source) the first
+        # time, so no manual repo setting is needed.
         uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
