@@ -51,9 +51,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.autofill.AutofillType
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -61,6 +64,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.buco7854.opentv.data.db.PlaylistEntity
 import com.buco7854.opentv.data.xtream.Xtream
 import com.buco7854.opentv.data.xtream.XtreamCredentials
+import com.buco7854.opentv.ui.components.autofill
 import com.buco7854.opentv.ui.components.focusHighlight
 import com.buco7854.opentv.ui.theme.Mint
 import com.buco7854.opentv.ui.theme.Periwinkle
@@ -261,6 +265,7 @@ private fun PlaylistCard(
     }
 }
 
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 private fun AddPlaylistDialog(
     onDismiss: () -> Unit,
@@ -312,7 +317,12 @@ private fun AddPlaylistDialog(
                             onValueChange = { username = it },
                             label = { Text("Username") },
                             singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .autofill(
+                                    types = listOf(AutofillType.Username),
+                                    onFill = { username = it },
+                                ),
                         )
                         OutlinedTextField(
                             value = password,
@@ -320,7 +330,13 @@ private fun AddPlaylistDialog(
                             label = { Text("Password") },
                             singleLine = true,
                             visualTransformation = PasswordVisualTransformation(),
-                            modifier = Modifier.fillMaxWidth(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .autofill(
+                                    types = listOf(AutofillType.Password),
+                                    onFill = { password = it },
+                                ),
                         )
                         Text(
                             "Uses the provider's API directly: server-side Live / Movies / Series " +
