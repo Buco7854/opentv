@@ -177,7 +177,7 @@ fun PlayerScreen(
     var resizeMode by remember { mutableIntStateOf(buildSettings.resizeMode) }
 
     val player = remember(url) {
-        val httpFactory = OkHttpDataSource.Factory(Http.ok).setUserAgent(Http.USER_AGENT)
+        val httpFactory = OkHttpDataSource.Factory(Http.ok).setUserAgent(Http.userAgent)
         val dataSourceFactory = DefaultDataSource.Factory(context, httpFactory)
         val renderersFactory = DefaultRenderersFactory(context)
             .setEnableDecoderFallback(buildSettings.decoderFallback)

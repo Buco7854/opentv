@@ -109,7 +109,7 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
                 val existing = DownloadStorage.length(applicationContext, item.filePath)
                 val requestBuilder = Request.Builder()
                     .url(item.url)
-                    .header("User-Agent", Http.USER_AGENT)
+                    .header("User-Agent", Http.userAgent)
                 if (existing > 0) requestBuilder.header("Range", "bytes=$existing-")
 
             Http.ok.newCall(requestBuilder.build()).execute().use { response ->

@@ -20,7 +20,15 @@ import java.util.zip.GZIPInputStream
  *    and EPG files cost a single 304 with no body transfer.
  */
 object Http {
-    const val USER_AGENT = "OpenTV/0.1 (Android)"
+    /** A widely-accepted default; many IPTV panels 404/403 unknown User-Agents. */
+    const val DEFAULT_USER_AGENT = "VLC/3.0.20 LibVLC/3.0.20"
+
+    /**
+     * Effective User-Agent for every request. Mutable so a user can change it in
+     * Settings to match what their provider whitelists. Set from prefs at start.
+     */
+    @Volatile
+    var userAgent: String = DEFAULT_USER_AGENT
 
     @Volatile private var client: OkHttpClient? = null
 
@@ -52,7 +60,7 @@ object Http {
     fun conditionalGet(url: String, etag: String?, lastModified: String?): FetchResult {
         val builder = Request.Builder()
             .url(url)
-            .header("User-Agent", USER_AGENT)
+            .header("User-Agent", userAgent)
             .header("Accept-Encoding", "gzip")
         if (etag != null) builder.header("If-None-Match", etag)
         if (lastModified != null) builder.header("If-Modified-Since", lastModified)

@@ -60,7 +60,7 @@ class MetaInfo(
 private fun getJson(url: String): String {
     val request = Request.Builder()
         .url(url)
-        .header("User-Agent", Http.USER_AGENT)
+        .header("User-Agent", Http.userAgent)
         .build()
     Http.ok.newCall(request).execute().use { response ->
         if (!response.isSuccessful) throw IOException("Metadata API returned HTTP ${response.code}")

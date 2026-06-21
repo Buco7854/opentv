@@ -13,6 +13,12 @@ import com.buco7854.opentv.data.repo.XtreamRepository
 import com.buco7854.opentv.diag.ErrorLog
 import com.buco7854.opentv.download.DownloadRepository
 import com.buco7854.opentv.download.DownloadWorker
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 
 /** Tiny hand-rolled dependency graph; no DI framework needed at this size. */
 class AppGraph(app: Application) {
@@ -41,5 +47,16 @@ class OpenTvApp : Application() {
         graph = AppGraph(this)
         graph.resume.pruneOld()
         DownloadWorker.ensureNotificationChannel(this)
+        // Keep the shared HTTP User-Agent in sync with the saved preference so
+        // every request (login, playlist, EPG, downloads) uses what the user's
+        // provider whitelists; "" falls back to the built-in VLC default.
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            graph.playerPrefs.settings
+                .map { it.userAgent }
+                .distinctUntilChanged()
+                .collect { ua ->
+                    Http.userAgent = ua.trim().ifBlank { Http.DEFAULT_USER_AGENT }
+                }
+        }
     }
 }

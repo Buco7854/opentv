@@ -50,6 +50,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.buco7854.opentv.OpenTvApp
+import com.buco7854.opentv.data.net.Http
 import com.buco7854.opentv.data.prefs.PlayerSettings
 import com.buco7854.opentv.download.DownloadStorage
 import com.buco7854.opentv.ui.components.SubtitleStyleControls
@@ -157,6 +158,10 @@ fun SettingsScreen(onBack: () -> Unit) {
                 DownloadLocationSetting(current = current, update = update)
                 SettingDivider()
                 MoveDownloadsSetting(snackbar = snackbar)
+            }
+
+            SectionCard("Network") {
+                UserAgentSetting(current = current, update = update)
             }
 
             SectionCard("Subtitles") {
@@ -321,6 +326,47 @@ private fun MoveDownloadsSetting(snackbar: SnackbarHostState) {
             ) { Text("Move") }
         }
     }
+}
+
+/** Common agents IPTV panels recognise; empty value = the app default. */
+private val USER_AGENT_PRESETS = listOf(
+    "Default" to "",
+    "VLC" to "VLC/3.0.20 LibVLC/3.0.20",
+    "IPTV Smarters" to "IPTVSmartersPlayer",
+    "Kodi" to "Kodi/20.0 (Linux; Android) Inputstream.adaptive",
+    "TiviMate" to "TiviMate/4.7.0 (Android)",
+)
+
+@Composable
+private fun UserAgentSetting(current: PlayerSettings, update: (PlayerSettings) -> Unit) {
+    // Local edit buffer so typing stays smooth; persisted on each change.
+    var text by remember(current.userAgent) { mutableStateOf(current.userAgent) }
+    Text("User-Agent", style = MaterialTheme.typography.titleSmall)
+    Row(Modifier.padding(top = 2.dp)) {
+        USER_AGENT_PRESETS.forEach { (name, value) ->
+            FilterChip(
+                selected = current.userAgent == value,
+                onClick = {
+                    text = value
+                    update(current.copy(userAgent = value))
+                },
+                label = { Text(name) },
+                modifier = Modifier.padding(end = 8.dp),
+            )
+        }
+    }
+    OutlinedTextField(
+        value = text,
+        onValueChange = {
+            text = it
+            update(current.copy(userAgent = it))
+        },
+        singleLine = true,
+        label = { Text("Custom User-Agent") },
+        placeholder = { Text(Http.DEFAULT_USER_AGENT) },
+        modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+    )
+    Hint("Some providers reject unknown apps with a 404 or 403. Match what your provider expects. Leave blank for the default.")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

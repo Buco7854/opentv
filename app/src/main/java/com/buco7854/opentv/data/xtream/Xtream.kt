@@ -12,6 +12,10 @@ import java.io.IOException
 
 class XtreamCredentials(val base: String, val user: String, val pass: String)
 
+/** The panel reachably rejected the credentials (auth=0) - distinct from a
+ *  transport/404 error, so callers know not to fall back to M3U. */
+class XtreamAuthException(message: String) : java.io.IOException(message)
+
 class AccountInfo(
     val activeConnections: Int,
     val maxConnections: Int,
@@ -138,7 +142,7 @@ object Xtream {
         params.forEach { builder.addQueryParameter(it.first, it.second) }
         val request = Request.Builder()
             .url(builder.build())
-            .header("User-Agent", Http.USER_AGENT)
+            .header("User-Agent", Http.userAgent)
             .build()
         Http.ok.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("Provider API returned HTTP ${response.code}")
@@ -212,7 +216,7 @@ object Xtream {
         val info = json.optJSONObject("user_info")
             ?: throw IOException("Provider API response is missing user_info")
         if (info.has("auth") && info.optInt("auth", 1) == 0) {
-            throw IOException("Login rejected by provider - check server, username and password")
+            throw XtreamAuthException("Login rejected by provider - check server, username and password")
         }
         AccountInfo(
             activeConnections = info.optString("active_cons", "0").toIntOrNull() ?: 0,

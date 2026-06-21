@@ -38,6 +38,9 @@ data class PlayerSettings(
     val downloadDirUri: String = "",
     /** Browse movies/series as a poster grid (default) or row lists. */
     val gridBrowse: Boolean = true,
+    /** Override sent as the HTTP User-Agent; "" = the app default (VLC). Some
+     *  IPTV panels 404/403 unrecognised agents, so this is user-tunable. */
+    val userAgent: String = "",
 ) {
     companion object {
         const val BUFFER_FAST_START = 0
@@ -62,6 +65,7 @@ class PlayerPrefs(private val context: Context) {
         val DOWNLOAD_LIMIT = intPreferencesKey("download_limit")
         val DOWNLOAD_DIR = stringPreferencesKey("download_dir_uri")
         val GRID_BROWSE = booleanPreferencesKey("grid_browse")
+        val USER_AGENT = stringPreferencesKey("user_agent")
     }
 
     val settings: Flow<PlayerSettings> = context.playerDataStore.data.map { prefs ->
@@ -80,6 +84,7 @@ class PlayerPrefs(private val context: Context) {
             downloadLimit = prefs[Keys.DOWNLOAD_LIMIT] ?: PlayerSettings.DOWNLOADS_AUTO,
             downloadDirUri = prefs[Keys.DOWNLOAD_DIR] ?: "",
             gridBrowse = prefs[Keys.GRID_BROWSE] ?: true,
+            userAgent = prefs[Keys.USER_AGENT] ?: "",
         )
     }
 
@@ -97,6 +102,7 @@ class PlayerPrefs(private val context: Context) {
             prefs[Keys.DOWNLOAD_LIMIT] = settings.downloadLimit
             prefs[Keys.DOWNLOAD_DIR] = settings.downloadDirUri
             prefs[Keys.GRID_BROWSE] = settings.gridBrowse
+            prefs[Keys.USER_AGENT] = settings.userAgent
         }
     }
 }

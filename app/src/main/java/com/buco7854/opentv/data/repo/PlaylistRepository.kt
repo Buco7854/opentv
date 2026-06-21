@@ -12,6 +12,7 @@ import com.buco7854.opentv.data.m3u.ContentClassifier
 import com.buco7854.opentv.data.m3u.M3uParser
 import com.buco7854.opentv.data.net.Http
 import com.buco7854.opentv.data.xtream.Xtream
+import com.buco7854.opentv.data.xtream.XtreamAuthException
 import com.buco7854.opentv.data.xtream.XtreamCredentials
 import com.buco7854.opentv.diag.ErrorLog
 import kotlinx.coroutines.Dispatchers
@@ -50,7 +51,19 @@ class PlaylistRepository(private val db: AppDatabase) {
         val base = Xtream.normalizeServer(server)
             ?: throw IllegalArgumentException("Invalid server address")
         val creds = XtreamCredentials(base, username.trim(), password.trim())
-        Xtream.fetchAccountInfo(creds) // throws "Login rejected" on bad credentials
+        try {
+            Xtream.fetchAccountInfo(creds) // throws XtreamAuthException on bad credentials
+        } catch (e: XtreamAuthException) {
+            throw e // wrong username/password: surface the panel's verdict as-is
+        } catch (e: java.io.IOException) {
+            // Reachable host but the API itself errored (commonly a 404/403).
+            // Usually the server URL/port is off, or the provider is filtering the
+            // app's User-Agent - both fixable, so point the user at them.
+            throw java.io.IOException(
+                "Could not reach the panel API at $base (${e.message}). " +
+                    "Check the server address and port, and try a different User-Agent in Settings."
+            )
+        }
         val id = db.playlistDao().insert(
             PlaylistEntity(
                 name = name.ifBlank { "Xtream" },
