@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -27,6 +28,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -34,6 +38,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -64,10 +69,12 @@ fun SettingsScreen(onBack: () -> Unit) {
     val prefs = OpenTvApp.graph.playerPrefs
     val settings by prefs.settings.collectAsState(initial = null)
     val scope = rememberCoroutineScope()
+    val snackbar = remember { SnackbarHostState() }
     val current = settings ?: return
     val update: (PlayerSettings) -> Unit = { scope.launch { prefs.save(it) } }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = { Text("Settings") },
@@ -148,6 +155,8 @@ fun SettingsScreen(onBack: () -> Unit) {
                 )
                 SettingDivider()
                 DownloadLocationSetting(current = current, update = update)
+                SettingDivider()
+                MoveDownloadsSetting(snackbar = snackbar)
             }
 
             SectionCard("Subtitles") {
@@ -266,6 +275,52 @@ private fun DownloadLocationSetting(current: PlayerSettings, update: (PlayerSett
         TextButton(onClick = { folderPicker.launch(null) }) { Text("Choose") }
     }
     Hint("A custom folder is visible to other apps and keeps your files after uninstall. Applies to new downloads.")
+}
+
+@Composable
+private fun MoveDownloadsSetting(snackbar: SnackbarHostState) {
+    val scope = rememberCoroutineScope()
+    val downloads = OpenTvApp.graph.downloads
+    var pending by remember { mutableStateOf(0) }
+    var moving by remember { mutableStateOf(false) }
+    // Recount when the screen (re)composes, e.g. after changing the folder.
+    LaunchedEffect(Unit) { pending = downloads.completedElsewhereCount() }
+
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).padding(end = 12.dp)) {
+            Text("Move existing downloads here", style = MaterialTheme.typography.titleSmall)
+            Text(
+                when {
+                    moving -> "Moving files…"
+                    pending == 0 -> "All downloads are already in this folder."
+                    else -> "$pending downloaded file${if (pending == 1) "" else "s"} elsewhere."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (moving) {
+            CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.5.dp)
+        } else {
+            TextButton(
+                enabled = pending > 0,
+                onClick = {
+                    scope.launch {
+                        moving = true
+                        val r = downloads.moveCompletedToCurrentFolder()
+                        pending = downloads.completedElsewhereCount()
+                        moving = false
+                        snackbar.showSnackbar(
+                            buildString {
+                                append("Moved ${r.moved}")
+                                if (r.failed > 0) append(", ${r.failed} failed")
+                            }
+                        )
+                    }
+                },
+            ) { Text("Move") }
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

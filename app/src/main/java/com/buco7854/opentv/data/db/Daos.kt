@@ -258,6 +258,9 @@ interface DownloadDao {
     @Query("SELECT * FROM downloads WHERE id = :id")
     suspend fun get(id: Long): DownloadEntity?
 
+    @Query("SELECT * FROM downloads WHERE status = :status")
+    suspend fun getByStatus(status: Int): List<DownloadEntity>
+
     @Query("SELECT * FROM downloads WHERE url = :url AND status IN (:statuses) LIMIT 1")
     suspend fun findByUrlWithStatus(url: String, statuses: List<Int>): DownloadEntity?
 

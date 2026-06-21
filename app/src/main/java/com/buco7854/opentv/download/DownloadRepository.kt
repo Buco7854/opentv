@@ -13,7 +13,10 @@ import com.buco7854.opentv.data.db.ChannelEntity
 import com.buco7854.opentv.data.db.DownloadEntity
 import com.buco7854.opentv.data.db.DownloadStatus
 import com.buco7854.opentv.data.prefs.PlayerPrefs
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
 
 class DownloadRepository(
@@ -95,6 +98,44 @@ class DownloadRepository(
         WorkManager.getInstance(context).cancelUniqueWork(workName(item.id))
         DownloadStorage.delete(context, item.filePath)
         db.downloadDao().delete(item.id)
+    }
+
+    data class MoveResult(val moved: Int, val alreadyThere: Int, val failed: Int)
+
+    /** How many completed downloads aren't already in the current folder. */
+    suspend fun completedElsewhereCount(): Int = withContext(Dispatchers.IO) {
+        val treeUri = prefs.settings.first().downloadDirUri
+        db.downloadDao().getByStatus(DownloadStatus.DONE).count {
+            it.filePath.isNotEmpty() &&
+                DownloadStorage.relocateNeeded(context, treeUri, it.filePath)
+        }
+    }
+
+    /**
+     * Moves every completed download into the currently-configured folder,
+     * updating each row's stored path. Runs uncancellable so navigating away
+     * mid-copy can't corrupt a file (source is removed only after a full copy).
+     */
+    suspend fun moveCompletedToCurrentFolder(): MoveResult = withContext(Dispatchers.IO + NonCancellable) {
+        val treeUri = prefs.settings.first().downloadDirUri
+        var moved = 0
+        var already = 0
+        var failed = 0
+        for (item in db.downloadDao().getByStatus(DownloadStatus.DONE)) {
+            if (item.filePath.isEmpty()) {
+                failed++
+                continue
+            }
+            when (val r = DownloadStorage.relocate(context, treeUri, item.filePath)) {
+                is DownloadStorage.Relocation.Moved -> {
+                    db.downloadDao().update(item.copy(filePath = r.newPath))
+                    moved++
+                }
+                DownloadStorage.Relocation.AlreadyThere -> already++
+                is DownloadStorage.Relocation.Failed -> failed++
+            }
+        }
+        MoveResult(moved, already, failed)
     }
 
     /**

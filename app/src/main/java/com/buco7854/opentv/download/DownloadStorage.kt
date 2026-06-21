@@ -10,6 +10,7 @@ import java.io.Closeable
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.io.InputStream
 import java.io.RandomAccessFile
 
 /**
@@ -111,4 +112,76 @@ object DownloadStorage {
         if (treeUri.isEmpty()) "App storage (default)"
         else Uri.parse(treeUri).lastPathSegment?.substringAfter(':')?.ifEmpty { "/" }
             ?.let { "/$it" } ?: treeUri
+
+    sealed interface Relocation {
+        /** Already in the destination; nothing to do. */
+        object AlreadyThere : Relocation
+        class Moved(val newPath: String) : Relocation
+        class Failed(val reason: String) : Relocation
+    }
+
+    private fun displayName(context: Context, path: String): String =
+        if (isContentUri(path)) {
+            DocumentFile.fromSingleUri(context, Uri.parse(path))?.name ?: "video.mp4"
+        } else {
+            File(path).name
+        }
+
+    private fun openInput(context: Context, path: String) =
+        if (isContentUri(path)) context.contentResolver.openInputStream(Uri.parse(path))
+        else File(path).inputStream()
+
+    /** True when [sourcePath] already lives in the destination [treeUri]. */
+    private fun alreadyIn(treeUri: String, sourcePath: String): Boolean {
+        if (treeUri.isEmpty()) return !isContentUri(sourcePath) // app storage = plain files
+        if (!isContentUri(sourcePath)) return false
+        return runCatching {
+            val tree = Uri.parse(treeUri)
+            val src = Uri.parse(sourcePath)
+            val treeDocId = android.provider.DocumentsContract.getTreeDocumentId(tree)
+            val srcDocId = android.provider.DocumentsContract.getDocumentId(src)
+            src.authority == tree.authority && srcDocId.startsWith(treeDocId)
+        }.getOrDefault(false)
+    }
+
+    /** True when [sourcePath] would actually move into [treeUri]. */
+    fun relocateNeeded(context: Context, treeUri: String, sourcePath: String): Boolean =
+        sourcePath.isNotEmpty() && !alreadyIn(treeUri, sourcePath)
+
+    /**
+     * Moves a completed download's file into [treeUri] (the current download
+     * location). Copies the bytes, then deletes the source; a partial target is
+     * cleaned up on failure so the original is never lost.
+     */
+    fun relocate(context: Context, treeUri: String, sourcePath: String): Relocation {
+        if (sourcePath.isEmpty()) return Relocation.Failed("no file")
+        if (alreadyIn(treeUri, sourcePath)) return Relocation.AlreadyThere
+
+        val name = displayName(context, sourcePath)
+        val baseName = name.substringBeforeLast('.', name)
+        val extension = name.substringAfterLast('.', "mp4")
+        val targetPath = createTarget(context, treeUri, baseName, extension)
+        // createTarget falls back to app storage; if that lands on the same file
+        // (already app storage), treat as no-op.
+        if (targetPath == sourcePath) return Relocation.AlreadyThere
+
+        return try {
+            openInput(context, sourcePath)?.use { input ->
+                openSink(context, targetPath, resumeAt = 0).use { sink ->
+                    val buffer = ByteArray(256 * 1024)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read == -1) break
+                        sink.write(buffer, 0, read)
+                    }
+                }
+            } ?: return Relocation.Failed("cannot read source")
+            delete(context, sourcePath)
+            Relocation.Moved(targetPath)
+        } catch (e: Exception) {
+            ErrorLog.log("Move download", e)
+            delete(context, targetPath) // remove the partial copy; source is intact
+            Relocation.Failed(ErrorLog.describe(e))
+        }
+    }
 }
