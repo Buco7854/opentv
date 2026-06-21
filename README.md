@@ -105,13 +105,8 @@ DataStore · OkHttp · Coil. Single-module app, MVVM, ~50 unit tests, CI on ever
 ```
 
 Requires JDK 17+ and the Android SDK (platform 35). The CI workflow uploads a
-debug APK artifact on every push; tagging `vX.Y.Z` builds a signed AAB + APK.
-
-## Publishing & releases
-
-See **[PUBLISHING.md](PUBLISHING.md)** for the full Play Store checklist
-(signing, App Bundle, store listing, data-safety) and the tag-driven release
-pipeline.
+debug APK artifact on every push, and attaches an APK to a GitHub Release when
+you tag `vX.Y.Z`.
 
 ## Privacy
 
