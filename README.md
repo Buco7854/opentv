@@ -65,6 +65,8 @@ and **look genuinely good** while doing it.
   video-scaling (Fit/Zoom/Stretch), immersive fullscreen, lifecycle-aware pause.
 - **Picture-in-Picture**: a player button, plus auto-PiP when you press Home —
   playback keeps going in a floating window.
+- **Resume**: VOD playback position is saved continuously, so movies and
+  episodes pick up where you left off even after the app is killed.
 - **EPG (XMLTV)**: now/next with progress on live rows, a full per-channel guide
   (also inside the player), gzip supported.
 - **Catch-up / timeshift**: replay past programmes on archived channels (Xtream

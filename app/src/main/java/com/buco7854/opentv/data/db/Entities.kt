@@ -130,6 +130,18 @@ data class GroupOverrideEntity(
  * not). Key is the stream url for live/movies, the seriesKey for M3U series,
  * or "x:{seriesId}" for Xtream catalog series.
  */
+/**
+ * Saved playback position for a VOD stream, so progress survives the app being
+ * killed. Keyed by the stream URL; live streams are never stored.
+ */
+@Entity(tableName = "resume_points")
+data class ResumePointEntity(
+    @PrimaryKey val url: String,
+    val positionMs: Long,
+    val durationMs: Long,
+    val updatedMs: Long,
+)
+
 @Entity(tableName = "favorites", primaryKeys = ["playlistId", "key"])
 data class FavoriteEntity(
     val playlistId: Long,

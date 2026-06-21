@@ -15,8 +15,9 @@ import androidx.room.RoomDatabase
         XtreamSeriesEntity::class,
         FavoriteEntity::class,
         GroupOverrideEntity::class,
+        ResumePointEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -28,6 +29,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun xtreamSeriesDao(): XtreamSeriesDao
     abstract fun favoriteDao(): FavoriteDao
     abstract fun groupOverrideDao(): GroupOverrideDao
+    abstract fun resumeDao(): ResumeDao
 
     companion object {
         fun build(context: Context): AppDatabase =

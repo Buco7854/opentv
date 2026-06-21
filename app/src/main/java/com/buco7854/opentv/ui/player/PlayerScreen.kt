@@ -152,6 +152,12 @@ fun PlayerScreen(
     val pipSupported = remember {
         context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE)
     }
+    // Saved VOD position to resume to, loaded from the DB; applied once on READY.
+    var resumeTargetMs by remember(url) { mutableStateOf(0L) }
+    var resumeApplied by remember(url) { mutableStateOf(false) }
+    LaunchedEffect(url) {
+        resumeTargetMs = OpenTvApp.graph.resume.resumePositionFor(url) ?: 0L
+    }
 
     LaunchedEffect(scaleHint) {
         if (scaleHint != null) {
@@ -218,14 +224,42 @@ fun PlayerScreen(
             override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
                 isLiveStream = player.isCurrentMediaItemDynamic || player.isCurrentMediaItemLive
             }
+
+            override fun onPlaybackStateChanged(state: Int) {
+                val live = player.isCurrentMediaItemLive || player.isCurrentMediaItemDynamic
+                if (state == Player.STATE_READY && !resumeApplied && !live) {
+                    resumeApplied = true
+                    val dur = player.duration
+                    if (resumeTargetMs in 1 until (dur - 15_000).coerceAtLeast(1)) {
+                        player.seekTo(resumeTargetMs)
+                    }
+                } else if (state == Player.STATE_ENDED) {
+                    OpenTvApp.graph.resume.clear(url) // finished: start fresh next time
+                }
+            }
         }
         player.addListener(listener)
         // Let the download worker know this provider host is busy streaming.
         PlaybackMonitor.playbackStarted(url)
         onDispose {
             PlaybackMonitor.playbackStopped()
+            // Persist progress so it survives the process being killed.
+            if (!player.isCurrentMediaItemLive && !player.isCurrentMediaItemDynamic) {
+                OpenTvApp.graph.resume.save(url, player.currentPosition, player.duration)
+            }
             player.removeListener(listener)
             player.release()
+        }
+    }
+
+    // Periodically persist progress while watching (covers process kills that
+    // skip onDispose); throttled, local DB only.
+    LaunchedEffect(player) {
+        while (true) {
+            delay(10_000)
+            if (player.isPlaying && !player.isCurrentMediaItemLive && !player.isCurrentMediaItemDynamic) {
+                OpenTvApp.graph.resume.save(url, player.currentPosition, player.duration)
+            }
         }
     }
 

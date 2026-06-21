@@ -224,6 +224,21 @@ interface GroupOverrideDao {
 }
 
 @Dao
+interface ResumeDao {
+    @Query("SELECT * FROM resume_points WHERE url = :url")
+    suspend fun get(url: String): ResumePointEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(point: ResumePointEntity)
+
+    @Query("DELETE FROM resume_points WHERE url = :url")
+    suspend fun delete(url: String)
+
+    @Query("DELETE FROM resume_points WHERE updatedMs < :before")
+    suspend fun prune(before: Long)
+}
+
+@Dao
 interface FavoriteDao {
     @Query("SELECT * FROM favorites WHERE playlistId = :playlistId")
     fun observeAll(playlistId: Long): Flow<List<FavoriteEntity>>
