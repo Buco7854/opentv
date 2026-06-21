@@ -51,19 +51,7 @@ class PlaylistRepository(private val db: AppDatabase) {
         val base = Xtream.normalizeServer(server)
             ?: throw IllegalArgumentException("Invalid server address")
         val creds = XtreamCredentials(base, username.trim(), password.trim())
-        try {
-            Xtream.fetchAccountInfo(creds) // throws XtreamAuthException on bad credentials
-        } catch (e: XtreamAuthException) {
-            throw e // wrong username/password: surface the panel's verdict as-is
-        } catch (e: java.io.IOException) {
-            // Reachable host but the API itself errored (commonly a 404/403).
-            // Usually the server URL/port is off, or the provider is filtering the
-            // app's User-Agent - both fixable, so point the user at them.
-            throw java.io.IOException(
-                "Could not reach the panel API at $base (${e.message}). " +
-                    "Check the server address and port, and try a different User-Agent in Settings."
-            )
-        }
+        validateXtream(creds)
         val id = db.playlistDao().insert(
             PlaylistEntity(
                 name = name.ifBlank { "Xtream" },
@@ -77,6 +65,116 @@ class PlaylistRepository(private val db: AppDatabase) {
         refresh(id, force = true)
         return id
     }
+
+    /** Confirm an Xtream login works, turning failures into actionable messages. */
+    private suspend fun validateXtream(creds: XtreamCredentials) {
+        try {
+            Xtream.fetchAccountInfo(creds) // throws XtreamAuthException on bad credentials
+        } catch (e: XtreamAuthException) {
+            throw e // wrong username/password: surface the panel's verdict as-is
+        } catch (e: java.io.IOException) {
+            // Reachable host but the API itself errored (commonly a 404/403).
+            // Usually the server URL/port is off, or the provider is filtering the
+            // app's User-Agent - both fixable, so point the user at them.
+            throw java.io.IOException(
+                "Could not reach the panel API at ${creds.base} (${e.message}). " +
+                    "Check the server address and port, and try a different User-Agent in Settings."
+            )
+        }
+    }
+
+    /**
+     * Update an existing native Xtream playlist. The new login is validated
+     * first, and the content is re-pulled only when the server or credentials
+     * actually changed (a pure rename costs no provider request).
+     */
+    suspend fun updateXtream(id: Long, name: String, server: String, username: String, password: String) {
+        val existing = db.playlistDao().get(id) ?: return
+        val base = Xtream.normalizeServer(server)
+            ?: throw IllegalArgumentException("Invalid server address")
+        val creds = XtreamCredentials(base, username.trim(), password.trim())
+        val credsChanged = existing.xtreamBase != base ||
+            existing.xtreamUser != creds.user || existing.xtreamPass != creds.pass
+        if (credsChanged) validateXtream(creds)
+        db.playlistDao().update(
+            existing.copy(
+                name = name.ifBlank { existing.name },
+                xtreamBase = creds.base,
+                xtreamUser = creds.user,
+                xtreamPass = creds.pass,
+                epgUrl = Xtream.xmltvUrl(creds),
+                // Force the next refresh to re-pull against the new account.
+                lastRefreshedMs = if (credsChanged) 0 else existing.lastRefreshedMs,
+                epgEtag = null,
+                epgLastModified = null,
+                epgLastRefreshedMs = if (credsChanged) 0 else existing.epgLastRefreshedMs,
+            )
+        )
+        if (credsChanged) {
+            lastAttemptMs.remove(id) // don't let forced-tap throttling skip this
+            refresh(id, force = true)
+        }
+    }
+
+    /**
+     * Update an existing URL-based (M3U) playlist. Content is re-fetched only
+     * when the URL changed; an EPG-only or name-only edit does not re-download.
+     */
+    suspend fun updateUrl(id: Long, name: String, url: String, epgUrl: String?) {
+        val existing = db.playlistDao().get(id) ?: return
+        val trimmedUrl = url.trim()
+        if (trimmedUrl.isEmpty()) throw IllegalArgumentException("Playlist URL cannot be empty")
+        val creds = Xtream.detect(trimmedUrl)
+        val urlChanged = existing.url != trimmedUrl
+        db.playlistDao().update(
+            existing.copy(
+                name = name.ifBlank { existing.name },
+                url = trimmedUrl,
+                epgUrl = epgUrl?.trim()?.takeIf { it.isNotBlank() },
+                xtreamBase = creds?.base,
+                xtreamUser = creds?.user,
+                xtreamPass = creds?.pass,
+                etag = if (urlChanged) null else existing.etag,
+                lastModified = if (urlChanged) null else existing.lastModified,
+                lastRefreshedMs = if (urlChanged) 0 else existing.lastRefreshedMs,
+                epgEtag = null,
+                epgLastModified = null,
+                epgLastRefreshedMs = 0,
+            )
+        )
+        if (urlChanged) {
+            lastAttemptMs.remove(id)
+            refresh(id, force = true)
+        }
+    }
+
+    /** Rename any playlist without touching its content or contacting the provider. */
+    suspend fun rename(id: Long, name: String) = withContext(Dispatchers.IO) {
+        val existing = db.playlistDao().get(id) ?: return@withContext
+        val trimmed = name.trim()
+        if (trimmed.isNotEmpty() && trimmed != existing.name) {
+            db.playlistDao().update(existing.copy(name = trimmed))
+        }
+    }
+
+    /** Replace the contents of a file-imported playlist with a newly picked file. */
+    suspend fun replaceFromFile(id: Long, name: String, uri: Uri, resolver: ContentResolver) =
+        withContext(Dispatchers.IO) {
+            val existing = db.playlistDao().get(id) ?: return@withContext
+            db.channelDao().deleteForPlaylist(id)
+            var epgFromFile: String? = null
+            val count = resolver.openInputStream(uri)?.use { stream ->
+                ingest(id, BufferedReader(InputStreamReader(stream)), emptyMap()) { epgFromFile = it }
+            } ?: 0
+            db.playlistDao().update(
+                existing.copy(
+                    name = name.ifBlank { existing.name },
+                    channelCount = count,
+                    epgUrl = epgFromFile ?: existing.epgUrl,
+                    lastRefreshedMs = System.currentTimeMillis(),
+                )
+            )
+        }
 
     suspend fun addFromUrl(name: String, url: String, epgUrl: String?): Long {
         val creds = Xtream.detect(url)

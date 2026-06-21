@@ -75,6 +75,63 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun editXtream(id: Long, name: String, server: String, username: String, password: String) {
+        viewModelScope.launch {
+            _busy.value = true
+            try {
+                graph.playlists.updateXtream(id, name, server, username, password)
+                _message.value = "Playlist updated"
+            } catch (e: Exception) {
+                ErrorLog.log("Edit Xtream", e)
+                _message.value = "Update failed: ${ErrorLog.describe(e)}"
+            } finally {
+                _busy.value = false
+            }
+        }
+    }
+
+    fun editUrl(id: Long, name: String, url: String, epgUrl: String) {
+        viewModelScope.launch {
+            _busy.value = true
+            try {
+                graph.playlists.updateUrl(id, name, url, epgUrl)
+                _message.value = "Playlist updated"
+            } catch (e: Exception) {
+                ErrorLog.log("Edit playlist", e)
+                _message.value = "Update failed: ${ErrorLog.describe(e)}"
+            } finally {
+                _busy.value = false
+            }
+        }
+    }
+
+    fun rename(id: Long, name: String) {
+        viewModelScope.launch {
+            try {
+                graph.playlists.rename(id, name)
+                _message.value = "Playlist renamed"
+            } catch (e: Exception) {
+                ErrorLog.log("Rename playlist", e)
+                _message.value = "Rename failed: ${ErrorLog.describe(e)}"
+            }
+        }
+    }
+
+    fun replaceFile(id: Long, name: String, uri: Uri) {
+        viewModelScope.launch {
+            _busy.value = true
+            try {
+                graph.playlists.replaceFromFile(id, name, uri, getApplication<Application>().contentResolver)
+                _message.value = "Playlist replaced"
+            } catch (e: Exception) {
+                ErrorLog.log("Replace playlist file", e)
+                _message.value = "Replace failed: ${ErrorLog.describe(e)}"
+            } finally {
+                _busy.value = false
+            }
+        }
+    }
+
     /** Refresh one playlist's content: M3U list and EPG. Account status lives
      *  on its own page with its own refresh. */
     fun refresh(playlistId: Long) {

@@ -23,6 +23,7 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
@@ -86,6 +87,7 @@ fun HomeScreen(
     val message by viewModel.message.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     var showAdd by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf<PlaylistEntity?>(null) }
     var pendingDelete by remember { mutableStateOf<PlaylistEntity?>(null) }
 
     LaunchedEffect(message) {
@@ -134,6 +136,7 @@ fun HomeScreen(
                             onClick = { onOpenPlaylist(playlist.id) },
                             onRefresh = { viewModel.refresh(playlist.id) },
                             onOpenAccount = { onOpenAccount(playlist.id) },
+                            onEdit = { editing = playlist },
                             onDelete = { pendingDelete = playlist },
                         )
                     }
@@ -145,20 +148,28 @@ fun HomeScreen(
         }
     }
 
-    if (showAdd) {
-        AddPlaylistDialog(
-            onDismiss = { showAdd = false },
-            onAddUrl = { name, url, epg ->
-                showAdd = false
-                viewModel.addFromUrl(name, url, epg)
+    if (showAdd || editing != null) {
+        PlaylistDialog(
+            editing = editing,
+            onDismiss = { showAdd = false; editing = null },
+            onSubmitUrl = { id, name, url, epg ->
+                showAdd = false; editing = null
+                if (id == null) viewModel.addFromUrl(name, url, epg)
+                else viewModel.editUrl(id, name, url, epg)
             },
-            onAddXtream = { name, server, user, pass ->
-                showAdd = false
-                viewModel.addXtream(name, server, user, pass)
+            onSubmitXtream = { id, name, server, user, pass ->
+                showAdd = false; editing = null
+                if (id == null) viewModel.addXtream(name, server, user, pass)
+                else viewModel.editXtream(id, name, server, user, pass)
             },
-            onAddFile = { name, uri ->
-                showAdd = false
-                viewModel.addFromFile(name, uri)
+            onSubmitFile = { id, name, uri ->
+                showAdd = false; editing = null
+                if (id == null) viewModel.addFromFile(name, uri)
+                else viewModel.replaceFile(id, name, uri)
+            },
+            onRename = { id, name ->
+                showAdd = false; editing = null
+                viewModel.rename(id, name)
             },
         )
     }
@@ -220,6 +231,7 @@ private fun PlaylistCard(
     onClick: () -> Unit,
     onRefresh: () -> Unit,
     onOpenAccount: () -> Unit,
+    onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
     Card(
@@ -257,6 +269,9 @@ private fun PlaylistCard(
                         Icon(Icons.Rounded.Refresh, contentDescription = "Refresh", tint = MaterialTheme.colorScheme.primary)
                     }
                 }
+                IconButton(onClick = onEdit) {
+                    Icon(Icons.Rounded.Edit, contentDescription = "Edit", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 IconButton(onClick = onDelete) {
                     Icon(Icons.Rounded.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -267,34 +282,47 @@ private fun PlaylistCard(
 
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
-private fun AddPlaylistDialog(
+private fun PlaylistDialog(
+    editing: PlaylistEntity?,
     onDismiss: () -> Unit,
-    onAddUrl: (name: String, url: String, epg: String) -> Unit,
-    onAddXtream: (name: String, server: String, username: String, password: String) -> Unit,
-    onAddFile: (name: String, uri: android.net.Uri) -> Unit,
+    onSubmitUrl: (id: Long?, name: String, url: String, epg: String) -> Unit,
+    onSubmitXtream: (id: Long?, name: String, server: String, username: String, password: String) -> Unit,
+    onSubmitFile: (id: Long?, name: String, uri: android.net.Uri) -> Unit,
+    onRename: (id: Long, name: String) -> Unit,
 ) {
-    var mode by remember { mutableStateOf(0) } // 0 = Xtream login, 1 = M3U URL, 2 = file
-    var name by remember { mutableStateOf("") }
-    var url by remember { mutableStateOf("") }
-    var epg by remember { mutableStateOf("") }
-    var server by remember { mutableStateOf("") }
-    var username by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
+    val isEdit = editing != null
+    // On edit the source type is fixed by the playlist; on add the user picks it.
+    val initialMode = when {
+        editing == null -> 0
+        editing.url != null -> 1
+        editing.xtreamBase != null -> 0
+        else -> 2
+    }
+    var mode by remember(editing) { mutableStateOf(initialMode) } // 0 = Xtream, 1 = M3U URL, 2 = file
+    var name by remember(editing) { mutableStateOf(editing?.name ?: "") }
+    var url by remember(editing) { mutableStateOf(editing?.url ?: "") }
+    var epg by remember(editing) { mutableStateOf(editing?.epgUrl ?: "") }
+    var server by remember(editing) { mutableStateOf(editing?.xtreamBase ?: "") }
+    var username by remember(editing) { mutableStateOf(editing?.xtreamUser ?: "") }
+    var password by remember(editing) { mutableStateOf(editing?.xtreamPass ?: "") }
     var xtreamSuggestion by remember { mutableStateOf<XtreamCredentials?>(null) }
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) onAddFile(name, uri)
+        if (uri != null) onSubmitFile(editing?.id, name, uri)
     }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Add playlist") },
+        title = { Text(if (isEdit) "Edit playlist" else "Add playlist") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = mode == 0, onClick = { mode = 0 }, label = { Text("Xtream") })
-                    FilterChip(selected = mode == 1, onClick = { mode = 1 }, label = { Text("M3U URL") })
-                    FilterChip(selected = mode == 2, onClick = { mode = 2 }, label = { Text("File") })
+                // The source type is locked once a playlist exists.
+                if (!isEdit) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(selected = mode == 0, onClick = { mode = 0 }, label = { Text("Xtream") })
+                        FilterChip(selected = mode == 1, onClick = { mode = 1 }, label = { Text("M3U URL") })
+                        FilterChip(selected = mode == 2, onClick = { mode = 2 }, label = { Text("File") })
+                    }
                 }
                 OutlinedTextField(
                     value = name,
@@ -338,12 +366,14 @@ private fun AddPlaylistDialog(
                                     onFill = { password = it },
                                 ),
                         )
-                        Text(
-                            "Uses the provider's API directly: server-side Live / Movies / Series " +
-                                "categories, series catalog with details, catch-up, and EPG. No guessing.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        if (!isEdit) {
+                            Text(
+                                "Uses the provider's API directly: server-side Live / Movies / Series " +
+                                    "categories, series catalog with details, catch-up, and EPG. No guessing.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                     1 -> {
                         OutlinedTextField(
@@ -361,11 +391,19 @@ private fun AddPlaylistDialog(
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
-                    else -> Text(
-                        "Pick a .m3u / .m3u8 file from your device.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    else -> {
+                        Text(
+                            if (isEdit) "Rename this imported playlist, or replace it with another file."
+                            else "Pick a .m3u / .m3u8 file from your device.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (isEdit) {
+                            TextButton(onClick = { filePicker.launch(arrayOf("*/*")) }) {
+                                Text("Replace file")
+                            }
+                        }
+                    }
                 }
             }
         },
@@ -374,19 +412,20 @@ private fun AddPlaylistDialog(
                 onClick = {
                     when (mode) {
                         0 -> if (server.isNotBlank() && username.isNotBlank() && password.isNotBlank()) {
-                            onAddXtream(name, server, username, password)
+                            onSubmitXtream(editing?.id, name, server, username, password)
                         }
                         1 -> if (url.isNotBlank()) {
-                            // get.php URLs carry an Xtream login: offer the
-                            // better integration before falling back to M3U.
-                            val creds = Xtream.detect(url.trim())
+                            // On add, a get.php URL carries an Xtream login: offer the
+                            // richer integration. On edit, updateUrl handles detection.
+                            val creds = if (isEdit) null else Xtream.detect(url.trim())
                             if (creds != null) xtreamSuggestion = creds
-                            else onAddUrl(name, url, epg)
+                            else onSubmitUrl(editing?.id, name, url, epg)
                         }
-                        else -> filePicker.launch(arrayOf("*/*"))
+                        else -> if (isEdit) onRename(editing!!.id, name)
+                        else filePicker.launch(arrayOf("*/*"))
                     }
                 },
-            ) { Text(if (mode == 2) "Choose file" else "Add") }
+            ) { Text(if (isEdit) "Save" else if (mode == 2) "Choose file" else "Add") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
@@ -406,13 +445,13 @@ private fun AddPlaylistDialog(
             confirmButton = {
                 TextButton(onClick = {
                     xtreamSuggestion = null
-                    onAddXtream(name, creds.base, creds.user, creds.pass)
+                    onSubmitXtream(null, name, creds.base, creds.user, creds.pass)
                 }) { Text("Use Xtream") }
             },
             dismissButton = {
                 TextButton(onClick = {
                     xtreamSuggestion = null
-                    onAddUrl(name, url, epg)
+                    onSubmitUrl(null, name, url, epg)
                 }) { Text("Keep M3U") }
             },
         )
