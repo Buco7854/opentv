@@ -64,9 +64,41 @@ jobs:
           name: test-reports
           path: app/build/reports/tests/
 
+  dev-release:
+    name: Publish dev build
+    # Every push to main refreshes the rolling "dev" release with the latest
+    # commit's APK. It is kept out of "latest" so the release channel only ever
+    # points at tagged versions.
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: opentv-debug-apk
+
+      - name: Update dev release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: dev
+          name: Development build (latest commit)
+          files: app-debug.apk
+          prerelease: false
+          make_latest: false
+          body: |
+            Rolling build from the latest commit on `main`.
+
+            Commit: ${{ github.sha }}
+
+            This is the dev channel. For the stable build, see the latest tagged release.
+
   release:
     name: Attach APK to release
-    # Tag a commit vX.Y.Z to get a GitHub Release with the APK attached.
+    # Tag a commit vX.Y.Z to get a GitHub Release with the APK attached. This is
+    # the stable "latest" release the release channel points at.
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
@@ -82,4 +114,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: app-debug.apk
+          make_latest: true
           generate_release_notes: true

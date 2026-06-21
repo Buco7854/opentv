@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="OpenTV">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5BE3B5"/>
+      <stop offset="1" stop-color="#8FA8FF"/>
+    </linearGradient>
+  </defs>
+  <rect x="20" y="48" width="216" height="152" rx="30" fill="#1A2036" stroke="url(#g)" stroke-width="8"/>
+  <path d="M104 98 L162 128 L104 158 Z" fill="url(#g)"/>
+  <rect x="96" y="214" width="64" height="12" rx="6" fill="url(#g)"/>
+  <circle cx="60" cy="36" r="6" fill="#5BE3B5"/>
+  <circle cx="196" cy="36" r="6" fill="#8FA8FF"/>
+</svg>

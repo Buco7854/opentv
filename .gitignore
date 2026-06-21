@@ -18,3 +18,8 @@ keystore.properties
 
 # Kotlin compiler session files
 .kotlin/
+
+# Docs site (VitePress)
+docs/node_modules/
+docs/.vitepress/dist/
+docs/.vitepress/cache/
