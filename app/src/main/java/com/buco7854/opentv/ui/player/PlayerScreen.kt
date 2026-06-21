@@ -7,6 +7,7 @@ import android.graphics.Typeface
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -58,6 +60,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -293,6 +296,44 @@ fun PlayerScreen(
                 it.resizeMode = resizeMode
             },
             modifier = Modifier.fillMaxSize(),
+        )
+
+        // Double-tap the left/right third to skip; single tap toggles controls.
+        // Seek step is the configurable value used to build the player.
+        val seekStep = settings.seekSeconds
+        Box(
+            Modifier
+                .align(Alignment.CenterStart)
+                .fillMaxHeight()
+                .fillMaxWidth(0.33f)
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onDoubleTap = {
+                            player.seekBack()
+                            scaleHint = "« $seekStep s"
+                        },
+                        onTap = {
+                            playerView?.let { if (it.isControllerFullyVisible) it.hideController() else it.showController() }
+                        },
+                    )
+                },
+        )
+        Box(
+            Modifier
+                .align(Alignment.CenterEnd)
+                .fillMaxHeight()
+                .fillMaxWidth(0.33f)
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onDoubleTap = {
+                            player.seekForward()
+                            scaleHint = "$seekStep s »"
+                        },
+                        onTap = {
+                            playerView?.let { if (it.isControllerFullyVisible) it.hideController() else it.showController() }
+                        },
+                    )
+                },
         )
 
         scaleHint?.let { hint ->

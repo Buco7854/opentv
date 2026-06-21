@@ -79,6 +79,7 @@ import com.buco7854.opentv.ui.components.ChannelLogo
 import com.buco7854.opentv.ui.components.DownloadStateIcon
 import com.buco7854.opentv.ui.components.FavoriteIcon
 import com.buco7854.opentv.ui.components.GuideSheet
+import com.buco7854.opentv.ui.components.MediaListRow
 import com.buco7854.opentv.ui.components.mediaTags
 import com.buco7854.opentv.ui.components.PosterGrid
 import com.buco7854.opentv.ui.components.PosterItem
@@ -138,6 +139,9 @@ fun BrowseScreen(
     val scope = rememberCoroutineScope()
     var guideChannel by remember { mutableStateOf<ChannelEntity?>(null) }
     var correctingGroup by remember { mutableStateOf<String?>(null) }
+    // Filters the currently-shown list (categories at the root, items inside one).
+    var filter by remember { mutableStateOf("") }
+    LaunchedEffect(group, tab) { filter = "" }
 
     // Downloads show a progress notification; on Android 13+ that needs a runtime grant.
     val context = LocalContext.current
@@ -260,19 +264,34 @@ fun BrowseScreen(
                     text = { Text("Series · $seriesCount") })
             }
 
+            // Filter bar: narrows the current list (categories at the root, or
+            // items inside a category). Shown whenever there's something to filter.
+            val hasContent = groups.isNotEmpty() || channels.isNotEmpty() ||
+                seriesGroups.isNotEmpty() || xtreamSeries.isNotEmpty()
+            if (hasContent) {
+                FilterField(
+                    value = filter,
+                    onValueChange = { filter = it },
+                    placeholder = if (group == null) "Filter categories" else "Filter this category",
+                )
+            }
+            val f = filter.trim()
+            fun matches(s: String) = f.isBlank() || s.contains(f, ignoreCase = true)
+
             when {
                 group == null -> GroupList(
-                    groups = groups,
+                    groups = groups.filter { matches(it.groupTitle) },
                     // Xtream categories come from the panel; only M3U guessing needs correcting.
                     onCorrect = if (isXtreamNative) null else ({ correctingGroup = it }),
                     onSelect = { viewModel.group.value = it },
                 )
 
                 // Native Xtream playlists list the panel's series catalog.
-                tab == ChannelKind.SERIES && isXtreamNative ->
+                tab == ChannelKind.SERIES && isXtreamNative -> {
+                    val shown = xtreamSeries.filter { matches(it.name) }
                     if (gridView) {
                         PosterGrid(
-                            items = xtreamSeries.map {
+                            items = shown.map {
                                 PosterItem(it.seriesId.toString(), it.cover, it.name, it.genre)
                             },
                             fallback = kindIcon(ChannelKind.SERIES),
@@ -280,7 +299,7 @@ fun BrowseScreen(
                         )
                     } else {
                         XtreamSeriesList(
-                            series = xtreamSeries,
+                            series = shown,
                             favoriteKeys = favoriteKeys,
                             onToggleFavorite = {
                                 viewModel.toggleFavorite(
@@ -291,12 +310,14 @@ fun BrowseScreen(
                             onSelect = { onOpenXtreamSeries(it) },
                         )
                     }
+                }
 
                 // Series open their own page (poster, season picker, episodes).
-                tab == ChannelKind.SERIES ->
+                tab == ChannelKind.SERIES -> {
+                    val shown = seriesGroups.filter { matches(it.seriesKey) }
                     if (gridView) {
                         PosterGrid(
-                            items = seriesGroups.map {
+                            items = shown.map {
                                 PosterItem(it.seriesKey, it.logo, it.seriesKey, "${it.count} episodes")
                             },
                             fallback = kindIcon(ChannelKind.SERIES),
@@ -304,15 +325,16 @@ fun BrowseScreen(
                         )
                     } else {
                         SeriesList(
-                            series = seriesGroups,
+                            series = shown,
                             favoriteKeys = favoriteKeys,
                             onToggleFavorite = { viewModel.toggleFavorite(it, ChannelKind.SERIES) },
                             onSelect = { onOpenSeries(it) },
                         )
                     }
+                }
 
                 tab == ChannelKind.MOVIE && gridView -> PosterGrid(
-                    items = channels.map {
+                    items = channels.filter { matches(it.name) }.map {
                         PosterItem(it.id.toString(), it.logo, it.name, null, tags = mediaTags(it.name, 1))
                     },
                     fallback = kindIcon(ChannelKind.MOVIE),
@@ -321,7 +343,7 @@ fun BrowseScreen(
 
                 // Movies open a detail page with play/download; live plays directly.
                 else -> ChannelList(
-                    channels = channels,
+                    channels = channels.filter { matches(it.name) },
                     nowAiring = if (tab == ChannelKind.LIVE) nowAiring else emptyMap(),
                     downloadsByUrl = if (tab == ChannelKind.MOVIE) downloadsByUrl else emptyMap(),
                     favoriteKeys = favoriteKeys,
@@ -380,53 +402,17 @@ private fun XtreamSeriesList(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         items(series, key = { it.seriesId }) { item ->
-            Card(
+            MediaListRow(
+                title = item.name,
+                subtitle = listOfNotNull(item.genre, item.rating?.let { "★ %.1f".format(it) })
+                    .joinToString(" · ").takeIf { it.isNotEmpty() },
+                logo = item.cover,
+                fallbackKind = ChannelKind.SERIES,
                 onClick = { onSelect(item.seriesId) },
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-                modifier = Modifier.focusHighlight(RoundedCornerShape(16.dp)),
-            ) {
-                Row(
-                    Modifier.fillMaxWidth().padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    ChannelLogo(item.cover, kindIcon(ChannelKind.SERIES))
-                    Spacer(Modifier.width(14.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            item.name,
-                            style = MaterialTheme.typography.titleMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        item.genre?.let {
-                            Text(
-                                it,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
-                    item.rating?.let {
-                        Text(
-                            "★ %.1f".format(it),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    FavoriteIcon(
-                        isFavorite = BrowseViewModel.xtreamFavKey(item.seriesId) in favoriteKeys,
-                        onToggle = { onToggleFavorite(item.seriesId) },
-                    )
-                    Icon(
-                        Icons.AutoMirrored.Rounded.KeyboardArrowRight,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
+                isFavorite = BrowseViewModel.xtreamFavKey(item.seriesId) in favoriteKeys,
+                onToggleFavorite = { onToggleFavorite(item.seriesId) },
+                trailingChevron = true,
+            )
         }
     }
 }
@@ -549,42 +535,16 @@ private fun SeriesList(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         items(series, key = { it.seriesKey }) { item ->
-            Card(
+            MediaListRow(
+                title = item.seriesKey,
+                subtitle = "${item.count} episodes",
+                logo = item.logo,
+                fallbackKind = ChannelKind.SERIES,
                 onClick = { onSelect(item.seriesKey) },
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-                modifier = Modifier.focusHighlight(RoundedCornerShape(16.dp)),
-            ) {
-                Row(
-                    Modifier.fillMaxWidth().padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    ChannelLogo(item.logo, kindIcon(ChannelKind.SERIES))
-                    Spacer(Modifier.width(14.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            item.seriesKey,
-                            style = MaterialTheme.typography.titleMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            "${item.count} episodes",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    FavoriteIcon(
-                        isFavorite = item.seriesKey in favoriteKeys,
-                        onToggle = { onToggleFavorite(item.seriesKey) },
-                    )
-                    Icon(
-                        Icons.AutoMirrored.Rounded.KeyboardArrowRight,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
+                isFavorite = item.seriesKey in favoriteKeys,
+                onToggleFavorite = { onToggleFavorite(item.seriesKey) },
+                trailingChevron = true,
+            )
         }
     }
 }
@@ -634,66 +594,49 @@ private fun ChannelRow(
     onDownload: (() -> Unit)?,
     onGuide: (() -> Unit)?,
 ) {
-    Card(
-        onClick = onPlay,
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-        modifier = Modifier.focusHighlight(RoundedCornerShape(16.dp)),
-    ) {
-        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            ChannelLogo(channel.logo, kindIcon(channel.kind))
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                val episodeTag = if (channel.season != null && channel.episode != null)
-                    "S%02dE%02d · ".format(channel.season, channel.episode) else ""
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        episodeTag + channel.name,
-                        style = MaterialTheme.typography.titleSmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    val tags = mediaTags(channel.name, 1)
-                    if (tags.isNotEmpty()) {
-                        Spacer(Modifier.width(6.dp))
-                        BadgeRow(tags)
-                    }
-                }
-                if (airing != null) {
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        airing.title,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Mint,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    val progress = ((System.currentTimeMillis() - airing.startMs).toFloat() /
-                        (airing.endMs - airing.startMs).coerceAtLeast(1)).coerceIn(0f, 1f)
-                    LinearProgressIndicator(
-                        progress = { progress },
-                        modifier = Modifier.fillMaxWidth().height(3.dp),
-                        trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    )
-                }
-            }
-            FavoriteIcon(isFavorite = isFavorite, onToggle = onToggleFavorite)
-            if (onGuide != null) {
-                IconButton(onClick = onGuide) {
-                    Icon(
-                        Icons.Rounded.CalendarMonth,
-                        contentDescription = if (channel.hasCatchup()) "Guide & catch-up" else "Guide",
-                        // Mint marks channels with a replay archive.
-                        tint = if (channel.hasCatchup()) Mint
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            if (onDownload != null) {
-                DownloadStateIcon(state = downloadState, onDownload = onDownload)
-            }
-        }
+    val episodeTag = if (channel.season != null && channel.episode != null)
+        "S%02dE%02d · ".format(channel.season, channel.episode) else ""
+    val progress = airing?.let {
+        ((System.currentTimeMillis() - it.startMs).toFloat() /
+            (it.endMs - it.startMs).coerceAtLeast(1)).coerceIn(0f, 1f)
     }
+    MediaListRow(
+        title = episodeTag + channel.name,
+        logo = channel.logo,
+        fallbackKind = channel.kind,
+        onClick = onPlay,
+        titleTags = mediaTags(channel.name, 1),
+        nowAiringTitle = airing?.title,
+        nowAiringProgress = progress,
+        isFavorite = isFavorite,
+        onToggleFavorite = onToggleFavorite,
+        downloadState = downloadState,
+        onDownload = onDownload,
+        onGuide = onGuide,
+        guideHighlight = channel.hasCatchup(),
+    )
+}
+
+/** Compact filter field for the browse content area. */
+@Composable
+private fun FilterField(value: String, onValueChange: (String) -> Unit, placeholder: String) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        placeholder = { Text(placeholder) },
+        leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+        trailingIcon = {
+            if (value.isNotEmpty()) {
+                IconButton(onClick = { onValueChange("") }) {
+                    Icon(Icons.Rounded.Close, contentDescription = "Clear filter")
+                }
+            }
+        },
+        singleLine = true,
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .padding(top = 8.dp, bottom = 4.dp),
+    )
 }

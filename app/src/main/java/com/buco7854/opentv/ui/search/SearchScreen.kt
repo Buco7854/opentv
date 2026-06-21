@@ -64,6 +64,8 @@ import com.buco7854.opentv.ui.components.ChannelLogo
 import com.buco7854.opentv.ui.components.DownloadStateIcon
 import com.buco7854.opentv.ui.components.FavoriteIcon
 import com.buco7854.opentv.ui.components.GuideSheet
+import com.buco7854.opentv.ui.components.MediaListRow
+import com.buco7854.opentv.ui.components.mediaTags
 import com.buco7854.opentv.ui.components.EmptyState
 import com.buco7854.opentv.ui.components.Pill
 import com.buco7854.opentv.ui.components.kindIcon
@@ -93,13 +95,11 @@ data class SeriesHit(
 )
 
 data class SearchResults(
-    val categories: List<GroupHit> = emptyList(),
     val live: List<ChannelEntity> = emptyList(),
     val movies: List<ChannelEntity> = emptyList(),
     val series: List<SeriesHit> = emptyList(),
 ) {
-    val isEmpty
-        get() = categories.isEmpty() && live.isEmpty() && movies.isEmpty() && series.isEmpty()
+    val isEmpty get() = live.isEmpty() && movies.isEmpty() && series.isEmpty()
 }
 
 @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
@@ -146,12 +146,7 @@ class SearchViewModel(app: Application, private val playlistId: Long) : AndroidV
                             xtreamSeriesId = it.seriesId,
                         )
                     }
-                // Categories match on the group title itself - the fast path
-                // when a playlist has hundreds of them.
-                val categories = (OpenTvApp.graph.db.channelDao().searchGroups(playlistId, escaped) +
-                    OpenTvApp.graph.db.xtreamSeriesDao().searchCategories(playlistId, escaped))
                 SearchResults(
-                    categories = categories,
                     live = rows.filter { it.kind == ChannelKind.LIVE },
                     movies = rows.filter { it.kind == ChannelKind.MOVIE },
                     series = xtreamSeries + m3uSeries,
@@ -199,7 +194,6 @@ fun SearchScreen(
     onOpenMovie: (channelId: Long) -> Unit,
     onOpenSeries: (seriesKey: String) -> Unit,
     onOpenXtreamSeries: (seriesId: Long) -> Unit,
-    onOpenCategory: (kind: Int, group: String) -> Unit,
 ) {
     val viewModel = playlistViewModel(playlistId, ::SearchViewModel)
     val query by viewModel.query.collectAsState()
@@ -257,92 +251,75 @@ fun SearchScreen(
                     val expandedSections = remember { mutableStateMapOf<String, Boolean>() }
                     fun expanded(key: String) = expandedSections.getOrDefault(key, true)
                     LazyColumn(
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    if (results.categories.isNotEmpty()) {
-                        item {
-                            SectionHeader("Categories", results.categories.size, expanded("cat")) {
-                                expandedSections["cat"] = !expanded("cat")
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        if (results.live.isNotEmpty()) {
+                            item {
+                                SectionHeader("Live", results.live.size, expanded("live")) {
+                                    expandedSections["live"] = !expanded("live")
+                                }
+                            }
+                            if (expanded("live")) items(results.live, key = { it.id }) { channel ->
+                                MediaListRow(
+                                    title = channel.name,
+                                    subtitle = channel.groupTitle,
+                                    logo = channel.logo,
+                                    fallbackKind = channel.kind,
+                                    titleTags = mediaTags(channel.name, 1),
+                                    onClick = { onPlay(channel.url, channel.name) },
+                                    isFavorite = channel.url in favoriteKeys,
+                                    onToggleFavorite = { viewModel.toggleFavorite(channel.url, channel.kind) },
+                                    onGuide = if (channel.tvgId != null) ({ guideChannel = channel }) else null,
+                                )
                             }
                         }
-                        if (expanded("cat")) items(results.categories, key = { "cat-${it.kind}-${it.groupTitle}" }) { hit ->
-                            ResultRow(
-                                title = hit.groupTitle,
-                                subtitle = "${hit.count} items",
-                                logo = null,
-                                kind = hit.kind,
-                                badge = kindLabel(hit.kind),
-                                onClick = { onOpenCategory(hit.kind, hit.groupTitle) },
-                            )
-                        }
-                    }
-                    if (results.live.isNotEmpty()) {
-                        item {
-                            SectionHeader("Live", results.live.size, expanded("live")) {
-                                expandedSections["live"] = !expanded("live")
+                        if (results.movies.isNotEmpty()) {
+                            item {
+                                SectionHeader("Movies", results.movies.size, expanded("movies")) {
+                                    expandedSections["movies"] = !expanded("movies")
+                                }
+                            }
+                            if (expanded("movies")) items(results.movies, key = { it.id }) { channel ->
+                                MediaListRow(
+                                    title = channel.name,
+                                    subtitle = channel.groupTitle,
+                                    logo = channel.logo,
+                                    fallbackKind = channel.kind,
+                                    titleTags = mediaTags(channel.name, 1),
+                                    onClick = { onOpenMovie(channel.id) },
+                                    isFavorite = channel.url in favoriteKeys,
+                                    onToggleFavorite = { viewModel.toggleFavorite(channel.url, channel.kind) },
+                                    downloadState = downloadsByUrl[channel.url],
+                                    onDownload = { viewModel.download(channel) },
+                                )
                             }
                         }
-                        if (expanded("live")) items(results.live, key = { it.id }) { channel ->
-                            ResultRow(
-                                title = channel.name,
-                                subtitle = channel.groupTitle,
-                                logo = channel.logo,
-                                kind = channel.kind,
-                                badge = "Live",
-                                onClick = { onPlay(channel.url, channel.name) },
-                                isFavorite = channel.url in favoriteKeys,
-                                onToggleFavorite = { viewModel.toggleFavorite(channel.url, channel.kind) },
-                                onGuide = if (channel.tvgId != null) ({ guideChannel = channel }) else null,
-                            )
-                        }
-                    }
-                    if (results.movies.isNotEmpty()) {
-                        item {
-                            SectionHeader("Movies", results.movies.size, expanded("movies")) {
-                                expandedSections["movies"] = !expanded("movies")
+                        if (results.series.isNotEmpty()) {
+                            item {
+                                SectionHeader("Series", results.series.size, expanded("series")) {
+                                    expandedSections["series"] = !expanded("series")
+                                }
+                            }
+                            if (expanded("series")) items(results.series, key = { "series-${it.xtreamSeriesId ?: it.seriesKey}" }) { hit ->
+                                val favKey = hit.xtreamSeriesId?.let { xtreamFavoriteKey(it) } ?: hit.seriesKey
+                                MediaListRow(
+                                    title = hit.seriesKey,
+                                    subtitle = hit.groupTitle +
+                                        (if (hit.count > 0) " · ${hit.count} matching episodes" else ""),
+                                    logo = hit.logo,
+                                    fallbackKind = ChannelKind.SERIES,
+                                    onClick = {
+                                        hit.xtreamSeriesId?.let { onOpenXtreamSeries(it) }
+                                            ?: onOpenSeries(hit.seriesKey)
+                                    },
+                                    isFavorite = favKey in favoriteKeys,
+                                    onToggleFavorite = { viewModel.toggleFavorite(favKey, ChannelKind.SERIES) },
+                                    trailingChevron = true,
+                                )
                             }
                         }
-                        if (expanded("movies")) items(results.movies, key = { it.id }) { channel ->
-                            ResultRow(
-                                title = channel.name,
-                                subtitle = channel.groupTitle,
-                                logo = channel.logo,
-                                kind = channel.kind,
-                                badge = "Movie",
-                                onClick = { onOpenMovie(channel.id) },
-                                isFavorite = channel.url in favoriteKeys,
-                                onToggleFavorite = { viewModel.toggleFavorite(channel.url, channel.kind) },
-                                downloadState = downloadsByUrl[channel.url],
-                                onDownload = { viewModel.download(channel) },
-                            )
-                        }
                     }
-                    if (results.series.isNotEmpty()) {
-                        item {
-                            SectionHeader("Series", results.series.size, expanded("series")) {
-                                expandedSections["series"] = !expanded("series")
-                            }
-                        }
-                        if (expanded("series")) items(results.series, key = { "series-${it.xtreamSeriesId ?: it.seriesKey}" }) { hit ->
-                            val favKey = hit.xtreamSeriesId?.let { xtreamFavoriteKey(it) } ?: hit.seriesKey
-                            ResultRow(
-                                title = hit.seriesKey,
-                                subtitle = hit.groupTitle +
-                                    (if (hit.count > 0) " · ${hit.count} matching episodes" else ""),
-                                logo = hit.logo,
-                                kind = ChannelKind.SERIES,
-                                badge = "Series",
-                                onClick = {
-                                    hit.xtreamSeriesId?.let { onOpenXtreamSeries(it) }
-                                        ?: onOpenSeries(hit.seriesKey)
-                                },
-                                isFavorite = favKey in favoriteKeys,
-                                onToggleFavorite = { viewModel.toggleFavorite(favKey, ChannelKind.SERIES) },
-                            )
-                        }
-                    }
-                }
                 }
             }
         }
@@ -384,70 +361,5 @@ private fun SectionHeader(text: String, count: Int, expanded: Boolean, onToggle:
             contentDescription = if (expanded) "Collapse" else "Expand",
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-    }
-}
-
-@Composable
-private fun ResultRow(
-    title: String,
-    subtitle: String,
-    logo: String?,
-    kind: Int,
-    badge: String,
-    onClick: () -> Unit,
-    isFavorite: Boolean? = null,
-    onToggleFavorite: (() -> Unit)? = null,
-    downloadState: DownloadEntity? = null,
-    onDownload: (() -> Unit)? = null,
-    onGuide: (() -> Unit)? = null,
-) {
-    Card(
-        onClick = onClick,
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-        modifier = Modifier.focusHighlight(RoundedCornerShape(16.dp)),
-    ) {
-        Row(
-            Modifier.fillMaxWidth().padding(start = 12.dp, top = 4.dp, bottom = 4.dp, end = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            ChannelLogo(logo, kindIcon(kind))
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    title,
-                    style = MaterialTheme.typography.titleSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            // Compact badge when no actions; actions replace it to save width.
-            if (onToggleFavorite == null && onDownload == null && onGuide == null) {
-                Pill(badge)
-                Spacer(Modifier.width(8.dp))
-            }
-            if (onGuide != null) {
-                IconButton(onClick = onGuide) {
-                    Icon(
-                        Icons.Rounded.CalendarMonth,
-                        contentDescription = "Guide",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            if (onToggleFavorite != null && isFavorite != null) {
-                FavoriteIcon(isFavorite = isFavorite, onToggle = onToggleFavorite)
-            }
-            if (onDownload != null) {
-                DownloadStateIcon(state = downloadState, onDownload = onDownload)
-            }
-        }
     }
 }

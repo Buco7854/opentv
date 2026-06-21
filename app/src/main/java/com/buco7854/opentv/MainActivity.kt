@@ -186,9 +186,6 @@ fun AppNav() {
                 onOpenMovie = { nav.navigate(Routes.movie(it)) },
                 onOpenSeries = { nav.navigate(Routes.series(playlistId, it)) },
                 onOpenXtreamSeries = { nav.navigate(Routes.xtreamSeries(playlistId, it)) },
-                onOpenCategory = { kind, group ->
-                    nav.navigate(Routes.browse(playlistId, kind, group))
-                },
             )
         }
         composable(Routes.DOWNLOADS) {
