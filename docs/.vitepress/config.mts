@@ -8,13 +8,13 @@ export default defineConfig({
   lang: 'en-US',
   title: 'OpenTV',
   description: 'Open-source IPTV player for Android and Android TV.',
-  // GitHub Pages project site is served under /opentv/.
-  base: '/opentv/',
+  // Served from the custom domain opentv.grimbert.net at the root.
+  base: '/',
   lastUpdated: true,
   ignoreDeadLinks: true,
 
   head: [
-    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/opentv/logo.svg' }],
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/logo.svg' }],
     ['meta', { name: 'theme-color', content: '#5BE3B5' }],
     ['meta', { property: 'og:type', content: 'website' }],
     ['meta', { property: 'og:title', content: 'OpenTV' }],

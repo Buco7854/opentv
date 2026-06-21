@@ -34,7 +34,7 @@ Store. There are two channels:
 
 Both builds are signed with the same key, so updates install in place without
 losing your data. Full instructions and documentation are on the
-**[OpenTV docs site](https://buco7854.github.io/opentv/)**.
+**[OpenTV docs site](https://opentv.grimbert.net/)**.
 
 ## Why OpenTV
 
