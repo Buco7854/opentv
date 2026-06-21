@@ -4,10 +4,6 @@
 
 The release channel is the latest tagged, stable version. The dev channel is rebuilt from every change merged into the main branch, so it has the newest features but may be less polished. See [Download](/download).
 
-## Will updates wipe my playlists?
-
-No. As long as you install over the existing app without uninstalling, your playlists, favorites, downloads and settings are kept. Both channels are signed with the same key, so they update in place. See [Updating the app](/guide/updating).
-
 ## Does OpenTV provide any channels or content?
 
 No. OpenTV is only a player. You bring your own M3U playlist or Xtream subscription from your provider.

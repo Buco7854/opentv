@@ -1,13 +1,36 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="OpenTV">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="108" height="108" role="img" aria-label="OpenTV">
   <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#5BE3B5"/>
-      <stop offset="1" stop-color="#8FA8FF"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="108" y2="108" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#131A33"/>
+      <stop offset="0.55" stop-color="#0C1020"/>
+      <stop offset="1" stop-color="#080A14"/>
     </linearGradient>
+    <radialGradient id="glow" cx="54" cy="52" r="34" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8FA8FF" stop-opacity="0.18"/>
+      <stop offset="0.7" stop-color="#8FA8FF" stop-opacity="0.078"/>
+      <stop offset="1" stop-color="#8FA8FF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="card" x1="29" y1="36" x2="79" y2="72" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8FA8FF"/>
+      <stop offset="1" stop-color="#5BE3B5"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="54" y1="39" x2="54" y2="51" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="play" x1="48.5" y1="46" x2="64" y2="62" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8FA8FF"/>
+      <stop offset="1" stop-color="#5BE3B5"/>
+    </linearGradient>
+    <clipPath id="round"><rect width="108" height="108" rx="24"/></clipPath>
   </defs>
-  <rect x="20" y="48" width="216" height="152" rx="30" fill="#1A2036" stroke="url(#g)" stroke-width="8"/>
-  <path d="M104 98 L162 128 L104 158 Z" fill="url(#g)"/>
-  <rect x="96" y="214" width="64" height="12" rx="6" fill="url(#g)"/>
-  <circle cx="60" cy="36" r="6" fill="#5BE3B5"/>
-  <circle cx="196" cy="36" r="6" fill="#8FA8FF"/>
+  <g clip-path="url(#round)">
+    <rect width="108" height="108" fill="url(#bg)"/>
+    <circle cx="54" cy="52" r="34" fill="url(#glow)"/>
+    <path d="M46,26 L54,36 L62,26" stroke="#5BE3B5" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <path d="M39,36 h30 a10,10 0 0 1 10,10 v16 a10,10 0 0 1 -10,10 H39 a10,10 0 0 1 -10,-10 V46 a10,10 0 0 1 10,-10 z" fill="url(#card)"/>
+    <path d="M40.5,39 h27 a7.5,7.5 0 0 1 7.5,7.5 v15 a7.5,7.5 0 0 1 -7.5,7.5 h-27 a7.5,7.5 0 0 1 -7.5,-7.5 v-15 a7.5,7.5 0 0 1 7.5,-7.5 z" fill="#12182C"/>
+    <path d="M40.5,39 h27 a7.5,7.5 0 0 1 7.5,7.5 v4.5 h-42 v-4.5 a7.5,7.5 0 0 1 7.5,-7.5 z" fill="url(#sheen)"/>
+    <path d="M48.5,46 L64,54 L48.5,62 Z" fill="url(#play)"/>
+  </g>
 </svg>

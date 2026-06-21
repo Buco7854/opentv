@@ -1,8 +1,8 @@
 import { defineConfig } from 'vitepress'
 
 const repo = 'https://github.com/Buco7854/opentv'
-const releaseApk = `${repo}/releases/latest/download/app-debug.apk`
-const devApk = `${repo}/releases/download/dev/app-debug.apk`
+const releaseApk = `${repo}/releases/latest/download/app-release.apk`
+const devApk = `${repo}/releases/download/dev/app-release.apk`
 
 export default defineConfig({
   lang: 'en-US',

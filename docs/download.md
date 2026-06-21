@@ -6,7 +6,7 @@ OpenTV ships as an Android APK that you install yourself. There are two channels
 
 The most recent tagged, stable version. This is the recommended build for daily use.
 
-[Download the latest release APK](https://github.com/Buco7854/opentv/releases/latest/download/app-debug.apk)
+[Download the latest release APK](https://github.com/Buco7854/opentv/releases/latest/download/app-release.apk)
 
 The release channel points at the newest tagged version. If the link does not work yet, no version has been tagged. In that case use the dev channel below, or browse [all releases](https://github.com/Buco7854/opentv/releases).
 
@@ -14,7 +14,7 @@ The release channel points at the newest tagged version. If the link does not wo
 
 Rebuilt automatically from the latest commit on the main branch. New features and fixes land here first, so it moves faster and may occasionally be rough.
 
-[Download the dev APK](https://github.com/Buco7854/opentv/releases/download/dev/app-debug.apk)
+[Download the dev APK](https://github.com/Buco7854/opentv/releases/download/dev/app-release.apk)
 
 ## Which one should I use
 

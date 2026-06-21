@@ -6,8 +6,8 @@ OpenTV is distributed as an APK. It is not on the Play Store, so you install it 
 
 On your Android phone, tablet or TV, get the build you want:
 
-- [Latest release](https://github.com/Buco7854/opentv/releases/latest/download/app-debug.apk) for the stable version
-- [Dev channel](https://github.com/Buco7854/opentv/releases/download/dev/app-debug.apk) for the latest commit
+- [Latest release](https://github.com/Buco7854/opentv/releases/latest/download/app-release.apk) for the stable version
+- [Dev channel](https://github.com/Buco7854/opentv/releases/download/dev/app-release.apk) for the latest commit
 
 See [Download](/download) if you are unsure which to pick.
 

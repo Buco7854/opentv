@@ -46,12 +46,12 @@ android {
             if (hasKeystore) signingConfig = signingConfigs.getByName("stable")
         }
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
+            // Code shrinking is left off: R8 is untested against this app's
+            // reflection-using libraries, and a broken sideloaded release is
+            // worse than a larger one. This is still a proper release build
+            // (not debuggable), just not minified.
+            isMinifyEnabled = false
+            isShrinkResources = false
             // Stable key when available; debug key otherwise so the release
             // variant still assembles in CI / locally.
             signingConfig = if (hasKeystore) {

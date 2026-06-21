@@ -8,7 +8,7 @@ Every build is signed with the same key. Android lets a new APK replace an exist
 
 To update:
 
-1. Download a newer APK from the [release](https://github.com/Buco7854/opentv/releases/latest/download/app-debug.apk) or [dev](https://github.com/Buco7854/opentv/releases/download/dev/app-debug.apk) channel.
+1. Download a newer APK from the [release](https://github.com/Buco7854/opentv/releases/latest/download/app-release.apk) or [dev](https://github.com/Buco7854/opentv/releases/download/dev/app-release.apk) channel.
 2. Open it and confirm. Android will show an update prompt instead of a fresh install.
 
 Your playlists and settings are preserved.

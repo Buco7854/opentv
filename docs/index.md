@@ -13,10 +13,10 @@ hero:
   actions:
     - theme: brand
       text: Download latest release
-      link: https://github.com/Buco7854/opentv/releases/latest/download/app-debug.apk
+      link: https://github.com/Buco7854/opentv/releases/latest/download/app-release.apk
     - theme: alt
       text: Dev channel
-      link: https://github.com/Buco7854/opentv/releases/download/dev/app-debug.apk
+      link: https://github.com/Buco7854/opentv/releases/download/dev/app-release.apk
     - theme: alt
       text: Read the guide
       link: /guide/installation
@@ -41,6 +41,12 @@ features:
     title: Private by design
     details: No servers, no accounts, no analytics. Your credentials and data stay on your device.
 ---
+
+::: warning OpenTV is a player, not a provider
+OpenTV does not provide any channels, streams or subscriptions, and none are
+included. You bring your own M3U playlist or Xtream login from a provider you
+already use.
+:::
 
 ## Two download channels
 

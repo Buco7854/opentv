@@ -43,18 +43,18 @@ jobs:
             echo "No SIGNING_KEYSTORE_BASE64 secret; using the default debug key."
           fi
 
-      - name: Build debug APK
+      - name: Build release APK
         env:
           KEYSTORE_PASSWORD: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
-        run: ./gradlew assembleDebug
+        run: ./gradlew assembleRelease
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: opentv-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: opentv-release-apk
+          path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
 
       - name: Upload test reports on failure
@@ -78,14 +78,14 @@ jobs:
       - name: Download APK artifact
         uses: actions/download-artifact@v4
         with:
-          name: opentv-debug-apk
+          name: opentv-release-apk
 
       - name: Update dev release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: dev
           name: Development build (latest commit)
-          files: app-debug.apk
+          files: app-release.apk
           prerelease: false
           make_latest: false
           body: |
@@ -108,11 +108,11 @@ jobs:
       - name: Download APK artifact
         uses: actions/download-artifact@v4
         with:
-          name: opentv-debug-apk
+          name: opentv-release-apk
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          files: app-debug.apk
+          files: app-release.apk
           make_latest: true
           generate_release_notes: true

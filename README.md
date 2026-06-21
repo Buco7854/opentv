@@ -8,6 +8,7 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-8FA8FF.svg)](LICENSE)
 ![Platform](https://img.shields.io/badge/Android-8.0%2B-5BE3B5)
 ![Made with Kotlin](https://img.shields.io/badge/Kotlin-Compose-8FA8FF)
+![Vibecoded](https://img.shields.io/badge/vibecoded-AI%20built-FF7B72)
 
 **A fast, private, open-source IPTV player for Android and Android TV.**
 M3U, M3U8 and native Xtream, with EPG, catch-up, downloads and a player that
@@ -17,10 +18,14 @@ gets out of the way.
 
 <br>
 
-<img src="docs/public/screens.svg" alt="OpenTV home, poster grid, and player" width="100%">
+> [!NOTE]
+> This project is vibecoded. It was built end to end with an AI coding
+> assistant. Review the code before you rely on it.
 
-> The images above are design renderings of the UI. For real device captures,
-> see the release listing.
+> [!IMPORTANT]
+> OpenTV is a player only. It does not provide any channels, streams or
+> subscriptions, and none are included. You bring your own M3U playlist or
+> Xtream login from a provider you already use.
 
 ## Download
 
@@ -28,9 +33,9 @@ OpenTV is distributed as an APK that you install yourself. It is not on the Play
 Store. There are two channels:
 
 - **Latest release**: the most recent tagged, stable version.
-  [Download](https://github.com/Buco7854/opentv/releases/latest/download/app-debug.apk)
+  [Download](https://github.com/Buco7854/opentv/releases/latest/download/app-release.apk)
 - **Dev channel**: rebuilt from the latest commit on `main`.
-  [Download](https://github.com/Buco7854/opentv/releases/download/dev/app-debug.apk)
+  [Download](https://github.com/Buco7854/opentv/releases/download/dev/app-release.apk)
 
 Both builds are signed with the same key, so updates install in place without
 losing your data. Full instructions and documentation are on the
@@ -128,14 +133,15 @@ every push.
 ## Building
 
 ```bash
-./gradlew :app:assembleDebug      # debug APK
 ./gradlew :app:testDebugUnitTest  # unit tests
-./gradlew :app:assembleRelease    # minified release (debug-signed unless a keystore is provided)
+./gradlew :app:assembleRelease    # release APK (signed with your key if provided, else debug-signed)
+./gradlew :app:assembleDebug      # debug APK
 ```
 
-Requires JDK 17 or newer and the Android SDK (platform 35). The CI workflow
-uploads a debug APK artifact on every push, refreshes the rolling dev release on
-`main`, and attaches an APK to a GitHub Release when you tag `vX.Y.Z`.
+Requires JDK 17 or newer and the Android SDK (platform 35). The CI workflow runs
+the unit tests and builds a release APK on every push. It refreshes the rolling
+dev release on `main`, and publishes a tagged GitHub Release when you push a
+`vX.Y.Z` tag.
 
 ## Documentation site
 
@@ -163,8 +169,7 @@ test setup (`./gradlew testDebugUnitTest`) and match the surrounding style.
 
 ## License
 
-Released under the GNU GPL v3.0. You may use, study, modify, redistribute, and
-even sell it, provided the source stays open under the same license. See
-[LICENSE](LICENSE).
+Released under the GNU GPL v3.0. You may use, study, modify and redistribute it,
+provided the source stays open under the same license. See [LICENSE](LICENSE).
 
 Copyright 2026 Buco7854.
