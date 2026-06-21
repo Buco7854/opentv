@@ -17,6 +17,27 @@ android {
         versionName = "0.1"
     }
 
+    // Release signing is configured only when a keystore is provided (via env or
+    // gradle properties), so open-source contributors and CI can still build a
+    // release variant for verification without holding the upload key.
+    val keystorePath = System.getenv("KEYSTORE_FILE")
+        ?: (project.findProperty("KEYSTORE_FILE") as String?)
+    val hasKeystore = keystorePath != null && file(keystorePath).exists()
+
+    signingConfigs {
+        if (hasKeystore) {
+            create("release") {
+                storeFile = file(keystorePath!!)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                    ?: project.findProperty("KEYSTORE_PASSWORD") as String?
+                keyAlias = System.getenv("KEY_ALIAS")
+                    ?: project.findProperty("KEY_ALIAS") as String?
+                keyPassword = System.getenv("KEY_PASSWORD")
+                    ?: project.findProperty("KEY_PASSWORD") as String?
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -25,6 +46,13 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // Real upload key when available; debug key otherwise so the
+            // release variant still assembles in CI / locally.
+            signingConfig = if (hasKeystore) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
     compileOptions {

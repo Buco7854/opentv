@@ -1,123 +1,133 @@
-# OpenTV
+<div align="center">
 
-A clean, fast IPTV player for Android. Built with Kotlin, Jetpack Compose (Material 3),
-Media3/ExoPlayer and Room.
+<img src="docs/banner.svg" alt="OpenTV" width="100%">
 
-## Features (v0.1)
+<br>
 
-- **Xtream login** — add a playlist with server + username + password and the app
-  drives the panel API directly: server-side Live/Movies/Series categories (no
-  classification guessing), the full series catalog with plot/cast/rating/cover,
-  lazily-fetched episode lists (one request per series opened, cached a day),
-  panel-provided movie details, auto-wired EPG, and catch-up. A refresh costs
-  exactly six API requests.
-- **Catch-up TV** — channels with a provider archive (`tv_archive`, or
-  `catchup-days` in M3U) show their past programmes in the guide sheet; tap one
-  to replay it via the panel's timeshift endpoint.
-- **M3U / M3U8 playlists** — add a remote URL from your provider, or import a local
-  `.m3u`/`.m3u8` file from device storage.
-- **List or poster grid** — browse movies and series as rows or as a portrait
-  poster-card grid; one toggle in the browse bar, persisted.
-- **Favorites** — heart anything (live channels, movies, series) from rows or
-  detail pages; a "★ Favorites" group is pinned on top of each tab. Favorites
-  are keyed by stable identity so they survive playlist refreshes.
-- **Cast with faces & quality badges** — series pages show a cast strip with
-  actor photos (TVMaze, keyless; panel casts shown as initials); quality tags
-  (4K/FHD/HDR/…) render as badges on rows, poster cards and detail pages.
-- **Category search & filter** — global search matches category names too
-  (tap to jump straight into the category), and long category lists get an
-  inline filter field.
-- **Android TV** — leanback launcher entry, TV banner, D-pad navigable.
-- **Categories & search** — `group-title` tags become browsable folders, split into
-  **Live / Movies / Series** tabs. A global search bar scans every category at once.
-- **Smart VOD detection** — M3U is a flat format, so content type is always a guess;
-  OpenTV layers signals in order of reliability instead of trusting the file extension
-  alone: Xtream URL segments (`/live/`, `/movie/`, `/series/`) first, then episode
-  markers in titles (`S01E02`, `1x05`, `EP 7`, `Season 1 Episode 2` — these beat a
-  `.ts` extension, so series served as TS streams don't pollute live TV), then
-  `group-title` keywords (SERIES/VOD/FILM/…), then extension, then a trailing year
-  tag. Decorative separator rows (`#### SPORTS ####`) are dropped instead of being
-  counted as channels. Episodes are grouped per show and sorted by season/episode.
-  The classifier is covered by unit tests (`ContentClassifierTest`).
-- **VOD downloads** — save movies and episodes to local storage for offline viewing,
-  with pause/resume (continuing from the same byte), progress notifications, and a
-  downloads manager.
-- **Connection monitoring** — for Xtream-based playlists the app reads
-  `player_api.php` and shows **active / maximum concurrent connections** (plus plan
-  expiry), so you never trip your provider's connection limit.
-- **Hardware-accelerated playback** — Media3/ExoPlayer with the device's MediaCodec
-  hardware decoders (HLS, TS, MP4, MKV).
-- **Subtitles & track selection** — embedded subtitle and audio tracks (HLS
-  renditions, MKV/TS streams) are selectable from an in-player sheet, including
-  "subtitles off" and playback speed. Subtitle appearance is configurable — size
-  (50–200%), outline vs. background style, bold — with a live preview, persisted
-  across sessions. A scaling button cycles Fit / Zoom / Stretch.
-- **Player settings** (gear icon on home) — preferred audio & subtitle language
-  (auto-applied when a stream has a matching track), seek step (5/10/30 s),
-  buffering profile (fast start / balanced / stable), software decoder fallback,
-  default video scaling, and subtitle appearance. All persisted.
-- **Basic EPG (XMLTV)** — add an XMLTV URL (auto-detected from `url-tvg` when
-  present); live channel lists show what's airing now with a progress bar, and a
-  per-channel guide sheet shows the upcoming timeline. Gzipped EPG files supported.
-- **Error log** — every failure (playlist refresh, EPG, downloads, playback,
-  connection status, even crashes from the previous session) is surfaced as a
-  snackbar where relevant and recorded with its full stack trace in an in-app
-  error log (bug icon on the home screen), with copy-to-clipboard support.
-  Provider credentials are redacted from everything the log records.
+[![Android CI](https://github.com/Buco7854/opentv/actions/workflows/android.yml/badge.svg)](https://github.com/Buco7854/opentv/actions/workflows/android.yml)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-8FA8FF.svg)](LICENSE)
+![Platform](https://img.shields.io/badge/Android-8.0%2B-5BE3B5)
+![Made with Kotlin](https://img.shields.io/badge/Kotlin-Compose-8FA8FF)
 
-## Designed to be gentle on your provider
+**A fast, beautiful, privacy-respecting IPTV player for Android & Android TV.**
+M3U, M3U8 and native Xtream — with EPG, catch-up, downloads and a player that
+gets out of the way.
 
-Many providers blacklist clients that hammer their servers. OpenTV is deliberately
-frugal with requests:
+</div>
 
-- **Conditional GETs** — playlist and EPG refreshes send `If-None-Match` /
-  `If-Modified-Since`; unchanged files cost a 304 with no body transfer.
-- **Refresh throttling** — playlists refresh at most every 6 h, EPG every 12 h,
-  unless you explicitly force a refresh.
-- **Single-flight refreshes** — concurrent triggers collapse into one request.
-- **Account status caching** — the connection monitor polls `player_api.php` at most
-  once per minute, and only while you're looking at it.
-- **One shared HTTP client** — connection pooling plus a 32 MB disk cache; channel
-  logos are cached on disk by Coil so each logo is fetched once.
-- **Resumable downloads** — interrupted VOD downloads resume with `Range` requests
-  instead of restarting from zero.
-- **Connection-aware downloads** — download concurrency defaults to Auto: the
-  provider's own `max_connections` minus one, keeping a slot reserved for
-  watching (configurable to 1–3 in Settings). With a manual limit or an unknown
-  provider, downloads wait — or yield mid-transfer and resume later — whenever
-  you're streaming from the same provider, so the connection budget is never
-  exceeded.
-- **Keyless metadata** — synopsis, rating and cast for series via TVMaze, and
-  synopsis, genre and director for movies via the iTunes Search API. No API key
-  or account needed; lookups are cached for 30 days per title, including
-  negative results.
-- **Streaming parsers** — M3U and XMLTV are parsed as streams in a single pass
-  (batched into Room), so 50k-entry playlists don't blow up memory or require
-  re-fetching.
+<br>
+
+<img src="docs/screens.svg" alt="OpenTV — home, poster grid, and player" width="100%">
+
+> _The images above are design renderings of the UI. For real device captures,
+> see the release listing._
+
+---
+
+## Why OpenTV
+
+Most M3U players either hammer your provider until you get blacklisted, guess
+content types badly, or bury features behind a clumsy UI. OpenTV is built around
+three ideas: **be gentle on the provider**, **classify content intelligently**,
+and **look genuinely good** while doing it.
+
+## Features
+
+**Sources**
+- **Native Xtream login** (server + username + password): server-side
+  Live / Movies / Series categories with *no* classification guessing, the full
+  series catalog (plot, cast, rating, cover), lazily-fetched episodes, panel
+  movie details, auto-wired EPG and catch-up. A full refresh is **6 requests**.
+- **M3U / M3U8** by URL or local file. Paste a `get.php` URL and the app offers
+  to upgrade it to the richer Xtream mode automatically.
+- **Smart VOD detection** for flat M3U: layered signals (Xtream URL segments →
+  `SxxExx`/episode markers → group keywords → extension → year tag) so series
+  served as `.ts` don't pollute Live, and `#### SEPARATOR ####` rows are dropped.
+  Mis-tagged categories can be re-typed by hand; covered by unit tests.
+
+**Browsing**
+- **List or poster-grid** views (per your preference, persisted), with quality
+  **badges** (4K/FHD/HDR…) on rows and posters.
+- **Filter bar** that narrows the current category or the category list itself.
+- **Global search** across live, movies and series, using the same row
+  components as browsing so everything looks and behaves identically.
+- **Favourites** for channels, movies and series — keyed by stable identity so
+  they survive refreshes — on their own screen with list/grid + sections.
+- **Rich detail pages** for movies, series and individual episodes: synopsis,
+  rating, genre/runtime, and **cast with photos** (keyless via TVMaze/iTunes).
+
+**Watching**
+- **Hardware-accelerated** Media3/ExoPlayer (HLS, TS, MP4, MKV) with optional
+  software-decoder fallback.
+- **Subtitles & tracks**: pick embedded subtitle/audio tracks, "off", playback
+  speed; configurable subtitle size/style/bold with live preview.
+- **Gestures**: double-tap left/right to skip by your configured step; rotate,
+  video-scaling (Fit/Zoom/Stretch), immersive fullscreen, lifecycle-aware pause.
+- **EPG (XMLTV)**: now/next with progress on live rows, a full per-channel guide
+  (also inside the player), gzip supported.
+- **Catch-up / timeshift**: replay past programmes on archived channels (Xtream
+  timeshift or M3U `catchup-source`), from the guide or mid-playback.
+
+**Downloads**
+- Offline movies & episodes with **pause / resume** (byte-range), progress
+  notifications, a manager, and a **chosen destination folder** (SAF).
+- **Connection-aware**: concurrency defaults to your plan's `max_connections − 1`
+  and yields to live playback, so downloads never trip your provider's limit.
+
+**Account & ops**
+- **Connection monitor**: active / max connections and plan expiry on a
+  dedicated account page.
+- **In-app error log** with full stack traces (and previous-session crashes),
+  credentials redacted.
+- **Android TV**: leanback launcher entry, banner, D-pad focus throughout.
+
+## Gentle on your provider
+
+Getting blacklisted is the #1 IPTV annoyance. OpenTV minimises requests by design:
+
+- Conditional GETs (`If-None-Match` / `If-Modified-Since`) → unchanged playlist/EPG cost a bodiless 304.
+- Refresh throttling (playlist ≥ 6 h, EPG ≥ 12 h unless forced) and single-flight collapsing.
+- Account status cached ~60 s; the deep per-channel guide is fetched only on demand and cached.
+- One pooled HTTP client with a 32 MB disk cache; logos fetched once via Coil.
+- Streaming M3U/XMLTV parsers (batched into Room) — 50k-entry playlists don't blow up memory.
+
+## Tech
+
+Kotlin · Jetpack Compose (Material 3) · Media3/ExoPlayer · Room · WorkManager ·
+DataStore · OkHttp · Coil. Single-module app, MVVM, ~50 unit tests, CI on every push.
 
 ## Building
 
 ```bash
-./gradlew :app:assembleDebug
+./gradlew :app:assembleDebug      # debug APK
+./gradlew :app:testDebugUnitTest  # unit tests
+./gradlew :app:assembleRelease    # minified release (debug-signed unless a keystore is provided)
 ```
 
-Requires JDK 17+ and the Android SDK (platform 35).
+Requires JDK 17+ and the Android SDK (platform 35). The CI workflow uploads a
+debug APK artifact on every push; tagging `vX.Y.Z` builds a signed AAB + APK.
 
-## Security notes
+## Publishing & releases
 
-- Cleartext HTTP is allowed (`usesCleartextTraffic`) because the majority of IPTV
-  providers only serve plain HTTP. Use an HTTPS playlist URL when your provider
-  offers one.
-- Xtream credentials (parsed from the playlist URL) are stored only in the app's
-  private database; `allowBackup` is disabled so they are never copied into cloud
-  device backups.
-- Downloads are written to app-specific external storage (no storage permissions
-  needed), with file names sanitized from playlist-controlled titles and URLs.
+See **[PUBLISHING.md](PUBLISHING.md)** for the full Play Store checklist
+(signing, App Bundle, store listing, data-safety) and the tag-driven release
+pipeline.
 
-## Notes
+## Privacy
 
-- Connection monitoring requires an Xtream-style playlist URL
-  (`http://host:port/get.php?username=...&password=...`) — credentials are detected
-  automatically and the matching `player_api.php` endpoint is used.
-- EPG data is matched against channels' `tvg-id` attributes and kept inside a
-  rolling window (-3 h … +48 h) to stay small.
+OpenTV has **no servers, accounts, analytics or ads**. Credentials and data stay
+on your device; the app only talks to your provider and optional keyless metadata
+APIs. Full policy: **[PRIVACY.md](PRIVACY.md)**.
+
+## Contributing
+
+Issues and PRs welcome. Please keep changes covered by the existing build/test
+setup (`./gradlew testDebugUnitTest`) and match the surrounding style.
+
+## License
+
+Released under the **GNU GPL v3.0** — you may use, study, modify, redistribute,
+and even sell it, provided the source stays open under the same license. See
+[LICENSE](LICENSE).
+
+Copyright © 2026 Buco7854.

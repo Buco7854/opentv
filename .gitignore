@@ -9,3 +9,12 @@
 .cxx
 local.properties
 app/build
+
+# Signing material — never commit
+*.jks
+*.keystore
+keystore.b64
+keystore.properties
+
+# Kotlin compiler session files
+.kotlin/

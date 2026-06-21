@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="340" viewBox="0 0 1200 340" fill="none" font-family="'Segoe UI',Roboto,system-ui,sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="340" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#131A33"/>
+      <stop offset="0.55" stop-color="#0C1020"/>
+      <stop offset="1" stop-color="#080A14"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="245" cy="170" r="180" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8FA8FF" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#8FA8FF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="accent" x1="160" y1="90" x2="330" y2="250" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8FA8FF"/>
+      <stop offset="1" stop-color="#5BE3B5"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="340" rx="28" fill="url(#bg)"/>
+  <rect width="1200" height="340" rx="28" fill="url(#glow)"/>
+
+  <!-- icon mark -->
+  <g transform="translate(150,96)">
+    <path d="M28,18 L46,40 L64,18" stroke="#5BE3B5" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <rect x="6" y="40" width="80" height="74" rx="18" fill="url(#accent)"/>
+    <rect x="13" y="47" width="66" height="60" rx="12" fill="#12182C"/>
+    <path d="M37,60 L65,77 L37,94 Z" fill="url(#accent)"/>
+  </g>
+
+  <text x="300" y="158" font-size="86" font-weight="800" letter-spacing="-2" fill="#E9ECF8">OpenTV</text>
+  <text x="304" y="208" font-size="30" font-weight="500" fill="#9AA3C0">A fast, beautiful, privacy-respecting IPTV player for Android</text>
+  <g transform="translate(304,236)" font-size="20" font-weight="600">
+    <rect x="0" y="0" width="150" height="40" rx="20" fill="#1A2036"/>
+    <text x="75" y="26" text-anchor="middle" fill="#8FA8FF">M3U · Xtream</text>
+    <rect x="166" y="0" width="120" height="40" rx="20" fill="#1A2036"/>
+    <text x="226" y="26" text-anchor="middle" fill="#5BE3B5">Catch-up</text>
+    <rect x="298" y="0" width="150" height="40" rx="20" fill="#1A2036"/>
+    <text x="373" y="26" text-anchor="middle" fill="#E9ECF8">Android TV</text>
+  </g>
+</svg>
