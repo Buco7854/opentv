@@ -1,9 +1,19 @@
 package com.buco7854.opentv.ui.player
 
 import android.app.Activity
+import android.app.PendingIntent
+import android.app.PictureInPictureParams
+import android.app.RemoteAction
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.graphics.Typeface
+import android.graphics.drawable.Icon
+import android.util.Rational
+import android.view.View
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
 import androidx.compose.foundation.background
@@ -65,6 +75,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -107,6 +118,25 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+/** Broadcast sent by the PiP window's play/pause button back to the player. */
+private const val PIP_ACTION_TOGGLE = "com.buco7854.opentv.player.PIP_TOGGLE"
+
+/** The single play/pause control shown inside the Picture-in-Picture window. */
+private fun playPauseAction(context: Context, isPlaying: Boolean): RemoteAction {
+    val icon = Icon.createWithResource(
+        context,
+        if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
+    )
+    val label = if (isPlaying) "Pause" else "Play"
+    val pending = PendingIntent.getBroadcast(
+        context,
+        0,
+        Intent(PIP_ACTION_TOGGLE).setPackage(context.packageName),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
+    return RemoteAction(icon, label, label, pending)
+}
+
 /**
  * Full-screen playback. Hardware decoding is the default: DefaultRenderersFactory
  * uses the device's MediaCodec hardware decoders first and never falls back to
@@ -146,6 +176,9 @@ fun PlayerScreen(
     var showSpeed by remember { mutableStateOf(false) }
     var playerView by remember { mutableStateOf<PlayerView?>(null) }
     var scaleHint by remember { mutableStateOf<String?>(null) }
+    // Our custom overlay (title + buttons) tracks the player controller's own
+    // visibility so the two show and hide together instead of drifting apart.
+    var controlsVisible by remember { mutableStateOf(true) }
     val configuration = LocalConfiguration.current
 
     val inPip by PipController.isInPip.collectAsState()
@@ -213,6 +246,34 @@ fun PlayerScreen(
             }
     }
 
+    fun pipParams(): PictureInPictureParams {
+        val size = player.videoSize
+        return PictureInPictureParams.Builder()
+            .apply {
+                if (size.width > 0 && size.height > 0) {
+                    // System requires the ratio within ~[0.42, 2.39]; clamp to be safe.
+                    val ratio = (size.width.toFloat() / size.height).coerceIn(0.42f, 2.39f)
+                    setAspectRatio(Rational((ratio * 1000).toInt(), 1000))
+                }
+                // A single play/pause control inside the PiP window.
+                setActions(listOf(playPauseAction(context, player.isPlaying)))
+            }
+            .build()
+    }
+
+    // Refresh params so the PiP button's icon matches the current play state.
+    fun refreshPipParams() {
+        val activity = context as? Activity ?: return
+        if (!pipSupported) return
+        runCatching { activity.setPictureInPictureParams(pipParams()) }
+    }
+
+    fun enterPip() {
+        val activity = context as? Activity ?: return
+        if (!pipSupported) return
+        runCatching { activity.enterPictureInPictureMode(pipParams()) }
+    }
+
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onPlayerError(playbackError: PlaybackException) {
@@ -223,6 +284,11 @@ fun PlayerScreen(
 
             override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
                 isLiveStream = player.isCurrentMediaItemDynamic || player.isCurrentMediaItemLive
+            }
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                // Keep the PiP play/pause icon in sync with the actual state.
+                if (PipController.isInPip.value) refreshPipParams()
             }
 
             override fun onPlaybackStateChanged(state: Int) {
@@ -283,23 +349,25 @@ fun PlayerScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    fun enterPip() {
-        val activity = context as? Activity ?: return
-        if (!pipSupported) return
-        val size = player.videoSize
-        val params = android.app.PictureInPictureParams.Builder().apply {
-            if (size.width > 0 && size.height > 0) {
-                // System requires the ratio within ~[0.42, 2.39]; clamp to be safe.
-                val ratio = (size.width.toFloat() / size.height).coerceIn(0.42f, 2.39f)
-                setAspectRatio(android.util.Rational((ratio * 1000).toInt(), 1000))
-            }
-        }.build()
-        runCatching { activity.enterPictureInPictureMode(params) }
-    }
     // Register auto-PiP (Home press) while this screen is on; keep playing in PiP.
     DisposableEffect(pipSupported) {
         if (pipSupported) PipController.onUserLeave = { enterPip() }
         onDispose { PipController.onUserLeave = null }
+    }
+
+    // The PiP window's play/pause button posts this broadcast back to us.
+    DisposableEffect(player) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) {
+                if (intent?.action != PIP_ACTION_TOGGLE) return
+                if (player.isPlaying) player.pause() else player.play()
+            }
+        }
+        ContextCompat.registerReceiver(
+            context, receiver, IntentFilter(PIP_ACTION_TOGGLE),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        onDispose { runCatching { context.unregisterReceiver(receiver) } }
     }
 
     // Immersive fullscreen while the player is open; restore bars and free
@@ -347,6 +415,13 @@ fun PlayerScreen(
                     setShowPreviousButton(false)
                     keepScreenOn = true
                     setShutterBackgroundColor(android.graphics.Color.BLACK)
+                    // Drive our overlay's visibility from the controller's, so the
+                    // title/buttons hide and show together with the progress bar.
+                    setControllerVisibilityListener(
+                        PlayerView.ControllerVisibilityListener { visibility ->
+                            controlsVisible = visibility == View.VISIBLE
+                        }
+                    )
                     playerView = this
                 }
             },
@@ -412,7 +487,7 @@ fun PlayerScreen(
             )
         }
 
-        if (!inPip) {
+        if (!inPip && controlsVisible) {
         Column(
             Modifier
                 .fillMaxWidth()
