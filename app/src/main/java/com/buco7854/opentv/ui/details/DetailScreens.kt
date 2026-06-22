@@ -72,6 +72,7 @@ import com.buco7854.opentv.ui.components.ChannelLogo
 import com.buco7854.opentv.ui.components.DownloadStateIcon
 import com.buco7854.opentv.ui.components.FavoriteIcon
 import com.buco7854.opentv.ui.components.Pill
+import com.buco7854.opentv.ui.components.WatchProgressBar
 import com.buco7854.opentv.ui.components.focusHighlight
 import com.buco7854.opentv.ui.components.mediaTags
 import kotlinx.coroutines.launch
@@ -171,6 +172,7 @@ fun MovieDetailScreen(
     var meta by remember { mutableStateOf<MetadataEntity?>(null) }
     var isFavorite by remember { mutableStateOf(false) }
     val downloads by OpenTvApp.graph.downloads.downloads.collectAsState(initial = emptyList())
+    val progressByUrl by OpenTvApp.graph.resume.progressByUrl.collectAsState(initial = emptyMap())
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
@@ -229,13 +231,24 @@ fun MovieDetailScreen(
                 }
                 MetadataBlock(meta)
                 Spacer(Modifier.height(24.dp))
+                val progress = progressByUrl[movie.url]
+                if (progress != null) {
+                    WatchProgressBar(progress, Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "${(progress * 100).toInt()}% watched",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                }
                 Button(
                     onClick = { onPlay(movie.url, movie.name) },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Icon(Icons.Rounded.PlayArrow, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text("Play")
+                    Text(if (progress != null) "Resume" else "Play")
                 }
                 Spacer(Modifier.height(10.dp))
                 DownloadButton(
@@ -306,6 +319,7 @@ fun SeriesDetailScreen(
         downloads.filter { it.status != DownloadStatus.CANCELLED && it.status != DownloadStatus.FAILED }
             .associateBy { it.url }
     }
+    val progressByUrl by OpenTvApp.graph.resume.progressByUrl.collectAsState(initial = emptyMap())
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
@@ -388,6 +402,7 @@ fun SeriesDetailScreen(
                             snackbar.showSnackbar(blocked ?: "Download started: ${episode.name}")
                         }
                     },
+                    progress = progressByUrl[episode.url],
                 )
             }
         }
@@ -435,7 +450,7 @@ internal fun formatDuration(secs: Int): String {
 }
 
 @Composable
-private fun EpisodeThumb(image: String?, modifier: Modifier = Modifier) {
+private fun EpisodeThumb(image: String?, progress: Float? = null, modifier: Modifier = Modifier) {
     Box(
         modifier
             .width(116.dp)
@@ -458,6 +473,18 @@ private fun EpisodeThumb(image: String?, modifier: Modifier = Modifier) {
                 modifier = Modifier.fillMaxSize(),
             )
         }
+        // "Continue watching" bar across the bottom of the still.
+        if (progress != null) {
+            WatchProgressBar(
+                progress,
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(horizontal = 5.dp)
+                    .padding(bottom = 5.dp),
+                height = 3.dp,
+            )
+        }
     }
 }
 
@@ -467,6 +494,7 @@ internal fun EpisodeRow(
     downloadState: DownloadEntity?,
     onOpen: () -> Unit,
     onDownload: () -> Unit,
+    progress: Float? = null,
 ) {
     Card(
         onClick = onOpen,
@@ -475,7 +503,7 @@ internal fun EpisodeRow(
         modifier = Modifier.padding(vertical = 4.dp).focusHighlight(),
     ) {
         Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            EpisodeThumb(episode.logo)
+            EpisodeThumb(episode.logo, progress = progress)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 episodeTag(episode)?.let {
@@ -526,6 +554,7 @@ fun EpisodeDetailScreen(
     var info by remember { mutableStateOf<MetadataEntity?>(null) }
     var seriesCast by remember { mutableStateOf<List<com.buco7854.opentv.data.meta.CastMember>>(emptyList()) }
     val downloads by graph.downloads.downloads.collectAsState(initial = emptyList())
+    val progressByUrl by graph.resume.progressByUrl.collectAsState(initial = emptyMap())
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
@@ -635,13 +664,24 @@ fun EpisodeDetailScreen(
                     CastRow(seriesCast)
                 }
                 Spacer(Modifier.height(24.dp))
+                val progress = progressByUrl[ep.url]
+                if (progress != null) {
+                    WatchProgressBar(progress, Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "${(progress * 100).toInt()}% watched",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                }
                 Button(
                     onClick = { onPlay(ep.url, ep.name) },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Icon(Icons.Rounded.PlayArrow, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text("Play")
+                    Text(if (progress != null) "Resume" else "Play")
                 }
                 Spacer(Modifier.height(10.dp))
                 DownloadButton(

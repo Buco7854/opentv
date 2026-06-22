@@ -5,6 +5,8 @@ import com.buco7854.opentv.data.db.ResumePointEntity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
@@ -22,6 +24,21 @@ class ResumeRepository(private val db: AppDatabase) {
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /**
+     * Live fraction watched (0..1) keyed by stream URL, for progress bars on
+     * movie/episode pages and episode lists. Finished items are pruned on save,
+     * so only genuinely in-progress titles appear here.
+     */
+    val progressByUrl: Flow<Map<String, Float>> = db.resumeDao().observeAll().map { points ->
+        buildMap {
+            for (p in points) {
+                if (p.durationMs > 0 && p.positionMs >= MIN_POSITION_MS) {
+                    put(p.url, (p.positionMs.toFloat() / p.durationMs).coerceIn(0f, 1f))
+                }
+            }
+        }
+    }
 
     suspend fun resumePositionFor(url: String): Long? {
         val point = db.resumeDao().get(url) ?: return null

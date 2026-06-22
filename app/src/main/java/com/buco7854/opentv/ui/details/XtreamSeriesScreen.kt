@@ -71,6 +71,7 @@ fun XtreamSeriesScreen(
         downloads.filter { it.status != DownloadStatus.CANCELLED && it.status != DownloadStatus.FAILED }
             .associateBy { it.url }
     }
+    val progressByUrl by graph.resume.progressByUrl.collectAsState(initial = emptyMap())
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
@@ -194,6 +195,7 @@ fun XtreamSeriesScreen(
                             snackbar.showSnackbar(blocked ?: "Download started: ${episode.name}")
                         }
                     },
+                    progress = progressByUrl[episode.url],
                 )
             }
         }

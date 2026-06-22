@@ -228,6 +228,10 @@ interface ResumeDao {
     @Query("SELECT * FROM resume_points WHERE url = :url")
     suspend fun get(url: String): ResumePointEntity?
 
+    /** All saved positions, observed live so progress bars update on return. */
+    @Query("SELECT * FROM resume_points")
+    fun observeAll(): Flow<List<ResumePointEntity>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(point: ResumePointEntity)
 
