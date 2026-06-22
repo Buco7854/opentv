@@ -444,6 +444,9 @@ fun PlayerScreen(
                 .align(Alignment.CenterStart)
                 .fillMaxHeight()
                 .fillMaxWidth(0.33f)
+                // Leave the bottom controller strip free so the seek bar can be
+                // scrubbed across its whole width, not just the middle third.
+                .padding(bottom = 96.dp)
                 .pointerInput(Unit) {
                     detectTapGestures(
                         onDoubleTap = {
@@ -461,6 +464,7 @@ fun PlayerScreen(
                 .align(Alignment.CenterEnd)
                 .fillMaxHeight()
                 .fillMaxWidth(0.33f)
+                .padding(bottom = 96.dp)
                 .pointerInput(Unit) {
                     detectTapGestures(
                         onDoubleTap = {
