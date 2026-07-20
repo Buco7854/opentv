@@ -1,0 +1,138 @@
+name: Android CI
+
+# Runs only when the Android app, the shared modules, or the build
+# configuration change (tag pushes always run: new refs skip path filters).
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - "app/**"
+      - "core/**"
+      - "data/**"
+      - "build.gradle.kts"
+      - "settings.gradle.kts"
+      - "gradle.properties"
+      - "gradle/**"
+      - ".github/workflows/android.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "core/**"
+      - "data/**"
+      - "build.gradle.kts"
+      - "settings.gradle.kts"
+      - "gradle.properties"
+      - "gradle/**"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Test & build APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle (with caching)
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run unit tests
+        run: ./gradlew testDebugUnitTest :core:jvmTest
+
+      # Decode the stable signing keystore from a repo secret when present, so
+      # every CI APK is signed identically and installs as an update. Absent
+      # (e.g. fork PRs), the build falls back to the default debug key.
+      - name: Decode signing keystore
+        env:
+          SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$SIGNING_KEYSTORE_BASE64" ]; then
+            echo "$SIGNING_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/stable.keystore"
+            echo "KEYSTORE_FILE=$RUNNER_TEMP/stable.keystore" >> "$GITHUB_ENV"
+            echo "Signing with the stable keystore."
+          else
+            echo "No SIGNING_KEYSTORE_BASE64 secret; using the default debug key."
+          fi
+
+      - name: Build release APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: ./gradlew assembleRelease
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: opentv-release-apk
+          path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: app/build/reports/tests/
+
+  dev-release:
+    name: Publish dev build
+    # Every push to main refreshes the rolling "dev" release with the latest
+    # commit's APK. It is kept out of "latest" so the release channel only ever
+    # points at tagged versions.
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: opentv-release-apk
+
+      - name: Update dev release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: dev
+          name: Development build (latest commit)
+          files: app-release.apk
+          prerelease: false
+          make_latest: false
+          body: |
+            Rolling build from the latest commit on `main`.
+
+            Commit: ${{ github.sha }}
+
+            This is the dev channel. For the stable build, see the latest tagged release.
+
+  release:
+    name: Attach APK to release
+    # Tag a commit vX.Y.Z to get a GitHub Release with the APK attached. This is
+    # the stable "latest" release the release channel points at.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: opentv-release-apk
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app-release.apk
+          make_latest: true
+          generate_release_notes: true

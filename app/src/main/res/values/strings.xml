@@ -1,0 +1,307 @@
+<resources>
+    <string name="app_name">OpenTV</string>
+
+    <!-- Common -->
+    <string name="common_back">Back</string>
+    <string name="common_cancel">Cancel</string>
+    <string name="common_close">Close</string>
+    <string name="common_delete">Delete</string>
+    <string name="common_remove">Remove</string>
+    <string name="common_undo">Undo</string>
+    <string name="common_save">Save</string>
+    <string name="common_add">Add</string>
+    <string name="common_clear">Clear</string>
+    <string name="common_edit">Edit</string>
+    <string name="common_refresh">Refresh</string>
+    <string name="common_retry">Retry</string>
+    <string name="common_play">Play</string>
+    <string name="common_pause">Pause</string>
+    <string name="common_resume">Resume</string>
+    <string name="common_loading">Loading…</string>
+    <string name="common_live">Live</string>
+    <string name="common_movies">Movies</string>
+    <string name="common_series">Series</string>
+    <string name="common_movie">Movie</string>
+    <string name="common_favorites">Favorites</string>
+    <string name="common_search">Search</string>
+    <string name="common_downloads">Downloads</string>
+    <string name="common_settings">Settings</string>
+    <string name="common_error_log">Error log</string>
+    <string name="common_collapse">Collapse</string>
+    <string name="common_expand">Expand</string>
+    <string name="common_grid_view">Grid view</string>
+    <string name="common_list_view">List view</string>
+    <string name="common_show_more">Show more</string>
+    <string name="common_show_less">Show less</string>
+    <string name="common_add_favorite">Add to favorites</string>
+    <string name="common_remove_favorite">Remove from favorites</string>
+
+    <!-- Shell -->
+    <string name="shell_playlists_and_more">Playlists and more</string>
+    <string name="shell_playlists">Playlists</string>
+    <string name="shell_playlist_actions">Playlist actions</string>
+    <string name="shell_add_playlist">Add playlist</string>
+    <plurals name="shell_item_count">
+        <item quantity="one">%1$d item</item>
+        <item quantity="other">%1$d items</item>
+    </plurals>
+    <string name="shell_updated">updated %1$s</string>
+
+    <!-- Home -->
+    <string name="home_welcome_title">Welcome to OpenTV</string>
+    <string name="home_welcome_subtitle">Add an Xtream login, an M3U playlist URL from your provider,\nor import a local playlist file.</string>
+
+    <!-- Playlists -->
+    <string name="playlist_added">Playlist added</string>
+    <string name="playlist_add_failed">Failed to load playlist: %1$s</string>
+    <string name="playlist_xtream_added">Xtream playlist added</string>
+    <string name="playlist_xtream_failed">Xtream login failed: %1$s</string>
+    <string name="playlist_imported">Playlist imported</string>
+    <string name="playlist_import_failed">Import failed: %1$s</string>
+    <string name="playlist_updated">Playlist updated</string>
+    <string name="playlist_update_failed">Update failed: %1$s</string>
+    <string name="playlist_renamed">Playlist renamed</string>
+    <string name="playlist_rename_failed">Rename failed: %1$s</string>
+    <string name="playlist_replaced">Playlist replaced</string>
+    <string name="playlist_replace_failed">Replace failed: %1$s</string>
+    <string name="playlist_refreshed">Playlist and guide refreshed</string>
+    <string name="playlist_refresh_failed">Refresh failed: %1$s</string>
+    <string name="playlist_clear_progress">Clear watch progress</string>
+    <string name="playlist_clear_progress_title">Clear watch progress?</string>
+    <string name="playlist_clear_progress_message">All saved playback positions for \"%1$s\" will be forgotten. Favorites are kept.</string>
+    <string name="playlist_progress_cleared">Watch progress cleared</string>
+    <string name="playlist_edit_title">Edit playlist</string>
+    <string name="playlist_add_title">Add playlist</string>
+    <string name="playlist_type_xtream">Xtream</string>
+    <string name="playlist_type_m3u_url">M3U URL</string>
+    <string name="playlist_type_file">File</string>
+    <string name="playlist_field_name">Name</string>
+    <string name="playlist_field_server">Server (host:port)</string>
+    <string name="playlist_field_username">Username</string>
+    <string name="playlist_field_password">Password</string>
+    <string name="playlist_xtream_description">Uses the provider\'s API directly: server-side Live / Movies / Series categories, series catalog with details, catch-up, and EPG. No guessing.</string>
+    <string name="playlist_field_m3u_url">M3U / M3U8 URL</string>
+    <string name="playlist_field_epg_url">EPG (XMLTV) URL (optional)</string>
+    <string name="playlist_file_edit_hint">Rename this imported playlist, or replace it with another file.</string>
+    <string name="playlist_file_add_hint">Pick a .m3u / .m3u8 file from your device.</string>
+    <string name="playlist_replace_file">Replace file</string>
+    <string name="playlist_choose_file">Choose file</string>
+    <string name="playlist_xtream_detected_title">Xtream account detected</string>
+    <string name="playlist_xtream_detected_text">This M3U URL is served by an Xtream panel (%1$s). Using the panel\'s API instead gives exact Live/Movies/Series categories, the series catalog with details, catch-up and automatic EPG, with no classification guessing. Your login was read from the URL.</string>
+    <string name="playlist_use_xtream">Use Xtream</string>
+    <string name="playlist_keep_m3u">Keep M3U</string>
+    <string name="playlist_delete_title">Remove playlist?</string>
+    <string name="playlist_delete_text">\"%1$s\" and its cached guide data will be removed.</string>
+
+    <!-- Browse -->
+    <string name="browse_fallback_title">Browse</string>
+    <string name="browse_live_count">Live · %1$d</string>
+    <string name="browse_movies_count">Movies · %1$d</string>
+    <string name="browse_series_count">Series · %1$d</string>
+    <string name="browse_connections">%1$d/%2$d connections</string>
+    <string name="browse_filter_categories">Filter categories</string>
+    <string name="browse_filter_category">Filter this category</string>
+    <string name="browse_clear_filter">Clear filter</string>
+    <string name="browse_correct_category">Correct category type</string>
+    <string name="browse_no_series_title">No series found</string>
+    <string name="browse_no_series_category">This category has no series.</string>
+    <string name="browse_no_episodes_category">No episodes were detected in this category.</string>
+    <string name="browse_empty_title">Nothing here yet</string>
+    <string name="browse_empty_subtitle">This playlist has no items of this type.</string>
+    <string name="browse_empty_category">Empty category</string>
+    <string name="browse_empty_category_subtitle">No items in this category.</string>
+    <string name="browse_kind_dialog_hint">Wrongly classified? Tell the app what this whole category really contains. Remembered and re-applied at every refresh.</string>
+    <string name="browse_kind_live">Live TV</string>
+    <string name="browse_kind_auto">Automatic (use detection)</string>
+    <string name="browse_category_auto_message">Category back to automatic, applies at next refresh</string>
+    <string name="browse_category_updated_message">Category updated. Series grouping refines at next refresh</string>
+    <string name="browse_playlist_refresh_failed">Playlist refresh failed: %1$s</string>
+    <string name="browse_epg_refresh_failed">EPG refresh failed: %1$s</string>
+
+    <!-- Guide -->
+    <string name="guide_no_data">No guide data for this channel.</string>
+    <string name="guide_no_data_epg_hint">No guide data for this channel. Add an XMLTV EPG URL to your playlist.</string>
+    <string name="guide_catchup_available">Catch-up available: tap a past programme to replay it</string>
+    <string name="guide_programme_guide">Programme guide</string>
+    <string name="guide_today">Today</string>
+    <string name="guide_yesterday">Yesterday</string>
+    <string name="guide_tomorrow">Tomorrow</string>
+    <string name="guide_now">Now</string>
+    <string name="guide_replay">Replay</string>
+    <string name="guide_show_description">Show full description</string>
+    <string name="guide_hide_description">Hide full description</string>
+    <string name="guide_catchup_unavailable">Catch-up isn\'t available for this programme.</string>
+    <string name="guide_open">Guide</string>
+    <string name="guide_open_catchup">Guide &amp; catch-up</string>
+
+    <!-- Search -->
+    <string name="search_placeholder">Channels, movies, series…</string>
+    <string name="search_empty_title">Search everything</string>
+    <string name="search_empty_subtitle">Looks across all categories: live, movies and series.</string>
+    <string name="search_no_results">No results</string>
+    <string name="search_no_results_subtitle">Nothing matches \"%1$s\".</string>
+    <plurals name="search_matching_episodes">
+        <item quantity="one">%1$d matching episode</item>
+        <item quantity="other">%1$d matching episodes</item>
+    </plurals>
+
+    <!-- Favorites -->
+    <string name="favorites_empty_title">No favorites yet</string>
+    <string name="favorites_empty_subtitle">Tap the heart on channels, movies or series to pin them here.</string>
+    <string name="favorites_select">Select</string>
+    <string name="favorites_select_all">Select all</string>
+    <string name="favorites_selected_count">%1$d selected</string>
+    <string name="favorites_remove_selected">Remove from favorites</string>
+    <string name="favorites_remove_title">Remove selected favorites?</string>
+    <string name="favorites_remove_message">%1$d item(s) will be removed from your favorites.</string>
+    <string name="favorites_remove_confirm">Remove</string>
+    <string name="favorites_removed">Removed from favorites</string>
+
+    <!-- Downloads -->
+    <string name="downloads_channel_name">Downloads</string>
+    <string name="downloads_started">Download started: %1$s</string>
+    <string name="downloads_started_generic">Download started</string>
+    <string name="downloads_empty_title">No downloads</string>
+    <string name="downloads_empty_subtitle">Use the download button on movies and episodes to save them for offline viewing.</string>
+    <string name="downloads_queued">Queued</string>
+    <string name="downloads_paused">Paused · %1$s</string>
+    <string name="downloads_saved">Saved · %1$s</string>
+    <string name="downloads_failed">Failed</string>
+    <string name="downloads_failed_reason">Failed: %1$s</string>
+    <string name="downloads_cancelled">Cancelled</string>
+    <string name="downloads_bytes_of">%1$s of %2$s</string>
+    <string name="downloads_pause_download">Pause download</string>
+    <string name="downloads_resume_download">Resume download</string>
+    <string name="downloads_downloaded">Downloaded</string>
+    <string name="downloads_download">Download</string>
+    <string name="downloads_remove_title">Remove download?</string>
+    <string name="downloads_delete_file_text">Delete the downloaded file for \"%1$s\"?</string>
+    <string name="downloads_delete_partial_text">Cancel and delete the partial download for \"%1$s\"?</string>
+    <string name="downloads_already_downloaded">Already downloaded</string>
+    <string name="downloads_paused_resume_hint">Paused. Resume it from Downloads</string>
+    <string name="downloads_already_downloading">Already downloading</string>
+    <string name="downloads_waiting_title">Waiting to download %1$s</string>
+    <string name="downloads_waiting_text">Paused while you\'re streaming from this provider</string>
+    <string name="downloads_downloading_title">Downloading %1$s</string>
+
+    <!-- Detail screens -->
+    <string name="details_cast">Cast</string>
+    <string name="details_percent_watched">%1$d%% watched</string>
+    <string name="details_season">Season</string>
+    <string name="details_season_n">Season %1$d</string>
+    <string name="details_all_seasons">All seasons</string>
+    <plurals name="details_episode_count">
+        <item quantity="one">%1$d episode</item>
+        <item quantity="other">%1$d episodes</item>
+    </plurals>
+    <plurals name="details_season_count">
+        <item quantity="one">%1$d season</item>
+        <item quantity="other">%1$d seasons</item>
+    </plurals>
+    <string name="details_loading_episodes">Loading episodes…</string>
+    <string name="details_episodes_error">Couldn\'t load episodes: %1$s</string>
+
+    <!-- Settings -->
+    <string name="settings_appearance">Appearance</string>
+    <string name="settings_theme">Theme</string>
+    <string name="settings_auto">Auto</string>
+    <string name="settings_theme_dark">Dark</string>
+    <string name="settings_theme_light">Light</string>
+    <string name="settings_theme_hint">Auto follows this device\'s appearance.</string>
+    <string name="settings_tracks">Tracks</string>
+    <string name="settings_preferred_audio">Preferred audio language</string>
+    <string name="settings_preferred_subtitles">Preferred subtitle language</string>
+    <string name="settings_tracks_hint">Picked automatically when a stream offers a matching track.</string>
+    <string name="settings_playback">Playback</string>
+    <string name="settings_seek_step">Seek step</string>
+    <string name="settings_seconds">%1$d s</string>
+    <string name="settings_buffering">Buffering</string>
+    <string name="settings_buffer_fast">Fast start</string>
+    <string name="settings_buffer_balanced">Balanced</string>
+    <string name="settings_buffer_stable">Stable</string>
+    <string name="settings_buffer_hint">Stable buffers more to ride out shaky connections.</string>
+    <string name="settings_video_scaling">Default video scaling</string>
+    <string name="settings_decoder_fallback">Software decoder fallback</string>
+    <string name="settings_decoder_fallback_desc">Retry with a software decoder if the hardware one fails.</string>
+    <string name="settings_simultaneous_downloads">Simultaneous downloads</string>
+    <string name="settings_downloads_hint">Auto uses your provider\'s connection limit, keeping one slot free for watching.</string>
+    <string name="settings_location">Location</string>
+    <string name="settings_reset">Reset</string>
+    <string name="settings_choose">Choose</string>
+    <string name="settings_location_hint">A custom folder is visible to other apps and keeps your files after uninstall. Applies to new downloads.</string>
+    <string name="settings_app_storage">App storage (default)</string>
+    <string name="settings_move_downloads">Move existing downloads here</string>
+    <string name="settings_moving_files">Moving files…</string>
+    <string name="settings_all_in_folder">All downloads are already in this folder.</string>
+    <plurals name="settings_files_elsewhere">
+        <item quantity="one">%1$d downloaded file elsewhere.</item>
+        <item quantity="other">%1$d downloaded files elsewhere.</item>
+    </plurals>
+    <string name="settings_move">Move</string>
+    <string name="settings_move_result">Moved %1$d</string>
+    <string name="settings_move_result_failed">Moved %1$d, %2$d failed</string>
+    <string name="settings_network">Network</string>
+    <string name="settings_user_agent">User-Agent</string>
+    <string name="settings_ua_default">Default</string>
+    <string name="settings_custom_user_agent">Custom User-Agent</string>
+    <string name="settings_user_agent_hint">Some providers reject unknown apps with a 404 or 403. Match what your provider expects. Leave blank for the default.</string>
+    <string name="settings_subtitle_preview">Preview subtitle</string>
+    <string name="settings_subtitle_size">Size · %1$d%%</string>
+    <string name="settings_subtitle_outline">Outline</string>
+    <string name="settings_subtitle_background">Background</string>
+    <string name="settings_subtitle_bold">Bold text</string>
+
+    <!-- Account -->
+    <string name="account_title">Account</string>
+    <string name="account_refresh_info">Refresh account info</string>
+    <string name="account_no_api_title">No account API</string>
+    <string name="account_no_api_subtitle">Connection monitoring needs an Xtream-style playlist URL (get.php?username=…&amp;password=…). This playlist doesn\'t have one.</string>
+    <string name="account_error">Couldn\'t reach the provider\'s account API. Details are in the error log.</string>
+    <string name="account_loading">Loading account information…</string>
+    <string name="account_updated">Updated %1$s</string>
+    <string name="account_cache_hint">Results are cached for a minute; the refresh button forces a fresh request to the provider.</string>
+    <string name="account_active_max">active / maximum connections</string>
+    <string name="account_status">Status</string>
+    <string name="account_trial">Trial</string>
+    <string name="account_username">Username</string>
+    <string name="account_expires">Expires</string>
+    <plurals name="account_expires_in">
+        <item quantity="one">%1$s · in %2$d day</item>
+        <item quantity="other">%1$s · in %2$d days</item>
+    </plurals>
+    <string name="account_expired">%1$s · expired</string>
+    <string name="account_member_since">Member since</string>
+
+    <!-- Player -->
+    <string name="player_stop">Stop playback</string>
+    <string name="player_rewind">Rewind</string>
+    <string name="player_forward">Forward</string>
+    <string name="player_audio_track">Audio track</string>
+    <string name="player_audio">Audio</string>
+    <string name="player_subtitles">Subtitles</string>
+    <string name="player_speed">Playback speed</string>
+    <string name="player_scaling">Video scaling</string>
+    <string name="player_scale_fit">Fit</string>
+    <string name="player_scale_zoom">Zoom</string>
+    <string name="player_scale_stretch">Stretch</string>
+    <string name="player_pip">Picture in picture</string>
+    <string name="player_rotate">Rotate screen</string>
+    <string name="player_live_badge">LIVE</string>
+    <string name="player_now_until">%1$s (until %2$s)</string>
+    <string name="player_next">Next: %1$s</string>
+    <string name="player_error_title">Could not play this stream</string>
+    <string name="player_catchup_unavailable">Catch-up unavailable</string>
+    <string name="player_track_off">Off</string>
+    <string name="player_track_n">Track %1$d</string>
+    <string name="player_no_subtitle_tracks">This stream has no selectable subtitle tracks.</string>
+    <string name="player_no_audio_tracks">This stream has no selectable audio tracks.</string>
+    <string name="player_seek_back_hint">« %1$d s</string>
+    <string name="player_seek_forward_hint">%1$d s »</string>
+
+    <!-- Error log -->
+    <string name="log_copy_all">Copy all</string>
+    <string name="log_copy">Copy</string>
+    <string name="log_empty_title">No errors recorded</string>
+    <string name="log_empty_subtitle">Network failures, refresh problems, playback errors and crashes will show up here with full details. Credentials are redacted.</string>
+    <string name="log_tap_stack">Tap to show stack trace</string>
+</resources>
