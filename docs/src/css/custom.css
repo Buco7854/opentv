@@ -1,0 +1,154 @@
+/*
+ * OpenTV docs theme — same design language as the web client:
+ * charcoal/white canvas, quiet gray panels with hairlines, one blue accent,
+ * Inter for UI and Barlow for display titles.
+ */
+
+@import "@fontsource-variable/inter";
+@import "@fontsource/barlow/500.css";
+@import "@fontsource/barlow/600.css";
+
+:root {
+  --ifm-font-family-base: "Inter Variable", Inter, system-ui, -apple-system, sans-serif;
+  --otv-font-display: Barlow, "Inter Variable", system-ui, sans-serif;
+
+  /* light */
+  --otv-bg: #ffffff;
+  --otv-fg: #171a20;
+  --otv-fg2: #5c5e62;
+  --otv-panel: #f4f4f4;
+  --otv-panel-hi: #ececec;
+  --otv-hairline: rgba(0, 0, 0, 0.1);
+  --otv-press: rgba(0, 0, 0, 0.06);
+  --otv-accent: #3e6ae1;
+  --otv-good: #12823b;
+  --otv-bad: #cc3b33;
+
+  --ifm-color-primary: var(--otv-accent);
+  --ifm-color-primary-dark: #3055c8;
+  --ifm-color-primary-darker: #2c4fbd;
+  --ifm-color-primary-darkest: #24419c;
+  --ifm-color-primary-light: #557ee5;
+  --ifm-color-primary-lighter: #6289e7;
+  --ifm-color-primary-lightest: #86a3ed;
+  --ifm-background-color: var(--otv-bg);
+  --ifm-font-color-base: var(--otv-fg);
+  --ifm-heading-color: var(--otv-fg);
+  --ifm-color-content-secondary: var(--otv-fg2);
+  --ifm-toc-border-color: var(--otv-hairline);
+  --ifm-navbar-background-color: #ffffff;
+  --ifm-navbar-shadow: none;
+  --ifm-footer-background-color: var(--otv-panel);
+  --ifm-footer-color: var(--otv-fg2);
+  --ifm-footer-link-color: var(--otv-fg);
+  --ifm-footer-title-color: var(--otv-fg);
+  --ifm-code-font-size: 90%;
+  --ifm-global-radius: 10px;
+  --ifm-button-border-radius: 10px;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.07);
+  --ifm-menu-color: var(--otv-fg2);
+  --ifm-menu-color-active: var(--otv-fg);
+  --ifm-menu-color-background-active: var(--otv-press);
+  --ifm-menu-color-background-hover: var(--otv-press);
+  --ifm-breadcrumb-item-background-active: var(--otv-press);
+}
+
+/* Dark: neutral near-black canvas and panels matching the app clients
+   (#161616), same royal blue accent as light. */
+[data-theme="dark"] {
+  --otv-bg: #161616;
+  --otv-fg: #ffffff;
+  --otv-fg2: #9b9b9b;
+  --otv-panel: #1f1f1f;
+  --otv-panel-hi: #262626;
+  --otv-hairline: rgba(255, 255, 255, 0.09);
+  --otv-press: rgba(255, 255, 255, 0.08);
+  --otv-accent: #3e6ae1;
+  --otv-good: #34c759;
+  --otv-bad: #f1544b;
+
+  /* Body links get a lighter step of the same blue for contrast. */
+  --ifm-color-primary: #6b8fe9;
+  --ifm-color-primary-dark: #3e6ae1;
+  --ifm-color-primary-darker: #3055c8;
+  --ifm-color-primary-darkest: #24419c;
+  --ifm-color-primary-light: #86a3ed;
+  --ifm-color-primary-lighter: #98b1f0;
+  --ifm-color-primary-lightest: #bccbf5;
+  --ifm-background-color: #161616;
+  --ifm-background-surface-color: #1f1f1f;
+  --ifm-navbar-background-color: #161616;
+  --ifm-footer-background-color: #111111;
+  --docusaurus-highlighted-code-line-bg: rgba(255, 255, 255, 0.1);
+}
+
+/* Headings in the display face */
+h1, h2, h3, .navbar__title {
+  font-family: var(--otv-font-display);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+/* Navbar: flat with a hairline. No backdrop-filter here — the mobile drawer
+   is a fixed-position child of the navbar, and a filter would clip it. */
+.navbar {
+  border-bottom: 1px solid var(--otv-hairline);
+}
+.navbar__link { font-weight: 500; }
+.navbar__link--active { color: var(--ifm-font-color-base); }
+
+/* Sidebar entries: pill rows like the app's panels */
+.menu__link { border-radius: 10px; font-weight: 500; }
+.menu__link--active:not(.menu__link--sublist) { background: var(--otv-press); color: var(--ifm-font-color-base); }
+.menu__list-item-collapsible { border-radius: 10px; }
+
+/* Cards, admonitions, tables: quiet panels with hairlines */
+.alert {
+  border: 1px solid var(--otv-hairline);
+  border-radius: 12px;
+  box-shadow: none;
+}
+.markdown table {
+  border-collapse: separate;
+  border-spacing: 0;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--otv-hairline);
+}
+.markdown table td, .markdown table th { border-color: var(--otv-hairline); }
+
+.button { font-weight: 600; }
+.button--secondary {
+  background: var(--otv-press);
+  border-color: transparent;
+  color: var(--ifm-font-color-base);
+}
+.button--secondary:hover { background: var(--otv-press); filter: brightness(1.15); }
+
+.footer { border-top: 1px solid var(--otv-hairline); }
+
+.pagination-nav__link { border-radius: 12px; border-color: var(--otv-hairline); }
+.theme-edit-this-page { color: var(--otv-fg2); }
+
+/* Screenshot figures in the guide */
+.doc-screen { margin: 24px 0; }
+.doc-screen img {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid var(--otv-hairline);
+}
+.doc-screen figcaption {
+  margin-top: 8px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--otv-fg2);
+}
+.doc-screen--phone { max-width: 340px; margin-inline: auto; }
+.screens-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  align-items: start;
+  margin: 24px 0;
+}
+.screens-grid .doc-screen { margin: 0; }
