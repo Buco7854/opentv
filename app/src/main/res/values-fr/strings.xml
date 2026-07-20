@@ -1,0 +1,307 @@
+<resources>
+    <string name="app_name">OpenTV</string>
+
+    <!-- Common -->
+    <string name="common_back">Retour</string>
+    <string name="common_cancel">Annuler</string>
+    <string name="common_close">Fermer</string>
+    <string name="common_delete">Supprimer</string>
+    <string name="common_remove">Retirer</string>
+    <string name="common_undo">Annuler</string>
+    <string name="common_save">Enregistrer</string>
+    <string name="common_add">Ajouter</string>
+    <string name="common_clear">Effacer</string>
+    <string name="common_edit">Modifier</string>
+    <string name="common_refresh">Actualiser</string>
+    <string name="common_retry">Réessayer</string>
+    <string name="common_play">Lecture</string>
+    <string name="common_pause">Pause</string>
+    <string name="common_resume">Reprendre</string>
+    <string name="common_loading">Chargement…</string>
+    <string name="common_live">Direct</string>
+    <string name="common_movies">Films</string>
+    <string name="common_series">Séries</string>
+    <string name="common_movie">Film</string>
+    <string name="common_favorites">Favoris</string>
+    <string name="common_search">Recherche</string>
+    <string name="common_downloads">Téléchargements</string>
+    <string name="common_settings">Réglages</string>
+    <string name="common_error_log">Journal d\'erreurs</string>
+    <string name="common_collapse">Replier</string>
+    <string name="common_expand">Déplier</string>
+    <string name="common_grid_view">Vue grille</string>
+    <string name="common_list_view">Vue liste</string>
+    <string name="common_show_more">Voir plus</string>
+    <string name="common_show_less">Voir moins</string>
+    <string name="common_add_favorite">Ajouter aux favoris</string>
+    <string name="common_remove_favorite">Retirer des favoris</string>
+
+    <!-- Shell -->
+    <string name="shell_playlists_and_more">Playlists et plus</string>
+    <string name="shell_playlists">Playlists</string>
+    <string name="shell_playlist_actions">Actions de la playlist</string>
+    <string name="shell_add_playlist">Ajouter une playlist</string>
+    <plurals name="shell_item_count">
+        <item quantity="one">%1$d élément</item>
+        <item quantity="other">%1$d éléments</item>
+    </plurals>
+    <string name="shell_updated">mise à jour %1$s</string>
+
+    <!-- Home -->
+    <string name="home_welcome_title">Bienvenue sur OpenTV</string>
+    <string name="home_welcome_subtitle">Ajoutez un compte Xtream, une URL de playlist M3U de votre fournisseur,\nou importez un fichier de playlist local.</string>
+
+    <!-- Playlists -->
+    <string name="playlist_added">Playlist ajoutée</string>
+    <string name="playlist_add_failed">Impossible de charger la playlist : %1$s</string>
+    <string name="playlist_xtream_added">Playlist Xtream ajoutée</string>
+    <string name="playlist_xtream_failed">Échec de la connexion Xtream : %1$s</string>
+    <string name="playlist_imported">Playlist importée</string>
+    <string name="playlist_import_failed">Échec de l\'import : %1$s</string>
+    <string name="playlist_updated">Playlist mise à jour</string>
+    <string name="playlist_update_failed">Échec de la mise à jour : %1$s</string>
+    <string name="playlist_renamed">Playlist renommée</string>
+    <string name="playlist_rename_failed">Échec du renommage : %1$s</string>
+    <string name="playlist_replaced">Playlist remplacée</string>
+    <string name="playlist_replace_failed">Échec du remplacement : %1$s</string>
+    <string name="playlist_refreshed">Playlist et guide actualisés</string>
+    <string name="playlist_refresh_failed">Échec de l\'actualisation : %1$s</string>
+    <string name="playlist_clear_progress">Effacer la progression</string>
+    <string name="playlist_clear_progress_title">Effacer la progression ?</string>
+    <string name="playlist_clear_progress_message">Toutes les positions de lecture enregistrées pour « %1$s » seront oubliées. Les favoris sont conservés.</string>
+    <string name="playlist_progress_cleared">Progression effacée</string>
+    <string name="playlist_edit_title">Modifier la playlist</string>
+    <string name="playlist_add_title">Ajouter une playlist</string>
+    <string name="playlist_type_xtream">Xtream</string>
+    <string name="playlist_type_m3u_url">URL M3U</string>
+    <string name="playlist_type_file">Fichier</string>
+    <string name="playlist_field_name">Nom</string>
+    <string name="playlist_field_server">Serveur (hôte:port)</string>
+    <string name="playlist_field_username">Nom d\'utilisateur</string>
+    <string name="playlist_field_password">Mot de passe</string>
+    <string name="playlist_xtream_description">Utilise directement l\'API du fournisseur : catégories Direct / Films / Séries côté serveur, catalogue de séries détaillé, replay et EPG. Aucune devinette.</string>
+    <string name="playlist_field_m3u_url">URL M3U / M3U8</string>
+    <string name="playlist_field_epg_url">URL EPG (XMLTV) (optionnel)</string>
+    <string name="playlist_file_edit_hint">Renommez cette playlist importée, ou remplacez-la par un autre fichier.</string>
+    <string name="playlist_file_add_hint">Choisissez un fichier .m3u / .m3u8 depuis votre appareil.</string>
+    <string name="playlist_replace_file">Remplacer le fichier</string>
+    <string name="playlist_choose_file">Choisir un fichier</string>
+    <string name="playlist_xtream_detected_title">Compte Xtream détecté</string>
+    <string name="playlist_xtream_detected_text">Cette URL M3U est servie par un panel Xtream (%1$s). Utiliser l\'API du panel donne les catégories Direct/Films/Séries exactes, le catalogue de séries détaillé, le replay et l\'EPG automatique, sans devinettes. Vos identifiants ont été lus depuis l\'URL.</string>
+    <string name="playlist_use_xtream">Utiliser Xtream</string>
+    <string name="playlist_keep_m3u">Garder M3U</string>
+    <string name="playlist_delete_title">Supprimer la playlist ?</string>
+    <string name="playlist_delete_text">« %1$s » et les données de guide en cache seront supprimés.</string>
+
+    <!-- Browse -->
+    <string name="browse_fallback_title">Parcourir</string>
+    <string name="browse_live_count">Direct · %1$d</string>
+    <string name="browse_movies_count">Films · %1$d</string>
+    <string name="browse_series_count">Séries · %1$d</string>
+    <string name="browse_connections">%1$d/%2$d connexions</string>
+    <string name="browse_filter_categories">Filtrer les catégories</string>
+    <string name="browse_filter_category">Filtrer cette catégorie</string>
+    <string name="browse_clear_filter">Effacer le filtre</string>
+    <string name="browse_correct_category">Corriger le type de catégorie</string>
+    <string name="browse_no_series_title">Aucune série trouvée</string>
+    <string name="browse_no_series_category">Cette catégorie ne contient aucune série.</string>
+    <string name="browse_no_episodes_category">Aucun épisode détecté dans cette catégorie.</string>
+    <string name="browse_empty_title">Rien ici pour le moment</string>
+    <string name="browse_empty_subtitle">Cette playlist n\'a aucun élément de ce type.</string>
+    <string name="browse_empty_category">Catégorie vide</string>
+    <string name="browse_empty_category_subtitle">Aucun élément dans cette catégorie.</string>
+    <string name="browse_kind_dialog_hint">Mal classée ? Indiquez ce que cette catégorie contient vraiment. Mémorisé et réappliqué à chaque actualisation.</string>
+    <string name="browse_kind_live">TV en direct</string>
+    <string name="browse_kind_auto">Automatique (détection)</string>
+    <string name="browse_category_auto_message">Catégorie repassée en automatique, appliqué à la prochaine actualisation</string>
+    <string name="browse_category_updated_message">Catégorie mise à jour. Le regroupement des séries s\'affinera à la prochaine actualisation</string>
+    <string name="browse_playlist_refresh_failed">Échec de l\'actualisation de la playlist : %1$s</string>
+    <string name="browse_epg_refresh_failed">Échec de l\'actualisation de l\'EPG : %1$s</string>
+
+    <!-- Guide -->
+    <string name="guide_no_data">Aucune donnée de guide pour cette chaîne.</string>
+    <string name="guide_no_data_epg_hint">Aucune donnée de guide pour cette chaîne. Ajoutez une URL EPG XMLTV à votre playlist.</string>
+    <string name="guide_catchup_available">Replay disponible : touchez un programme passé pour le revoir</string>
+    <string name="guide_programme_guide">Guide des programmes</string>
+    <string name="guide_today">Aujourd\'hui</string>
+    <string name="guide_yesterday">Hier</string>
+    <string name="guide_tomorrow">Demain</string>
+    <string name="guide_now">En ce moment</string>
+    <string name="guide_replay">Replay</string>
+    <string name="guide_show_description">Afficher la description complète</string>
+    <string name="guide_hide_description">Masquer la description complète</string>
+    <string name="guide_catchup_unavailable">Le replay n\'est pas disponible pour ce programme.</string>
+    <string name="guide_open">Guide</string>
+    <string name="guide_open_catchup">Guide et replay</string>
+
+    <!-- Search -->
+    <string name="search_placeholder">Chaînes, films, séries…</string>
+    <string name="search_empty_title">Tout rechercher</string>
+    <string name="search_empty_subtitle">Cherche dans toutes les catégories : direct, films et séries.</string>
+    <string name="search_no_results">Aucun résultat</string>
+    <string name="search_no_results_subtitle">Rien ne correspond à « %1$s ».</string>
+    <plurals name="search_matching_episodes">
+        <item quantity="one">%1$d épisode correspondant</item>
+        <item quantity="other">%1$d épisodes correspondants</item>
+    </plurals>
+
+    <!-- Favorites -->
+    <string name="favorites_empty_title">Aucun favori</string>
+    <string name="favorites_empty_subtitle">Touchez le cœur sur les chaînes, films ou séries pour les retrouver ici.</string>
+    <string name="favorites_select">Sélectionner</string>
+    <string name="favorites_select_all">Tout sélectionner</string>
+    <string name="favorites_selected_count">%1$d sélectionné(s)</string>
+    <string name="favorites_remove_selected">Retirer des favoris</string>
+    <string name="favorites_remove_title">Retirer les favoris sélectionnés ?</string>
+    <string name="favorites_remove_message">%1$d élément(s) seront retirés de vos favoris.</string>
+    <string name="favorites_remove_confirm">Retirer</string>
+    <string name="favorites_removed">Retiré des favoris</string>
+
+    <!-- Downloads -->
+    <string name="downloads_channel_name">Téléchargements</string>
+    <string name="downloads_started">Téléchargement démarré : %1$s</string>
+    <string name="downloads_started_generic">Téléchargement démarré</string>
+    <string name="downloads_empty_title">Aucun téléchargement</string>
+    <string name="downloads_empty_subtitle">Utilisez le bouton de téléchargement sur les films et épisodes pour les regarder hors ligne.</string>
+    <string name="downloads_queued">En file d\'attente</string>
+    <string name="downloads_paused">En pause · %1$s</string>
+    <string name="downloads_saved">Enregistré · %1$s</string>
+    <string name="downloads_failed">Échec</string>
+    <string name="downloads_failed_reason">Échec : %1$s</string>
+    <string name="downloads_cancelled">Annulé</string>
+    <string name="downloads_bytes_of">%1$s sur %2$s</string>
+    <string name="downloads_pause_download">Mettre le téléchargement en pause</string>
+    <string name="downloads_resume_download">Reprendre le téléchargement</string>
+    <string name="downloads_downloaded">Téléchargé</string>
+    <string name="downloads_download">Télécharger</string>
+    <string name="downloads_remove_title">Supprimer le téléchargement ?</string>
+    <string name="downloads_delete_file_text">Supprimer le fichier téléchargé de « %1$s » ?</string>
+    <string name="downloads_delete_partial_text">Annuler et supprimer le téléchargement partiel de « %1$s » ?</string>
+    <string name="downloads_already_downloaded">Déjà téléchargé</string>
+    <string name="downloads_paused_resume_hint">En pause. Reprenez-le depuis Téléchargements</string>
+    <string name="downloads_already_downloading">Téléchargement déjà en cours</string>
+    <string name="downloads_waiting_title">En attente de téléchargement de %1$s</string>
+    <string name="downloads_waiting_text">En pause pendant que vous regardez un flux de ce fournisseur</string>
+    <string name="downloads_downloading_title">Téléchargement de %1$s</string>
+
+    <!-- Detail screens -->
+    <string name="details_cast">Distribution</string>
+    <string name="details_percent_watched">%1$d%% visionné</string>
+    <string name="details_season">Saison</string>
+    <string name="details_season_n">Saison %1$d</string>
+    <string name="details_all_seasons">Toutes les saisons</string>
+    <plurals name="details_episode_count">
+        <item quantity="one">%1$d épisode</item>
+        <item quantity="other">%1$d épisodes</item>
+    </plurals>
+    <plurals name="details_season_count">
+        <item quantity="one">%1$d saison</item>
+        <item quantity="other">%1$d saisons</item>
+    </plurals>
+    <string name="details_loading_episodes">Chargement des épisodes…</string>
+    <string name="details_episodes_error">Impossible de charger les épisodes : %1$s</string>
+
+    <!-- Settings -->
+    <string name="settings_appearance">Apparence</string>
+    <string name="settings_theme">Thème</string>
+    <string name="settings_auto">Auto</string>
+    <string name="settings_theme_dark">Sombre</string>
+    <string name="settings_theme_light">Clair</string>
+    <string name="settings_theme_hint">Auto suit l\'apparence de cet appareil.</string>
+    <string name="settings_tracks">Pistes</string>
+    <string name="settings_preferred_audio">Langue audio préférée</string>
+    <string name="settings_preferred_subtitles">Langue de sous-titres préférée</string>
+    <string name="settings_tracks_hint">Choisie automatiquement quand un flux propose une piste correspondante.</string>
+    <string name="settings_playback">Lecture</string>
+    <string name="settings_seek_step">Pas de saut</string>
+    <string name="settings_seconds">%1$d s</string>
+    <string name="settings_buffering">Mise en mémoire tampon</string>
+    <string name="settings_buffer_fast">Démarrage rapide</string>
+    <string name="settings_buffer_balanced">Équilibré</string>
+    <string name="settings_buffer_stable">Stable</string>
+    <string name="settings_buffer_hint">Stable met plus en mémoire tampon pour absorber les connexions instables.</string>
+    <string name="settings_video_scaling">Mise à l\'échelle par défaut</string>
+    <string name="settings_decoder_fallback">Décodeur logiciel de secours</string>
+    <string name="settings_decoder_fallback_desc">Réessaie avec un décodeur logiciel si le décodeur matériel échoue.</string>
+    <string name="settings_simultaneous_downloads">Téléchargements simultanés</string>
+    <string name="settings_downloads_hint">Auto utilise la limite de connexions de votre fournisseur, en gardant une place libre pour regarder.</string>
+    <string name="settings_location">Emplacement</string>
+    <string name="settings_reset">Réinitialiser</string>
+    <string name="settings_choose">Choisir</string>
+    <string name="settings_location_hint">Un dossier personnalisé est visible par les autres applications et conserve vos fichiers après désinstallation. S\'applique aux nouveaux téléchargements.</string>
+    <string name="settings_app_storage">Stockage de l\'application (défaut)</string>
+    <string name="settings_move_downloads">Déplacer les téléchargements existants ici</string>
+    <string name="settings_moving_files">Déplacement des fichiers…</string>
+    <string name="settings_all_in_folder">Tous les téléchargements sont déjà dans ce dossier.</string>
+    <plurals name="settings_files_elsewhere">
+        <item quantity="one">%1$d fichier téléchargé ailleurs.</item>
+        <item quantity="other">%1$d fichiers téléchargés ailleurs.</item>
+    </plurals>
+    <string name="settings_move">Déplacer</string>
+    <string name="settings_move_result">%1$d déplacé(s)</string>
+    <string name="settings_move_result_failed">%1$d déplacé(s), %2$d en échec</string>
+    <string name="settings_network">Réseau</string>
+    <string name="settings_user_agent">User-Agent</string>
+    <string name="settings_ua_default">Par défaut</string>
+    <string name="settings_custom_user_agent">User-Agent personnalisé</string>
+    <string name="settings_user_agent_hint">Certains fournisseurs rejettent les applications inconnues avec un 404 ou 403. Utilisez ce que votre fournisseur attend. Laissez vide pour la valeur par défaut.</string>
+    <string name="settings_subtitle_preview">Aperçu des sous-titres</string>
+    <string name="settings_subtitle_size">Taille · %1$d%%</string>
+    <string name="settings_subtitle_outline">Contour</string>
+    <string name="settings_subtitle_background">Fond</string>
+    <string name="settings_subtitle_bold">Texte en gras</string>
+
+    <!-- Account -->
+    <string name="account_title">Compte</string>
+    <string name="account_refresh_info">Actualiser les informations du compte</string>
+    <string name="account_no_api_title">Pas d\'API de compte</string>
+    <string name="account_no_api_subtitle">Le suivi des connexions nécessite une URL de playlist de type Xtream (get.php?username=…&amp;password=…). Cette playlist n\'en a pas.</string>
+    <string name="account_error">Impossible de joindre l\'API de compte du fournisseur. Les détails sont dans le journal d\'erreurs.</string>
+    <string name="account_loading">Chargement des informations du compte…</string>
+    <string name="account_updated">Mis à jour %1$s</string>
+    <string name="account_cache_hint">Les résultats sont mis en cache une minute ; le bouton actualiser force une requête au fournisseur.</string>
+    <string name="account_active_max">connexions actives / maximum</string>
+    <string name="account_status">Statut</string>
+    <string name="account_trial">Essai</string>
+    <string name="account_username">Nom d\'utilisateur</string>
+    <string name="account_expires">Expire</string>
+    <plurals name="account_expires_in">
+        <item quantity="one">%1$s · dans %2$d jour</item>
+        <item quantity="other">%1$s · dans %2$d jours</item>
+    </plurals>
+    <string name="account_expired">%1$s · expiré</string>
+    <string name="account_member_since">Membre depuis</string>
+
+    <!-- Player -->
+    <string name="player_stop">Arrêter la lecture</string>
+    <string name="player_rewind">Reculer</string>
+    <string name="player_forward">Avancer</string>
+    <string name="player_audio_track">Piste audio</string>
+    <string name="player_audio">Audio</string>
+    <string name="player_subtitles">Sous-titres</string>
+    <string name="player_speed">Vitesse de lecture</string>
+    <string name="player_scaling">Mise à l\'échelle</string>
+    <string name="player_scale_fit">Ajuster</string>
+    <string name="player_scale_zoom">Zoom</string>
+    <string name="player_scale_stretch">Étirer</string>
+    <string name="player_pip">Image dans l\'image</string>
+    <string name="player_rotate">Pivoter l\'écran</string>
+    <string name="player_live_badge">DIRECT</string>
+    <string name="player_now_until">%1$s (jusqu\'à %2$s)</string>
+    <string name="player_next">Ensuite : %1$s</string>
+    <string name="player_error_title">Impossible de lire ce flux</string>
+    <string name="player_catchup_unavailable">Replay indisponible</string>
+    <string name="player_track_off">Désactivés</string>
+    <string name="player_track_n">Piste %1$d</string>
+    <string name="player_no_subtitle_tracks">Ce flux n\'a pas de pistes de sous-titres sélectionnables.</string>
+    <string name="player_no_audio_tracks">Ce flux n\'a pas de pistes audio sélectionnables.</string>
+    <string name="player_seek_back_hint">« %1$d s</string>
+    <string name="player_seek_forward_hint">%1$d s »</string>
+
+    <!-- Error log -->
+    <string name="log_copy_all">Tout copier</string>
+    <string name="log_copy">Copier</string>
+    <string name="log_empty_title">Aucune erreur enregistrée</string>
+    <string name="log_empty_subtitle">Les échecs réseau, problèmes d\'actualisation, erreurs de lecture et plantages apparaîtront ici avec tous les détails. Les identifiants sont masqués.</string>
+    <string name="log_tap_stack">Toucher pour afficher la pile d\'appels</string>
+</resources>
