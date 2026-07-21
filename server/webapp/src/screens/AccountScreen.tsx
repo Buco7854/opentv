@@ -1,5 +1,5 @@
-// Xtream account: connections hero + detail rows, with forced refresh
-// (server caches for a minute). Mirrors AccountScreen.kt.
+// Xtream account: connections hero + detail rows, always fetched live from the
+// provider (open and refresh both force a fresh request).
 
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -32,7 +32,7 @@ export function AccountScreen() {
     setBusy(false);
   }, [playlistId]);
 
-  useEffect(() => { if (isXtream) load(false); }, [isXtream, load]);
+  useEffect(() => { if (isXtream) load(true); }, [isXtream, load]);
 
   return (
     <>
@@ -42,7 +42,7 @@ export function AccountScreen() {
         onBack={() => navigate(-1)}
         actions={
           busy
-            ? <div className="grid size-12 place-items-center"><div className="spinner" style={{ width: 22, height: 22 }} /></div>
+            ? <div className="grid size-11 flex-none place-items-center"><div className="spinner" style={{ width: 22, height: 22 }} /></div>
             : <IconBtn name="refresh" label={t('account.refresh')} disabled={!isXtream} onClick={() => load(true)} />
         }
       />
@@ -69,9 +69,6 @@ export function AccountScreen() {
                   {t('account.updatedAt', { time: new Date(updatedAtMs).toLocaleTimeString(getLocale()) })}
                 </p>
               )}
-              <p className="mt-2 type-body-small text-on-surface-variant">
-                {t('account.cacheHint')}
-              </p>
             </>
           )}
         </div>

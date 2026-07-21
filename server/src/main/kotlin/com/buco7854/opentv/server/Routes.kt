@@ -56,6 +56,8 @@ class ServerGraph(
     val remux: RemuxService,
     val transcoder: AudioTranscoder,
     val cipher: StreamCipher,
+    /** Concurrent reads the provider behind a source URL permits (its max_connections). */
+    val connectionLimit: suspend (String) -> Int,
 )
 
 @Serializable
@@ -66,8 +68,8 @@ data class RemuxAvailableDto(val available: Boolean)
 
 @Serializable
 data class RemuxStartDto(
-    val url: String,
-    val offset: Int = 0,
+    val id: String,
+    val playlistUrl: String,
     val duration: Double? = null,
     val audioTracks: List<String> = emptyList(),
     val subtitleTracks: List<String> = emptyList(),
@@ -187,6 +189,17 @@ private fun ApplicationCall.id(name: String = "id"): Long =
 private val DOWNLOAD_FILE_URL = Regex("""/api/downloads/(\d+)/file""")
 private fun downloadFileId(url: String): Long? =
     DOWNLOAD_FILE_URL.find(url)?.groupValues?.get(1)?.toLongOrNull()
+
+/** Resolve the remux `u` param to a source ffmpeg may open: a provider token or this
+ *  server's own download-file URL only, never an arbitrary value (no local-file/SSRF). */
+private suspend fun remuxSource(g: ServerGraph, call: ApplicationCall): String? {
+    val raw = call.request.queryParameters["u"] ?: throw IllegalArgumentException("Missing target url")
+    val decoded = g.cipher.tryDecrypt(raw)
+    val source = downloadFileId(decoded ?: raw)?.let { g.downloads.fileFor(it)?.second?.toString() }
+        ?: decoded?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
+    if (source == null) call.respond(HttpStatusCode.BadRequest, MessageDto("Invalid or missing target url"))
+    return source
+}
 
 // Every provider URL leaves the server only as an opaque token (StreamCipher).
 private fun Channel.forClient(c: StreamCipher) = copy(url = c.encrypt(url), logo = c.encryptOrNull(logo))
@@ -597,38 +610,25 @@ fun Route.api(g: ServerGraph) = route("/api") {
         g.transcoder.stream(url, call)
     }
 
-    // ffmpeg-backed HLS remux exposing a file's audio/subtitle tracks (RemuxService).
+    // ffmpeg-backed VOD playback: a pre-listed VOD HLS playlist whose fMP4 segments one
+    // ffmpeg produces on demand, played by hls.js (RemuxService).
     get("/remux/available") { call.respond(RemuxAvailableDto(g.remux.available)) }
     get("/remux/start") {
         if (!g.remux.available) {
             call.respond(HttpStatusCode.NotImplemented, MessageDto("ffmpeg is not installed on the server"))
             return@get
         }
-        val raw = call.request.queryParameters["u"]
-            ?: throw IllegalArgumentException("Missing target url")
-        // Accept only a provider token (like /stream and /transcode) or this
-        // server's own download-file URL - never an arbitrary value, so ffmpeg
-        // can't be pointed at local files or internal hosts.
-        val decoded = g.cipher.tryDecrypt(raw)
-        val source = downloadFileId(decoded ?: raw)?.let { g.downloads.fileFor(it)?.second?.toString() }
-            ?: decoded?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
-        if (source == null) {
-            call.respond(HttpStatusCode.BadRequest, MessageDto("Invalid or missing target url"))
-            return@get
-        }
-        val start = call.request.queryParameters["start"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
-        // Catch-up forces the remux on so its finite recording becomes seekable.
-        val force = call.request.queryParameters["force"] == "1"
+        val source = remuxSource(g, call) ?: return@get
+        val audio = call.request.queryParameters["audio"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
         // hevc=1: browser can decode HEVC, so copy non-H.264 video instead of transcoding.
         val clientHevc = call.request.queryParameters["hevc"] == "1"
+        // Catch-up forces the remux on so its finite recording becomes seekable.
+        val force = call.request.queryParameters["force"] == "1"
+        val limit = g.connectionLimit(source)
         try {
-            val result = withContext(Dispatchers.IO) { g.remux.start(source, start, force, clientHevc) }
-            call.respond(
-                RemuxStartDto(
-                    "/api/remux/${result.id}/index.m3u8", result.offsetSec, result.durationSec,
-                    result.audioTracks, result.subtitleTracks, result.nativeVideoCopy,
-                )
-            )
+            val result = withContext(Dispatchers.IO) { g.remux.start(source, audio, clientHevc, force, limit) }
+            call.respond(RemuxStartDto(result.id, result.playlistUrl, result.durationSec,
+                result.audioTracks, result.subtitleTracks, result.nativeVideoCopy))
         } catch (e: RemuxService.NoExtraTracksException) {
             call.respond(HttpStatusCode.NotFound, MessageDto(e.message ?: "No extra tracks"))
         } catch (e: IllegalStateException) {
@@ -639,23 +639,31 @@ fun Route.api(g: ServerGraph) = route("/api") {
         g.remux.stop(call.parameters["id"]!!)
         call.respond(HttpStatusCode.NoContent)
     }
+    // Master/media playlists, fMP4 init, numbered segments and WebVTT subtitle renditions.
     get("/remux/{id}/{file}") {
+        val id = call.parameters["id"]!!
         val file = call.parameters["file"]!!
-        val path = g.remux.resolve(call.parameters["id"]!!, file)
-        if (path == null) {
-            call.respond(HttpStatusCode.NotFound, MessageDto("Unknown remux file"))
-            return@get
+        when {
+            file == "master.m3u8" -> g.remux.master(id, call)
+            file == "main.m3u8" -> g.remux.playlist(id, call)
+            file == "init.mp4" -> g.remux.initSegment(id, call)
+            file.startsWith("main") && (file.endsWith(".m4s") || file.endsWith(".ts")) ->
+                file.removePrefix("main").substringBefore('.').toIntOrNull()
+                    ?.let { g.remux.segment(id, it, call) }
+                    ?: call.respond(HttpStatusCode.NotFound, MessageDto("Unknown segment"))
+            // sub_<i>.m3u8 (a rendition's playlist) and sub_<i>_<n>.vtt (its segments).
+            file.startsWith("sub_") && file.endsWith(".m3u8") ->
+                file.removePrefix("sub_").removeSuffix(".m3u8").toIntOrNull()
+                    ?.let { g.remux.subtitlePlaylist(id, it, call) }
+                    ?: call.respond(HttpStatusCode.NotFound, MessageDto("Unknown subtitle"))
+            file.startsWith("sub_") && file.endsWith(".vtt") -> {
+                val parts = file.removePrefix("sub_").removeSuffix(".vtt").split('_')
+                val i = parts.getOrNull(0)?.toIntOrNull()
+                val n = parts.getOrNull(1)?.toIntOrNull()
+                if (i != null && n != null) g.remux.subtitleSegment(id, i, n, call)
+                else call.respond(HttpStatusCode.NotFound, MessageDto("Unknown subtitle"))
+            }
+            else -> call.respond(HttpStatusCode.NotFound, MessageDto("Unknown remux file"))
         }
-        val type = when (file.substringAfterLast('.').lowercase()) {
-            "m3u8" -> ContentType.parse("application/vnd.apple.mpegurl")
-            "ts" -> ContentType.parse("video/mp2t")
-            "m4s" -> ContentType.parse("video/iso.segment")
-            "mp4" -> ContentType.parse("video/mp4")
-            "vtt" -> ContentType.parse("text/vtt")
-            else -> ContentType.Application.OctetStream
-        }
-        // Playlists grow while ffmpeg is writing; never let them cache.
-        if (file.endsWith(".m3u8")) call.response.header(HttpHeaders.CacheControl, "no-store")
-        call.respondBytes(withContext(Dispatchers.IO) { java.nio.file.Files.readAllBytes(path) }, type)
     }
 }

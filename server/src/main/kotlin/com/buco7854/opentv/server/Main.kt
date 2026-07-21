@@ -97,8 +97,22 @@ fun main() {
     val xtreamApi = XtreamApi(http.fetcher)
     val playlists = PlaylistRepository(storage, xtreamApi, http.conditionalFetcher, coreLog)
     val epg = EpgRepository(storage, http.conditionalFetcher)
-    val downloads = DownloadManager(storage, http, settings, dataDir)
     val account = AccountRepository(xtreamApi, coreLog)
+    // One provider-connection budget shared by playback and downloads, capped at the
+    // panel's max_connections (default 1 when it can't be told; OPENTV_REMUX_CONNECTIONS overrides).
+    val connections = ProviderConnections()
+    val connectionLimit: suspend (String) -> Int = limit@{ url ->
+        // Local files (played-back downloads) touch no provider - never cap them.
+        if (!url.startsWith("http")) return@limit Int.MAX_VALUE
+        val fallback = System.getenv("OPENTV_REMUX_CONNECTIONS")?.toIntOrNull()?.coerceAtLeast(1) ?: 1
+        val playlist = storage.playlists.getAll().firstOrNull { pl ->
+            val base = pl.xtreamBase
+            val user = pl.xtreamUser
+            base != null && user != null && url.startsWith(base) && url.contains(user)
+        } ?: return@limit fallback
+        (account.accountInfo(playlist)?.maxConnections ?: 0).takeIf { it > 0 } ?: fallback
+    }
+    val downloads = DownloadManager(storage, http, settings, dataDir, connections, connectionLimit)
     val graph = ServerGraph(
         storage = storage,
         http = http,
@@ -110,9 +124,10 @@ fun main() {
         proxy = StreamProxy(http, cipher),
         settings = settings,
         downloads = downloads,
-        remux = RemuxService(http),
+        remux = RemuxService(http, connections),
         transcoder = AudioTranscoder(http),
         cipher = cipher,
+        connectionLimit = connectionLimit,
     )
     downloads.start()
 

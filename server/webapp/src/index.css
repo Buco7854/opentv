@@ -933,7 +933,7 @@
   .player-error p { @apply max-w-[460px] text-white/60; font: var(--type-body-medium); }
 
   .menu-option {
-    @apply flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-3 text-left;
+    @apply flex w-full items-center gap-2.5 rounded-[10px] px-4 py-3 text-left;
     font: var(--type-body-large);
   }
   .menu-option:active { background: var(--c-press); }

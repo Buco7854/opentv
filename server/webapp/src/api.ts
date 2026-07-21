@@ -196,11 +196,13 @@ export const api = {
   metaEpisode: (series: string, season: number, episode: number) =>
     j<Metadata>(`/api/meta/episode?series=${encodeURIComponent(series)}&season=${season}&episode=${episode}`),
   remuxAvailable: () => j<{ available: boolean }>('/api/remux/available'),
-  startRemux: (u: string, start = 0, force = false, hevc = false) =>
-    j<{ url: string; offset: number; duration: number | null; audioTracks: string[]; subtitleTracks: string[]; nativeVideoCopy: boolean }>(
-      `/api/remux/start?u=${encodeURIComponent(u)}&start=${Math.max(0, Math.floor(start))}${force ? '&force=1' : ''}${hevc ? '&hevc=1' : ''}`,
+  /** Prepare an HLS session for a file; returns its VOD playlist URL and track lists. */
+  remuxStart: (u: string, audio = 0, force = false, hevc = false) =>
+    j<{ id: string; playlistUrl: string; duration: number | null; audioTracks: string[]; subtitleTracks: string[]; nativeVideoCopy: boolean }>(
+      `/api/remux/start?u=${encodeURIComponent(u)}&audio=${audio}${force ? '&force=1' : ''}${hevc ? '&hevc=1' : ''}`,
     ),
-  stopRemux: (id: string) => j<null>(`/api/remux/${id}`, { method: 'DELETE' }),
+  /** Release a remux session (and its provider connection) when playback ends. */
+  remuxStop: (id: string) => fetch(`/api/remux/${id}`, { method: 'DELETE', keepalive: true }).catch(() => {}),
   resumeAll: () => j<ResumePoint[]>('/api/resume'),
   saveResume: (url: string, positionMs: number, durationMs: number) =>
     j<null>('/api/resume', put({ url, positionMs, durationMs, updatedMs: Date.now() })),

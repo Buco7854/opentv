@@ -11,12 +11,12 @@ application {
 }
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_17
-    targetCompatibility = JavaVersion.VERSION_17
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
 }
 
 kotlin {
-    compilerOptions.jvmTarget.set(JvmTarget.JVM_17)
+    compilerOptions.jvmTarget.set(JvmTarget.JVM_21)
 }
 
 // The React client (server/webapp) compiles into src/main/resources/web so the

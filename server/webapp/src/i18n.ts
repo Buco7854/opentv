@@ -180,7 +180,6 @@ const en = {
   'account.memberSince': 'Member since',
   'account.trial': 'Trial',
   'account.updatedAt': 'Updated {time}',
-  'account.cacheHint': 'Results are cached for a minute; the refresh button forces a fresh request to the provider.',
 
   'settings.title': 'Settings',
   'settings.appearance': 'Appearance',
@@ -430,7 +429,6 @@ const fr: Catalog = {
   'account.memberSince': 'Membre depuis',
   'account.trial': 'Essai',
   'account.updatedAt': 'Mis à jour à {time}',
-  'account.cacheHint': 'Les résultats sont mis en cache une minute ; le bouton actualiser force une requête au fournisseur.',
 
   'settings.title': 'Réglages',
   'settings.appearance': 'Apparence',

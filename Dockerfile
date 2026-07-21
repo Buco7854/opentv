@@ -12,7 +12,7 @@ RUN npm ci
 COPY server/webapp/ ./
 RUN WEBAPP_OUT=/webapp/dist npm run build
 
-FROM gradle:8.14-jdk17 AS build
+FROM gradle:8.14-jdk21 AS build
 
 # The Android Gradle plugin needs an SDK just to configure the :app/:core/:data
 # modules, even though only the JVM server is compiled here.
@@ -30,9 +30,11 @@ COPY . .
 COPY --from=webapp /webapp/dist server/src/main/resources/web
 RUN gradle --no-daemon -PwebappPrebuilt :server:installDist
 
-FROM eclipse-temurin:17-jre
+FROM eclipse-temurin:21-jre-noble
 
-# ffmpeg powers the track-exposing remux for direct VOD files in browsers.
+# ffmpeg powers the track-exposing remux for VOD files in browsers. Ubuntu 24.04
+# (noble) ships ffmpeg 6.1, so the read-rate throttle that bounds disk and how far
+# ahead a provider is read is available (5.0 added -readrate, 6.1 its initial burst).
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && \
     rm -rf /var/lib/apt/lists/*
 

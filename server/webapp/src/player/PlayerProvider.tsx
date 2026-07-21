@@ -77,12 +77,6 @@ const hevcCapable = typeof MediaSource !== 'undefined'
   && ['hvc1.1.6.L120.90', 'hvc1.1.6.L93.90', 'hev1.1.6.L93.90']
     .some((c) => MediaSource.isTypeSupported(`video/mp4; codecs="${c}"`));
 
-// Stop the remux session named by its playlist URL (best-effort; awaitable).
-const stopRemuxUrl = (remuxUrl: string) => {
-  const id = remuxUrl.match(/\/api\/remux\/([^/]+)\//)?.[1];
-  return id ? api.stopRemux(id).catch(() => {}) : Promise.resolve();
-};
-
 const fmtClock = (s: number) => {
   if (!isFinite(s)) return '–:––';
   s = Math.max(0, Math.floor(s));
@@ -166,9 +160,10 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
   onPlayCatchup: (channelId: number, startMs: number, endMs: number) => void;
 }) {
   const { url, title, channelId, live, tvgId, hasGuide, catchup, direct } = request;
-  // Server remux override: content re-served as HLS with all tracks exposed. Fresh
-  // timeline starting at `offset`s, so full-file time = offset + video time.
-  const [remux, setRemux] = useState<{ url: string; offset: number; duration: number | null; startAt: number; nativeCopy: boolean } | null>(null);
+  // Server remux override: the file re-served as a VOD HLS playlist (all tracks exposed,
+  // seeking handled by hls.js). `startAt` is the resume/switch position; `audio` is the
+  // muxed-in track (switching re-requests).
+  const [remux, setRemux] = useState<{ id: string; playlistUrl: string; duration: number | null; startAt: number; nativeCopy: boolean; audio: number } | null>(null);
   const [remuxState, setRemuxState] = useState<'idle' | 'loading' | 'none' | 'failed'>('idle');
   const [remuxAvailable, setRemuxAvailable] = useState<boolean | null>(null);
   const remuxRef = useRef(remux);
@@ -179,17 +174,16 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
   // Set when a copied-HEVC remux fails: browser claimed support but couldn't play it;
   // re-request with a transcode.
   const forceTranscode = useRef(false);
-  useEffect(() => { setRemux(null); setRemuxState('idle'); forceTranscode.current = false; }, [url]);
+  useEffect(() => {
+    // Switching files: release the old session (frees its provider connection).
+    const prev = remuxRef.current;
+    if (prev) api.remuxStop(prev.id);
+    setRemux(null); setRemuxState('idle'); forceTranscode.current = false;
+  }, [url]);
   useEffect(() => {
     api.remuxAvailable().then((r) => setRemuxAvailable(r.available)).catch(() => setRemuxAvailable(false));
   }, []);
-  // End the remux session on leave to free its connection/disk (single-connection accounts).
-  useEffect(() => {
-    const remuxUrl = remux?.url;
-    if (!remuxUrl) return;
-    return () => { stopRemuxUrl(remuxUrl); };
-  }, [remux]);
-  const activeUrl = remux?.url ?? url;
+  const activeUrl = remux?.playlistUrl ?? url;
   const activeDirect = remux ? true : !!direct;
   const rootRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -207,10 +201,7 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
   const [scrub, setScrub] = useState<number | null>(null);
   /* Full-file target of an in-flight seek; the bar shows this until playback reaches it. */
   const [pendingSeek, setPendingSeek] = useState<number | null>(null);
-  /* Catch-up seek target (local secs) not yet produced: hold and jump once the
-     remux streams in that far, rather than snapping back. */
-  const [awaitSeek, setAwaitSeek] = useState<number | null>(null);
-  useEffect(() => { setPendingSeek(null); setAwaitSeek(null); }, [url]);
+  useEffect(() => { setPendingSeek(null); }, [url]);
   // Held-seek target for the seek closures, so a relative nudge starts from where
   // the bar is heading, not stale media time.
   const pendingSeekRef = useRef(pendingSeek);
@@ -291,6 +282,9 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     };
 
     const readHlsTracks = (hls: Hls) => {
+      // A remux playlist muxes in one audio track and serves subtitles as sidecars,
+      // so its menus come from /remux/start, not from what hls.js sees here.
+      if (remuxRef.current) return;
       setTracks({
         audio: { names: hls.audioTracks.map((track, i) => track.name || track.lang || t('player.audioN', { n: i + 1 })), current: hls.audioTrack },
         subs: { names: hls.subtitleTracks.map((track, i) => track.name || track.lang || t('player.subtitlesN', { n: i + 1 })), current: hls.subtitleTrack },
@@ -357,41 +351,52 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
         else setError(t('player.hlsUnsupported'));
         return;
       }
-      // When the remux serves a full-file timeline, start where the user was.
-      const startAt = remux && !remux.offset && remux.startAt > 0 ? remux.startAt : -1;
+      // The remux playlist is the whole file; open at the resume/switch position.
+      const startAt = remux && remux.startAt > 0 ? remux.startAt : -1;
+      // 30s forward buffer; unbounded back buffer for VOD so seeking back replays from memory.
       const hls = new Hls({
-        enableWorker: true, backBufferLength: 90, maxBufferLength: 60, startPosition: startAt,
-        // Remux flushes playlists only once ffmpeg reads the source; slow providers need >10s default.
-        manifestLoadingTimeOut: 30_000, manifestLoadingMaxRetry: 2,
-        levelLoadingTimeOut: 30_000,
+        startPosition: startAt,
+        lowLatencyMode: false,
+        maxBufferLength: 30,
+        maxMaxBufferLength: 30,
+        backBufferLength: remux ? Infinity : 90,
+        manifestLoadingTimeOut: 20_000,
       });
       hlsRef.current = hls;
       // Keep the track 'hidden' (cues fire, browser draws nothing) so our overlay renders them.
       hls.subtitleDisplay = false;
       let mediaRecoveries = 0;
       let netRetries = 0;
+      let lastMediaError = 0;
+      // A media error every now and then (e.g. resuming after the tab was backgrounded and the
+      // decoder was suspended) shouldn't burn the recovery budget forever: once fragments flow
+      // again for a few seconds, restore it so each incident gets a fresh attempt.
+      hls.on(Hls.Events.FRAG_BUFFERED, () => {
+        if (performance.now() - lastMediaError > 5000) { mediaRecoveries = 0; netRetries = 0; }
+      });
       hls.loadSource(src(target, hlsVariant));
       hls.attachMedia(video);
       hls.on(Hls.Events.ERROR, (_e, data) => {
         if (!data.fatal) return;
-        // Try hls.js recovery paths before surfacing an error screen.
+        // A copied HEVC the browser claimed to support but can't actually decode: force a
+        // transcode and re-prepare the session at the current spot.
+        if (remuxRef.current?.nativeCopy && data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRecoveries < 1) {
+          forceTranscode.current = true;
+          startRemuxRef.current(remuxRef.current.audio, video.currentTime);
+          return;
+        }
+        // recoverMediaError, then (provider HLS only) swapAudioCodec and recover, then give up.
+        // Never swap on the remux: its audio is AAC-LC we encoded, so a swap to HE-AAC decodes
+        // as distorted audio that sticks until the buffer is rebuilt.
         if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRecoveries < 2) {
-          mediaRecoveries++;
+          lastMediaError = performance.now();
+          if (mediaRecoveries++ > 0 && !remuxRef.current) hls.swapAudioCodec();
           hls.recoverMediaError();
           return;
         }
         if (data.type === Hls.ErrorTypes.NETWORK_ERROR && netRetries < 4) {
           netRetries++;
           retryTimer = setTimeout(() => hls.startLoad(), 1000 * netRetries);
-          return;
-        }
-        if (remux) {
-          // Remux died mid-flight (provider drop, ffmpeg failure, undecodable HEVC copy):
-          // tear it down; if it was a native-codec copy, force a transcode on retry.
-          if (remuxRef.current?.nativeCopy) forceTranscode.current = true;
-          stopRemuxUrl(remux.url);
-          setRemux(null);
-          setRemuxState('failed');
           return;
         }
         if (kind === 'livets' && !triedTsFallback) {
@@ -444,8 +449,7 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
       if (live || catchup) return;
       const duration = remux?.duration ?? video.duration;
       if (!duration || !isFinite(duration)) return;
-      const position = video.currentTime + (remux?.offset ?? 0);
-      api.saveResume(url, Math.floor(position * 1000), Math.floor(duration * 1000)).catch(() => {});
+      api.saveResume(url, Math.floor(video.currentTime * 1000), Math.floor(duration * 1000)).catch(() => {});
     };
     const resumeTimer = live || catchup ? undefined : setInterval(saveResume, 5000);
 
@@ -487,10 +491,12 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     };
   }, [url, activeUrl, live, remux, src, holdEngine]);
 
-  // PiP/fullscreen end when the player closes, not on engine swaps.
+  // PiP/fullscreen end when the player closes, not on engine swaps. Closing also
+  // releases the remux session so nothing keeps reading the provider.
   useEffect(() => () => {
     if (document.pictureInPictureElement) document.exitPictureInPicture().catch(() => {});
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    if (remuxRef.current) api.remuxStop(remuxRef.current.id);
   }, []);
 
   // ---- video element state -> React ----
@@ -521,11 +527,20 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     };
     const onEnded = () => onClose();
     const onError = () => {
-      if (!hlsRef.current && !mpegtsRef.current) diagnoseNativeError();
+      if (hlsRef.current || mpegtsRef.current) return;
+      if (remuxRef.current) {
+        // The remux stream died, or the browser couldn't decode a copied HEVC it
+        // claimed to support: force a transcode on the retry and re-anchor.
+        if (remuxRef.current.nativeCopy) forceTranscode.current = true;
+        setRemux(null);
+        setRemuxState('failed');
+        return;
+      }
+      diagnoseNativeError();
     };
     // Browser-exposed tracks (native HLS, mp4/webm); hls.js reports its own instead.
     const readNativeTracks = () => {
-      if (hlsRef.current) return;
+      if (hlsRef.current || remuxRef.current) return;
       const text = Array.from(video.textTracks ?? []).filter(
         (track) => track.kind === 'subtitles' || track.kind === 'captions',
       );
@@ -585,50 +600,50 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     };
   }, [onClose, diagnoseNativeError]);
 
-  // Draw subtitles ourselves (track kept 'hidden': cues fire, browser paints nothing)
-  // so size/style follow the user's preference.
+  // Draw subtitles ourselves (track kept 'hidden': browser paints nothing) so size/style
+  // follow the user's preference. Pick the active cue by scanning the track for one that
+  // spans currentTime, rather than reading `activeCues`: on a track switch the browser
+  // doesn't reliably re-activate the cue already spanning the playhead (its "time marches
+  // on" step only re-evaluates as playback crosses a *new* cue boundary, and cues that
+  // load a moment late never activate at all), which left the new track blank until a seek.
+  // Scanning by time shows the right cue as soon as it's present, at the playhead.
   useEffect(() => {
     const video = videoRef.current!;
-    const render = () => {
+    let raf = 0;
+    let last = '';
+    const tick = () => {
       const list = video.textTracks;
+      const now = video.currentTime;
       let text = '';
       for (let i = 0; i < list.length; i++) {
         if (list[i].mode === 'disabled') continue;
-        const active = list[i].activeCues;
-        if (!active || !active.length) continue;
-        text = Array.from(active).map((cue) => (cue as VTTCue).text ?? '').join('\n');
+        const cues = list[i].cues;
+        if (!cues || !cues.length) continue;
+        const parts: string[] = [];
+        for (let j = 0; j < cues.length; j++) {
+          const cue = cues[j] as VTTCue;
+          if (cue.startTime <= now && cue.endTime > now) parts.push(cue.text ?? '');
+        }
+        text = parts.join('\n');
         if (text) break;
       }
-      setCueText(text);
+      if (text !== last) { last = text; setCueText(text); }
+      raf = requestAnimationFrame(tick);
     };
-    // Re-attach per-track cuechange listeners as hls.js adds tracks lazily.
-    const attach = () => {
-      for (let i = 0; i < video.textTracks.length; i++) {
-        video.textTracks[i].removeEventListener('cuechange', render);
-        video.textTracks[i].addEventListener('cuechange', render);
-      }
-    };
-    attach();
-    video.textTracks?.addEventListener?.('addtrack', attach);
-    video.textTracks?.addEventListener?.('change', render);
-    video.addEventListener('seeked', render);
-    return () => {
-      for (let i = 0; i < video.textTracks.length; i++) {
-        video.textTracks[i].removeEventListener('cuechange', render);
-      }
-      video.textTracks?.removeEventListener?.('addtrack', attach);
-      video.textTracks?.removeEventListener?.('change', render);
-      video.removeEventListener('seeked', render);
-    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
   }, [activeUrl]);
 
   const pickAudio = useCallback((index: number) => {
     chosenTracks.current.audio = index;
     setTracks((old) => ({ ...old, audio: { ...old.audio, current: index } }));
-    if (hlsRef.current) {
-      hlsRef.current.audioTrack = index;
+    if (remuxRef.current) {
+      // Switching audio re-requests the playlist muxed with that track, reopened at
+      // the current position.
+      startRemuxRef.current(index, videoRef.current!.currentTime);
       return;
     }
+    if (hlsRef.current) { hlsRef.current.audioTrack = index; return; }
     nativeTracks.current.audio.forEach((track, i) => { track.enabled = i === index; });
   }, []);
 
@@ -636,8 +651,13 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     chosenTracks.current.subs = index;
     setTracks((old) => ({ ...old, subs: { ...old.subs, current: index } }));
     if (index < 0) setCueText('');
+    // hls.js aligns the cues to the video's timeline. Switching straight to another track
+    // leaves the already-buffered stretch on the old track, so the new one shows nothing
+    // until playback passes it; deselect first so it reloads from the current position.
     if (hlsRef.current) {
-      hlsRef.current.subtitleTrack = index;
+      const hls = hlsRef.current;
+      hls.subtitleTrack = -1;
+      if (index >= 0) requestAnimationFrame(() => { if (hlsRef.current === hls) hls.subtitleTrack = index; });
       return;
     }
     // 'hidden' not 'showing': cues fire for our overlay without browser rendering.
@@ -650,14 +670,14 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     else video.pause();
   }, []);
 
-  // seekTo is defined further down (needs startRemuxAt); ref lets seekBy and media-session reach it.
+  // seekTo/startRemux are defined further down; refs let earlier callbacks reach them.
   const seekToRef = useRef<(target: number) => void>(() => {});
+  const startRemuxRef = useRef<(audio: number, startAt: number) => void>(() => {});
   const seekBy = useCallback((delta: number) => {
     const video = videoRef.current!;
-    const offset = remuxRef.current?.offset ?? 0;
-    // Start from the held target if any, else live media time: on catch-up a seek
-    // ahead may still be buffering, and currentTime would jump the bar back.
-    const base = pendingSeekRef.current ?? (video.currentTime + offset);
+    // Start from the held target if any, else media time: a seek still buffering
+    // would otherwise nudge from a stale position.
+    const base = pendingSeekRef.current ?? video.currentTime;
     seekToRef.current(Math.max(0, base + delta));
   }, []);
 
@@ -747,67 +767,55 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
   const speeds = useMemo(() => [0.5, 0.75, 1, 1.25, 1.5, 2], []);
   const scaleModes = useMemo(() => ['fit', 'zoom', 'stretch'] as const, []);
 
-  /** Starts (or re-anchors) the remux at [at] seconds of the full file. */
-  const startRemuxAt = useCallback(async (at: number) => {
-    const video = videoRef.current!;
-    // Free the provider connection before ffmpeg opens its own (single-connection accounts).
-    hlsRef.current?.destroy(); hlsRef.current = null;
-    mpegtsRef.current?.destroy(); mpegtsRef.current = null;
-    video.pause();
-    video.removeAttribute('src');
-    video.load();
+  /** Prepares (or re-requests) the HLS remux session with audio track [audio]; hls.js
+   *  then plays its VOD playlist, opening at [startAt] seconds. */
+  const startRemux = useCallback(async (audio: number, startAt: number) => {
+    const audioIdx = Math.max(0, audio);
+    const prevId = remuxRef.current?.id;
     setRemuxState('loading');
     try {
-      const previous = remuxRef.current;
-      if (previous) await stopRemuxUrl(previous.url);
       // Copy (not transcode) HEVC when the browser can decode it, unless a prior copy failed.
       const hevc = hevcCapable && !forceTranscode.current;
-      let result;
-      try {
-        result = await api.startRemux(url, at, !!catchup, hevc);
-      } catch (e) {
-        if (/no additional tracks/i.test((e as Error).message)) throw e;
-        // Provider may need a moment to free the released connection; one delayed retry.
-        await new Promise((resolve) => setTimeout(resolve, 2500));
-        result = await api.startRemux(url, at, !!catchup, hevc);
-      }
+      const result = await api.remuxStart(url, audioIdx, !!catchup, hevc);
+      // Switching audio makes a new session; release the old one so this viewer never
+      // holds two of the provider's connections at once.
+      if (prevId && prevId !== result.id) api.remuxStop(prevId);
       setRemux({
-        url: result.url, offset: result.offset,
-        duration: result.duration ?? previous?.duration ?? null,
-        startAt: at, nativeCopy: result.nativeVideoCopy,
+        id: result.id, playlistUrl: result.playlistUrl,
+        duration: result.duration ?? remuxRef.current?.duration ?? null,
+        startAt, nativeCopy: result.nativeVideoCopy, audio: audioIdx,
       });
-      // Probe knows the track names: fill menus before the HLS engine loads anything.
-      if (result.audioTracks?.length) {
-        const chosen = chosenTracks.current;
-        setTracks({
-          audio: { names: result.audioTracks, current: chosen.audio >= 0 ? chosen.audio : 0 },
-          subs: { names: result.subtitleTracks ?? [], current: chosen.subs ?? -1 },
-        });
-      }
+      setTracks({
+        audio: { names: result.audioTracks, current: audioIdx },
+        subs: { names: result.subtitleTracks ?? [], current: chosenTracks.current.subs ?? -1 },
+      });
     } catch (e) {
-      // "No additional tracks" is normal; anything else surfaces. Either way, engine resumes direct.
+      // "No additional tracks" is normal (source plays directly); anything else surfaces.
       const noTracks = /no additional tracks/i.test((e as Error).message);
       setRemuxState(noTracks ? 'none' : 'failed');
       setRemux(null);
       if (!noTracks) snackbar((e as Error).message);
     }
   }, [url, catchup]);
+  startRemuxRef.current = startRemux;
 
-  // Start the remux at the saved resume position when the file opens, to populate menus early.
+  // Prepare the remux when the file opens, opening at the saved resume position so
+  // hls.js starts there and the track menus are populated early.
   useEffect(() => {
     if (!remuxEligible || remuxAvailable !== true || remux || remuxState !== 'idle') return;
     let cancelled = false;
     (async () => {
-      const points = await api.resumeAll().catch(() => [] as ResumePoint[]);
+      const points = catchup ? [] : await api.resumeAll().catch(() => [] as ResumePoint[]);
       if (cancelled) return;
       const point = points.find((x) => x.url === url);
-      startRemuxAt(point && point.positionMs >= 10_000 ? Math.floor(point.positionMs / 1000) : 0);
+      const at = point && point.positionMs >= 10_000 ? Math.floor(point.positionMs / 1000) : 0;
+      startRemux(Math.max(0, chosenTracks.current.audio), at);
     })();
     return () => { cancelled = true; };
-  }, [remuxEligible, remuxAvailable, remux, remuxState, url, startRemuxAt]);
+  }, [remuxEligible, remuxAvailable, remux, remuxState, url, catchup, startRemux]);
 
   // Remux is the only path to sound for undecodable audio (AC3/E-AC3/DTS), so a failed
-  // auto-start can't be left as silent direct playback. Usual cause: a single-connection
+  // prepare can't be left as silent direct playback. Usual cause: a single-connection
   // provider where the first ffprobe still holds the connection; the probe is then cached,
   // so retries (with backoff) generally get in.
   const remuxRetries = useRef(0);
@@ -816,13 +824,12 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     if (remuxState !== 'failed' || !remuxEligible || remuxAvailable !== true) return;
     if (remuxRetries.current >= 3) return;
     remuxRetries.current += 1;
-    // Re-anchor at the live position so retries don't jump the timeline back.
     const timer = setTimeout(
-      () => startRemuxAt(Math.floor(videoRef.current?.currentTime ?? 0)),
+      () => startRemux(Math.max(0, chosenTracks.current.audio), 0),
       1500 * remuxRetries.current,
     );
     return () => clearTimeout(timer);
-  }, [remuxState, remuxEligible, remuxAvailable, startRemuxAt]);
+  }, [remuxState, remuxEligible, remuxAvailable, startRemux]);
 
   // One extra remux retry per track-menu opening, after the automatic ones are used up.
   const menuRetried = useRef(false);
@@ -830,55 +837,19 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     if (menu !== 'audio' && menu !== 'subs') { menuRetried.current = false; return; }
     if (menuRetried.current || remuxState !== 'failed' || !remuxEligible || remuxAvailable !== true) return;
     menuRetried.current = true;
-    startRemuxAt(Math.floor(videoRef.current?.currentTime ?? 0));
-  }, [menu, remuxState, remuxEligible, remuxAvailable, startRemuxAt]);
+    startRemux(Math.max(0, chosenTracks.current.audio), 0);
+  }, [menu, remuxState, remuxEligible, remuxAvailable, startRemux]);
 
-  // Full-file timeline for the seek bar (remux runs on a shifted one).
-  const remuxOffset = remux?.offset ?? 0;
   const fullDuration = remux?.duration ?? time.duration;
-  const fullPosition = time.position + remuxOffset;
+  const fullPosition = time.position;
+  // hls.js (remux) and native players both seek in place; the whole file is addressable.
   const seekTo = useCallback((target: number) => {
     const video = videoRef.current!;
-    // Hold the requested position on the bar until playback gets there.
-    setPendingSeek(target);
-    const current = remuxRef.current;
-    if (!current) {
-      // Native seek (seekable catch-up, or a direct source).
-      video.currentTime = target;
-      return;
-    }
-    const local = target - current.offset;
-    const seekable = video.seekable;
-    const end = seekable.length ? seekable.end(seekable.length - 1) : 0;
-    // Inside what ffmpeg has produced: plain seek.
-    if (local >= 0 && local <= end) { setAwaitSeek(null); video.currentTime = local; return; }
-    // Catch-up timeshift can't be re-anchored (ffmpeg can't -ss live input): hold
-    // the bar and jump once the remux streams in that far (see awaitSeek watcher).
-    if (catchup) { setAwaitSeek(local); video.pause(); setBuffering(true); return; }
-    // VOD/download: re-anchor the remux at the target (files support -ss).
-    startRemuxAt(Math.max(0, target));
-  }, [startRemuxAt, catchup]);
+    const clamped = Math.max(0, target);
+    setPendingSeek(clamped);
+    video.currentTime = clamped;
+  }, []);
   seekToRef.current = seekTo;
-
-  // Perform a held catch-up seek once the remux has produced far enough, then resume.
-  // Polls (production grows outside React); if it stops growing, land on the furthest point.
-  useEffect(() => {
-    if (awaitSeek == null) return;
-    const video = videoRef.current!;
-    let lastEnd = -1;
-    let stalls = 0;
-    const jump = (to: number) => { video.currentTime = to; video.play().catch(() => {}); setAwaitSeek(null); };
-    const tick = () => {
-      const seekable = video.seekable;
-      const end = seekable.length ? seekable.end(seekable.length - 1) : 0;
-      if (end >= awaitSeek) return jump(awaitSeek);
-      if (end <= lastEnd) { if (++stalls >= 10 && end > 0) jump(end); }
-      else { stalls = 0; lastEnd = end; }
-    };
-    tick();
-    const id = setInterval(tick, 500);
-    return () => clearInterval(id);
-  }, [awaitSeek]);
 
   // Release the held seek target once media reaches it (within ~1.5s).
   useEffect(() => {
@@ -886,7 +857,7 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     if (isFinite(fullPosition) && Math.abs(fullPosition - pendingSeek) < 1.5) setPendingSeek(null);
   }, [fullPosition, pendingSeek]);
 
-  const busy = holdEngine || remuxState === 'loading' || awaitSeek != null || (buffering && !paused);
+  const busy = holdEngine || remuxState === 'loading' || (buffering && !paused);
   // VOD/downloads and catch-up all get a scrubber.
   const showSeek = !live;
   const tracksEmptyText =
@@ -898,7 +869,7 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
   const seekFrac = scrub != null ? scrub / 1000
     : fullDuration && isFinite(fullDuration) ? barPosition / fullDuration : 0;
   const bufferedFrac = fullDuration && isFinite(fullDuration)
-    ? Math.max(seekFrac, Math.min(1, (bufferedEnd + remuxOffset) / fullDuration)) : 0;
+    ? Math.max(seekFrac, Math.min(1, bufferedEnd / fullDuration)) : 0;
   const seekStyle = {
     background: `linear-gradient(to right, #fff ${(seekFrac * 100).toFixed(2)}%, `
       + `rgba(255,255,255,0.45) ${(seekFrac * 100).toFixed(2)}%, `

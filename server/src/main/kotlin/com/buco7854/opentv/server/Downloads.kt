@@ -34,6 +34,9 @@ class DownloadManager(
     private val http: ServerHttp,
     private val settings: ServerSettings,
     dataDir: Path,
+    private val connections: ProviderConnections,
+    // How many concurrent reads the provider behind a URL permits (its max_connections).
+    private val connectionLimit: suspend (String) -> Int,
 ) {
     private val log = LoggerFactory.getLogger("opentv")
     private val dir: Path = dataDir.resolve("downloads")
@@ -43,6 +46,9 @@ class DownloadManager(
 
     /** Re-queue transfers interrupted by a restart and resume the queue. */
     fun start() {
+        // A freed provider slot (a stream ending, or another download finishing) may let a
+        // waiting download in.
+        connections.onSlotFreed { pump() }
         scope.launch {
             for (item in storage.downloads.getByStatus(DownloadStatus.RUNNING)) {
                 storage.downloads.update(item.copy(status = DownloadStatus.QUEUED))
@@ -147,6 +153,15 @@ class DownloadManager(
     private suspend fun run(id: Long) {
         val item = storage.downloads.get(id) ?: return
         if (item.status != DownloadStatus.QUEUED || item.filePath.isEmpty()) return
+        // Take a provider connection within its cap (shared with playback). If the provider
+        // is full, stay queued - a freed slot pumps the queue again. A stream that needs the
+        // slot evicts this download back to queued (see onSlotFreed).
+        val slot = "dl:$id"
+        val evict = { requeueIfRunning(id); jobs[id]?.cancel(); Unit }
+        if (!connections.tryOpenDownload(slot, providerKeyOf(item.url), connectionLimit(item.url), evict)) {
+            jobs.remove(id)
+            return
+        }
         storage.downloads.update(item.copy(status = DownloadStatus.RUNNING, error = null))
         val target = Path.of(item.filePath)
         try {
@@ -180,8 +195,18 @@ class DownloadManager(
                 storage.downloads.update(current.copy(status = DownloadStatus.FAILED, error = (e.message ?: e::class.simpleName)?.take(200)))
             }
         } finally {
+            connections.close(slot)
             jobs.remove(id)
             pump()
+        }
+    }
+
+    /** An evicting stream bumps a running download back to the queue to await a free slot. */
+    private fun requeueIfRunning(id: Long) {
+        scope.launch {
+            storage.downloads.get(id)?.let {
+                if (it.status == DownloadStatus.RUNNING) storage.downloads.update(it.copy(status = DownloadStatus.QUEUED))
+            }
         }
     }
 
@@ -223,6 +248,7 @@ class DownloadManager(
                     val now = System.currentTimeMillis()
                     if (now - lastWrite > 500) {
                         lastWrite = now
+                        connections.touch("dl:$id")
                         storage.downloads.updateProgress(id, downloaded, total, DownloadStatus.RUNNING)
                     }
                 }
