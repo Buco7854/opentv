@@ -11,8 +11,10 @@ const config: Config = {
   tagline: 'Open-source IPTV player for Android and Android TV.',
   favicon: 'logo.svg',
 
-  url: 'https://opentv.grimbert.net',
-  baseUrl: '/',
+  url: 'https://buco7854.github.io',
+  baseUrl: '/opentv/',
+  organizationName: 'Buco7854',
+  projectName: 'opentv',
   trailingSlash: false,
 
   onBrokenLinks: 'warn',

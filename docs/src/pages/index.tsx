@@ -75,7 +75,7 @@ export default function Home() {
         <section className={styles.channels}>
           <h2>Two download channels</h2>
           <p className={styles.channelsIntro}>
-            OpenTV is distributed as an APK you install yourself — it is not on the Play Store.
+            OpenTV is distributed as an APK you install yourself. It is not on the Play Store.
             Both builds are signed with the same key, so you can switch between them and update
             in place without losing playlists or settings.
           </p>

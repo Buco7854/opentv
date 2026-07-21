@@ -2,7 +2,9 @@
 
 ## Account monitor
 
-For Xtream logins, a dedicated account page shows your active and maximum connections and your plan expiry, so you can see at a glance whether you have a free connection slot. This information is cached for about a minute, so checking it does not spam your provider.
+For Xtream logins, a dedicated account page shows your active and maximum connections and your plan expiry, so you can see at a glance whether you have a free connection slot.
+
+The reading is kept for about a minute, so opening the page again within that window reuses it instead of querying your provider. The Refresh button works differently: it forces a live check and always makes a request. So mashing Refresh will query your provider on every tap. Use it when you genuinely want an up-to-date number, and let the cached value stand the rest of the time.
 
 ## Error log
 

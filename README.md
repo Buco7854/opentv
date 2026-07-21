@@ -39,7 +39,7 @@ Store. There are two channels:
 
 Both builds are signed with the same key, so updates install in place without
 losing your data. Full instructions and documentation are on the
-**[OpenTV docs site](https://opentv.grimbert.net/)**.
+**[OpenTV docs site](https://buco7854.github.io/opentv/)**.
 
 ## Web client
 
@@ -57,7 +57,7 @@ docker run -d -p 127.0.0.1:8080:8080 -v opentv-data:/data \
 > The web server has **no authentication**: anyone who can reach it can use
 > your playlists and read your provider credentials. Always run it behind an
 > authenticated reverse proxy (or a VPN); never expose it directly to the
-> internet. See the [web client guide](https://opentv.grimbert.net/guide/webclient)
+> internet. See the [web client guide](https://buco7854.github.io/opentv/guide/webclient)
 > for a Caddy basic-auth example, configuration and limitations.
 
 The **Now watching** page (in the playlists panel) shows who is watching what,
@@ -93,7 +93,7 @@ genuinely good while doing it.
 - **Account and ops**: a connection and expiry monitor, an in-app error log with
   credentials redacted, and full Android TV support (leanback, D-pad focus).
 
-Full walkthroughs are on the **[docs site](https://opentv.grimbert.net/)**.
+Full walkthroughs are on the **[docs site](https://buco7854.github.io/opentv/)**.
 
 ## Gentle on your provider
 

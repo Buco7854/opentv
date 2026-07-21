@@ -10,20 +10,20 @@ server share the same core modules (M3U parsing, content classification, the
 Xtream client, EPG, catch-up, metadata enrichment and the SQLite data layer).
 Only the UI differs.
 
-The web UI is a touch-first cockpit: a persistent bottom dock (playlists
-panel, Live / Movies / Series / Favorites / Search, downloads and settings),
-floating panels, thin line icons, and a mini player that keeps video
-playing in a docked card while you browse. It ships dark, light and
-system-following themes and is designed to feel at home on large landscape
-touchscreens (including in-car browsers) while scaling down to phones, where
-the dock becomes a tab bar.
+The web UI is a touch-first cockpit: a persistent bottom dock with the active
+playlist's Live / Movies / Series / Favorites / Search, and a panel (the burger)
+that holds your playlists plus Now watching, downloads and settings. Playback
+opens as a fullscreen player. It ships dark, light and system-following themes
+and is designed to feel at home on large landscape touchscreens (including
+in-car browsers) while scaling down to phones, where the dock becomes a tab bar.
 
 import ThemedImage from '@theme/ThemedImage';
+import useBaseUrl from '@docusaurus/useBaseUrl';
 
 <figure className="doc-screen">
   <ThemedImage
     alt="Browsing a movies category, with the bottom dock"
-    sources={{ light: '/img/web/browse-light.png', dark: '/img/web/browse-dark.png' }}
+    sources={{ light: useBaseUrl('/img/web/browse-light.png'), dark: useBaseUrl('/img/web/browse-dark.png') }}
   />
   <figcaption>Browsing movies: poster grid, quality badges, and the dock. Screenshots follow your theme.</figcaption>
 </figure>
@@ -32,28 +32,28 @@ import ThemedImage from '@theme/ThemedImage';
   <figure className="doc-screen">
     <ThemedImage
       alt="The playlists panel opened from the dock"
-      sources={{ light: '/img/web/playlists-panel-light.png', dark: '/img/web/playlists-panel-dark.png' }}
+      sources={{ light: useBaseUrl('/img/web/playlists-panel-light.png'), dark: useBaseUrl('/img/web/playlists-panel-dark.png') }}
     />
     <figcaption>The dock's playlists panel: switch, add, refresh, edit.</figcaption>
   </figure>
   <figure className="doc-screen">
     <ThemedImage
       alt="Per-channel guide sheet with replayable catch-up programmes"
-      sources={{ light: '/img/web/guide-sheet-light.png', dark: '/img/web/guide-sheet-dark.png' }}
+      sources={{ light: useBaseUrl('/img/web/guide-sheet-light.png'), dark: useBaseUrl('/img/web/guide-sheet-dark.png') }}
     />
     <figcaption>Per-channel guide with tap-to-replay catch-up.</figcaption>
   </figure>
   <figure className="doc-screen">
     <ThemedImage
       alt="A movie detail page with play and download controls"
-      sources={{ light: '/img/web/movie-detail-light.png', dark: '/img/web/movie-detail-dark.png' }}
+      sources={{ light: useBaseUrl('/img/web/movie-detail-light.png'), dark: useBaseUrl('/img/web/movie-detail-dark.png') }}
     />
     <figcaption>Movie page: play, and the compact download control.</figcaption>
   </figure>
   <figure className="doc-screen">
     <ThemedImage
       alt="Settings with the appearance section and sidebar"
-      sources={{ light: '/img/web/settings-light.png', dark: '/img/web/settings-dark.png' }}
+      sources={{ light: useBaseUrl('/img/web/settings-light.png'), dark: useBaseUrl('/img/web/settings-dark.png') }}
     />
     <figcaption>Settings: dark, light and system themes under Appearance.</figcaption>
   </figure>
@@ -62,7 +62,7 @@ import ThemedImage from '@theme/ThemedImage';
 <figure className="doc-screen doc-screen--phone">
   <ThemedImage
     alt="The web client on a phone, with the dock as a tab bar"
-    sources={{ light: '/img/web/phone-light.png', dark: '/img/web/phone-dark.png' }}
+    sources={{ light: useBaseUrl('/img/web/phone-light.png'), dark: useBaseUrl('/img/web/phone-dark.png') }}
   />
   <figcaption>On phones the dock becomes a tab bar.</figcaption>
 </figure>
@@ -116,7 +116,7 @@ volumes:
 ```
 
 ```text
-# Caddyfile - generate the hash with: caddy hash-password
+# Caddyfile. Generate the password hash with: caddy hash-password
 tv.example.com {
     basic_auth {
         me $2a$14$...hashed-password...
@@ -132,8 +132,10 @@ tv.example.com {
 | `PORT`                  | `8080`     | HTTP port the server listens on                                                                                                      |
 | `OPENTV_DATA`           | `/data`    | Directory for the SQLite database                                                                                                    |
 | `OPENTV_PAGE_SIZE`      | `50`       | Items per page in the web client's lists                                                                                             |
-| `OPENTV_VIDEO_ENCODER`  | `libx264`  | Encoder for non-H.264 video (HEVC...). Set `copy` to turn transcoding off, or a hardware encoder like `h264_qsv` / `h264_nvenc` with a GPU |
-| `OPENTV_X264_PRESET`    | `veryfast` | Software encode speed vs size (`ultrafast`...`slow`); only used by the default `libx264` encoder                                     |
+| `OPENTV_VIDEO_ENCODER`  | `libx264`  | Encoder for non-H.264 video (HEVC and friends). Set `copy` to turn transcoding off, or a hardware encoder like `h264_qsv` / `h264_nvenc` with a GPU |
+| `OPENTV_X264_PRESET`    | `veryfast` | Software encode speed vs size (`ultrafast` to `slow`); only used by the default `libx264` encoder                                    |
+| `OPENTV_REMUX_CONNECTIONS` | `1`     | How many concurrent provider reads to allow when a panel does not report its own `max_connections`. Playback and downloads share this budget |
+| `OPENTV_TRUSTED_PROXIES` | (unset)   | Comma-separated proxy IPs and CIDRs (e.g. `127.0.0.1,10.0.0.0/8`). When a request comes from one of these, the real viewer IP is read from `X-Forwarded-For` for the Now watching page |
 
 ## What it does
 
@@ -163,6 +165,39 @@ All provider traffic goes through the server, which keeps the app's frugal
 behavior: conditional GETs for playlists and EPG, refresh throttling, and
 hard caches for metadata.
 
+## Now watching
+
+The playlists panel has a **Now watching** page that lists everyone currently
+watching through the web client, one card per viewer. Each card shows the
+title, the playlist it came from, and who is watching, identified by IP address
+and a browser and OS guess (there are no accounts, so the IP is the identity).
+You get a live progress bar, and for a paused viewer it says so.
+
+From a card you can:
+
+- **Pause or resume** their playback remotely.
+- **Send them a short message**, which pops up on their screen.
+- **Open stream details** to see what the server is doing for that stream and,
+  in plain language, why. The badge names the path (direct play, relayed,
+  remux, transcode, audio transcode), and the details panel spells it out: which
+  video and audio codecs are in play, whether video is copied or transcoded and
+  to what, how many HLS segments, which provider connection it holds, and
+  whether ffmpeg is running. It is meant for debugging a stream on the spot,
+  without opening a shell on the server.
+
+This covers web-client viewers only. The Android app plays through the shared
+core, not this server, so it does not show up here.
+
+Viewers are keyed by IP, so behind a reverse proxy every request looks like it
+comes from the proxy. Set `OPENTV_TRUSTED_PROXIES` to your proxy's address (see
+the table above) and the page reads the real client IP from `X-Forwarded-For`.
+
+:::caution
+The Now watching page has no access control of its own, like the rest of the
+web client. Anyone who can reach the server can pause a stream or message a
+viewer, so keep it behind your reverse proxy.
+:::
+
 ## Limitations vs the Android app
 
 - **Codecs**: browsers decode less than ExoPlayer, so for movies, series and
@@ -180,8 +215,8 @@ hard caches for metadata.
   unusual live video codec may still not play; those streams also play in the
   Android app.
 - **Downloads** are stored on the server (the `/data` volume), not on the
-  browser's device - use the save button on a finished download to copy it
-  locally.
+  browser's device. Use the save button on a finished download to copy it
+  to the device you are browsing from.
 - The **User-Agent** and download settings are server-wide (they affect how
   the server talks to your provider), not per-browser.
 

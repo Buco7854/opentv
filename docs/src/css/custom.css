@@ -1,5 +1,5 @@
 /*
- * OpenTV docs theme — same design language as the web client:
+ * OpenTV docs theme, same design language as the web client:
  * charcoal/white canvas, quiet gray panels with hairlines, one blue accent,
  * Inter for UI and Barlow for display titles.
  */
@@ -89,8 +89,8 @@ h1, h2, h3, .navbar__title {
   letter-spacing: -0.02em;
 }
 
-/* Navbar: flat with a hairline. No backdrop-filter here — the mobile drawer
-   is a fixed-position child of the navbar, and a filter would clip it. */
+/* Navbar: flat with a hairline. No backdrop-filter here, because the mobile
+   drawer is a fixed-position child of the navbar and a filter would clip it. */
 .navbar {
   border-bottom: 1px solid var(--otv-hairline);
 }
