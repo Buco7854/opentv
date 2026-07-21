@@ -60,6 +60,13 @@ docker run -d -p 127.0.0.1:8080:8080 -v opentv-data:/data \
 > internet. See the [web client guide](https://opentv.grimbert.net/guide/webclient)
 > for a Caddy basic-auth example, configuration and limitations.
 
+The **Now watching** page (in the playlists panel) shows who is watching what,
+with remote pause/resume, a message channel, and live stream diagnostics
+(direct / proxied / remux, and why ffmpeg is copying or transcoding). Viewers
+are identified by IP; set `OPENTV_TRUSTED_PROXIES` to a comma-separated list of
+proxy IPs/CIDRs (e.g. `127.0.0.1,10.0.0.0/8`) so the real client IP is read from
+`X-Forwarded-For` when the request comes through your reverse proxy.
+
 ## Why OpenTV
 
 Most M3U players either hammer your provider until you get blacklisted, guess

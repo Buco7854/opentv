@@ -42,7 +42,7 @@ export function AccountScreen() {
         onBack={() => navigate(-1)}
         actions={
           busy
-            ? <div className="grid size-11 flex-none place-items-center"><div className="spinner" style={{ width: 22, height: 22 }} /></div>
+            ? <div className="grid size-11 flex-none place-items-center"><div className="spinner" style={{ width: 22, height: 22, margin: 0 }} /></div>
             : <IconBtn name="refresh" label={t('account.refresh')} disabled={!isXtream} onClick={() => load(true)} />
         }
       />

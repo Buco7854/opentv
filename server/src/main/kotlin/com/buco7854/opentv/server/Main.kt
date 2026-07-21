@@ -127,6 +127,8 @@ fun main() {
         remux = RemuxService(http, connections),
         transcoder = AudioTranscoder(http),
         cipher = cipher,
+        sessions = PlaybackSessionRegistry(),
+        trustedProxies = TrustedProxies.fromEnv(),
         connectionLimit = connectionLimit,
     )
     downloads.start()

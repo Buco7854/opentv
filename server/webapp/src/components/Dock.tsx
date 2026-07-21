@@ -163,6 +163,10 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
                 <div className="name">{downloading ? t('playlists.downloadsActive') : t('nav.downloads')}</div>
               </div>
             </button>
+            <button className="panel-row" onClick={() => { onClose(); navigate('/sessions'); }}>
+              <Icon name="activity" />
+              <div className="body"><div className="name">{t('nav.activity')}</div></div>
+            </button>
             <button className="panel-row" onClick={() => { onClose(); navigate('/settings'); }}>
               <Icon name="settings" />
               <div className="body"><div className="name">{t('nav.settings')}</div></div>

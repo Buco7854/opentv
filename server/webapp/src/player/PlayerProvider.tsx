@@ -12,6 +12,7 @@ import { api, Channel, GuideEntry, prefs, ResumePoint, streamUrl, transcodeUrl }
 import { GuideSheet } from '../components/GuideSheet';
 import { Icon } from '../components/Icons';
 import { IconBtn, Segmented, Sheet, snackbar } from '../components/Primitives';
+import { useSessionReporter } from './useSessionReporter';
 import { t } from '../i18n';
 
 export interface PlayRequest {
@@ -24,6 +25,10 @@ export interface PlayRequest {
   catchup?: boolean;
   /** Served by this server (downloaded file): skip the stream proxy. */
   direct?: boolean;
+  /** Reported to the activity dashboard (who is watching what). */
+  playlistId?: number | null;
+  kind?: 'live' | 'movie' | 'series' | 'catchup' | 'download';
+  logo?: string | null;
 }
 
 /** Player is a route (`/watch/...`); helpers navigate by id to keep tokens/urls out of the URL bar. */
@@ -856,6 +861,24 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     if (pendingSeek == null) return;
     if (isFinite(fullPosition) && Math.abs(fullPosition - pendingSeek) < 1.5) setPendingSeek(null);
   }, [fullPosition, pendingSeek]);
+
+  // Report playback to the activity dashboard. Engine mirrors the wiring effect's
+  // choice; remux takes precedence since it re-serves the source as HLS.
+  const reportEngine = remux ? 'remux'
+    : streamKind(activeUrl) === 'ts' ? 'mpegts'
+      : streamKind(activeUrl) === 'direct' ? 'native' : 'hls';
+  useSessionReporter({
+    playlistId: request.playlistId ?? null,
+    title,
+    kind: request.kind ?? (catchup ? 'catchup' : live ? 'live' : 'movie'),
+    logo: request.logo ?? null,
+    live: !!live,
+    durationSec: fullDuration,
+    engine: reportEngine,
+    direct: activeDirect,
+    audioTranscoded: false,
+    remuxId: remux?.id ?? null,
+  }, videoRef);
 
   const busy = holdEngine || remuxState === 'loading' || (buffering && !paused);
   // VOD/downloads and catch-up all get a scrubber.

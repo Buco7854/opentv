@@ -56,6 +56,8 @@ class ServerGraph(
     val remux: RemuxService,
     val transcoder: AudioTranscoder,
     val cipher: StreamCipher,
+    val sessions: PlaybackSessionRegistry,
+    val trustedProxies: TrustedProxies,
     /** Concurrent reads the provider behind a source URL permits (its max_connections). */
     val connectionLimit: suspend (String) -> Int,
 )
@@ -214,6 +216,14 @@ private fun Metadata.forClient(c: StreamCipher) = copy(
 /** Live/movie favorite keys are provider URLs (tokenized); series keys are not. */
 private fun Favorite.tokenized(c: StreamCipher) =
     if (kind == ChannelKind.SERIES) this else copy(key = c.encrypt(key))
+
+private fun RemuxService.RemuxDiagnostics.toDto() = RemuxDiagDto(
+    videoCodec = videoCodec, transcodeVideo = transcodeVideo, videoEncoder = videoEncoder,
+    nativeVideoCopy = nativeVideoCopy, audioCodec = audioCodec, audioChannels = audioChannels,
+    audioLabel = audioLabel, subtitleCount = subtitleCount, segmentCount = segmentCount,
+    timeshift = timeshift, providerKey = providerKey, connectionLimit = connectionLimit,
+    ffmpegRunning = ffmpegRunning, durationSec = durationSec, lastLog = lastLog,
+)
 
 private fun escapeLike(q: String) = q.trim()
     .replace("\\", "\\\\")
@@ -589,6 +599,53 @@ fun Route.api(g: ServerGraph) = route("/api") {
                 }
                 call.respondFile(path.toFile())
             }
+        }
+    }
+
+    // Active web-client playback sessions: viewers heartbeat here, the admin dashboard
+    // lists them and queues pause/play/message commands delivered on the next heartbeat.
+    route("/sessions") {
+        get {
+            val dtos = g.sessions.active().map { live ->
+                val s = live.state
+                val diag = s.remuxId?.let { g.remux.diagnostics(it) }?.toDto()
+                SessionDto(
+                    id = live.id,
+                    ip = live.ip,
+                    userAgent = live.userAgent,
+                    playlistName = s.playlistId?.let { g.storage.playlists.get(it)?.name },
+                    title = s.title,
+                    kind = s.kind,
+                    logo = s.logo,
+                    positionMs = s.positionMs,
+                    durationMs = s.durationMs,
+                    paused = s.paused,
+                    live = s.live,
+                    startedAtMs = live.startedAtMs,
+                    lastSeenMs = live.lastSeenMs,
+                    stream = SessionStreamDto(s.engine, s.direct, s.audioTranscoded, diag),
+                )
+            }
+            call.respond(dtos)
+        }
+        post("/heartbeat") {
+            val dto = call.receive<SessionHeartbeatDto>()
+            val ip = g.trustedProxies.clientIp(call)
+            val userAgent = call.request.headers[HttpHeaders.UserAgent].orEmpty()
+            call.respond(HeartbeatResponseDto(g.sessions.heartbeat(ip, userAgent, dto)))
+        }
+        post("/{id}/command") {
+            val id = call.parameters["id"] ?: throw IllegalArgumentException("Missing id")
+            val cmd = call.receive<SessionCommandDto>()
+            if (cmd.type !in setOf("pause", "play", "message")) {
+                throw IllegalArgumentException("Unknown command")
+            }
+            if (g.sessions.enqueue(id, cmd)) call.respond(HttpStatusCode.NoContent)
+            else call.respond(HttpStatusCode.NotFound, MessageDto("No such session"))
+        }
+        delete("/{id}") {
+            g.sessions.remove(call.parameters["id"] ?: "")
+            call.respond(HttpStatusCode.NoContent)
         }
     }
 

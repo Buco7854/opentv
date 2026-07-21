@@ -10,6 +10,7 @@ import { DownloadsScreen } from './screens/DownloadsScreen';
 import { FavoritesScreen } from './screens/FavoritesScreen';
 import { HomeScreen } from './screens/HomeScreen';
 import { SearchScreen } from './screens/SearchScreen';
+import { SessionsScreen } from './screens/SessionsScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { WatchCatchupScreen, WatchChannelScreen, WatchDownloadScreen } from './screens/WatchScreen';
 import { XtreamSeriesScreen } from './screens/XtreamSeriesScreen';
@@ -31,6 +32,7 @@ export function App() {
             <Route path="/series/:playlistId/:seriesKey" element={<SeriesDetailScreen />} />
             <Route path="/xseries/:playlistId/:seriesId" element={<XtreamSeriesScreen />} />
             <Route path="/downloads" element={<DownloadsScreen />} />
+            <Route path="/sessions" element={<SessionsScreen />} />
             <Route path="/watch/:channelId" element={<WatchChannelScreen />} />
             <Route path="/watch/catchup/:channelId/:startMs/:endMs" element={<WatchCatchupScreen />} />
             <Route path="/watch/download/:downloadId" element={<WatchDownloadScreen />} />

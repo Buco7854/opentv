@@ -755,6 +755,27 @@
   .download-card .status.failed { @apply text-error; }
   .download-card .progress-track { @apply mt-2.5 h-1; }
 
+  /* Activity dashboard: one card per active viewer. */
+  .session-card { @apply p-4; }
+  .session-card .head { @apply flex items-start gap-3; }
+  .session-card .head .logo-box { @apply size-12 flex-none; }
+  .session-card .head .body { @apply min-w-0 flex-1; }
+  .session-card .title { @apply truncate; font: var(--type-title-small); }
+  .session-card .sub { @apply mt-0.5 truncate text-on-surface-variant; font: var(--type-body-small); }
+  .session-card .who { @apply mt-0.5 truncate tabular-nums text-on-surface-variant; font: var(--type-label-small); }
+  .session-card .tags { @apply flex flex-none flex-col items-end gap-1.5; }
+  .session-card .timeline { @apply mt-3; }
+  .session-card .timeline .times { @apply mt-1 flex justify-between tabular-nums text-on-surface-variant; font: var(--type-label-small); }
+  .session-card .actions { @apply mt-2 flex items-center gap-1; }
+  .session-card .details { @apply mt-3 rounded-xl px-3.5 py-1; background: var(--c-input); }
+  .session-card .details .kv-row { @apply py-2; }
+  .session-card .details .kv-row .v { @apply text-right tabular-nums; }
+  .session-card .details .note { @apply pt-2.5 text-on-surface-variant; font: var(--type-label-small); }
+  .session-card .details .log { @apply border-t py-2.5; border-color: var(--c-hairline); }
+  .session-card .details .log .k { @apply text-on-surface-variant; font: var(--type-label-small); }
+  .session-card .details .log code { @apply mt-1 block whitespace-pre-wrap break-words text-error; font: var(--type-label-small); font-family: ui-monospace, monospace; }
+  .session-card .details .stamp { @apply border-t py-2 text-right text-on-surface-variant; border-color: var(--c-hairline); font: var(--type-label-small); }
+
   /* ================================================================ */
   /* 5. PLAYER: fullscreen overlay                                    */
   /* ================================================================ */

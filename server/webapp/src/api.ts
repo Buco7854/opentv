@@ -136,6 +136,68 @@ export interface Download {
   createdMs: number;
 }
 
+/** What a player reports about current playback (mirrors server SessionHeartbeatDto). */
+export interface SessionHeartbeat {
+  id: string;
+  playlistId: number | null;
+  title: string;
+  kind: 'live' | 'movie' | 'series' | 'catchup' | 'download';
+  logo: string | null;
+  positionMs: number;
+  durationMs: number;
+  paused: boolean;
+  live: boolean;
+  engine: 'hls' | 'mpegts' | 'native' | 'remux';
+  direct: boolean;
+  audioTranscoded: boolean;
+  remuxId: string | null;
+}
+
+export interface SessionCommand { type: 'pause' | 'play' | 'message'; text?: string }
+
+export interface RemuxDiag {
+  videoCodec: string;
+  transcodeVideo: boolean;
+  videoEncoder: string;
+  nativeVideoCopy: boolean;
+  audioCodec: string;
+  audioChannels: number | null;
+  audioLabel: string | null;
+  subtitleCount: number;
+  segmentCount: number;
+  timeshift: boolean;
+  providerKey: string;
+  connectionLimit: number;
+  ffmpegRunning: boolean;
+  durationSec: number | null;
+  lastLog: string | null;
+}
+
+export interface SessionStream {
+  engine: 'hls' | 'mpegts' | 'native' | 'remux';
+  direct: boolean;
+  audioTranscoded: boolean;
+  remux: RemuxDiag | null;
+}
+
+/** One active viewer on the activity dashboard. */
+export interface Session {
+  id: string;
+  ip: string;
+  userAgent: string;
+  playlistName: string | null;
+  title: string;
+  kind: SessionHeartbeat['kind'];
+  logo: string | null;
+  positionMs: number;
+  durationMs: number;
+  paused: boolean;
+  live: boolean;
+  startedAtMs: number;
+  lastSeenMs: number;
+  stream: SessionStream;
+}
+
 export interface XtreamSeriesDetail { series: XtreamSeries; episodes: Channel[]; error: string | null }
 export interface FavoritesResolved { live: Channel[]; movies: Channel[]; series: SeriesHit[] }
 export interface Settings { userAgent: string; downloadLimit: number; pageSize: number }
@@ -203,6 +265,16 @@ export const api = {
     ),
   /** Release a remux session (and its provider connection) when playback ends. */
   remuxStop: (id: string) => fetch(`/api/remux/${id}`, { method: 'DELETE', keepalive: true }).catch(() => {}),
+  sessions: () => j<Session[]>('/api/sessions'),
+  /** keepalive so a heartbeat still fires from the player's unmount/unload. */
+  sessionHeartbeat: (body: SessionHeartbeat) =>
+    fetch('/api/sessions/heartbeat', { ...post(body), keepalive: true })
+      .then((r) => (r.ok ? (r.json() as Promise<{ commands: SessionCommand[] }>) : { commands: [] }))
+      .catch(() => ({ commands: [] as SessionCommand[] })),
+  sessionCommand: (id: string, command: SessionCommand) =>
+    j<null>(`/api/sessions/${encodeURIComponent(id)}/command`, post(command)),
+  sessionEnd: (id: string) =>
+    fetch(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE', keepalive: true }).catch(() => {}),
   resumeAll: () => j<ResumePoint[]>('/api/resume'),
   saveResume: (url: string, positionMs: number, durationMs: number) =>
     j<null>('/api/resume', put({ url, positionMs, durationMs, updatedMs: Date.now() })),

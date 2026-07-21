@@ -40,6 +40,9 @@ export function WatchChannelScreen() {
     live: channel.kind === ChannelKind.LIVE,
     tvgId: channel.tvgId,
     hasGuide: channel.tvgId != null || channel.xtreamStreamId != null,
+    playlistId: channel.playlistId,
+    kind: channel.kind === ChannelKind.LIVE ? 'live' : channel.kind === ChannelKind.SERIES ? 'series' : 'movie',
+    logo: channel.logo,
   };
   return <Stage request={request} />;
 }
@@ -64,6 +67,9 @@ export function WatchCatchupScreen() {
     channelId,
     live: false,
     catchup: true,
+    playlistId: data.channel.playlistId,
+    kind: 'catchup',
+    logo: data.channel.logo,
   };
   return <Stage request={request} />;
 }
@@ -79,6 +85,7 @@ export function WatchDownloadScreen() {
     url: downloadFileUrl(downloadId),
     title: item.title,
     direct: true,
+    kind: 'download',
   };
   return <Stage request={request} />;
 }

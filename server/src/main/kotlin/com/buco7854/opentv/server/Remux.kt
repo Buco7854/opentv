@@ -221,6 +221,50 @@ class RemuxService(private val http: ServerHttp, private val connections: Provid
         sessions[id]?.let { evict(it) }
     }
 
+    /** Read-only snapshot of a live session's ffmpeg pipeline, for the admin dashboard's
+     *  "why is this transcoding/remuxing" panel. Null when the session is gone. */
+    data class RemuxDiagnostics(
+        val videoCodec: String,
+        val transcodeVideo: Boolean,
+        val videoEncoder: String,
+        val nativeVideoCopy: Boolean,
+        val audioCodec: String,
+        val audioChannels: Int?,
+        val audioLabel: String?,
+        val subtitleCount: Int,
+        val segmentCount: Int,
+        val timeshift: Boolean,
+        val providerKey: String,
+        val connectionLimit: Int,
+        val ffmpegRunning: Boolean,
+        val durationSec: Double?,
+        val lastLog: String?,
+    )
+
+    fun diagnostics(id: String): RemuxDiagnostics? {
+        val s = sessions[id] ?: return null
+        val lastLog = runCatching {
+            Files.readString(s.dir.resolve("ffmpeg.log")).trim().lines().lastOrNull { it.isNotBlank() }
+        }.getOrNull()
+        return RemuxDiagnostics(
+            videoCodec = s.videoCodec,
+            transcodeVideo = s.transcodeVideo,
+            videoEncoder = videoEncoder,
+            nativeVideoCopy = s.nativeVideoCopy,
+            audioCodec = s.audio.codec,
+            audioChannels = s.audio.channels,
+            audioLabel = s.audioLabels.getOrNull(s.audioIndex),
+            subtitleCount = s.subLabels.size,
+            segmentCount = s.starts.size,
+            timeshift = s.timeshift,
+            providerKey = s.providerKey,
+            connectionLimit = s.connectionLimit,
+            ffmpegRunning = s.process?.isAlive == true,
+            durationSec = s.durationSec.takeIf { it > 0 },
+            lastLog = lastLog,
+        )
+    }
+
     private fun sessionId(url: String, clientHevc: Boolean, audioIndex: Int): String =
         MessageDigest.getInstance("SHA-1").digest("$url@${if (clientHevc) "n" else "s"}@$audioIndex".toByteArray())
             .joinToString("") { "%02x".format(it) }.take(16)
