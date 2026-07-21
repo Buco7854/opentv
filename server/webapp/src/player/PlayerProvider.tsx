@@ -199,6 +199,9 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
   const [paused, setPaused] = useState(false);
   const [buffering, setBuffering] = useState(true);
   const [bufferedEnd, setBufferedEnd] = useState(0);
+  // Live audio the browser couldn't decode, rescued via the server's AAC transcode
+  // (mpegts path only); surfaced to the activity dashboard.
+  const [audioTranscoded, setAudioTranscoded] = useState(false);
   const [epgNow, setEpgNow] = useState<GuideEntry | null>(null);
   const [uiVisible, setUiVisible] = useState(true);
   const [time, setTime] = useState({ position: 0, duration: NaN });
@@ -274,6 +277,7 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     setError(null);
     setBuffering(true);
     setBufferedEnd(0);
+    setAudioTranscoded(false);
     if (lastUrl.current !== url) {
       lastUrl.current = url;
       video.playbackRate = 1;
@@ -301,6 +305,7 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
         setError(t('player.mpegtsUnsupported'));
         return;
       }
+      setAudioTranscoded(transcoded);
       const player = mpegts.createPlayer({
         type: 'mpegts', isLive: true,
         url: transcoded ? transcodeUrl(target) : src(target),
@@ -876,7 +881,7 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     durationSec: fullDuration,
     engine: reportEngine,
     direct: activeDirect,
-    audioTranscoded: false,
+    audioTranscoded,
     // Engine is held while ffmpeg probes the file; report "preparing" so the
     // dashboard shows that, not the transient pre-remux (proxied) mode.
     preparing: holdEngine,
