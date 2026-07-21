@@ -768,6 +768,10 @@
   .session-card .timeline .times { @apply mt-1 flex justify-between tabular-nums text-on-surface-variant; font: var(--type-label-small); }
   .session-card .actions { @apply mt-2 flex items-center gap-1; }
   .session-card .details { @apply mt-3 rounded-xl px-3.5 py-1; background: var(--c-input); }
+  .session-card .details .explain { @apply pt-3 pb-1; }
+  .session-card .details .explain p { @apply py-1; font: var(--type-body-small); }
+  .session-card .details .explain p + p { @apply mt-0; }
+  .session-card .details .tech-label { @apply mt-1.5 border-t pt-3 pb-1 uppercase text-on-surface-variant; border-color: var(--c-hairline); font: var(--type-label-small); letter-spacing: 0.5px; }
   .session-card .details .kv-row { @apply py-2; }
   .session-card .details .kv-row .v { @apply text-right tabular-nums; }
   .session-card .details .note { @apply pt-2.5 text-on-surface-variant; font: var(--type-label-small); }

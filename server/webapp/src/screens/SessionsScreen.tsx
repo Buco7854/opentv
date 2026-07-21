@@ -56,6 +56,28 @@ const kindLabel = (kind: Session['kind']) =>
       : kind === 'movie' ? t('nav.movies')
         : kind === 'series' ? t('nav.series') : t('downloads.download');
 
+const up = (codec: string) => codec.toUpperCase();
+
+/** Plain-language "what is happening and why", for viewers who don't know what
+ *  remux/transcode/AAC mean. One sentence per media aspect. */
+function explain(stream: Session['stream']): string[] {
+  const r = stream.remux;
+  if (r) {
+    const lines: string[] = [];
+    lines.push(r.transcodeVideo ? t('sessions.whyVideoTranscode', { codec: up(r.videoCodec) })
+      : r.nativeVideoCopy ? t('sessions.whyVideoCopyNative', { codec: up(r.videoCodec) })
+        : t('sessions.whyVideoCopy'));
+    lines.push(r.audioCodec.toLowerCase() === 'aac'
+      ? t('sessions.whyAudioKeep')
+      : t('sessions.whyAudioConvert', { codec: up(r.audioCodec) }));
+    lines.push(t('sessions.whyContainer'));
+    return lines;
+  }
+  if (stream.audioTranscoded) return [t('sessions.whyAudioLive'), t('sessions.whyRelay')];
+  if (stream.direct) return [t('sessions.whyDirect')];
+  return [t('sessions.whyRelay')];
+}
+
 export function SessionsScreen() {
   const [sessions, setSessions] = useState<Session[] | null>(null);
   const [messaging, setMessaging] = useState<Session | null>(null);
@@ -189,6 +211,10 @@ function StreamDetails({ session }: { session: Session }) {
 
   return (
     <div className="details">
+      <div className="explain">
+        {explain(stream).map((line, i) => <p key={i}>{line}</p>)}
+      </div>
+      <div className="tech-label">{t('sessions.technical')}</div>
       {r?.timeshift && <div className="note">{t('sessions.timeshift')}</div>}
       {rows.map(([k, v], i) => (
         <div className="kv-row" key={i}>
