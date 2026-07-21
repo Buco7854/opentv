@@ -23,9 +23,14 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
-      label: 'Beyond Android',
+      label: 'Web client',
       collapsed: false,
-      items: ['guide/webclient'],
+      link: { type: 'doc', id: 'guide/webclient' },
+      items: [
+        'guide/webclient-tour',
+        'guide/webclient-now-watching',
+        'guide/webclient-hosting',
+      ],
     },
     { type: 'doc', id: 'download', label: 'Download the app' },
     { type: 'doc', id: 'faq', label: 'FAQ' },
