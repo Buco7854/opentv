@@ -17,6 +17,7 @@ export interface PlaybackSnapshot {
   engine: SessionHeartbeat['engine'];
   direct: boolean;
   audioTranscoded: boolean;
+  preparing: boolean;
   remuxId: string | null;
 }
 
@@ -64,6 +65,7 @@ export function useSessionReporter(snapshot: PlaybackSnapshot, video: RefObject<
         engine: s.engine,
         direct: s.direct,
         audioTranscoded: s.audioTranscoded,
+        preparing: s.preparing,
         remuxId: s.remuxId,
       };
       const { commands } = await api.sessionHeartbeat(body);

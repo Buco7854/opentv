@@ -150,6 +150,8 @@ export interface SessionHeartbeat {
   engine: 'hls' | 'mpegts' | 'native' | 'remux';
   direct: boolean;
   audioTranscoded: boolean;
+  /** Server is still probing the file to choose remux vs transcode; mode is undecided. */
+  preparing: boolean;
   remuxId: string | null;
 }
 
@@ -177,6 +179,7 @@ export interface SessionStream {
   engine: 'hls' | 'mpegts' | 'native' | 'remux';
   direct: boolean;
   audioTranscoded: boolean;
+  preparing: boolean;
   remux: RemuxDiag | null;
 }
 

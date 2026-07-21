@@ -877,6 +877,9 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     engine: reportEngine,
     direct: activeDirect,
     audioTranscoded: false,
+    // Engine is held while ffmpeg probes the file; report "preparing" so the
+    // dashboard shows that, not the transient pre-remux (proxied) mode.
+    preparing: holdEngine,
     remuxId: remux?.id ?? null,
   }, videoRef);
 

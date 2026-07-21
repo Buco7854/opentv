@@ -43,6 +43,7 @@ function deviceLabel(ua: string): string {
 
 /** The playback path in one label, for the card's chip. */
 function modeLabel(stream: Session['stream']): string {
+  if (stream.preparing) return t('sessions.modePreparing');
   if (stream.remux) {
     return stream.remux.transcodeVideo ? t('sessions.modeRemuxTranscode') : t('sessions.modeRemuxCopy');
   }
@@ -61,12 +62,15 @@ const up = (codec: string) => codec.toUpperCase();
 /** Plain-language "what is happening and why", for viewers who don't know what
  *  remux/transcode/AAC mean. One sentence per media aspect. */
 function explain(stream: Session['stream']): string[] {
+  if (stream.preparing) return [t('sessions.whyPreparing')];
   const r = stream.remux;
   if (r) {
     const lines: string[] = [];
-    lines.push(r.transcodeVideo ? t('sessions.whyVideoTranscode', { codec: up(r.videoCodec) })
-      : r.nativeVideoCopy ? t('sessions.whyVideoCopyNative', { codec: up(r.videoCodec) })
-        : t('sessions.whyVideoCopy'));
+    // Copy (remux) and native-copy are the same story to a viewer: the browser can
+    // decode this codec, so it passes through untouched.
+    lines.push(r.transcodeVideo
+      ? t('sessions.whyVideoTranscode', { codec: up(r.videoCodec) })
+      : t('sessions.whyVideoCopy', { codec: up(r.videoCodec) }));
     lines.push(r.audioCodec.toLowerCase() === 'aac'
       ? t('sessions.whyAudioKeep')
       : t('sessions.whyAudioConvert', { codec: up(r.audioCodec) }));
@@ -192,9 +196,10 @@ function SessionCard({ session, onToggle, onMessage }: {
 function StreamDetails({ session }: { session: Session }) {
   const { stream } = session;
   const rows: [string, React.ReactNode][] = [];
-  rows.push([t('sessions.engine'), stream.engine]);
+  // Nothing technical to show until the server has finished probing.
+  if (!stream.preparing) rows.push([t('sessions.engine'), stream.engine]);
 
-  const r: RemuxDiag | null = stream.remux;
+  const r: RemuxDiag | null = stream.preparing ? null : stream.remux;
   if (r) {
     const videoAction = r.transcodeVideo
       ? t('sessions.transcodeTo', { encoder: r.videoEncoder })
@@ -214,7 +219,7 @@ function StreamDetails({ session }: { session: Session }) {
       <div className="explain">
         {explain(stream).map((line, i) => <p key={i}>{line}</p>)}
       </div>
-      <div className="tech-label">{t('sessions.technical')}</div>
+      {rows.length > 0 && <div className="tech-label">{t('sessions.technical')}</div>}
       {r?.timeshift && <div className="note">{t('sessions.timeshift')}</div>}
       {rows.map(([k, v], i) => (
         <div className="kv-row" key={i}>

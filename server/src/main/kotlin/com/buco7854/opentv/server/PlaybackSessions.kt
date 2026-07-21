@@ -26,6 +26,8 @@ data class SessionHeartbeatDto(
     val direct: Boolean = false,
     /** Live audio the browser couldn't decode, rescued to AAC by the server. */
     val audioTranscoded: Boolean = false,
+    /** ffmpeg is still probing the file; the copy-vs-transcode choice isn't made yet. */
+    val preparing: Boolean = false,
     /** Set when engine == "remux"; joins to server-side ffmpeg diagnostics. */
     val remuxId: String? = null,
 )
@@ -66,6 +68,7 @@ data class SessionStreamDto(
     val engine: String,
     val direct: Boolean,
     val audioTranscoded: Boolean,
+    val preparing: Boolean,
     val remux: RemuxDiagDto? = null,
 )
 

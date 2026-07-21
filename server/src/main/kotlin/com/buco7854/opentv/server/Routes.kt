@@ -623,7 +623,7 @@ fun Route.api(g: ServerGraph) = route("/api") {
                     live = s.live,
                     startedAtMs = live.startedAtMs,
                     lastSeenMs = live.lastSeenMs,
-                    stream = SessionStreamDto(s.engine, s.direct, s.audioTranscoded, diag),
+                    stream = SessionStreamDto(s.engine, s.direct, s.audioTranscoded, s.preparing, diag),
                 )
             }
             call.respond(dtos)
