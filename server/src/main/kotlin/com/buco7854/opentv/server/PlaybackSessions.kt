@@ -32,14 +32,36 @@ data class SessionHeartbeatDto(
     val preparing: Boolean = false,
     /** Set when engine == "remux"; joins to server-side ffmpeg diagnostics. */
     val remuxId: String? = null,
+    /** Stable identity of the content being watched (channel/download/catch-up), so the
+     *  server can tell two viewers apart from two viewers of the same thing. */
+    val contentKey: String = "",
 )
 
-/** A remote-control command the admin queues for a viewer. */
+/** Host-driven playback state, mirrored to the other members of a watch-together room. */
+@Serializable
+data class SyncStateDto(val positionMs: Long, val paused: Boolean, val rate: Double = 1.0)
+
+/**
+ * A command pushed to a viewer. The admin queues pause/play/message; the rest coordinate
+ * watch-together rooms between viewers over the same channel.
+ */
 @Serializable
 data class SessionCommandDto(
-    /** "pause" | "play" | "message". */
+    /** pause | play | message (admin) · join-request | join-response | sync | peer-left |
+     *  host (you are the new host) | room-ended (watch-together dissolved). */
     val type: String,
     val text: String? = null,
+    /** join-response: the room the requester was admitted to. */
+    val roomId: String? = null,
+    /** join-request/response: the other viewer's session id and display name. */
+    val peerId: String? = null,
+    val peerName: String? = null,
+    /** join-response: whether the host accepted. */
+    val accepted: Boolean? = null,
+    /** join-request: the host already declined this peer once, so ask quietly (no modal). */
+    val quiet: Boolean = false,
+    /** sync: the host's latest playback state. */
+    val sync: SyncStateDto? = null,
 )
 
 @Serializable
@@ -113,7 +135,17 @@ class PlaybackSessionRegistry {
         val commands: ConcurrentLinkedQueue<SessionCommandDto> = ConcurrentLinkedQueue(),
     )
 
+    /** A watch-together room: the host drives playback, every other member mirrors it. */
+    private class Room(val id: String, @Volatile var hostId: String) {
+        val members: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    }
+
     private val sessions = ConcurrentHashMap<String, Live>()
+    private val rooms = ConcurrentHashMap<String, Room>()
+    private val memberRoom = ConcurrentHashMap<String, String>()
+    // A host that declined a peer for some content isn't pestered with a modal again for it.
+    private val declined = ConcurrentHashMap<String, MutableSet<String>>()
+    private fun declineKey(peerId: String, contentKey: String) = "$peerId@$contentKey"
     // Signals a session's WebSocket to drain immediately; heartbeat draining is the fallback.
     private val wakes = ConcurrentHashMap<String, Channel<Unit>>()
     private fun wake(id: String) = wakes.computeIfAbsent(id) { Channel(Channel.CONFLATED) }
@@ -136,6 +168,81 @@ class PlaybackSessionRegistry {
         return true
     }
 
+    /** Other live viewers watching the same [contentKey] as [selfId] - watch-together candidates. */
+    fun sameContentPeers(selfId: String, contentKey: String): List<Live> {
+        if (contentKey.isBlank()) return emptyList()
+        return active().filter { it.id != selfId && it.state.contentKey == contentKey }
+    }
+
+    /** Distinct other streams the viewers on [playlistId] currently pull from the provider. */
+    fun otherStreamsOn(selfId: String, playlistId: Long?, contentKey: String): Int {
+        if (playlistId == null) return 0
+        return active()
+            .filter { it.id != selfId && it.state.playlistId == playlistId && it.state.contentKey != contentKey }
+            .map { it.state.contentKey }.distinct().size
+    }
+
+    /** Ask [hostId] to admit [peerId] into a watch-together room; false when the host is gone. */
+    fun requestJoin(hostId: String, peerId: String, peerName: String, contentKey: String): Boolean {
+        if (hostId == peerId || hostId !in sessions) return false
+        val quiet = declined[hostId]?.contains(declineKey(peerId, contentKey)) == true
+        return enqueue(hostId, SessionCommandDto(
+            type = "join-request", peerId = peerId, peerName = peerName, quiet = quiet,
+        ))
+    }
+
+    /** The host's answer to a join request. On accept both share a room; on decline it's
+     *  remembered so the same peer can't pop another modal for the same content. */
+    fun answerJoin(hostId: String, peerId: String, hostName: String, contentKey: String, accept: Boolean): Boolean {
+        if (peerId !in sessions) return false
+        if (!accept) {
+            declined.computeIfAbsent(hostId) { java.util.concurrent.ConcurrentHashMap.newKeySet() }
+                .add(declineKey(peerId, contentKey))
+            return enqueue(peerId, SessionCommandDto(type = "join-response", accepted = false))
+        }
+        declined[hostId]?.remove(declineKey(peerId, contentKey))
+        val roomId = memberRoom[hostId] ?: run {
+            val room = Room("r-$hostId", hostId)
+            room.members.add(hostId)
+            rooms[room.id] = room
+            memberRoom[hostId] = room.id
+            room.id
+        }
+        rooms[roomId]?.members?.add(peerId)
+        memberRoom[peerId] = roomId
+        return enqueue(peerId, SessionCommandDto(
+            type = "join-response", accepted = true, roomId = roomId, peerId = hostId, peerName = hostName,
+        ))
+    }
+
+    /** Mirror the host's [state] to the room's other members (only the host drives). */
+    fun syncRoom(fromId: String, state: SyncStateDto) {
+        val room = memberRoom[fromId]?.let { rooms[it] } ?: return
+        if (room.hostId != fromId) return
+        room.members.filter { it != fromId }.forEach { member ->
+            // Keep only the freshest sync queued, so a brief socket outage can't back them up.
+            sessions[member]?.commands?.removeIf { it.type == "sync" }
+            enqueue(member, SessionCommandDto(type = "sync", sync = state))
+        }
+    }
+
+    /** Drop [id] from its room. The room keeps going with the remaining members (a new host
+     *  is promoted if the host left); it dissolves only when one lone member is left. */
+    fun leaveRoom(id: String) {
+        val roomId = memberRoom.remove(id) ?: return
+        val room = rooms[roomId] ?: return
+        room.members.remove(id)
+        if (room.members.size <= 1) {
+            room.members.forEach { memberRoom.remove(it); enqueue(it, SessionCommandDto(type = "room-ended")) }
+            rooms.remove(roomId)
+            return
+        }
+        val hostLeft = room.hostId == id
+        if (hostLeft) room.hostId = room.members.first()
+        room.members.forEach { enqueue(it, SessionCommandDto(type = "peer-left", peerId = id)) }
+        if (hostLeft) enqueue(room.hostId, SessionCommandDto(type = "host"))
+    }
+
     /** Fires whenever a command is queued for [id]; the WebSocket drains on each signal. */
     fun commandSignal(id: String): ReceiveChannel<Unit> = wake(id)
 
@@ -146,12 +253,18 @@ class PlaybackSessionRegistry {
         return out
     }
 
-    fun remove(id: String) { sessions.remove(id); wakes.remove(id)?.close() }
+    fun remove(id: String) {
+        leaveRoom(id)
+        declined.remove(id)
+        sessions.remove(id)
+        wakes.remove(id)?.close()
+    }
 
     /** Live sessions (stale ones pruned first), newest first. */
     fun active(): List<Live> {
         val cutoff = nowMs() - STALE_MS
-        sessions.values.removeIf { it.lastSeenMs < cutoff }
+        val stale = sessions.values.filter { it.lastSeenMs < cutoff }.map { it.id }
+        stale.forEach { remove(it) }
         return sessions.values.sortedByDescending { it.startedAtMs }
     }
 

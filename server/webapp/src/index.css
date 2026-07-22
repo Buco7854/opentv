@@ -876,6 +876,20 @@
   }
   .live-chip::before { content: ""; @apply size-2 rounded-full; background: #F1544B; }
 
+  /* Watch-together banner: a small pill over the video, visible with the chrome hidden. */
+  .watch-pill {
+    @apply absolute left-1/2 top-3 z-20 flex -translate-x-1/2 items-center gap-2
+           rounded-full px-3 py-1.5 text-white;
+    font: var(--type-label-medium);
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(8px);
+  }
+  .watch-pill .dot { @apply size-2 rounded-full; background: #34D399; }
+  .watch-pill .leave { @apply ml-1 rounded-full px-2 py-0.5 font-semibold; color: #8AB4FF; }
+  @media (hover: hover) { .watch-pill .leave:hover { background: rgba(255, 255, 255, 0.12); } }
+  .watch-pill.ask { @apply cursor-pointer; }
+  @media (hover: hover) { .watch-pill.ask:hover { background: rgba(0, 0, 0, 0.7); } }
+
   /* Our own subtitle overlay (the selected track is kept hidden so cues fire
      without native ::cue rendering). Standard low position, as players like
      Jellyfin place them; a small clearance when the (now slim) control bar

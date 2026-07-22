@@ -40,3 +40,18 @@ export const episodeTag = (ch: { season: number | null; episode: number | null }
     : ch.episode != null ? `EP ${ch.episode}` : null;
 
 export const starRating = (r: number) => `★ ${r.toFixed(1)}`;
+
+/** Compact "Browser · OS" label from a raw user-agent string. */
+export function deviceLabel(ua: string): string {
+  const browser = /Edg\//.test(ua) ? 'Edge'
+    : /OPR\/|Opera/.test(ua) ? 'Opera'
+      : /Chrome\//.test(ua) ? 'Chrome'
+        : /Firefox\//.test(ua) ? 'Firefox'
+          : /Safari\//.test(ua) ? 'Safari' : '';
+  const os = /Android/.test(ua) ? 'Android'
+    : /iPhone|iPad|iPod/.test(ua) ? 'iOS'
+      : /Windows/.test(ua) ? 'Windows'
+        : /Mac OS X|Macintosh/.test(ua) ? 'macOS'
+          : /Linux/.test(ua) ? 'Linux' : '';
+  return [browser, os].filter(Boolean).join(' · ');
+}

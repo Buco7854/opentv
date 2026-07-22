@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api, RemuxDiag, Session } from '../api';
 import { ChannelLogo, EmptyState, Pill } from '../components/Common';
 import { Dialog, IconBtn, ScreenHeader, Spinner, TextField, snackbar } from '../components/Primitives';
+import { deviceLabel } from '../lib/format';
 import { getLocale, t } from '../i18n';
 
 const POLL_MS = 3000;
@@ -25,21 +26,6 @@ const clock = (ms: number) => {
 
 const channelsName = (n: number | null) =>
   n == null ? null : n === 1 ? 'Mono' : n === 2 ? 'Stereo' : n === 6 ? '5.1' : n === 8 ? '7.1' : `${n}ch`;
-
-/** Compact "Browser · OS" label from a raw user-agent string. */
-function deviceLabel(ua: string): string {
-  const browser = /Edg\//.test(ua) ? 'Edge'
-    : /OPR\/|Opera/.test(ua) ? 'Opera'
-      : /Chrome\//.test(ua) ? 'Chrome'
-        : /Firefox\//.test(ua) ? 'Firefox'
-          : /Safari\//.test(ua) ? 'Safari' : '';
-  const os = /Android/.test(ua) ? 'Android'
-    : /iPhone|iPad|iPod/.test(ua) ? 'iOS'
-      : /Windows/.test(ua) ? 'Windows'
-        : /Mac OS X|Macintosh/.test(ua) ? 'macOS'
-          : /Linux/.test(ua) ? 'Linux' : '';
-  return [browser, os].filter(Boolean).join(' · ');
-}
 
 /** The playback path in one label, for the card's chip. */
 function modeLabel(stream: Session['stream']): string {

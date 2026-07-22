@@ -68,6 +68,31 @@ class ServerGraph(
 @Serializable
 data class MessageDto(val message: String)
 
+/** A viewer's request to check who else is on this content and whether the provider is full. */
+@Serializable
+data class WatchIntentRequest(
+    val selfId: String,
+    val contentKey: String,
+    /** Encrypted source token; lets the server read the provider's connection limit. */
+    val source: String? = null,
+    val playlistId: Long? = null,
+)
+
+@Serializable
+data class WatchIntentResponse(
+    /** Session ids already watching this same content (watch-together candidates). */
+    val sameContent: List<String>,
+    /** Starting a different stream here would exceed the provider's connection limit. */
+    val atLimit: Boolean,
+    val limit: Int,
+)
+
+@Serializable
+data class JoinRequestBody(val peerId: String, val peerName: String, val contentKey: String = "")
+
+@Serializable
+data class JoinAnswerBody(val peerId: String, val hostName: String, val contentKey: String = "", val accept: Boolean)
+
 @Serializable
 data class RemuxAvailableDto(val available: Boolean)
 
@@ -636,6 +661,38 @@ fun Route.api(g: ServerGraph) = route("/api") {
             val ip = g.trustedProxies.clientIp(call)
             val userAgent = call.request.headers[HttpHeaders.UserAgent].orEmpty()
             call.respond(HeartbeatResponseDto(g.sessions.heartbeat(ip, userAgent, dto)))
+        }
+        // Before playing, a viewer asks who else is on this content and whether the provider
+        // is full - so the client can offer "watch together" or show the limit message.
+        post("/intent") {
+            val req = call.receive<WatchIntentRequest>()
+            val peers = g.sessions.sameContentPeers(req.selfId, req.contentKey).map { it.id }
+            val url = req.source?.let { g.cipher.tryDecrypt(it) }
+            val limit = url?.let { g.connectionLimit(it) } ?: Int.MAX_VALUE
+            val others = g.sessions.otherStreamsOn(req.selfId, req.playlistId, req.contentKey)
+            call.respond(WatchIntentResponse(peers, peers.isEmpty() && others >= limit.coerceAtLeast(1), limit))
+        }
+        // Watch-together handshake, routed over the same command channel as pause/play.
+        post("/{id}/join-request") {
+            val hostId = call.parameters["id"] ?: throw IllegalArgumentException("Missing id")
+            val req = call.receive<JoinRequestBody>()
+            if (g.sessions.requestJoin(hostId, req.peerId, req.peerName, req.contentKey)) call.respond(HttpStatusCode.NoContent)
+            else call.respond(HttpStatusCode.NotFound, MessageDto("No such session"))
+        }
+        post("/{id}/join-answer") {
+            val hostId = call.parameters["id"] ?: throw IllegalArgumentException("Missing id")
+            val req = call.receive<JoinAnswerBody>()
+            if (g.sessions.answerJoin(hostId, req.peerId, req.hostName, req.contentKey, req.accept)) call.respond(HttpStatusCode.NoContent)
+            else call.respond(HttpStatusCode.NotFound, MessageDto("No such session"))
+        }
+        post("/{id}/sync") {
+            val id = call.parameters["id"] ?: throw IllegalArgumentException("Missing id")
+            g.sessions.syncRoom(id, call.receive<SyncStateDto>())
+            call.respond(HttpStatusCode.NoContent)
+        }
+        post("/{id}/leave") {
+            g.sessions.leaveRoom(call.parameters["id"] ?: "")
+            call.respond(HttpStatusCode.NoContent)
         }
         post("/{id}/command") {
             val id = call.parameters["id"] ?: throw IllegalArgumentException("Missing id")

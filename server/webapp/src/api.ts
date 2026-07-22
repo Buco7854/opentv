@@ -153,9 +153,27 @@ export interface SessionHeartbeat {
   /** Server is still probing the file to choose remux vs transcode; mode is undecided. */
   preparing: boolean;
   remuxId: string | null;
+  /** Stable id of the content, so the server can spot two viewers of the same thing. */
+  contentKey: string;
 }
 
-export interface SessionCommand { type: 'pause' | 'play' | 'message'; text?: string }
+/** Host playback state mirrored to a watch-together room's guests. */
+export interface SyncState { positionMs: number; paused: boolean; rate: number }
+
+export interface SessionCommand {
+  type: 'pause' | 'play' | 'message' | 'join-request' | 'join-response'
+    | 'sync' | 'peer-left' | 'host' | 'room-ended';
+  text?: string;
+  roomId?: string;
+  peerId?: string;
+  peerName?: string;
+  accepted?: boolean;
+  quiet?: boolean;
+  sync?: SyncState;
+}
+
+/** Who else is on this content, and whether the provider is full for a different stream. */
+export interface WatchIntent { sameContent: string[]; atLimit: boolean; limit: number }
 
 export interface RemuxDiag {
   videoCodec: string;
@@ -285,6 +303,20 @@ export const api = {
     j<null>(`/api/sessions/${encodeURIComponent(id)}/command`, post(command)),
   sessionEnd: (id: string) =>
     fetch(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE', keepalive: true }).catch(() => {}),
+  /** Who else is watching this content, and whether the provider is at its limit. */
+  watchIntent: (selfId: string, contentKey: string, source: string | null, playlistId: number | null) =>
+    j<WatchIntent>('/api/sessions/intent', post({ selfId, contentKey, source, playlistId })),
+  /** Ask [hostId]'s viewer to admit us into a watch-together room. */
+  joinRequest: (hostId: string, peerId: string, peerName: string, contentKey: string) =>
+    j<null>(`/api/sessions/${encodeURIComponent(hostId)}/join-request`, post({ peerId, peerName, contentKey })),
+  /** The host's answer to a pending join request. */
+  joinAnswer: (hostId: string, peerId: string, hostName: string, contentKey: string, accept: boolean) =>
+    j<null>(`/api/sessions/${encodeURIComponent(hostId)}/join-answer`, post({ peerId, hostName, contentKey, accept })),
+  /** Host pushes its playback state to the room. keepalive so a final pause still lands. */
+  sessionSync: (id: string, state: SyncState) =>
+    fetch(`/api/sessions/${encodeURIComponent(id)}/sync`, { ...post(state), keepalive: true }).catch(() => {}),
+  sessionLeave: (id: string) =>
+    fetch(`/api/sessions/${encodeURIComponent(id)}/leave`, { method: 'POST', keepalive: true }).catch(() => {}),
   resumeAll: () => j<ResumePoint[]>('/api/resume'),
   saveResume: (url: string, positionMs: number, durationMs: number) =>
     j<null>('/api/resume', put({ url, positionMs, durationMs, updatedMs: Date.now() })),

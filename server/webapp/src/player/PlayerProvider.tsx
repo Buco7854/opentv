@@ -12,7 +12,8 @@ import { api, ApiError, Channel, GuideEntry, prefs, ResumePoint, streamUrl, tran
 import { GuideSheet } from '../components/GuideSheet';
 import { Icon } from '../components/Icons';
 import { IconBtn, Segmented, Sheet, snackbar } from '../components/Primitives';
-import { useSessionReporter } from './useSessionReporter';
+import { tabSessionId, useSessionReporter } from './useSessionReporter';
+import { useWatchTogether, WatchTogetherModals } from './WatchTogether';
 import { t } from '../i18n';
 
 export interface PlayRequest {
@@ -880,6 +881,24 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
   const reportEngine = remux ? 'remux'
     : streamKind(activeUrl) === 'ts' ? 'mpegts'
       : streamKind(activeUrl) === 'direct' ? 'native' : 'hls';
+  // Stable identity of this content, so two viewers of the same thing can watch together.
+  const contentKey = catchup ? `cu:${url}` : channelId != null ? `ch:${channelId}` : `u:${url}`;
+  const wt = useWatchTogether({
+    selfId: tabSessionId(),
+    video: videoRef,
+    active: !error,
+    live: !!live,
+    contentKey,
+    source: url,
+    playlistId: request.playlistId ?? null,
+  });
+  // Watching something else while the provider is full: show the same style of message
+  // as a decode failure rather than silently stealing the connection.
+  useEffect(() => {
+    if (!wt.limited) return;
+    setError((old) => old ?? t('player.connectionLimit'));
+    videoRef.current?.pause();
+  }, [wt.limited]);
   useSessionReporter({
     playlistId: request.playlistId ?? null,
     title,
@@ -894,7 +913,8 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     // dashboard shows that, not the transient pre-remux (proxied) mode.
     preparing: holdEngine,
     remuxId: remux?.id ?? null,
-  }, videoRef);
+    contentKey,
+  }, videoRef, wt.onCommand);
 
   const busy = holdEngine || remuxState === 'loading' || (buffering && !paused);
   // VOD/downloads and catch-up all get a scrubber.
@@ -940,6 +960,21 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
          }}>
       <video ref={videoRef} autoPlay playsInline
              className={scale === 'zoom' ? 'zoom' : scale === 'stretch' ? 'stretch' : undefined} />
+
+      {wt.room && (
+        <div className="watch-pill">
+          <span className="dot" aria-hidden />
+          {t('watch.together')}
+          <button className="leave" onClick={wt.leave}>{t('watch.leave')}</button>
+        </div>
+      )}
+      {!wt.room && wt.canAsk && !wt.offer && (
+        <button className="watch-pill ask" onClick={wt.ask}>
+          <span className="dot" aria-hidden />
+          {t('watch.ask')}
+        </button>
+      )}
+      <WatchTogetherModals wt={wt} container={rootRef.current} />
 
       {cueText && (
         <div className={`player-subs${uiVisible ? ' chrome' : ''}`} aria-live="off">

@@ -19,12 +19,13 @@ export interface PlaybackSnapshot {
   audioTranscoded: boolean;
   preparing: boolean;
   remuxId: string | null;
+  contentKey: string;
 }
 
 const HEARTBEAT_MS = 3000;
 
 /** Stable per browser tab, so navigating between channels stays one session. */
-function tabSessionId(): string {
+export function tabSessionId(): string {
   let id = sessionStorage.getItem('opentvSessionId');
   if (!id) {
     id = (crypto.randomUUID?.() ?? `s-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -39,13 +40,29 @@ function applyCommand(command: SessionCommand, video: HTMLVideoElement) {
   else if (command.type === 'message' && command.text) snackbar(command.text, undefined);
 }
 
-export function useSessionReporter(snapshot: PlaybackSnapshot, video: RefObject<HTMLVideoElement>) {
+/**
+ * Reports playback and delivers admin pause/play/message commands. [onCommand] also gets
+ * every command (including watch-together ones), so the room layer can react without
+ * opening a second socket.
+ */
+export function useSessionReporter(
+  snapshot: PlaybackSnapshot,
+  video: RefObject<HTMLVideoElement>,
+  onCommand?: (command: SessionCommand) => void,
+) {
   const snapRef = useRef(snapshot);
   snapRef.current = snapshot;
+  const cmdRef = useRef(onCommand);
+  cmdRef.current = onCommand;
 
   useEffect(() => {
     const id = tabSessionId();
     let stopped = false;
+
+    const handle = (command: SessionCommand, el: HTMLVideoElement) => {
+      applyCommand(command, el);
+      cmdRef.current?.(command);
+    };
 
     const beat = async () => {
       const v = video.current;
@@ -67,17 +84,18 @@ export function useSessionReporter(snapshot: PlaybackSnapshot, video: RefObject<
         audioTranscoded: s.audioTranscoded,
         preparing: s.preparing,
         remuxId: s.remuxId,
+        contentKey: s.contentKey,
       };
       const { commands } = await api.sessionHeartbeat(body);
       if (stopped) return;
       const el = video.current;
-      if (el) commands.forEach((c) => applyCommand(c, el));
+      if (el) commands.forEach((c) => handle(c, el));
     };
 
     beat();
     const timer = setInterval(beat, HEARTBEAT_MS);
 
-    // Push channel: pause/play/message arrive instantly instead of on the next beat.
+    // Push channel: commands arrive instantly instead of on the next beat.
     let ws: WebSocket | null = null;
     let wsRetry: ReturnType<typeof setTimeout> | undefined;
     const connect = () => {
@@ -86,7 +104,7 @@ export function useSessionReporter(snapshot: PlaybackSnapshot, video: RefObject<
       ws.onmessage = (ev) => {
         const el = video.current;
         if (!el) return;
-        try { applyCommand(JSON.parse(ev.data as string) as SessionCommand, el); } catch { /* ignore */ }
+        try { handle(JSON.parse(ev.data as string) as SessionCommand, el); } catch { /* ignore */ }
       };
       ws.onclose = () => { if (!stopped) wsRetry = setTimeout(connect, HEARTBEAT_MS); };
       ws.onerror = () => ws?.close();
