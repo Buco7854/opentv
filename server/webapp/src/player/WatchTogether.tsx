@@ -7,7 +7,7 @@
 
 import { MutableRefObject, RefObject, useCallback, useEffect, useRef, useState } from 'react';
 import { api, RoomMember, SessionCommand, SyncState, WatchIntentPeer } from '../api';
-import { Sheet, snackbar } from '../components/Primitives';
+import { IconBtn, Segmented, Sheet, snackbar } from '../components/Primitives';
 import { t } from '../i18n';
 
 // The driver's state is pushed the instant it plays/pauses/seeks, plus this tick to catch a
@@ -318,28 +318,24 @@ export function WatchTogetherSheet({ wt, onDismiss, container }: {
 
   wt.members.forEach((m) => {
     const isSelf = m.id === wt.selfId;
-    // The host sets each guest's role from one select (viewer / can control / remove), so there's
-    // no scatter of tags and buttons. Everyone else just sees who's the host or a controller.
+    // The host sets a guest's role with a segmented control and removes them with the icon; the
+    // host's own row and everyone else's just carry a role chip, so nothing scatters.
     const manage = wt.isHost && !isSelf && !m.host;
+    const role = m.host ? t('watch.roleHost') : m.controller ? t('watch.roleController') : t('watch.roleViewer');
     rows.push(
       <div className="watch-row" key={`m-${m.id}`}>
         <span className="min-w-0 flex-1 truncate">{isSelf ? t('watch.you') : m.name}</span>
         {manage ? (
-          <select className="watch-select" aria-label={m.name}
-                  value={m.controller ? 'control' : 'viewer'}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    if (v === 'remove') wt.kick(m.id);
-                    else wt.setControl(m.id, v === 'control');
-                  }}>
-            <option value="viewer">{t('watch.roleViewer')}</option>
-            <option value="control">{t('watch.roleController')}</option>
-            <option value="remove">{t('watch.kick')}</option>
-          </select>
+          <>
+            <Segmented
+              options={[['viewer', t('watch.roleViewer')], ['control', t('watch.roleController')]]}
+              selected={m.controller ? 'control' : 'viewer'}
+              onSelect={(v) => wt.setControl(m.id, v === 'control')}
+            />
+            <IconBtn name="del" label={t('watch.kick')} onClick={() => wt.kick(m.id)} />
+          </>
         ) : (
-          (m.host || m.controller) && (
-            <span className="watch-role">{m.host ? t('watch.roleHost') : t('watch.roleController')}</span>
-          )
+          <span className="watch-chip">{role}</span>
         )}
       </div>,
     );

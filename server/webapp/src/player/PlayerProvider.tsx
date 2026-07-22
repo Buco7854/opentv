@@ -1042,6 +1042,9 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
 
       {!error && wt.choosing && (
         <div className="player-error">
+          <span className="player-choose-close">
+            <IconBtn name="close" label={t('player.stop')} onClick={onClose} />
+          </span>
           <h3>{t('watch.title')}</h3>
           <p>{t('watch.choosePrompt')}</p>
           <div className="watch-actions">
@@ -1060,7 +1063,7 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
         </div>
       )}
 
-      {!error && (
+      {!error && !wt.choosing && (
         <div className={`player-ui${uiVisible ? '' : ' hidden'}`}>
           <div className="top">
             <IconBtn name="back" label={t('common.back')} onClick={onClose} />

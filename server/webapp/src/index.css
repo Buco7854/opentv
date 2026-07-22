@@ -884,12 +884,9 @@
     --tw-ring-color: rgba(0, 0, 0, 0.6);
   }
   .watch-row { @apply flex items-center gap-2 py-1.5; }
-  .watch-role { @apply shrink-0 text-on-surface-variant; font: var(--type-label-small); }
-  .watch-select {
-    @apply shrink-0 rounded-lg border px-2 py-1;
-    border-color: var(--c-input);
-    color: var(--c-fg);
-    background: transparent;
+  .watch-chip {
+    @apply inline-flex h-8 shrink-0 items-center rounded-lg px-3 text-on-surface-variant;
+    background: var(--c-input);
     font: var(--type-label-large);
   }
   .watch-act { @apply shrink-0 px-2 py-1; }
@@ -977,6 +974,9 @@
   }
   .player-error h3 { font: var(--type-title-large); letter-spacing: -0.2px; }
   .player-error p { @apply max-w-[460px] text-white/60; font: var(--type-body-medium); }
+  .player-choose-close { @apply absolute right-3 top-3; }
+  .player-choose-close .icon-btn { @apply size-11 rounded-full text-white; }
+  .player-choose-close .icon-btn .icon { @apply size-6; }
 
   .menu-option {
     @apply flex w-full items-center gap-2.5 rounded-[10px] px-4 py-3 text-left;
