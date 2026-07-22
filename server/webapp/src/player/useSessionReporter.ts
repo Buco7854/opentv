@@ -62,6 +62,9 @@ export function useSessionReporter(
     const handle = (command: SessionCommand, el: HTMLVideoElement) => {
       applyCommand(command, el);
       cmdRef.current?.(command);
+      // A pause/play changes what the dashboard should show: report it now instead of
+      // waiting for the next tick, so the admin sees the real state within a round-trip.
+      if (command.type === 'pause' || command.type === 'play') beat();
     };
 
     const beat = async () => {

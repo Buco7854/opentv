@@ -965,6 +965,9 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
         <div className="watch-pill">
           <span className="dot" aria-hidden />
           {t('watch.together')}
+          {wt.room.role === 'guest' && !wt.room.canControl && (
+            <button className="leave" onClick={wt.requestControl}>{t('watch.requestControl')}</button>
+          )}
           <button className="leave" onClick={wt.leave}>{t('watch.leave')}</button>
         </div>
       )}

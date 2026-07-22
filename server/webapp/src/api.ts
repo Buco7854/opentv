@@ -162,7 +162,7 @@ export interface SyncState { positionMs: number; paused: boolean; rate: number }
 
 export interface SessionCommand {
   type: 'pause' | 'play' | 'message' | 'join-request' | 'join-response'
-    | 'sync' | 'peer-left' | 'host' | 'room-ended';
+    | 'sync' | 'peer-left' | 'host' | 'control-request' | 'control-response' | 'room-ended';
   text?: string;
   roomId?: string;
   peerId?: string;
@@ -217,6 +217,9 @@ export interface Session {
   startedAtMs: number;
   lastSeenMs: number;
   stream: SessionStream;
+  /** Set when the viewer is in a watch-together room; roomSize counts its members. */
+  roomId: string | null;
+  roomSize: number;
 }
 
 export interface XtreamSeriesDetail { series: XtreamSeries; episodes: Channel[]; error: string | null }
@@ -315,6 +318,12 @@ export const api = {
   /** Host pushes its playback state to the room. keepalive so a final pause still lands. */
   sessionSync: (id: string, state: SyncState) =>
     fetch(`/api/sessions/${encodeURIComponent(id)}/sync`, { ...post(state), keepalive: true }).catch(() => {}),
+  /** A guest asks the room's host to let it control playback too. */
+  requestControl: (id: string, peerName: string) =>
+    j<null>(`/api/sessions/${encodeURIComponent(id)}/request-control`, post({ peerName })),
+  /** Host grants or refuses a guest's control request. */
+  grantControl: (hostId: string, peerId: string, grant: boolean) =>
+    j<null>(`/api/sessions/${encodeURIComponent(hostId)}/grant-control`, post({ peerId, grant })),
   sessionLeave: (id: string) =>
     fetch(`/api/sessions/${encodeURIComponent(id)}/leave`, { method: 'POST', keepalive: true }).catch(() => {}),
   resumeAll: () => j<ResumePoint[]>('/api/resume'),

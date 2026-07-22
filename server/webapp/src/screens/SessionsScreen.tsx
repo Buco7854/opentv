@@ -72,10 +72,11 @@ export function SessionsScreen() {
   const [sessions, setSessions] = useState<Session[] | null>(null);
   const [messaging, setMessaging] = useState<Session | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>();
-  // A pause/play command takes a poll or two to reach the server's reported
-  // state. Hold the optimistic `paused` for each commanded session until a poll
-  // agrees (or a short safety window elapses), so an in-flight poll carrying the
-  // pre-command value can't flip the icon back and forth.
+  // The viewer applies a pause/play over its socket and heartbeats the new state
+  // right away, so a confirming poll is usually a second out. Hold the optimistic
+  // `paused` until a poll agrees, or a short safety window elapses if the viewer
+  // never confirms (offline), so an in-flight poll with the pre-command value
+  // can't flip the icon back and forth.
   const pendingPaused = useRef<Map<string, { paused: boolean; until: number }>>(new Map());
 
   const reconcile = (list: Session[]): Session[] => {
@@ -100,9 +101,11 @@ export function SessionsScreen() {
 
   const command = async (session: Session, type: 'pause' | 'play') => {
     const paused = type === 'pause';
-    pendingPaused.current.set(session.id, { paused, until: Date.now() + 8000 });
+    pendingPaused.current.set(session.id, { paused, until: Date.now() + 4000 });
     setSessions((list) => list?.map((s) => (s.id === session.id ? { ...s, paused } : s)) ?? list);
     await api.sessionCommand(session.id, { type }).catch(() => { pendingPaused.current.delete(session.id); });
+    // The viewer confirms over its socket within a round-trip; poll shortly to pick it up.
+    setTimeout(tick, 700);
   };
 
   return (
@@ -163,6 +166,11 @@ function SessionCard({ session, onToggle, onMessage }: {
         </div>
         <div className="tags">
           {live && <span className="live-chip">{t('player.live').toUpperCase()}</span>}
+          {session.roomId && (
+            <Pill>{session.roomSize > 2
+              ? `${t('sessions.together')} · ${session.roomSize}`
+              : t('sessions.together')}</Pill>
+          )}
           <Pill>{modeLabel(session.stream)}</Pill>
         </div>
       </div>

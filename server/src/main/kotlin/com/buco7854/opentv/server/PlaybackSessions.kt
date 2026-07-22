@@ -48,7 +48,7 @@ data class SyncStateDto(val positionMs: Long, val paused: Boolean, val rate: Dou
 @Serializable
 data class SessionCommandDto(
     /** pause | play | message (admin) · join-request | join-response | sync | peer-left |
-     *  host (you are the new host) | room-ended (watch-together dissolved). */
+     *  host (you own the room) | control-request | control-response | room-ended. */
     val type: String,
     val text: String? = null,
     /** join-response: the room the requester was admitted to. */
@@ -113,6 +113,9 @@ data class SessionDto(
     val startedAtMs: Long,
     val lastSeenMs: Long,
     val stream: SessionStreamDto,
+    /** Set when this viewer is in a watch-together room; [roomSize] counts its members. */
+    val roomId: String? = null,
+    val roomSize: Int = 0,
 )
 
 /**
@@ -135,9 +138,11 @@ class PlaybackSessionRegistry {
         val commands: ConcurrentLinkedQueue<SessionCommandDto> = ConcurrentLinkedQueue(),
     )
 
-    /** A watch-together room: the host drives playback, every other member mirrors it. */
+    /** A watch-together room. The host owns it and can grant playback control to guests;
+     *  everyone in [controllers] (the host plus whoever it allowed) can drive, the rest mirror. */
     private class Room(val id: String, @Volatile var hostId: String) {
         val members: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+        val controllers: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
     }
 
     private val sessions = ConcurrentHashMap<String, Live>()
@@ -204,6 +209,7 @@ class PlaybackSessionRegistry {
         val roomId = memberRoom[hostId] ?: run {
             val room = Room("r-$hostId", hostId)
             room.members.add(hostId)
+            room.controllers.add(hostId)
             rooms[room.id] = room
             memberRoom[hostId] = room.id
             room.id
@@ -215,10 +221,35 @@ class PlaybackSessionRegistry {
         ))
     }
 
-    /** Mirror the host's [state] to the room's other members (only the host drives). */
+    /** A guest asks the room's host to let it control playback too. */
+    fun requestControl(fromId: String, fromName: String): Boolean {
+        val room = memberRoom[fromId]?.let { rooms[it] } ?: return false
+        if (fromId in room.controllers) return true
+        return enqueue(room.hostId, SessionCommandDto(
+            type = "control-request", peerId = fromId, peerName = fromName,
+        ))
+    }
+
+    /** The host's answer to a control request. Only the host may grant; on grant the guest
+     *  joins [controllers] and can drive playback alongside everyone else already allowed. */
+    fun grantControl(hostId: String, peerId: String, grant: Boolean): Boolean {
+        val room = memberRoom[hostId]?.let { rooms[it] } ?: return false
+        if (room.hostId != hostId || peerId !in room.members) return false
+        if (grant) room.controllers.add(peerId)
+        return enqueue(peerId, SessionCommandDto(type = "control-response", accepted = grant))
+    }
+
+    /** The room [id] is in and how many are in it, for the activity dashboard. Null if none. */
+    fun roomOf(id: String): Pair<String, Int>? {
+        val roomId = memberRoom[id] ?: return null
+        val room = rooms[roomId] ?: return null
+        return roomId to room.members.size
+    }
+
+    /** Mirror a controller's [state] to the room's other members (non-controllers can't drive). */
     fun syncRoom(fromId: String, state: SyncStateDto) {
         val room = memberRoom[fromId]?.let { rooms[it] } ?: return
-        if (room.hostId != fromId) return
+        if (fromId !in room.controllers) return
         room.members.filter { it != fromId }.forEach { member ->
             // Keep only the freshest sync queued, so a brief socket outage can't back them up.
             sessions[member]?.commands?.removeIf { it.type == "sync" }
@@ -232,13 +263,17 @@ class PlaybackSessionRegistry {
         val roomId = memberRoom.remove(id) ?: return
         val room = rooms[roomId] ?: return
         room.members.remove(id)
+        room.controllers.remove(id)
         if (room.members.size <= 1) {
             room.members.forEach { memberRoom.remove(it); enqueue(it, SessionCommandDto(type = "room-ended")) }
             rooms.remove(roomId)
             return
         }
         val hostLeft = room.hostId == id
-        if (hostLeft) room.hostId = room.members.first()
+        if (hostLeft) {
+            room.hostId = room.members.first()
+            room.controllers.add(room.hostId)
+        }
         room.members.forEach { enqueue(it, SessionCommandDto(type = "peer-left", peerId = id)) }
         if (hostLeft) enqueue(room.hostId, SessionCommandDto(type = "host"))
     }

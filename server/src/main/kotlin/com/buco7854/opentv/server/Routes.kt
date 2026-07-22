@@ -94,6 +94,12 @@ data class JoinRequestBody(val peerId: String, val peerName: String, val content
 data class JoinAnswerBody(val peerId: String, val hostName: String, val contentKey: String = "", val accept: Boolean)
 
 @Serializable
+data class RequestControlBody(val peerName: String)
+
+@Serializable
+data class GrantControlBody(val peerId: String, val grant: Boolean)
+
+@Serializable
 data class RemuxAvailableDto(val available: Boolean)
 
 @Serializable
@@ -637,6 +643,7 @@ fun Route.api(g: ServerGraph) = route("/api") {
             val dtos = g.sessions.active().map { live ->
                 val s = live.state
                 val diag = s.remuxId?.let { g.remux.diagnostics(it) }?.toDto()
+                val room = g.sessions.roomOf(live.id)
                 SessionDto(
                     id = live.id,
                     ip = live.ip,
@@ -652,6 +659,8 @@ fun Route.api(g: ServerGraph) = route("/api") {
                     startedAtMs = live.startedAtMs,
                     lastSeenMs = live.lastSeenMs,
                     stream = SessionStreamDto(s.engine, s.direct, s.audioTranscoded, s.preparing, diag),
+                    roomId = room?.first,
+                    roomSize = room?.second ?: 0,
                 )
             }
             call.respond(dtos)
@@ -689,6 +698,18 @@ fun Route.api(g: ServerGraph) = route("/api") {
             val id = call.parameters["id"] ?: throw IllegalArgumentException("Missing id")
             g.sessions.syncRoom(id, call.receive<SyncStateDto>())
             call.respond(HttpStatusCode.NoContent)
+        }
+        post("/{id}/request-control") {
+            val id = call.parameters["id"] ?: throw IllegalArgumentException("Missing id")
+            val req = call.receive<RequestControlBody>()
+            if (g.sessions.requestControl(id, req.peerName)) call.respond(HttpStatusCode.NoContent)
+            else call.respond(HttpStatusCode.NotFound, MessageDto("Not in a room"))
+        }
+        post("/{id}/grant-control") {
+            val hostId = call.parameters["id"] ?: throw IllegalArgumentException("Missing id")
+            val req = call.receive<GrantControlBody>()
+            if (g.sessions.grantControl(hostId, req.peerId, req.grant)) call.respond(HttpStatusCode.NoContent)
+            else call.respond(HttpStatusCode.NotFound, MessageDto("No such room"))
         }
         post("/{id}/leave") {
             g.sessions.leaveRoom(call.parameters["id"] ?: "")

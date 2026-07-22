@@ -313,6 +313,15 @@ const en = {
   'watch.requesting': 'Asking to watch together…',
   'watch.requestFailed': "Couldn't send the request",
   'watch.askedQuiet': '{name} would like to watch together',
+  'watch.requestControl': 'Request control',
+  'watch.controlTitle': 'Allow control?',
+  'watch.controlBody': '{name} wants to control playback for everyone.',
+  'watch.allow': 'Allow',
+  'watch.controlAsked': 'Requesting control…',
+  'watch.controlGranted': 'You can now control playback',
+  'watch.controlDenied': 'Your control request was declined',
+
+  'sessions.together': 'Watching together',
 } as const;
 
 export type MessageKey = keyof typeof en;
@@ -628,6 +637,15 @@ const fr: Catalog = {
   'watch.requesting': 'Demande de visionnage commun…',
   'watch.requestFailed': "Impossible d'envoyer la demande",
   'watch.askedQuiet': '{name} aimerait regarder ensemble',
+  'watch.requestControl': 'Demander le contrôle',
+  'watch.controlTitle': 'Autoriser le contrôle ?',
+  'watch.controlBody': '{name} veut contrôler la lecture pour tout le monde.',
+  'watch.allow': 'Autoriser',
+  'watch.controlAsked': 'Demande de contrôle…',
+  'watch.controlGranted': 'Vous pouvez maintenant contrôler la lecture',
+  'watch.controlDenied': 'Votre demande de contrôle a été refusée',
+
+  'sessions.together': 'Visionnage commun',
 };
 
 const catalogs: Record<'en' | 'fr', Catalog> = { en, fr };
