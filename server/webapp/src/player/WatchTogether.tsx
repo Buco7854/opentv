@@ -6,7 +6,7 @@
 // would need its own, playback is blocked with a clear message instead of cutting someone off.
 
 import { MutableRefObject, RefObject, useCallback, useEffect, useRef, useState } from 'react';
-import { api, RoomMember, SessionCommand, SyncState } from '../api';
+import { api, RoomMember, SessionCommand, SyncState, WatchIntentPeer } from '../api';
 import { Sheet, snackbar } from '../components/Primitives';
 import { t } from '../i18n';
 
@@ -31,15 +31,15 @@ export interface WatchTogether {
   members: RoomMember[];
   isHost: boolean;
   canControl: boolean;
-  /** Session ids on this content we could invite / join (when not yet in a room). */
-  peers: string[];
+  /** Viewers on this content we could join (when not yet in a room). */
+  peers: WatchIntentPeer[];
   joinRequests: Peer[];
   controlRequests: Peer[];
   /** Provider check in flight - hold playback so we never open a doomed connection. */
   checking: boolean;
   /** The provider is full and this stream needs its own connection: don't play. */
   blocked: boolean;
-  ask: () => void;
+  ask: (peerId: string) => void;
   answerJoin: (peerId: string, accept: boolean) => void;
   requestControl: () => void;
   answerControl: (peerId: string, grant: boolean) => void;
@@ -71,7 +71,7 @@ export function useWatchTogether(opts: {
 
   const [members, setMembers] = useState<RoomMember[]>([]);
   const [inRoom, setInRoom] = useState(false);
-  const [peers, setPeers] = useState<string[]>([]);
+  const [peers, setPeers] = useState<WatchIntentPeer[]>([]);
   const [joinRequests, setJoinRequests] = useState<Peer[]>([]);
   const [controlRequests, setControlRequests] = useState<Peer[]>([]);
   const [checking, setChecking] = useState(true);
@@ -84,7 +84,6 @@ export function useWatchTogether(opts: {
   const contentRef = useRef(contentKey); contentRef.current = contentKey;
   const liveRef = useRef(live); liveRef.current = live;
   const remuxRef = useRef(remuxEligible); remuxRef.current = remuxEligible;
-  const peersRef = useRef(peers); peersRef.current = peers;
   // The content the room was formed on, so navigating elsewhere drops us out of it.
   const roomContent = useRef<string | null>(null);
   // The last state we applied from a peer (with when), so our own resulting events - which fire
@@ -104,11 +103,10 @@ export function useWatchTogether(opts: {
     resetRoom();
   }, [selfId, resetRoom]);
 
-  const ask = useCallback(() => {
-    const target = peersRef.current[0];
-    if (!target) return;
+  // Ask a specific viewer to watch together (there can be several on the same content).
+  const ask = useCallback((peerId: string) => {
     snackbar(t('watch.requesting'));
-    api.joinRequest(target, selfId, deviceName, contentRef.current)
+    api.joinRequest(peerId, selfId, deviceName, contentRef.current)
       .catch(() => snackbar(t('watch.requestFailed')));
   }, [selfId, deviceName]);
 
@@ -272,13 +270,14 @@ export function WatchTogetherSheet({ wt, onDismiss, container }: {
 
   wt.members.forEach((m) => {
     const isSelf = m.id === wt.selfId;
-    const role = m.host ? t('watch.roleHost') : m.controller ? t('watch.roleController') : t('watch.roleViewer');
+    // Everyone here is watching, so only call out who's the host or who can drive.
+    const role = m.host ? t('watch.roleHost') : m.controller ? t('watch.roleController') : '';
     // The host manages each guest directly - hand over control (or take it back) and remove.
     const manage = wt.isHost && !isSelf && !m.host;
     rows.push(
       <div className="watch-row" key={`m-${m.id}`}>
         <span className="min-w-0 flex-1 truncate">{isSelf ? t('watch.you') : m.name}</span>
-        <span className="watch-tag">{role}</span>
+        {role && <span className="watch-tag">{role}</span>}
         {manage && (
           <button className="btn text watch-act" onClick={() => wt.setControl(m.id, !m.controller)}>
             {m.controller ? t('watch.removeControl') : t('watch.giveControl')}
@@ -307,6 +306,16 @@ export function WatchTogetherSheet({ wt, onDismiss, container }: {
     </div>,
   ));
 
+  // Not in a room yet: each viewer on this content is someone you can join.
+  if (!wt.inRoom) {
+    wt.peers.forEach((p) => rows.push(
+      <div className="watch-row" key={`p-${p.id}`}>
+        <span className="min-w-0 flex-1 truncate">{p.name}</span>
+        <button className="btn text watch-act" onClick={() => { wt.ask(p.id); onDismiss(); }}>{t('watch.joinPeer')}</button>
+      </div>,
+    ));
+  }
+
   return (
     <Sheet onDismiss={onDismiss} container={container}
            header={<h3 className="sheet-title">{t('watch.title')}</h3>}>
@@ -315,9 +324,6 @@ export function WatchTogetherSheet({ wt, onDismiss, container }: {
       )}
       {rows}
       <div className="watch-actions">
-        {!wt.inRoom && wt.peers.length > 0 && (
-          <button className="btn tonal" onClick={() => { wt.ask(); onDismiss(); }}>{t('watch.ask')}</button>
-        )}
         {wt.inRoom && !wt.canControl && (
           <button className="btn tonal" onClick={() => { wt.requestControl(); onDismiss(); }}>{t('watch.requestControl')}</button>
         )}

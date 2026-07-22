@@ -883,11 +883,7 @@
     background: #34D399;
     --tw-ring-color: rgba(0, 0, 0, 0.6);
   }
-  .watch-row {
-    @apply flex items-center gap-2 py-2;
-    border-top: 1px solid var(--c-outline-variant, rgba(128, 128, 128, 0.2));
-  }
-  .watch-row:first-of-type { border-top: none; }
+  .watch-row { @apply flex items-center gap-2 py-1.5; }
   .watch-tag { @apply shrink-0 text-on-surface-variant; font: var(--type-label-small); }
   .watch-act { @apply shrink-0 px-2 py-1; }
   .watch-actions { @apply mt-3 flex flex-wrap items-center justify-end gap-2; }

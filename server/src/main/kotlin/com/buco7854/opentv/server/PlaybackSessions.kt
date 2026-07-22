@@ -162,13 +162,19 @@ class PlaybackSessionRegistry {
     private val wakes = ConcurrentHashMap<String, Channel<Unit>>()
     private fun wake(id: String) = wakes.computeIfAbsent(id) { Channel(Channel.CONFLATED) }
 
-    /** Upsert from a heartbeat and drain any commands queued for this session. */
-    fun heartbeat(ip: String, userAgent: String, dto: SessionHeartbeatDto): List<SessionCommandDto> {
+    /** Upsert session state from a heartbeat. Commands are drained separately - the HTTP
+     *  heartbeat returns them, the WebSocket pushes them as they're queued. */
+    fun update(ip: String, userAgent: String, dto: SessionHeartbeatDto) {
         val now = nowMs()
         sessions.compute(dto.id) { _, existing ->
             existing?.apply { this.ip = ip; this.userAgent = userAgent; state = dto; lastSeenMs = now }
                 ?: Live(dto.id, ip, userAgent, dto, now, now)
         }
+    }
+
+    /** Upsert from a heartbeat and drain any commands queued for this session (HTTP fallback). */
+    fun heartbeat(ip: String, userAgent: String, dto: SessionHeartbeatDto): List<SessionCommandDto> {
+        update(ip, userAgent, dto)
         return drainCommands(dto.id)
     }
 

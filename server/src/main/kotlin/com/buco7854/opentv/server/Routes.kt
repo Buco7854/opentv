@@ -82,9 +82,12 @@ data class WatchIntentRequest(
 )
 
 @Serializable
+data class WatchIntentPeer(val id: String, val name: String)
+
+@Serializable
 data class WatchIntentResponse(
-    /** Session ids already watching this same content (watch-together candidates). */
-    val sameContent: List<String>,
+    /** Viewers already on this same content, so the client can offer to join a specific one. */
+    val sameContent: List<WatchIntentPeer>,
     /** The provider's other active streams already fill its connection allowance. The
      *  client decides what to do: a remuxed file shared with a same-content viewer costs
      *  no new connection, while a live stream always needs its own. */
@@ -109,6 +112,14 @@ data class KickBody(val targetId: String)
 
 @Serializable
 data class SetControlBody(val targetId: String, val grant: Boolean)
+
+/** A frame a viewer sends over its socket: a heartbeat (state) or watch-together sync. */
+@Serializable
+data class ClientFrameDto(
+    val type: String,
+    val heartbeat: SessionHeartbeatDto? = null,
+    val sync: SyncStateDto? = null,
+)
 
 @Serializable
 data class RemuxAvailableDto(val available: Boolean)
@@ -686,7 +697,8 @@ fun Route.api(g: ServerGraph) = route("/api") {
         // is full - so the client can offer "watch together" or show the limit message.
         post("/intent") {
             val req = call.receive<WatchIntentRequest>()
-            val peers = g.sessions.sameContentPeers(req.selfId, req.contentKey).map { it.id }
+            val peers = g.sessions.sameContentPeers(req.selfId, req.contentKey)
+                .map { WatchIntentPeer(it.id, it.state.name.ifBlank { "Someone" }) }
             val url = req.source?.let { g.cipher.tryDecrypt(it) }
             val limit = url?.let { g.connectionLimit(it) } ?: Int.MAX_VALUE
             val others = g.sessions.otherStreamsOn(req.selfId, req.playlistId)
@@ -747,10 +759,13 @@ fun Route.api(g: ServerGraph) = route("/api") {
             if (g.sessions.command(id, cmd)) call.respond(HttpStatusCode.NoContent)
             else call.respond(HttpStatusCode.NotFound, MessageDto("No such session"))
         }
-        // Bidirectional: pushes queued commands to the viewer instantly (heartbeat drains as a
-        // fallback), and receives real-time watch-together sync from drivers so they never POST.
+        // Bidirectional: pushes queued commands to the viewer instantly, and receives the
+        // viewer's heartbeat and watch-together sync in real time - so during playback there's
+        // no HTTP polling (the heartbeat POST stays only as a fallback when the socket is down).
         webSocket("/{id}/ws") {
             val id = call.parameters["id"] ?: return@webSocket
+            val ip = g.trustedProxies.clientIp(call)
+            val userAgent = call.request.headers[HttpHeaders.UserAgent].orEmpty()
             suspend fun flush() = g.sessions.drainCommands(id).forEach {
                 send(Frame.Text(Json.encodeToString(SessionCommandDto.serializer(), it)))
             }
@@ -761,8 +776,11 @@ fun Route.api(g: ServerGraph) = route("/api") {
             try {
                 for (frame in incoming) {
                     if (frame !is Frame.Text) continue
-                    val cmd = runCatching { Json.decodeFromString(SessionCommandDto.serializer(), frame.readText()) }.getOrNull()
-                    if (cmd?.type == "sync" && cmd.sync != null) g.sessions.syncRoom(id, cmd.sync)
+                    val msg = runCatching { Json.decodeFromString(ClientFrameDto.serializer(), frame.readText()) }.getOrNull() ?: continue
+                    when (msg.type) {
+                        "heartbeat" -> msg.heartbeat?.let { g.sessions.update(ip, userAgent, it) }
+                        "sync" -> msg.sync?.let { g.sessions.syncRoom(id, it) }
+                    }
                 }
             } finally {
                 sender.cancel()

@@ -69,8 +69,9 @@ export function useGuideIds(playlistId: number): { guideIds: Set<string>; reload
 const isActiveDownload = (d: Download) =>
   d.status === DownloadStatus.QUEUED || d.status === DownloadStatus.RUNNING;
 
-/** Polls /api/downloads (fast while transfers run, slow otherwise); byUrl excludes cancelled/failed. */
-export function useDownloads(): {
+/** Polls /api/downloads (fast while transfers run, slow otherwise); byUrl excludes cancelled/failed.
+ *  Pass enabled=false to stop polling (e.g. the dock while the fullscreen player is up). */
+export function useDownloads(enabled = true): {
   list: Download[]; byUrl: Map<string, Download>; refresh: () => void;
 } {
   const [list, setList] = useState<Download[]>([]);
@@ -88,9 +89,10 @@ export function useDownloads(): {
   }, []);
 
   useEffect(() => {
+    if (!enabled) return;
     tick();
     return () => clearTimeout(timer.current);
-  }, [tick]);
+  }, [tick, enabled]);
 
   const byUrl = new Map(
     list

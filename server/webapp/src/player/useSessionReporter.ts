@@ -63,6 +63,8 @@ export function useSessionReporter(
     const id = tabSessionId();
     let stopped = false;
 
+    let ws: WebSocket | null = null;
+
     const handle = (command: SessionCommand, el: HTMLVideoElement) => {
       applyCommand(command, el);
       cmdRef.current?.(command);
@@ -94,17 +96,18 @@ export function useSessionReporter(
         contentKey: s.contentKey,
         name: s.name,
       };
+      // Over the socket while it's up (commands come back via onmessage); POST otherwise.
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'heartbeat', heartbeat: body }));
+        return;
+      }
       const { commands } = await api.sessionHeartbeat(body);
       if (stopped) return;
       const el = video.current;
       if (el) commands.forEach((c) => handle(c, el));
     };
 
-    beat();
-    const timer = setInterval(beat, HEARTBEAT_MS);
-
-    // Push channel: commands arrive instantly instead of on the next beat.
-    let ws: WebSocket | null = null;
+    // Push channel: commands arrive instantly; the client also sends heartbeat/sync over it.
     let wsRetry: ReturnType<typeof setTimeout> | undefined;
     const connect = () => {
       if (stopped) return;
@@ -118,6 +121,9 @@ export function useSessionReporter(
       ws.onerror = () => ws?.close();
     };
     connect();
+
+    beat();
+    const timer = setInterval(beat, HEARTBEAT_MS);
 
     if (wsSend) {
       wsSend.current = (command) => {

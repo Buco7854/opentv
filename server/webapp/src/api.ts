@@ -178,8 +178,10 @@ export interface SessionCommand {
   members?: RoomMember[];
 }
 
+/** A viewer already on this content, offered as someone to watch together with. */
+export interface WatchIntentPeer { id: string; name: string }
 /** Who else is on this content, and whether the provider's connections are all in use. */
-export interface WatchIntent { sameContent: string[]; full: boolean; limit: number }
+export interface WatchIntent { sameContent: WatchIntentPeer[]; full: boolean; limit: number }
 
 export interface RemuxDiag {
   videoCodec: string;

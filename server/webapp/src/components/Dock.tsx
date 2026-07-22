@@ -36,7 +36,8 @@ export function Dock() {
   const navigate = useNavigate();
   const { pathname, search } = useLocation();
   const [panelOpen, setPanelOpen] = useState(false);
-  const downloads = useDownloads();
+  // The fullscreen player covers the dock; don't keep polling downloads underneath it.
+  const downloads = useDownloads(!pathname.startsWith('/watch'));
   const downloading = downloads.list.some(
     (d) => d.status === DownloadStatus.QUEUED || d.status === DownloadStatus.RUNNING,
   );
