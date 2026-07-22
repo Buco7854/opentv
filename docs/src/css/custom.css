@@ -109,10 +109,13 @@ h1, h2, h3, .navbar__title {
   box-shadow: none;
 }
 .markdown table {
+  /* display:block + overflow keeps wide tables (e.g. the env-var reference)
+     scrollable on mobile instead of being clipped by the rounded corners. */
+  display: block;
+  overflow-x: auto;
   border-collapse: separate;
   border-spacing: 0;
   border-radius: 12px;
-  overflow: hidden;
   border: 1px solid var(--otv-hairline);
 }
 .markdown table td, .markdown table th { border-color: var(--otv-hairline); }
