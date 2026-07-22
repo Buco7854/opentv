@@ -46,15 +46,16 @@ export function IconBtn({ name, label, onClick, className = '', disabled, title 
   );
 }
 
-export function Dialog({ title, onDismiss, children, buttons }: {
+export function Dialog({ title, onDismiss, children, buttons, className = '' }: {
   title: ReactNode;
   onDismiss: () => void;
   children?: ReactNode;
   buttons?: ReactNode;
+  className?: string;
 }) {
   return createPortal(
     <div className="scrim" onClick={(e) => { if (e.target === e.currentTarget) onDismiss(); }}>
-      <div className="dialog">
+      <div className={`dialog ${className}`.trim()}>
         <h2>{title}</h2>
         {children}
         {buttons && <div className="buttons">{buttons}</div>}

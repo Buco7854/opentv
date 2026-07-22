@@ -767,18 +767,20 @@
   .session-card .timeline { @apply mt-3; }
   .session-card .timeline .times { @apply mt-1 flex justify-between tabular-nums text-on-surface-variant; font: var(--type-label-small); }
   .session-card .actions { @apply mt-2 flex items-center gap-1; }
-  .session-card .details { @apply mt-3 rounded-xl px-3.5 py-1; background: var(--c-input); }
-  .session-card .details .explain { @apply pt-3 pb-1; }
-  .session-card .details .explain p { @apply py-1; font: var(--type-body-small); }
-  .session-card .details .explain p + p { @apply mt-0; }
-  .session-card .details .tech-label { @apply mt-1.5 border-t pt-3 pb-1 uppercase text-on-surface-variant; border-color: var(--c-hairline); font: var(--type-label-small); letter-spacing: 0.5px; }
-  .session-card .details .kv-row { @apply py-2; }
-  .session-card .details .kv-row .v { @apply text-right tabular-nums; }
-  .session-card .details .note { @apply pt-2.5 text-on-surface-variant; font: var(--type-label-small); }
-  .session-card .details .log { @apply border-t py-2.5; border-color: var(--c-hairline); }
-  .session-card .details .log .k { @apply text-on-surface-variant; font: var(--type-label-small); }
-  .session-card .details .log code { @apply mt-1 block whitespace-pre-wrap break-words text-error; font: var(--type-label-small); font-family: ui-monospace, monospace; }
-  .session-card .details .stamp { @apply border-t py-2 text-right text-on-surface-variant; border-color: var(--c-hairline); font: var(--type-label-small); }
+
+  /* Stream diagnostics, shown in a modal off the card's info button. */
+  .dialog.stream-dialog { max-width: 560px; }
+  .dialog.stream-dialog .dialog-sub { @apply -mt-1 mb-1 text-on-surface-variant; font: var(--type-body-small); }
+  .stream-details .explain { @apply pb-1; }
+  .stream-details .explain p { @apply py-1; font: var(--type-body-medium); }
+  .stream-details .tech-label { @apply mt-2 border-t pt-3 pb-1 uppercase text-on-surface-variant; border-color: var(--c-hairline); font: var(--type-label-small); letter-spacing: 0.5px; }
+  .stream-details .kv-row { @apply py-2; }
+  .stream-details .kv-row .v { @apply text-right tabular-nums; }
+  .stream-details .note { @apply pt-2.5 text-on-surface-variant; font: var(--type-label-small); }
+  .stream-details .log { @apply border-t py-2.5; border-color: var(--c-hairline); }
+  .stream-details .log .k { @apply text-on-surface-variant; font: var(--type-label-small); }
+  .stream-details .log code { @apply mt-1 block whitespace-pre-wrap break-words text-error; font: var(--type-label-small); font-family: ui-monospace, monospace; }
+  .stream-details .stamp { @apply border-t py-2 text-right text-on-surface-variant; border-color: var(--c-hairline); font: var(--type-label-small); }
 
   /* ================================================================ */
   /* 5. PLAYER: fullscreen overlay                                    */

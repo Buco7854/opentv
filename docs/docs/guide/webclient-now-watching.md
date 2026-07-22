@@ -17,7 +17,7 @@ import useBaseUrl from '@docusaurus/useBaseUrl';
     alt="The Now watching page with a stream's details expanded"
     sources={{ light: useBaseUrl('/img/web/now-watching-light.png'), dark: useBaseUrl('/img/web/now-watching-dark.png') }}
   />
-  <figcaption>A transcoding stream expanded, with the plain-language summary and the technical details.</figcaption>
+  <figcaption>A transcoding stream's details, with the plain-language summary above the technical facts.</figcaption>
 </figure>
 
 Each card shows the title, the playlist it came from, and who is watching,

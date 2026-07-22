@@ -141,7 +141,7 @@ function SessionCard({ session, onToggle, onMessage }: {
   onToggle: () => void;
   onMessage: () => void;
 }) {
-  const [showDetails, setShowDetails] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const { positionMs, durationMs, live } = session;
   const fraction = durationMs > 0 ? Math.min(1, positionMs / durationMs) : 0;
 
@@ -180,16 +180,26 @@ function SessionCard({ session, onToggle, onMessage }: {
           onClick={onToggle}
         />
         <IconBtn name="message" label={t('sessions.sendMessage')} onClick={onMessage} />
-        <IconBtn
-          name="info"
-          className={showDetails ? 'primary' : 'muted'}
-          label={showDetails ? t('sessions.hideDetails') : t('sessions.details')}
-          onClick={() => setShowDetails((v) => !v)}
-        />
+        <IconBtn name="info" className="muted" label={t('sessions.details')}
+                 onClick={() => setDetailsOpen(true)} />
       </div>
 
-      {showDetails && <StreamDetails session={session} />}
+      {detailsOpen && <StreamDetailsDialog session={session} onDismiss={() => setDetailsOpen(false)} />}
     </div>
+  );
+}
+
+function StreamDetailsDialog({ session, onDismiss }: { session: Session; onDismiss: () => void }) {
+  return (
+    <Dialog
+      title={t('sessions.details')}
+      className="stream-dialog"
+      onDismiss={onDismiss}
+      buttons={<button className="btn text" onClick={onDismiss}>{t('common.close')}</button>}
+    >
+      <div className="dialog-sub truncate">{session.title}</div>
+      <StreamDetails session={session} />
+    </Dialog>
   );
 }
 
@@ -215,7 +225,7 @@ function StreamDetails({ session }: { session: Session }) {
   }
 
   return (
-    <div className="details">
+    <div className="stream-details">
       <div className="explain">
         {explain(stream).map((line, i) => <p key={i}>{line}</p>)}
       </div>
