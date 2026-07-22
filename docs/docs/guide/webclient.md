@@ -16,6 +16,11 @@ EPG, catch-up, metadata and the SQLite data layer). Only the UI differs.
 import ThemedImage from '@theme/ThemedImage';
 import useBaseUrl from '@docusaurus/useBaseUrl';
 
+:::note[Illustrative screenshots]
+The screenshots throughout these pages use a mock provider that does not exist.
+Every channel, movie and series shown is a placeholder, for illustration only.
+:::
+
 <figure className="doc-screen">
   <ThemedImage
     alt="Browsing a movies category as a poster grid"

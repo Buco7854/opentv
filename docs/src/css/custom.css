@@ -132,14 +132,12 @@ h1, h2, h3, .navbar__title {
 
 /* Screenshot figures in the guide */
 .doc-screen { margin: 28px 0; }
-/* The screenshot is already cropped to the macOS window frame (rounded, with
-   transparent corners); the page just floats it with a theme-aware shadow. */
+/* The screenshot ships its own macOS window on a wallpaper backdrop; the page
+   just rounds it into a card. */
 .doc-screen img {
   width: 100%;
-  filter: drop-shadow(0 16px 30px rgba(30, 40, 60, 0.18));
-}
-[data-theme='dark'] .doc-screen img {
-  filter: drop-shadow(0 16px 34px rgba(0, 0, 0, 0.55));
+  border-radius: 14px;
+  border: 1px solid var(--otv-hairline);
 }
 .doc-screen figcaption {
   margin-top: 8px;

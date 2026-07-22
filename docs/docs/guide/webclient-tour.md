@@ -7,6 +7,11 @@ title: A visual tour
 Every screen of the web client, in dark and light. The images follow the theme
 you are reading the docs in.
 
+:::note[Illustrative screenshots]
+These shots use a mock provider that does not exist. The channels, movies and
+series shown are placeholders, for illustration only.
+:::
+
 import ThemedImage from '@theme/ThemedImage';
 import useBaseUrl from '@docusaurus/useBaseUrl';
 

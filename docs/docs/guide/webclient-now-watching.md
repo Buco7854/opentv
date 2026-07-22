@@ -9,6 +9,11 @@ watching through the web client, one card per viewer. It doubles as a
 debugging tool: each card can tell you exactly what the server is doing for that
 stream, and why.
 
+:::note[Illustrative screenshots]
+These shots use a mock provider that does not exist. The viewers, titles and IPs
+shown are placeholders, for illustration only.
+:::
+
 import ThemedImage from '@theme/ThemedImage';
 import useBaseUrl from '@docusaurus/useBaseUrl';
 
