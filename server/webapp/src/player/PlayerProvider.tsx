@@ -276,15 +276,16 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
   // Hold the engine while the provider check is in flight, and keep it off (with a clear
   // message) when the provider is full - so a blocked stream never plays in the background
   // or steals the connection from whoever is already watching.
-  const holdForConnection = providerBacked && (wt.checking || wt.blocked);
+  const holdForConnection = providerBacked && (wt.checking || wt.blocked || wt.choosing);
   const holdEngine = holdForConnection || (remuxEligible && !remux &&
     (remuxAvailable == null ||
       (remuxAvailable && (remuxState === 'idle' || remuxState === 'loading'))));
   useEffect(() => {
-    if (wt.blocked) setError((old) => old ?? t('player.connectionLimit'));
-    // Joining a room shares the read, so a previously blocked viewer can play: clear that error.
-    else setError((old) => (old === t('player.connectionLimit') ? null : old));
-  }, [wt.blocked]);
+    // Don't surface the limit error while the viewer is still choosing alone vs together - only
+    // once they've picked alone and the provider really is full.
+    if (wt.blocked && !wt.choosing) setError((old) => old ?? t('player.connectionLimit'));
+    else if (!wt.blocked) setError((old) => (old === t('player.connectionLimit') ? null : old));
+  }, [wt.blocked, wt.choosing]);
 
   const poke = useCallback(() => {
     setUiVisible(true);
@@ -969,7 +970,10 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     name: deviceName,
   }, videoRef, wt.onCommand, wsSend);
 
-  const busy = holdEngine || remuxState === 'loading' || (buffering && !paused);
+  // Buffering means we're waiting on data (initial load, a seek, a stall) - show the spinner even
+  // while paused, so a loading player never shows a resting play icon. A deliberate pause clears
+  // buffering (the media has data), so it correctly shows play then.
+  const busy = holdEngine || remuxState === 'loading' || buffering;
   // VOD/downloads and catch-up all get a scrubber.
   const showSeek = !live;
   const tracksEmptyText =
@@ -1023,12 +1027,24 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
         </div>
       )}
 
-      {!error && busy && !uiVisible && <div className="player-spinner" aria-hidden />}
+      {!error && busy && !uiVisible && !wt.choosing && <div className="player-spinner" aria-hidden />}
+
+      {!error && wt.choosing && (
+        <div className="player-error">
+          <h3>{t('watch.title')}</h3>
+          <p>{t('watch.choosePrompt')}</p>
+          <div className="watch-actions">
+            <button className="btn tonal" style={{ width: 'auto' }} onClick={() => setWtMenu(true)}>{t('watch.title')}</button>
+            <button className="btn text" style={{ width: 'auto' }} onClick={wt.watchAlone}>{t('watch.watchAlone')}</button>
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="player-error">
           <h3>{t('player.errorTitle')}</h3>
-          <p>{error} {t('player.errorHint')}</p>
+          {/* The codec/Android hint only fits a decode failure, not a full-provider refusal. */}
+          <p>{error}{error === t('player.connectionLimit') ? '' : ` ${t('player.errorHint')}`}</p>
           <button className="btn tonal" style={{ width: 'auto' }} onClick={onClose}>{t('common.close')}</button>
         </div>
       )}

@@ -43,6 +43,10 @@ export interface WatchTogether {
   checking: boolean;
   /** The provider is full and this stream needs its own connection: don't play. */
   blocked: boolean;
+  /** Someone's already on this content: hold playback until the viewer picks alone or together. */
+  choosing: boolean;
+  /** Viewer chose to watch alone: release the hold and play (may then hit the provider limit). */
+  watchAlone: () => void;
   ask: (peerId: string) => void;
   answerJoin: (peerId: string, accept: boolean) => void;
   requestControl: () => void;
@@ -83,6 +87,9 @@ export function useWatchTogether(opts: {
   const [controlRequests, setControlRequests] = useState<Peer[]>([]);
   const [checking, setChecking] = useState(true);
   const [blocked, setBlocked] = useState(false);
+  // 'pending' while someone is already on this content and the viewer hasn't said whether to watch
+  // alone or together - playback is held until they choose, so a seat is never taken by surprise.
+  const [choice, setChoice] = useState<'pending' | 'decided'>('decided');
 
   const self = members.find((m) => m.id === selfId);
   const isHost = !!self?.host;
@@ -176,8 +183,10 @@ export function useWatchTogether(opts: {
   const broadcast = useCallback((guarded: boolean, seek: boolean) => {
     const v = video.current;
     if (!v) return;
-    // Don't anchor a transient position while a seek is still landing: it would rewind the room.
-    if (!seek && (v.seeking || settling(v))) return;
+    // Don't anchor a transient position while our own playback isn't settled - mid-seek, still
+    // buffering (readyState below HAVE_FUTURE_DATA), or a seek still landing. A loading peer that
+    // kept broadcasting its stuck position would rewind everyone else again and again.
+    if (!seek && (v.seeking || v.readyState < 3 || settling(v))) return;
     const state: SyncState = {
       positionMs: Math.floor((v.currentTime || 0) * 1000), paused: v.paused, rate: v.playbackRate || 1, seek,
     };
@@ -210,7 +219,9 @@ export function useWatchTogether(opts: {
       roomContent.current = contentRef.current;
       setInRoom(true);
       setMembers(roster);
-      // In a room a remuxed viewer shares its read, so a full provider no longer blocks them.
+      // Now watching together: the choice is settled and a remuxed viewer shares the room's read,
+      // so a full provider no longer blocks them.
+      setChoice('decided');
       if (remuxRef.current) setBlocked(false);
       // Anyone now in the room no longer has a pending request to answer.
       setJoinRequests((list) => list.filter((r) => !ids.has(r.peerId)));
@@ -230,8 +241,11 @@ export function useWatchTogether(opts: {
     setPeers([]);
     setBlocked(false);
     setChecking(true);
+    setChoice('decided');
     if (roomContent.current && roomContent.current !== contentKey) leave();
   }, [contentKey, leave]);
+
+  const watchAlone = useCallback(() => setChoice('decided'), []);
 
   // Ask the server who else is here and whether the provider is full - once per content.
   const checked = useRef<string | null>(null);
@@ -250,7 +264,9 @@ export function useWatchTogether(opts: {
       // (which shares their read) or get the limit message.
       setBlocked(intent.full);
       setChecking(false);
-      if (intent.sameContent.length > 0) snackbar(t(intent.full ? 'watch.joinToWatch' : 'watch.availableHint'));
+      // Someone's already here: don't just start streaming (and maybe take the last seat) - hold
+      // and ask whether to watch alone or together.
+      if (intent.sameContent.length > 0) setChoice('pending');
     }).catch(() => { if (!cancelled) { clearTimeout(failOpen); setChecking(false); } });
     return () => { cancelled = true; clearTimeout(failOpen); };
   }, [active, contentKey, inRoom, selfId, source, playlistId]);
@@ -287,6 +303,7 @@ export function useWatchTogether(opts: {
     available: inRoom || peers.length > 0 || joinRequests.length > 0,
     hasPending: joinRequests.length > 0 || controlRequests.length > 0,
     inRoom, members, isHost, canControl, peers, joinRequests, controlRequests, checking, blocked,
+    choosing: choice === 'pending', watchAlone,
     ask, answerJoin, requestControl, answerControl, setControl, kick, leave, onCommand,
   };
 }
@@ -301,21 +318,28 @@ export function WatchTogetherSheet({ wt, onDismiss, container }: {
 
   wt.members.forEach((m) => {
     const isSelf = m.id === wt.selfId;
-    // Everyone here is watching, so only call out who's the host or who can drive.
-    const role = m.host ? t('watch.roleHost') : m.controller ? t('watch.roleController') : '';
-    // The host manages each guest directly - hand over control (or take it back) and remove.
+    // The host sets each guest's role from one select (viewer / can control / remove), so there's
+    // no scatter of tags and buttons. Everyone else just sees who's the host or a controller.
     const manage = wt.isHost && !isSelf && !m.host;
     rows.push(
       <div className="watch-row" key={`m-${m.id}`}>
         <span className="min-w-0 flex-1 truncate">{isSelf ? t('watch.you') : m.name}</span>
-        {role && <span className="watch-tag">{role}</span>}
-        {manage && (
-          <button className="btn text watch-act" onClick={() => wt.setControl(m.id, !m.controller)}>
-            {m.controller ? t('watch.removeControl') : t('watch.giveControl')}
-          </button>
-        )}
-        {manage && (
-          <button className="btn text watch-act" onClick={() => wt.kick(m.id)}>{t('watch.kick')}</button>
+        {manage ? (
+          <select className="watch-select" aria-label={m.name}
+                  value={m.controller ? 'control' : 'viewer'}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === 'remove') wt.kick(m.id);
+                    else wt.setControl(m.id, v === 'control');
+                  }}>
+            <option value="viewer">{t('watch.roleViewer')}</option>
+            <option value="control">{t('watch.roleController')}</option>
+            <option value="remove">{t('watch.kick')}</option>
+          </select>
+        ) : (
+          (m.host || m.controller) && (
+            <span className="watch-role">{m.host ? t('watch.roleHost') : t('watch.roleController')}</span>
+          )
         )}
       </div>,
     );

@@ -884,7 +884,14 @@
     --tw-ring-color: rgba(0, 0, 0, 0.6);
   }
   .watch-row { @apply flex items-center gap-2 py-1.5; }
-  .watch-tag { @apply shrink-0 text-on-surface-variant; font: var(--type-label-small); }
+  .watch-role { @apply shrink-0 text-on-surface-variant; font: var(--type-label-small); }
+  .watch-select {
+    @apply shrink-0 rounded-lg border px-2 py-1;
+    border-color: var(--c-input);
+    color: var(--c-fg);
+    background: transparent;
+    font: var(--type-label-large);
+  }
   .watch-act { @apply shrink-0 px-2 py-1; }
   .watch-actions { @apply mt-3 flex flex-wrap items-center justify-end gap-2; }
 
