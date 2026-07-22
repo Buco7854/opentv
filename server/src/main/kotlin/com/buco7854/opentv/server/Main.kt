@@ -114,7 +114,7 @@ fun main() {
         (account.accountInfo(playlist)?.maxConnections ?: 0).takeIf { it > 0 } ?: fallback
     }
     val downloads = DownloadManager(storage, http, settings, dataDir, connections, connectionLimit)
-    val streamGate = StreamGate()
+    val streamGate = StreamGate(connections)
     val graph = ServerGraph(
         storage = storage,
         http = http,

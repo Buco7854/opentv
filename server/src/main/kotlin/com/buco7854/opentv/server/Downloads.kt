@@ -158,7 +158,7 @@ class DownloadManager(
         // slot evicts this download back to queued (see onSlotFreed).
         val slot = "dl:$id"
         val evict = { requeueIfRunning(id); jobs[id]?.cancel(); Unit }
-        if (!connections.tryOpenDownload(slot, providerKeyOf(item.url), connectionLimit(item.url), evict)) {
+        if (!connections.tryOpenDownload(slot, providerKeyOf(item.url), item.url, connectionLimit(item.url), evict)) {
             jobs.remove(id)
             return
         }

@@ -493,16 +493,15 @@ class RemuxService(private val http: ServerHttp, private val connections: Provid
                 it.audioLabels, it.subLabels, it.nativeVideoCopy)
         }
 
-        // Refuse a new stream when the provider's other active streams already fill its
-        // connection allowance, so the viewer sees a clear message instead of bumping
-        // someone else off. Same-url sessions (e.g. an audio-track switch) don't count,
-        // and idle prepared sessions that hold no live connection don't either. Checked
-        // before probing, since ffprobe itself opens one of the provider's connections.
+        // Refuse a new stream when the provider's other streams (live or other VOD) already
+        // fill its connection allowance, so the viewer sees a clear message instead of bumping
+        // someone else off. Same-url reads (an audio-track switch, or another viewer of this
+        // file) share one connection and don't count. Checked before probing, since ffprobe
+        // itself opens one of the provider's connections.
         val providerKey = providerKeyOf(url)
-        val busyOtherStreams = sessions.values
-            .filter { it.providerKey == providerKey && it.url != url && connections.isOpen(it.id) }
-            .map { it.url }.distinct().size
-        if (busyOtherStreams >= connectionLimit.coerceAtLeast(1)) throw ConnectionLimitException(connectionLimit)
+        if (connections.distinctStreams(providerKey, url) >= connectionLimit.coerceAtLeast(1)) {
+            throw ConnectionLimitException(connectionLimit)
+        }
 
         val probed = probeCached(url)
         val audios = probed.streams.filter { it.type == "audio" }
@@ -647,9 +646,10 @@ class RemuxService(private val http: ServerHttp, private val connections: Provid
         if (sessions[session.id] !== session) return // evicted; don't spawn an orphan
         killProcess(session)
         Files.createDirectories(session.dir)
-        // Reserve the provider slot (evicting a stale stream or a background download if
-        // the cap is full); the eviction callback stops this session if we're later bumped.
-        connections.openStream(session.id, session.providerKey, session.connectionLimit) { stopReading(session) }
+        // Reserve the provider slot (this file's connection, shared with any other viewer of
+        // it, evicting background downloads if need be); the callback stops this session if
+        // we're ever bumped.
+        connections.openStream(session.id, session.providerKey, session.url, session.connectionLimit) { stopReading(session) }
         val process = ProcessBuilder(command(session, startNumber))
             // Run in the session dir so ffmpeg's bare fMP4 init filename lands here on every OS.
             .directory(session.dir.toFile())
