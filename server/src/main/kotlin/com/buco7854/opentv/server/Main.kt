@@ -131,6 +131,7 @@ fun main() {
         cipher = cipher,
         sessions = PlaybackSessionRegistry(),
         streamGate = streamGate,
+        liveRelay = LiveRelay(http, connections),
         trustedProxies = TrustedProxies.fromEnv(),
         connectionLimit = connectionLimit,
     )

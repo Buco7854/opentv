@@ -63,6 +63,7 @@ class ServerGraph(
     val cipher: StreamCipher,
     val sessions: PlaybackSessionRegistry,
     val streamGate: StreamGate,
+    val liveRelay: LiveRelay,
     val trustedProxies: TrustedProxies,
     /** Concurrent reads the provider behind a source URL permits (its max_connections). */
     val connectionLimit: suspend (String) -> Int,
@@ -810,6 +811,23 @@ fun Route.api(g: ServerGraph) = route("/api") {
 
     get("/stream") { g.proxy.handle(call, sid = call.request.queryParameters["sid"]) }
     get("/img") { g.proxy.handle(call, cache = true) }
+
+    // Watch-together live: one upstream read shared by the whole room, so N members cost the
+    // provider a single connection (keyed by the room's share group). Solo viewers use /stream.
+    get("/relay") {
+        val url = call.request.queryParameters["u"]?.let { g.cipher.tryDecrypt(it) }
+        if (url.isNullOrBlank() || !url.startsWith("http")) {
+            call.respond(HttpStatusCode.BadRequest, MessageDto("Invalid or missing target url"))
+            return@get
+        }
+        val sid = call.request.queryParameters["sid"].orEmpty()
+        val group = g.sessions.shareGroup(sid)
+        // The whole room is converging on one shared read: drop every member's solo connection so
+        // its seat frees for the relay instead of double-counting during the handoff, whichever
+        // member switches first. A genuinely full provider still refuses the relay itself.
+        (g.sessions.roomMembers(sid) + sid).forEach { g.streamGate.release(it) }
+        g.liveRelay.stream(call, url, group, providerKeyOf(url), g.connectionLimit(url))
+    }
 
     // Live audio rescue: client fallback for an undecodable audio track (AudioTranscoder).
     get("/transcode") {

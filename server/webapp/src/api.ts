@@ -366,6 +366,10 @@ export const streamUrl = (u: string, hls = false, sid?: string) =>
 /** Audio re-encoded to AAC (video copied); live-playback fallback when the browser can't decode the codec. */
 export const transcodeUrl = (u: string, sid?: string) =>
   `/api/transcode?u=${encodeURIComponent(u)}${sid ? `&sid=${encodeURIComponent(sid)}` : ''}`;
+/** Watch-together live: the room's shared upstream (one provider connection), keyed by the
+ *  viewer's session so the server groups the whole room onto a single read. */
+export const relayUrl = (u: string, sid: string) =>
+  `/api/relay?u=${encodeURIComponent(u)}&sid=${encodeURIComponent(sid)}`;
 export const imgUrl = (u: string) => `/api/img?u=${encodeURIComponent(u)}`;
 export const downloadFileUrl = (id: number, save = false) => `/api/downloads/${id}/file${save ? '?save=1' : ''}`;
 

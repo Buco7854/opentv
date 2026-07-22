@@ -219,10 +219,10 @@ export function useWatchTogether(opts: {
       roomContent.current = contentRef.current;
       setInRoom(true);
       setMembers(roster);
-      // Now watching together: the choice is settled and a remuxed viewer shares the room's read,
-      // so a full provider no longer blocks them.
+      // Now watching together: the choice is settled and the room shares one read (a movie through
+      // the remux, live through the relay), so a full provider no longer blocks a member.
       setChoice('decided');
-      if (remuxRef.current) setBlocked(false);
+      setBlocked(false);
       // Anyone now in the room no longer has a pending request to answer.
       setJoinRequests((list) => list.filter((r) => !ids.has(r.peerId)));
       setControlRequests((list) => list.filter((r) => !ids.has(r.peerId)));

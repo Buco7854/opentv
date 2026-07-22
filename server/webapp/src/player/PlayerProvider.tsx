@@ -8,7 +8,7 @@ import {
   createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState,
 } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api, ApiError, Channel, GuideEntry, prefs, ResumePoint, SessionCommand, streamUrl, transcodeUrl } from '../api';
+import { api, ApiError, Channel, GuideEntry, prefs, relayUrl, ResumePoint, SessionCommand, streamUrl, transcodeUrl } from '../api';
 import { GuideSheet } from '../components/GuideSheet';
 import { Icon } from '../components/Icons';
 import { IconBtn, Segmented, Sheet, snackbar } from '../components/Primitives';
@@ -272,6 +272,9 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
   // Room rights read from inside pickAudio without rebuilding it each roster change.
   const wtRef = useRef({ inRoom: false, canControl: false });
   wtRef.current = { inRoom: wt.inRoom, canControl: wt.canControl };
+  // Live watched together goes through the shared relay (one seat for the room); joining or
+  // leaving flips this and re-inits the engine onto (or off) the relay.
+  const roomLive = !!live && wt.inRoom;
 
   // Hold the engine while the provider check is in flight, and keep it off (with a clear
   // message) when the provider is full - so a blocked stream never plays in the background
@@ -344,7 +347,9 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
       });
     };
 
-    const playMpegts = (target: string, transcoded = false) => {
+    // [relay] serves the room's shared upstream (watch-together live) instead of this viewer's
+    // own; the AAC rescue is skipped there, since it would open a second, unshared connection.
+    const playMpegts = (target: string, transcoded = false, relay = false) => {
       if (!mpegts.getFeatureList().mseLivePlayback) {
         setError(t('player.mpegtsUnsupported'));
         return;
@@ -352,7 +357,8 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
       setAudioTranscoded(transcoded);
       const player = mpegts.createPlayer({
         type: 'mpegts', isLive: true,
-        url: transcoded ? transcodeUrl(target, tabSessionId()) : src(target),
+        url: relay ? relayUrl(target, tabSessionId())
+          : transcoded ? transcodeUrl(target, tabSessionId()) : src(target),
       });
       mpegtsRef.current = player;
       player.attachMediaElement(video);
@@ -361,7 +367,7 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
       // Audio the browser can't decode: server re-muxes to AAC (video copied) and
       // retry once through the same engine, so it gets sound not a silent picture.
       const rescueAudio = () => {
-        if (transcoded || remuxAvailableRef.current !== true) return false;
+        if (transcoded || relay || remuxAvailableRef.current !== true) return false;
         player.destroy();
         if (mpegtsRef.current === player) mpegtsRef.current = null;
         playMpegts(target, true);
@@ -482,7 +488,11 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
       hls.on(Hls.Events.SUBTITLE_TRACK_SWITCH, () => readHlsTracks(hls));
     };
 
-    if (kind === 'hls') playHls(activeUrl);
+    // Watch-together live rides the room's shared upstream (one provider seat) via the relay,
+    // played as a transport stream; solo live keeps its own connection through the proxy. The
+    // relay tees raw TS, so a playlist-only (m3u8) channel can't use it and stays on HLS.
+    if (roomLive && kind !== 'hls') playMpegts(url, false, true);
+    else if (kind === 'hls') playHls(activeUrl);
     else if (kind === 'livets') playHls(activeUrl, true); // ask the proxy for the HLS variant
     else if (kind === 'ts') playMpegts(activeUrl);
     else video.src = src(activeUrl);
@@ -543,7 +553,7 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
       video.removeAttribute('src');
       video.load();
     };
-  }, [url, activeUrl, live, remux, src, holdEngine]);
+  }, [url, activeUrl, live, remux, src, holdEngine, roomLive]);
 
   // PiP/fullscreen end when the player closes, not on engine swaps. Closing also
   // releases the remux session so nothing keeps reading the provider.
@@ -949,9 +959,10 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
 
   // Report playback to the activity dashboard. Engine mirrors the wiring effect's
   // choice; remux takes precedence since it re-serves the source as HLS.
-  const reportEngine = remux ? 'remux'
-    : streamKind(activeUrl) === 'ts' ? 'mpegts'
-      : streamKind(activeUrl) === 'direct' ? 'native' : 'hls';
+  const reportEngine = roomLive ? 'mpegts'
+    : remux ? 'remux'
+      : streamKind(activeUrl) === 'ts' ? 'mpegts'
+        : streamKind(activeUrl) === 'direct' ? 'native' : 'hls';
   useSessionReporter({
     playlistId: request.playlistId ?? null,
     title,
@@ -976,12 +987,6 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
   const busy = holdEngine || remuxState === 'loading' || buffering;
   // VOD/downloads and catch-up all get a scrubber.
   const showSeek = !live;
-  // Only offer the audio/subtitle buttons when there's actually a track to pick (or a remux still
-  // preparing/retrying, which will populate them). A direct MP4/MKV the browser can't switch has
-  // none, so showing a menu that only explains that is just noise.
-  const preparingTracks = remuxState === 'loading' || (remuxEligible && remuxState === 'failed');
-  const canPickAudio = tracks.audio.names.length > 0 || preparingTracks;
-  const canPickSubs = tracks.subs.names.length > 0 || preparingTracks;
   const tracksEmptyText =
     remuxState === 'loading' || holdEngine ? t('player.remuxPreparing')
       : remux || remuxState === 'none' ? t('player.noExtraTracks')
@@ -1129,8 +1134,8 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
             )}
             <div className="controls">
               {live && <span className="live-chip">{t('player.live').toUpperCase()}</span>}
-              {canPickAudio && <IconBtn name="audio" label={t('player.audio')} onClick={() => setMenu('audio')} />}
-              {canPickSubs && <IconBtn name="subtitles" label={t('player.subtitles')} onClick={() => setMenu('subs')} />}
+              <IconBtn name="audio" label={t('player.audio')} onClick={() => setMenu('audio')} />
+              <IconBtn name="subtitles" label={t('player.subtitles')} onClick={() => setMenu('subs')} />
               {!live && <IconBtn name="speed" label={t('player.speed')} onClick={() => setMenu('speed')} />}
               <IconBtn name="aspect" label={t('player.scaling')} onClick={() => setMenu('scale')} />
               {document.pictureInPictureEnabled &&
