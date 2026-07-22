@@ -86,18 +86,37 @@ export function SessionsScreen() {
   const [sessions, setSessions] = useState<Session[] | null>(null);
   const [messaging, setMessaging] = useState<Session | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>();
+  // A pause/play command takes a poll or two to reach the server's reported
+  // state. Hold the optimistic `paused` for each commanded session until a poll
+  // agrees (or a short safety window elapses), so an in-flight poll carrying the
+  // pre-command value can't flip the icon back and forth.
+  const pendingPaused = useRef<Map<string, { paused: boolean; until: number }>>(new Map());
+
+  const reconcile = (list: Session[]): Session[] => {
+    const now = Date.now();
+    return list.map((s) => {
+      const pending = pendingPaused.current.get(s.id);
+      if (!pending) return s;
+      if (now > pending.until || s.paused === pending.paused) {
+        pendingPaused.current.delete(s.id);
+        return s;
+      }
+      return { ...s, paused: pending.paused };
+    });
+  };
 
   const tick = async () => {
     clearTimeout(timer.current);
-    try { setSessions(await api.sessions()); } catch { /* keep last */ }
+    try { setSessions(reconcile(await api.sessions())); } catch { /* keep last */ }
     timer.current = setTimeout(tick, POLL_MS);
   };
   useEffect(() => { tick(); return () => clearTimeout(timer.current); }, []);
 
-  // Optimistic paused flip; the next poll reconciles with the real player state.
   const command = async (session: Session, type: 'pause' | 'play') => {
-    setSessions((list) => list?.map((s) => (s.id === session.id ? { ...s, paused: type === 'pause' } : s)) ?? list);
-    await api.sessionCommand(session.id, { type }).catch(() => {});
+    const paused = type === 'pause';
+    pendingPaused.current.set(session.id, { paused, until: Date.now() + 8000 });
+    setSessions((list) => list?.map((s) => (s.id === session.id ? { ...s, paused } : s)) ?? list);
+    await api.sessionCommand(session.id, { type }).catch(() => { pendingPaused.current.delete(session.id); });
   };
 
   return (
@@ -180,7 +199,7 @@ function SessionCard({ session, onToggle, onMessage }: {
           onClick={onToggle}
         />
         <IconBtn name="message" label={t('sessions.sendMessage')} onClick={onMessage} />
-        <IconBtn name="info" className="muted" label={t('sessions.details')}
+        <IconBtn name="info" label={t('sessions.details')}
                  onClick={() => setDetailsOpen(true)} />
       </div>
 
