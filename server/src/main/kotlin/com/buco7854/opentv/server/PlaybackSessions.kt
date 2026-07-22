@@ -189,7 +189,7 @@ class PlaybackSessionRegistry {
 
     /** Ask [hostId] to admit [peerId] into a watch-together room; false when the host is gone. */
     fun requestJoin(hostId: String, peerId: String, peerName: String, contentKey: String): Boolean {
-        if (hostId == peerId || hostId !in sessions) return false
+        if (hostId == peerId || !sessions.containsKey(hostId)) return false
         val quiet = declined[hostId]?.contains(declineKey(peerId, contentKey)) == true
         return enqueue(hostId, SessionCommandDto(
             type = "join-request", peerId = peerId, peerName = peerName, quiet = quiet,
@@ -199,7 +199,7 @@ class PlaybackSessionRegistry {
     /** The host's answer to a join request. On accept both share a room; on decline it's
      *  remembered so the same peer can't pop another modal for the same content. */
     fun answerJoin(hostId: String, peerId: String, hostName: String, contentKey: String, accept: Boolean): Boolean {
-        if (peerId !in sessions) return false
+        if (!sessions.containsKey(peerId)) return false
         if (!accept) {
             declined.computeIfAbsent(hostId) { java.util.concurrent.ConcurrentHashMap.newKeySet() }
                 .add(declineKey(peerId, contentKey))
