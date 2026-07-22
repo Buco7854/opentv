@@ -22,7 +22,6 @@ import java.net.URI
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * Shares one upstream live connection across a watch-together room. The channel is read from the
@@ -50,9 +49,10 @@ class LiveRelay(
         val providerKey: String,
         val limit: Int,
     ) {
-        // Each member gets a bounded channel; a member that can't keep up drops the oldest bytes
-        // and resyncs on the next transport-stream keyframe rather than stalling the whole room.
-        private val members = CopyOnWriteArrayList<Channel<ByteArray>>()
+        // Each member (keyed by its session id) gets a bounded channel; a member that can't keep
+        // up drops the oldest bytes and resyncs on the next transport-stream keyframe rather than
+        // stalling the room. Keying by session id lets the server cut a kicked member's stream.
+        private val members = ConcurrentHashMap<String, Channel<ByteArray>>()
         private val lifecycle = Any()
         @Volatile private var reader: Job? = null
         @Volatile private var closer: Job? = null
@@ -66,7 +66,7 @@ class LiveRelay(
         /** Attach [member], starting the single upstream read if this is the first member.
          *  REFUSED when the provider is full; DEAD when this relay has been retired and the
          *  caller should fetch a fresh one. */
-        fun attach(member: Channel<ByteArray>): Attach {
+        fun attach(sid: String, member: Channel<ByteArray>): Attach {
             synchronized(lifecycle) {
                 if (dead) return Attach.DEAD
                 closer?.cancel(); closer = null
@@ -77,15 +77,16 @@ class LiveRelay(
                     }
                     reader = scope.launch { pump() }
                 }
-                members.add(member)
+                members.put(sid, member)?.close() // a reconnecting session replaces its old channel
                 return Attach.ATTACHED
             }
         }
 
-        fun detach(member: Channel<ByteArray>) {
+        fun detach(sid: String, member: Channel<ByteArray>) {
             member.close()
             synchronized(lifecycle) {
-                members.remove(member)
+                // Only clear the map entry if it's still this channel (not a newer reconnect).
+                if (members[sid] === member) members.remove(sid)
                 // Keep the upstream briefly so a channel hop or a quick reconnect reuses it.
                 if (members.isEmpty() && closer == null && !dead) {
                     closer = scope.launch {
@@ -94,6 +95,12 @@ class LiveRelay(
                     }
                 }
             }
+        }
+
+        /** Cut a member's stream (left or kicked); its response ends and the client falls back to
+         *  solo. No-op if this relay doesn't hold that session. */
+        fun drop(sid: String) {
+            synchronized(lifecycle) { members.remove(sid)?.close() }
         }
 
         // Always called under [lifecycle].
@@ -108,7 +115,7 @@ class LiveRelay(
             ffmpeg = null
             relays.remove(key, this)
             connections.close(key)
-            members.forEach { it.close() }
+            members.values.forEach { it.close() }
             members.clear()
         }
 
@@ -129,7 +136,7 @@ class LiveRelay(
                         if (n == 0) continue
                         connections.touch(key)
                         val chunk = buffer.copyOf(n)
-                        members.forEach { it.trySend(chunk) }
+                        members.values.forEach { it.trySend(chunk) }
                     }
                 } catch (e: Exception) {
                     // Providers drop long transfers; fall through and reconnect.
@@ -190,13 +197,13 @@ class LiveRelay(
         }
     }
 
-    /** Serve [url] to one room member, sharing the room's single upstream read. */
-    suspend fun stream(call: ApplicationCall, url: String, group: String, providerKey: String, limit: Int) {
+    /** Serve [url] to the room member [sid], sharing the room's single upstream read. */
+    suspend fun stream(call: ApplicationCall, url: String, group: String, providerKey: String, limit: Int, sid: String) {
         val key = "$group|$url"
         val member = Channel<ByteArray>(capacity = 256, onBufferOverflow = BufferOverflow.DROP_OLDEST)
         while (true) {
             val relay = relays.computeIfAbsent(key) { Relay(key, url, group, providerKey, limit) }
-            when (relay.attach(member)) {
+            when (relay.attach(sid, member)) {
                 Attach.REFUSED -> {
                     call.respond(HttpStatusCode.TooManyRequests, MessageDto("Provider connection limit reached"))
                     return
@@ -212,12 +219,18 @@ class LiveRelay(
                             }
                         }
                     } finally {
-                        relay.detach(member)
+                        relay.detach(sid, member)
                     }
                     return
                 }
             }
         }
+    }
+
+    /** Cut [sid]'s shared live stream if it's riding one - called when it leaves or is kicked from
+     *  its room, so the server enforces the removal instead of trusting the client to disconnect. */
+    fun drop(sid: String) {
+        relays.values.forEach { it.drop(sid) }
     }
 
     companion object {

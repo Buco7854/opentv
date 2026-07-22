@@ -166,6 +166,9 @@ class PlaybackSessionRegistry {
     private val sessions = ConcurrentHashMap<String, Live>()
     private val rooms = ConcurrentHashMap<String, Room>()
     private val memberRoom = ConcurrentHashMap<String, String>()
+    // Notified when a viewer leaves or is kicked from a room, so a shared live connection it was
+    // riding can be cut server-side rather than trusting the client to disconnect itself.
+    private val leaveListeners = java.util.concurrent.CopyOnWriteArrayList<(String) -> Unit>()
     // A host that declined a peer for some content isn't pestered with a modal again for it.
     private val declined = ConcurrentHashMap<String, MutableSet<String>>()
     private fun declineKey(peerId: String, contentKey: String) = "$peerId@$contentKey"
@@ -359,6 +362,12 @@ class PlaybackSessionRegistry {
         room.members.forEach { enqueue(it, SessionCommandDto(type = "room-state", members = members)) }
     }
 
+    /** Re-send the roster to [id] alone if it's still in a room, so a socket that just (re)connected
+     *  - after a page refresh - picks its watch-together session back up instead of dropping out. */
+    fun resendRoomState(id: String) {
+        memberRoom[id]?.let { rooms[it] }?.let { enqueue(id, SessionCommandDto(type = "room-state", members = roster(it))) }
+    }
+
     /** Mirror a controller's [state] to the room's other members (non-controllers can't drive). */
     fun syncRoom(fromId: String, state: SyncStateDto) {
         val room = memberRoom[fromId]?.let { rooms[it] } ?: return
@@ -385,6 +394,8 @@ class PlaybackSessionRegistry {
         room.controllers.remove(id)
         room.ready.remove(id)
         room.noHevc.remove(id)
+        // Cut any shared live connection this viewer was riding, now that it's no longer a member.
+        leaveListeners.forEach { runCatching { it(id) } }
         if (room.members.isEmpty()) { rooms.remove(room.id); return }
         if (room.hostId == id) {
             room.hostId = room.members.first()
@@ -392,6 +403,9 @@ class PlaybackSessionRegistry {
         }
         pushRoomState(room)
     }
+
+    /** Register to be told when [onMemberLeave]'s id leaves or is kicked from a room. */
+    fun onMemberLeave(listener: (String) -> Unit) { leaveListeners.add(listener) }
 
     /** Fires whenever a command is queued for [id]; the WebSocket drains on each signal. */
     fun commandSignal(id: String): ReceiveChannel<Unit> = wake(id)

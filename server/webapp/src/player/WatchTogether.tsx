@@ -106,6 +106,9 @@ export function useWatchTogether(opts: {
   const remuxRef = useRef(remuxEligible); remuxRef.current = remuxEligible;
   // The content the room was formed on, so navigating elsewhere drops us out of it.
   const roomContent = useRef<string | null>(null);
+  // The content whose provider we've already checked, so we only ask once - reset on leaving a
+  // room so a member dropped back to solo is re-checked (and blocked if there's no free seat).
+  const checked = useRef<string | null>(null);
   // The last state we applied from a peer (with when), so our own resulting events - which fire
   // within a few ms - aren't echoed straight back, while genuine actions later still send.
   const lastApplied = useRef<{ positionMs: number; paused: boolean; rate: number; atMs: number } | null>(null);
@@ -127,6 +130,10 @@ export function useWatchTogether(opts: {
     roomContent.current = null;
     loadingRef.current = false;
     setLoading(false);
+    // Dropped back to solo (left or kicked): re-check the provider - if it's full now, this viewer
+    // gets the limit error instead of quietly holding a seat it no longer shares.
+    checked.current = null;
+    setChecking(true);
     setInRoom(false);
     setMembers([]);
     setJoinRequests([]);
@@ -193,10 +200,11 @@ export function useWatchTogether(opts: {
     if (!v) return;
     // Silent during a track-change reload: the pauses and plays it causes aren't real drives.
     if (loadingRef.current) return;
-    // Don't anchor a transient position while our own playback isn't settled - mid-seek, still
-    // buffering (readyState below HAVE_FUTURE_DATA), or a seek still landing. A loading peer that
-    // kept broadcasting its stuck position would rewind everyone else again and again.
-    if (!seek && (v.seeking || v.readyState < 3 || settling(v))) return;
+    // Hold back only the periodic anchor (never a real play/pause/rate/seek action) while our own
+    // playback isn't settled - mid-seek, still buffering, or a seek still landing. A loading peer
+    // that kept anchoring its stuck position would rewind everyone else again and again; but a
+    // deliberate rate or pause change must always propagate, or peers drift apart.
+    if (!guarded && !seek && (v.seeking || v.readyState < 3 || settling(v))) return;
     const state: SyncState = {
       positionMs: Math.floor((v.currentTime || 0) * 1000), paused: v.paused, rate: v.playbackRate || 1, seek,
     };
@@ -268,7 +276,6 @@ export function useWatchTogether(opts: {
   const watchAlone = useCallback(() => setChoice('decided'), []);
 
   // Ask the server who else is here and whether the provider is full - once per content.
-  const checked = useRef<string | null>(null);
   useEffect(() => {
     if (!active || !contentKey || inRoom || checked.current === contentKey) return;
     checked.current = contentKey;

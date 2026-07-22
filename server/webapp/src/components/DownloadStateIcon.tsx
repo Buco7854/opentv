@@ -38,11 +38,14 @@ export function DownloadStateIcon({ state, onDownload, onChanged }: {
   switch (state?.status) {
     case DownloadStatus.RUNNING:
     case DownloadStatus.QUEUED: {
-      const fraction = state.totalBytes > 0 && state.status === DownloadStatus.RUNNING
+      // Queued means the provider's connections are busy: it waits (spinner + a hint saying so)
+      // rather than looking like a stuck active download.
+      const queued = state.status === DownloadStatus.QUEUED;
+      const fraction = !queued && state.totalBytes > 0
         ? Math.min(1, state.downloadedBytes / state.totalBytes) : null;
       button = (
         <button className="icon-btn relative" aria-label={t('downloads.pauseAria')}
-                title={t('downloads.pauseHint')}
+                title={t(queued ? 'downloads.queuedHint' : 'downloads.pauseHint')}
                 onClick={act(() => api.pauseDownload(state.id))} onContextMenu={openDelete}>
           <Ring fraction={fraction} />
           <Icon name="pause" className="dl-pause-glyph" />

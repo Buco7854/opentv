@@ -279,7 +279,11 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
   // Hold the engine while the provider check is in flight, and keep it off (with a clear
   // message) when the provider is full - so a blocked stream never plays in the background
   // or steals the connection from whoever is already watching.
-  const holdForConnection = providerBacked && (wt.checking || wt.blocked || wt.choosing);
+  // The alone/together choice (and the check that precedes it) holds any content, downloads
+  // included - there's no seat there, but the viewer still chooses whether to sync. A full
+  // provider only blocks provider-backed streams.
+  const holdForChoice = wt.checking || wt.choosing;
+  const holdForConnection = holdForChoice || (providerBacked && wt.blocked);
   const holdEngine = holdForConnection || (remuxEligible && !remux &&
     (remuxAvailable == null ||
       (remuxAvailable && (remuxState === 'idle' || remuxState === 'loading'))));

@@ -788,6 +788,9 @@ fun Route.api(g: ServerGraph) = route("/api") {
             suspend fun flush() = g.sessions.drainCommands(id).forEach {
                 send(Frame.Text(Json.encodeToString(SessionCommandDto.serializer(), it)))
             }
+            // A socket that just (re)connected while still in a room - e.g. after a refresh -
+            // gets its roster back, so it rejoins the watch-together session instead of dropping.
+            g.sessions.resendRoomState(id)
             val sender = launch {
                 flush()
                 for (signal in g.sessions.commandSignal(id)) flush()
@@ -830,7 +833,7 @@ fun Route.api(g: ServerGraph) = route("/api") {
         // its seat frees for the relay instead of double-counting during the handoff, whichever
         // member switches first. A genuinely full provider still refuses the relay itself.
         (g.sessions.roomMembers(sid) + sid).forEach { g.streamGate.release(it) }
-        g.liveRelay.stream(call, url, group, providerKeyOf(url), g.connectionLimit(url))
+        g.liveRelay.stream(call, url, group, providerKeyOf(url), g.connectionLimit(url), sid)
     }
 
     // Live audio rescue: client fallback for an undecodable audio track (AudioTranscoder).

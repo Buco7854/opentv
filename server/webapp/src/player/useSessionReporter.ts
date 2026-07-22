@@ -132,13 +132,20 @@ export function useSessionReporter(
       };
     }
 
+    // A refresh/tab-close unloads the page: keep the session (and its watch-together room) so the
+    // reloaded page rejoins it. Only a real navigate-away (page stays) ends the session.
+    let unloading = false;
+    const onPageHide = () => { unloading = true; };
+    window.addEventListener('pagehide', onPageHide);
+
     return () => {
       stopped = true;
       clearInterval(timer);
       clearTimeout(wsRetry);
+      window.removeEventListener('pagehide', onPageHide);
       if (wsSend) wsSend.current = null;
       if (ws) { ws.onclose = null; ws.close(); }
-      api.sessionEnd(id);
+      if (!unloading) api.sessionEnd(id);
     };
   }, [video, wsSend]);
 }

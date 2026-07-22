@@ -69,8 +69,9 @@ class DownloadManager(
     }
 
     /**
-     * Queue a VOD download. Returns null when queued, or a user-facing reason
-     * when the same URL is already queued, running, or finished.
+     * Queue a VOD download. Returns a user-facing message: a reason when the same URL is already
+     * queued/running/finished, a heads-up when the provider is full so it will wait for a free
+     * connection, or null when it starts right away.
      */
     suspend fun enqueue(channel: Channel): String? {
         val existing = storage.downloads.findByUrlWithStatus(
@@ -88,8 +89,12 @@ class DownloadManager(
         storage.downloads.get(id)?.let {
             storage.downloads.update(it.copy(filePath = targetPath(channel, id)))
         }
+        // The provider's connections may all be in use by playback; the download then waits its
+        // turn rather than cutting a stream. Tell the user instead of leaving it spinning silently.
+        val waiting = channel.url.startsWith("http") &&
+            !connections.downloadFits(providerKeyOf(channel.url), connectionLimit(channel.url))
         pump()
-        return null
+        return if (waiting) "Queued — it will start when a connection is free" else null
     }
 
     /** Write PAUSED before cancelling so the worker doesn't mark the row FAILED. */

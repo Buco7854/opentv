@@ -98,6 +98,12 @@ class ProviderConnections {
             } else false
         }
 
+    /** Whether a fresh download could start on [key] right now (its distinct connections are below
+     *  [limit]) - a peek for telling the user their download will wait, without reserving. */
+    fun downloadFits(key: String, limit: Int): Boolean = synchronized(lock) {
+        holders.values.filter { it.key == key }.map { it.shareKey }.distinct().size < limit.coerceAtLeast(1)
+    }
+
     /** Keep a live connection from looking idle to the LRU eviction / stream reaper. */
     fun touch(id: String) { holders[id]?.lastMs = System.currentTimeMillis() }
 
