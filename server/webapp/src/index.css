@@ -876,19 +876,21 @@
   }
   .live-chip::before { content: ""; @apply size-2 rounded-full; background: #F1544B; }
 
-  /* Watch-together banner: a small pill over the video, visible with the chrome hidden. */
-  .watch-pill {
-    @apply absolute left-1/2 top-3 z-20 flex -translate-x-1/2 items-center gap-2
-           rounded-full px-3 py-1.5 text-white;
-    font: var(--type-label-medium);
-    background: rgba(0, 0, 0, 0.55);
-    backdrop-filter: blur(8px);
+  /* Watch-together: a top-bar icon with a pending-request dot, and its sheet's rows. */
+  .wt-icon { @apply relative inline-flex; }
+  .wt-badge {
+    @apply absolute right-1 top-1 size-2.5 rounded-full ring-2;
+    background: #34D399;
+    --tw-ring-color: rgba(0, 0, 0, 0.6);
   }
-  .watch-pill .dot { @apply size-2 rounded-full; background: #34D399; }
-  .watch-pill .leave { @apply ml-1 rounded-full px-2 py-0.5 font-semibold; color: #8AB4FF; }
-  @media (hover: hover) { .watch-pill .leave:hover { background: rgba(255, 255, 255, 0.12); } }
-  .watch-pill.ask { @apply cursor-pointer; }
-  @media (hover: hover) { .watch-pill.ask:hover { background: rgba(0, 0, 0, 0.7); } }
+  .watch-row {
+    @apply flex items-center gap-2 py-2;
+    border-top: 1px solid var(--c-outline-variant, rgba(128, 128, 128, 0.2));
+  }
+  .watch-row:first-of-type { border-top: none; }
+  .watch-tag { @apply shrink-0 text-on-surface-variant; font: var(--type-label-small); }
+  .watch-act { @apply shrink-0 px-2 py-1; }
+  .watch-actions { @apply mt-3 flex flex-wrap items-center justify-end gap-2; }
 
   /* Our own subtitle overlay (the selected track is kept hidden so cues fire
      without native ::cue rendering). Standard low position, as players like

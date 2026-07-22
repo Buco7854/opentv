@@ -82,8 +82,10 @@ data class WatchIntentRequest(
 data class WatchIntentResponse(
     /** Session ids already watching this same content (watch-together candidates). */
     val sameContent: List<String>,
-    /** Starting a different stream here would exceed the provider's connection limit. */
-    val atLimit: Boolean,
+    /** The provider's other active streams already fill its connection allowance. The
+     *  client decides what to do: a remuxed file shared with a same-content viewer costs
+     *  no new connection, while a live stream always needs its own. */
+    val full: Boolean,
     val limit: Int,
 )
 
@@ -98,6 +100,9 @@ data class RequestControlBody(val peerName: String)
 
 @Serializable
 data class GrantControlBody(val peerId: String, val grant: Boolean)
+
+@Serializable
+data class KickBody(val targetId: String)
 
 @Serializable
 data class RemuxAvailableDto(val available: Boolean)
@@ -678,8 +683,8 @@ fun Route.api(g: ServerGraph) = route("/api") {
             val peers = g.sessions.sameContentPeers(req.selfId, req.contentKey).map { it.id }
             val url = req.source?.let { g.cipher.tryDecrypt(it) }
             val limit = url?.let { g.connectionLimit(it) } ?: Int.MAX_VALUE
-            val others = g.sessions.otherStreamsOn(req.selfId, req.playlistId, req.contentKey)
-            call.respond(WatchIntentResponse(peers, peers.isEmpty() && others >= limit.coerceAtLeast(1), limit))
+            val others = g.sessions.otherStreamsOn(req.selfId, req.playlistId)
+            call.respond(WatchIntentResponse(peers, others >= limit.coerceAtLeast(1), limit))
         }
         // Watch-together handshake, routed over the same command channel as pause/play.
         post("/{id}/join-request") {
@@ -698,6 +703,12 @@ fun Route.api(g: ServerGraph) = route("/api") {
             val id = call.parameters["id"] ?: throw IllegalArgumentException("Missing id")
             g.sessions.syncRoom(id, call.receive<SyncStateDto>())
             call.respond(HttpStatusCode.NoContent)
+        }
+        post("/{id}/kick") {
+            val hostId = call.parameters["id"] ?: throw IllegalArgumentException("Missing id")
+            val req = call.receive<KickBody>()
+            if (g.sessions.kick(hostId, req.targetId)) call.respond(HttpStatusCode.NoContent)
+            else call.respond(HttpStatusCode.NotFound, MessageDto("No such room"))
         }
         post("/{id}/request-control") {
             val id = call.parameters["id"] ?: throw IllegalArgumentException("Missing id")

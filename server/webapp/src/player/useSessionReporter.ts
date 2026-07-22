@@ -20,6 +20,7 @@ export interface PlaybackSnapshot {
   preparing: boolean;
   remuxId: string | null;
   contentKey: string;
+  name: string;
 }
 
 const HEARTBEAT_MS = 3000;
@@ -88,6 +89,7 @@ export function useSessionReporter(
         preparing: s.preparing,
         remuxId: s.remuxId,
         contentKey: s.contentKey,
+        name: s.name,
       };
       const { commands } = await api.sessionHeartbeat(body);
       if (stopped) return;

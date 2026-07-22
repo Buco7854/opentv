@@ -13,7 +13,8 @@ import { GuideSheet } from '../components/GuideSheet';
 import { Icon } from '../components/Icons';
 import { IconBtn, Segmented, Sheet, snackbar } from '../components/Primitives';
 import { tabSessionId, useSessionReporter } from './useSessionReporter';
-import { useWatchTogether, WatchTogetherModals } from './WatchTogether';
+import { useWatchTogether, WatchTogetherSheet } from './WatchTogether';
+import { deviceLabel } from '../lib/format';
 import { t } from '../i18n';
 
 export interface PlayRequest {
@@ -185,6 +186,7 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     const prev = remuxRef.current;
     if (prev) api.remuxStop(prev.id);
     setRemux(null); setRemuxState('idle'); forceTranscode.current = false;
+    setError(null);
   }, [url]);
   useEffect(() => {
     api.remuxAvailable().then((r) => setRemuxAvailable(r.available)).catch(() => setRemuxAvailable(false));
@@ -217,6 +219,7 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
   useEffect(() => { pendingSeekRef.current = pendingSeek; }, [pendingSeek]);
   const [tracks, setTracks] = useState<TrackKind>({ audio: { names: [], current: -1 }, subs: { names: [], current: -1 } });
   const [menu, setMenu] = useState<null | 'speed' | 'scale' | 'audio' | 'subs' | 'subStyle'>(null);
+  const [wtMenu, setWtMenu] = useState(false);
   const [guideChannel, setGuideChannel] = useState<Channel | null>(null);
   const [scale, setScale] = useState(prefs.resizeMode);
   // Active cue text (rendered by our own overlay) and the user's appearance settings.
@@ -240,9 +243,34 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
   // single-connection providers never see two concurrent opens. Live `.ts` is excluded.
   const remuxEligible = !live &&
     (streamKind(url) === 'direct' || streamKind(url) === 'ts' || !!catchup);
-  const holdEngine = remuxEligible && !remux &&
+
+  // Watch-together: stable content identity, and whether this stream draws on the provider
+  // (downloads are local). Defined here so the connection check can gate the engine below.
+  const providerBacked = !direct;
+  const contentKey = catchup ? `cu:${url}` : channelId != null ? `ch:${channelId}` : `u:${url}`;
+  const deviceName = useMemo(() => deviceLabel(navigator.userAgent) || t('watch.someone'), []);
+  const wt = useWatchTogether({
+    selfId: tabSessionId(),
+    deviceName,
+    video: videoRef,
+    active: !error,
+    live: !!live,
+    remuxEligible,
+    contentKey,
+    source: url,
+    playlistId: request.playlistId ?? null,
+  });
+
+  // Hold the engine while the provider check is in flight, and keep it off (with a clear
+  // message) when the provider is full - so a blocked stream never plays in the background
+  // or steals the connection from whoever is already watching.
+  const holdForConnection = providerBacked && (wt.checking || wt.blocked);
+  const holdEngine = holdForConnection || (remuxEligible && !remux &&
     (remuxAvailable == null ||
-      (remuxAvailable && (remuxState === 'idle' || remuxState === 'loading')));
+      (remuxAvailable && (remuxState === 'idle' || remuxState === 'loading'))));
+  useEffect(() => {
+    if (wt.blocked) setError((old) => old ?? t('player.connectionLimit'));
+  }, [wt.blocked]);
 
   const poke = useCallback(() => {
     setUiVisible(true);
@@ -515,12 +543,16 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     const video = videoRef.current!;
     video.volume = prefs.volume;
     video.muted = prefs.muted;
+    // Reflect the element's real state now, so a reload (or autoplay being blocked) can't
+    // leave the play/pause button showing the wrong icon until the next event.
+    setPaused(video.paused);
     const onTime = () => setTime({ position: video.currentTime, duration: video.duration });
     const onPlay = () => setPaused(false);
     const onPause = () => setPaused(true);
     const onWaiting = () => setBuffering(true);
     const onReady = () => {
       setBuffering(false);
+      setPaused(video.paused);
       // Remux is playing: never leave the menus stuck on "preparing".
       if (remuxRef.current) setRemuxState((s) => (s === 'loading' ? 'idle' : s));
     };
@@ -819,9 +851,11 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
   startRemuxRef.current = startRemux;
 
   // Prepare the remux when the file opens, opening at the saved resume position so
-  // hls.js starts there and the track menus are populated early.
+  // hls.js starts there and the track menus are populated early. Held off until the
+  // connection check clears, so a full provider isn't opened just to be refused.
   useEffect(() => {
     if (!remuxEligible || remuxAvailable !== true || remux || remuxState !== 'idle') return;
+    if (wt.checking || wt.blocked) return;
     let cancelled = false;
     (async () => {
       const points = catchup ? [] : await api.resumeAll().catch(() => [] as ResumePoint[]);
@@ -831,7 +865,7 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
       startRemux(Math.max(0, chosenTracks.current.audio), at);
     })();
     return () => { cancelled = true; };
-  }, [remuxEligible, remuxAvailable, remux, remuxState, url, catchup, startRemux]);
+  }, [remuxEligible, remuxAvailable, remux, remuxState, url, catchup, startRemux, wt.checking, wt.blocked]);
 
   // Remux is the only path to sound for undecodable audio (AC3/E-AC3/DTS), so a failed
   // prepare can't be left as silent direct playback. Usual cause: a single-connection
@@ -881,24 +915,6 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
   const reportEngine = remux ? 'remux'
     : streamKind(activeUrl) === 'ts' ? 'mpegts'
       : streamKind(activeUrl) === 'direct' ? 'native' : 'hls';
-  // Stable identity of this content, so two viewers of the same thing can watch together.
-  const contentKey = catchup ? `cu:${url}` : channelId != null ? `ch:${channelId}` : `u:${url}`;
-  const wt = useWatchTogether({
-    selfId: tabSessionId(),
-    video: videoRef,
-    active: !error,
-    live: !!live,
-    contentKey,
-    source: url,
-    playlistId: request.playlistId ?? null,
-  });
-  // Watching something else while the provider is full: show the same style of message
-  // as a decode failure rather than silently stealing the connection.
-  useEffect(() => {
-    if (!wt.limited) return;
-    setError((old) => old ?? t('player.connectionLimit'));
-    videoRef.current?.pause();
-  }, [wt.limited]);
   useSessionReporter({
     playlistId: request.playlistId ?? null,
     title,
@@ -914,6 +930,7 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     preparing: holdEngine,
     remuxId: remux?.id ?? null,
     contentKey,
+    name: deviceName,
   }, videoRef, wt.onCommand);
 
   const busy = holdEngine || remuxState === 'loading' || (buffering && !paused);
@@ -961,24 +978,6 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
       <video ref={videoRef} autoPlay playsInline
              className={scale === 'zoom' ? 'zoom' : scale === 'stretch' ? 'stretch' : undefined} />
 
-      {wt.room && (
-        <div className="watch-pill">
-          <span className="dot" aria-hidden />
-          {t('watch.together')}
-          {wt.room.role === 'guest' && !wt.room.canControl && (
-            <button className="leave" onClick={wt.requestControl}>{t('watch.requestControl')}</button>
-          )}
-          <button className="leave" onClick={wt.leave}>{t('watch.leave')}</button>
-        </div>
-      )}
-      {!wt.room && wt.canAsk && !wt.offer && (
-        <button className="watch-pill ask" onClick={wt.ask}>
-          <span className="dot" aria-hidden />
-          {t('watch.ask')}
-        </button>
-      )}
-      <WatchTogetherModals wt={wt} container={rootRef.current} />
-
       {cueText && (
         <div className={`player-subs${uiVisible ? ' chrome' : ''}`} aria-live="off">
           <span className={`cue cue-${subStyle.style}${subStyle.bold ? ' bold' : ''}`}
@@ -1015,6 +1014,12 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
                   : catchup ? t('player.catchup') : ''}
               </div>
             </div>
+            {wt.available && (
+              <span className="wt-icon">
+                <IconBtn name="person" label={t('watch.title')} onClick={() => setWtMenu(true)} />
+                {wt.hasPending && <span className="wt-badge" aria-hidden />}
+              </span>
+            )}
             {live && channelId != null && (hasGuide ?? !!tvgId) && (
               <IconBtn name="calendar" label={t('guide.title')} onClick={async () => {
                 const channel = await api.channel(channelId).catch(() => null);
@@ -1129,6 +1134,9 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
           onDismiss={() => setGuideChannel(null)}
           onPlayCatchup={(cid, startMs, endMs) => { setGuideChannel(null); onPlayCatchup(cid, startMs, endMs); }}
         />
+      )}
+      {wtMenu && (
+        <WatchTogetherSheet wt={wt} container={rootRef.current} onDismiss={() => setWtMenu(false)} />
       )}
     </div>
   );

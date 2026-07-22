@@ -155,25 +155,30 @@ export interface SessionHeartbeat {
   remuxId: string | null;
   /** Stable id of the content, so the server can spot two viewers of the same thing. */
   contentKey: string;
+  /** Friendly device label, shown in the watch-together roster. */
+  name: string;
 }
 
-/** Host playback state mirrored to a watch-together room's guests. */
+/** Driver playback state mirrored to a watch-together room's other members. */
 export interface SyncState { positionMs: number; paused: boolean; rate: number }
+
+/** One viewer in a watch-together room. */
+export interface RoomMember { id: string; name: string; host: boolean; controller: boolean }
 
 export interface SessionCommand {
   type: 'pause' | 'play' | 'message' | 'join-request' | 'join-response'
-    | 'sync' | 'peer-left' | 'host' | 'control-request' | 'control-response' | 'room-ended';
+    | 'control-request' | 'control-response' | 'sync' | 'room-state' | 'room-ended';
   text?: string;
-  roomId?: string;
   peerId?: string;
   peerName?: string;
   accepted?: boolean;
   quiet?: boolean;
   sync?: SyncState;
+  members?: RoomMember[];
 }
 
-/** Who else is on this content, and whether the provider is full for a different stream. */
-export interface WatchIntent { sameContent: string[]; atLimit: boolean; limit: number }
+/** Who else is on this content, and whether the provider's connections are all in use. */
+export interface WatchIntent { sameContent: string[]; full: boolean; limit: number }
 
 export interface RemuxDiag {
   videoCodec: string;
@@ -324,6 +329,9 @@ export const api = {
   /** Host grants or refuses a guest's control request. */
   grantControl: (hostId: string, peerId: string, grant: boolean) =>
     j<null>(`/api/sessions/${encodeURIComponent(hostId)}/grant-control`, post({ peerId, grant })),
+  /** Host removes a member from the room. */
+  kick: (hostId: string, targetId: string) =>
+    j<null>(`/api/sessions/${encodeURIComponent(hostId)}/kick`, post({ targetId })),
   sessionLeave: (id: string) =>
     fetch(`/api/sessions/${encodeURIComponent(id)}/leave`, { method: 'POST', keepalive: true }).catch(() => {}),
   resumeAll: () => j<ResumePoint[]>('/api/resume'),

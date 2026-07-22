@@ -35,11 +35,17 @@ data class SessionHeartbeatDto(
     /** Stable identity of the content being watched (channel/download/catch-up), so the
      *  server can tell two viewers apart from two viewers of the same thing. */
     val contentKey: String = "",
+    /** Friendly device label ("Chrome · Windows"), shown in the watch-together roster. */
+    val name: String = "",
 )
 
 /** Host-driven playback state, mirrored to the other members of a watch-together room. */
 @Serializable
 data class SyncStateDto(val positionMs: Long, val paused: Boolean, val rate: Double = 1.0)
+
+/** One viewer in a watch-together room (server -> members). */
+@Serializable
+data class RoomMemberDto(val id: String, val name: String, val host: Boolean, val controller: Boolean)
 
 /**
  * A command pushed to a viewer. The admin queues pause/play/message; the rest coordinate
@@ -47,21 +53,21 @@ data class SyncStateDto(val positionMs: Long, val paused: Boolean, val rate: Dou
  */
 @Serializable
 data class SessionCommandDto(
-    /** pause | play | message (admin) · join-request | join-response | sync | peer-left |
-     *  host (you own the room) | control-request | control-response | room-ended. */
+    /** pause | play | message (admin) · join-request | join-response | control-request |
+     *  control-response | sync | room-state (roster changed) | room-ended (dropped/kicked). */
     val type: String,
     val text: String? = null,
-    /** join-response: the room the requester was admitted to. */
-    val roomId: String? = null,
-    /** join-request/response: the other viewer's session id and display name. */
+    /** join/control-request: the other viewer's session id and display name. */
     val peerId: String? = null,
     val peerName: String? = null,
-    /** join-response: whether the host accepted. */
+    /** join/control-response: whether it was accepted. */
     val accepted: Boolean? = null,
-    /** join-request: the host already declined this peer once, so ask quietly (no modal). */
+    /** join-request: the host already declined this peer once, so nudge quietly. */
     val quiet: Boolean = false,
-    /** sync: the host's latest playback state. */
+    /** sync: the driver's latest playback state. */
     val sync: SyncStateDto? = null,
+    /** room-state: the full roster, so each client can render who's in and their rights. */
+    val members: List<RoomMemberDto>? = null,
 )
 
 @Serializable
@@ -179,11 +185,12 @@ class PlaybackSessionRegistry {
         return active().filter { it.id != selfId && it.state.contentKey == contentKey }
     }
 
-    /** Distinct other streams the viewers on [playlistId] currently pull from the provider. */
-    fun otherStreamsOn(selfId: String, playlistId: Long?, contentKey: String): Int {
+    /** Distinct streams other viewers on [playlistId] currently pull from the provider
+     *  (two viewers of the same thing count once - they can share it). */
+    fun otherStreamsOn(selfId: String, playlistId: Long?): Int {
         if (playlistId == null) return 0
         return active()
-            .filter { it.id != selfId && it.state.playlistId == playlistId && it.state.contentKey != contentKey }
+            .filter { it.id != selfId && it.state.playlistId == playlistId }
             .map { it.state.contentKey }.distinct().size
     }
 
@@ -206,19 +213,17 @@ class PlaybackSessionRegistry {
             return enqueue(peerId, SessionCommandDto(type = "join-response", accepted = false))
         }
         declined[hostId]?.remove(declineKey(peerId, contentKey))
-        val roomId = memberRoom[hostId] ?: run {
-            val room = Room("r-$hostId", hostId)
-            room.members.add(hostId)
-            room.controllers.add(hostId)
-            rooms[room.id] = room
-            memberRoom[hostId] = room.id
-            room.id
+        val room = memberRoom[hostId]?.let { rooms[it] } ?: Room("r-$hostId", hostId).also {
+            it.members.add(hostId)
+            it.controllers.add(hostId)
+            rooms[it.id] = it
+            memberRoom[hostId] = it.id
         }
-        rooms[roomId]?.members?.add(peerId)
-        memberRoom[peerId] = roomId
-        return enqueue(peerId, SessionCommandDto(
-            type = "join-response", accepted = true, roomId = roomId, peerId = hostId, peerName = hostName,
-        ))
+        room.members.add(peerId)
+        memberRoom[peerId] = room.id
+        enqueue(peerId, SessionCommandDto(type = "join-response", accepted = true))
+        pushRoomState(room)
+        return true
     }
 
     /** A guest asks the room's host to let it control playback too. */
@@ -235,8 +240,17 @@ class PlaybackSessionRegistry {
     fun grantControl(hostId: String, peerId: String, grant: Boolean): Boolean {
         val room = memberRoom[hostId]?.let { rooms[it] } ?: return false
         if (room.hostId != hostId || peerId !in room.members) return false
-        if (grant) room.controllers.add(peerId)
+        if (grant) { room.controllers.add(peerId); pushRoomState(room) }
         return enqueue(peerId, SessionCommandDto(type = "control-response", accepted = grant))
+    }
+
+    /** The host removes [targetId] from the room. */
+    fun kick(hostId: String, targetId: String): Boolean {
+        val room = memberRoom[hostId]?.let { rooms[it] } ?: return false
+        if (room.hostId != hostId || targetId == hostId || targetId !in room.members) return false
+        enqueue(targetId, SessionCommandDto(type = "room-ended"))
+        removeFromRoom(room, targetId)
+        return true
     }
 
     /** The room [id] is in and how many are in it, for the activity dashboard. Null if none. */
@@ -244,6 +258,21 @@ class PlaybackSessionRegistry {
         val roomId = memberRoom[id] ?: return null
         val room = rooms[roomId] ?: return null
         return roomId to room.members.size
+    }
+
+    private fun roster(room: Room): List<RoomMemberDto> = room.members.map { id ->
+        RoomMemberDto(
+            id = id,
+            name = sessions[id]?.state?.name?.takeIf { it.isNotBlank() } ?: "Someone",
+            host = id == room.hostId,
+            controller = id in room.controllers,
+        )
+    }
+
+    /** Push the current roster to every member, so each renders who's in and their rights. */
+    private fun pushRoomState(room: Room) {
+        val members = roster(room)
+        room.members.forEach { enqueue(it, SessionCommandDto(type = "room-state", members = members)) }
     }
 
     /** Mirror a controller's [state] to the room's other members (non-controllers can't drive). */
@@ -257,25 +286,28 @@ class PlaybackSessionRegistry {
         }
     }
 
-    /** Drop [id] from its room. The room keeps going with the remaining members (a new host
-     *  is promoted if the host left); it dissolves only when one lone member is left. */
+    /** Take [id] out of its room, dissolving it when only one lone member would be left,
+     *  promoting a new host if the host left, and re-broadcasting the roster otherwise. */
     fun leaveRoom(id: String) {
-        val roomId = memberRoom.remove(id) ?: return
-        val room = rooms[roomId] ?: return
+        val room = memberRoom[id]?.let { rooms[it] } ?: return
+        removeFromRoom(room, id)
+    }
+
+    private fun removeFromRoom(room: Room, id: String) {
+        memberRoom.remove(id)
         room.members.remove(id)
         room.controllers.remove(id)
         if (room.members.size <= 1) {
             room.members.forEach { memberRoom.remove(it); enqueue(it, SessionCommandDto(type = "room-ended")) }
-            rooms.remove(roomId)
+            room.members.clear()
+            rooms.remove(room.id)
             return
         }
-        val hostLeft = room.hostId == id
-        if (hostLeft) {
+        if (room.hostId == id) {
             room.hostId = room.members.first()
             room.controllers.add(room.hostId)
         }
-        room.members.forEach { enqueue(it, SessionCommandDto(type = "peer-left", peerId = id)) }
-        if (hostLeft) enqueue(room.hostId, SessionCommandDto(type = "host"))
+        pushRoomState(room)
     }
 
     /** Fires whenever a command is queued for [id]; the WebSocket drains on each signal. */

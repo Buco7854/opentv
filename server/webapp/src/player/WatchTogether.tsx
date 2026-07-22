@@ -1,41 +1,47 @@
-// Watch-together: viewers on the same content share a room. The host owns it and anchors
-// the timeline; it can grant control to guests, and everyone with control drives playback
-// for the rest. Handshake and sync ride the session command channel (useSessionReporter),
-// so there is no second socket. Trying to watch something else while the provider is full
-// surfaces a connection-limit message instead.
+// Watch-together: viewers on the same content share a room, reached from the group icon in
+// the player's top bar (no banner over the video). The host owns the room and can grant
+// control; every controller drives play/pause/seek and the rest mirror it in real time.
+// Handshake, roster and sync all ride the session command channel (useSessionReporter), so
+// there is no second socket. When the provider's connections are all in use and this stream
+// would need its own, playback is blocked with a clear message instead of cutting someone off.
 
-import { ReactNode, RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { api, SessionCommand } from '../api';
-import { snackbar } from '../components/Primitives';
-import { deviceLabel } from '../lib/format';
+import { RefObject, useCallback, useEffect, useRef, useState } from 'react';
+import { api, RoomMember, SessionCommand } from '../api';
+import { Sheet, snackbar } from '../components/Primitives';
 import { t } from '../i18n';
 
-const SYNC_MS = 2000;
-// Mirrors only re-seek past this drift, so small buffering differences don't fight playback.
-const DRIFT_SEC = 2.5;
+// The driver's state is pushed on every transport change (instant) and on this tick (to
+// catch up joiners and re-align after buffering). Play/pause/seek propagate immediately.
+const ANCHOR_MS = 2000;
+// Mirrors only re-seek past this drift, so small buffering differences don't fight playback
+// (catch-up seeks land inside hls.js's buffer, so they're cheap).
+const DRIFT_SEC = 2;
 
-// A room holds any number of viewers. `canControl` is the host plus whoever it allowed.
-type RoomState = { role: 'host' | 'guest'; canControl: boolean };
 type Peer = { peerId: string; peerName: string };
 
 export interface WatchTogether {
-  room: RoomState | null;
-  /** The one-time "someone's already watching this" prompt. */
-  offer: boolean;
-  /** Others are on this content and we're not in a room yet: a re-ask stays available. */
-  canAsk: boolean;
-  /** A pending join request to answer (host of a would-be room). */
-  incoming: Peer | null;
-  /** A pending control request to answer (room host). */
-  controlIncoming: Peer | null;
-  limited: boolean;
-  acceptOffer: () => void;
-  dismissOffer: () => void;
+  selfId: string;
+  /** Show the group icon in the top bar. */
+  available: boolean;
+  /** A request is waiting (badge on the icon). */
+  hasPending: boolean;
+  inRoom: boolean;
+  members: RoomMember[];
+  isHost: boolean;
+  canControl: boolean;
+  /** Session ids on this content we could invite / join (when not yet in a room). */
+  peers: string[];
+  joinRequests: Peer[];
+  controlRequests: Peer[];
+  /** Provider check in flight - hold playback so we never open a doomed connection. */
+  checking: boolean;
+  /** The provider is full and this stream needs its own connection: don't play. */
+  blocked: boolean;
   ask: () => void;
-  answer: (accept: boolean) => void;
+  answerJoin: (peerId: string, accept: boolean) => void;
   requestControl: () => void;
-  grantControl: (grant: boolean) => void;
+  answerControl: (peerId: string, grant: boolean) => void;
+  kick: (id: string) => void;
   leave: () => void;
   /** Pass to useSessionReporter so room commands reach this hook. */
   onCommand: (command: SessionCommand) => void;
@@ -43,53 +49,78 @@ export interface WatchTogether {
 
 export function useWatchTogether(opts: {
   selfId: string;
+  deviceName: string;
   video: RefObject<HTMLVideoElement>;
   /** The player is up on real content (not an error), so an intent check is worthwhile. */
   active: boolean;
   live: boolean;
+  /** This content is served through the remux, so a same-content viewer shares its connection. */
+  remuxEligible: boolean;
   contentKey: string;
   /** Encrypted source token, for reading the provider's connection limit. */
   source: string | null;
   playlistId: number | null;
 }): WatchTogether {
-  const { selfId, video, active, live, contentKey, source, playlistId } = opts;
+  const { selfId, deviceName, video, active, live, remuxEligible, contentKey, source, playlistId } = opts;
 
-  const [room, setRoom] = useState<RoomState | null>(null);
-  const [offer, setOffer] = useState(false);
-  // Session ids on this same content that we could ask to watch together.
-  const [hosts, setHosts] = useState<string[]>([]);
-  const [incoming, setIncoming] = useState<Peer | null>(null);
-  const [controlIncoming, setControlIncoming] = useState<Peer | null>(null);
-  const [limited, setLimited] = useState(false);
+  const [members, setMembers] = useState<RoomMember[]>([]);
+  const [inRoom, setInRoom] = useState(false);
+  const [peers, setPeers] = useState<string[]>([]);
+  const [joinRequests, setJoinRequests] = useState<Peer[]>([]);
+  const [controlRequests, setControlRequests] = useState<Peer[]>([]);
+  const [checking, setChecking] = useState(true);
+  const [blocked, setBlocked] = useState(false);
 
-  const deviceName = useMemo(() => deviceLabel(navigator.userAgent) || t('watch.someone'), []);
+  const self = members.find((m) => m.id === selfId);
+  const isHost = !!self?.host;
+  const canControl = !!self?.controller;
+
   const contentRef = useRef(contentKey); contentRef.current = contentKey;
   const liveRef = useRef(live); liveRef.current = live;
-  const roomRef = useRef(room); roomRef.current = room;
-  const hostsRef = useRef(hosts); hostsRef.current = hosts;
-  const incomingRef = useRef(incoming); incomingRef.current = incoming;
-  const controlIncomingRef = useRef(controlIncoming); controlIncomingRef.current = controlIncoming;
+  const remuxRef = useRef(remuxEligible); remuxRef.current = remuxEligible;
+  const peersRef = useRef(peers); peersRef.current = peers;
   // The content the room was formed on, so navigating elsewhere drops us out of it.
   const roomContent = useRef<string | null>(null);
   // The last state we applied from a peer, so our own resulting events aren't echoed back.
   const lastApplied = useRef<{ positionMs: number; paused: boolean; rate: number } | null>(null);
 
+  const resetRoom = useCallback(() => {
+    roomContent.current = null;
+    setInRoom(false);
+    setMembers([]);
+    setJoinRequests([]);
+    setControlRequests([]);
+  }, []);
+
   const leave = useCallback(() => {
     api.sessionLeave(selfId);
-    roomContent.current = null;
-    setRoom(null);
+    resetRoom();
+  }, [selfId, resetRoom]);
+
+  const ask = useCallback(() => {
+    const target = peersRef.current[0];
+    if (!target) return;
+    snackbar(t('watch.requesting'));
+    api.joinRequest(target, selfId, deviceName, contentRef.current)
+      .catch(() => snackbar(t('watch.requestFailed')));
+  }, [selfId, deviceName]);
+
+  const answerJoin = useCallback((peerId: string, accept: boolean) => {
+    api.joinAnswer(selfId, peerId, deviceName, contentRef.current, accept).catch(() => {});
+    setJoinRequests((list) => list.filter((r) => r.peerId !== peerId));
+  }, [selfId, deviceName]);
+
+  const requestControl = useCallback(() => {
+    snackbar(t('watch.controlAsked'));
+    api.requestControl(selfId, deviceName).catch(() => {});
+  }, [selfId, deviceName]);
+
+  const answerControl = useCallback((peerId: string, grant: boolean) => {
+    api.grantControl(selfId, peerId, grant).catch(() => {});
+    setControlRequests((list) => list.filter((r) => r.peerId !== peerId));
   }, [selfId]);
 
-  const respond = useCallback((peerId: string, accept: boolean) => {
-    api.joinAnswer(selfId, peerId, deviceName, contentRef.current, accept).catch(() => {});
-    // Admitting someone while solo makes us the room's host; if already in a room we just
-    // let them in and keep our current role (the server adds them to the same room).
-    if (accept && !roomRef.current) {
-      roomContent.current = contentRef.current;
-      setRoom({ role: 'host', canControl: true });
-    }
-    setIncoming(null);
-  }, [selfId, deviceName]);
+  const kick = useCallback((id: string) => { api.kick(selfId, id).catch(() => {}); }, [selfId]);
 
   const applySync = useCallback((sync: NonNullable<SessionCommand['sync']>) => {
     const v = video.current;
@@ -104,7 +135,7 @@ export function useWatchTogether(opts: {
     }
   }, [video]);
 
-  // Send our playback state to the room. Controller events are guarded so applying a peer's
+  // Send our playback state to the room. Event-driven sends are guarded so applying a peer's
   // state doesn't bounce straight back; the host's periodic anchor always sends.
   const broadcast = useCallback((guarded: boolean) => {
     const v = video.current;
@@ -112,192 +143,160 @@ export function useWatchTogether(opts: {
     const state = { positionMs: Math.floor((v.currentTime || 0) * 1000), paused: v.paused, rate: v.playbackRate || 1 };
     const last = lastApplied.current;
     if (guarded && last && last.paused === state.paused && last.rate === state.rate
-        && Math.abs(last.positionMs - state.positionMs) < 1500) return;
+        && Math.abs(last.positionMs - state.positionMs) < 1200) return;
     api.sessionSync(selfId, state);
   }, [selfId, video]);
 
   const onCommand = useCallback((command: SessionCommand) => {
     if (command.type === 'join-request' && command.peerId) {
-      const peerId = command.peerId;
-      const name = command.peerName || t('watch.someone');
-      if (command.quiet) {
-        snackbar(t('watch.askedQuiet', { name }),
-          { label: t('watch.accept'), onClick: () => respond(peerId, true) });
-      } else {
-        setIncoming({ peerId, peerName: name });
-      }
+      const peer = { peerId: command.peerId, peerName: command.peerName || t('watch.someone') };
+      setJoinRequests((list) => (list.some((r) => r.peerId === peer.peerId) ? list : [...list, peer]));
+      if (!command.quiet) snackbar(t('watch.wantsToJoin', { name: peer.peerName }));
     } else if (command.type === 'control-request' && command.peerId) {
-      setControlIncoming({ peerId: command.peerId, peerName: command.peerName || t('watch.someone') });
+      const peer = { peerId: command.peerId, peerName: command.peerName || t('watch.someone') };
+      setControlRequests((list) => (list.some((r) => r.peerId === peer.peerId) ? list : [...list, peer]));
+      snackbar(t('watch.wantsControl', { name: peer.peerName }));
     } else if (command.type === 'join-response') {
-      if (command.accepted) {
-        roomContent.current = contentRef.current;
-        setRoom({ role: 'guest', canControl: false });
-        snackbar(t('watch.joined'));
-      } else {
-        snackbar(t('watch.declined'));
-      }
+      snackbar(command.accepted ? t('watch.joined') : t('watch.declined'));
     } else if (command.type === 'control-response') {
       snackbar(command.accepted ? t('watch.controlGranted') : t('watch.controlDenied'));
-      if (command.accepted) setRoom((current) => (current ? { ...current, canControl: true } : current));
+    } else if (command.type === 'room-state' && command.members) {
+      const roster = command.members;
+      const ids = new Set(roster.map((m) => m.id));
+      roomContent.current = contentRef.current;
+      setInRoom(true);
+      setMembers(roster);
+      // Anyone now in the room no longer has a pending request to answer.
+      setJoinRequests((list) => list.filter((r) => !ids.has(r.peerId)));
+      setControlRequests((list) => list.filter((r) => !ids.has(r.peerId)));
     } else if (command.type === 'sync' && command.sync) {
       applySync(command.sync);
-    } else if (command.type === 'host') {
-      // The previous host left: we now own the room and can control it.
-      setRoom((current) => (current ? { role: 'host', canControl: true } : current));
     } else if (command.type === 'room-ended') {
-      roomContent.current = null;
-      setRoom((current) => { if (current) snackbar(t('watch.ended')); return null; });
+      if (roomContent.current) snackbar(t('watch.ended'));
+      resetRoom();
     }
-    // "peer-left" needs no action: the room keeps going with the rest.
-  }, [respond, applySync]);
+  }, [applySync, resetRoom]);
 
-  // Ask the first peer on this content; repeat asks after a decline reach them quietly
-  // (the server remembers the refusal, so they get a subtle notice, not another modal).
-  const ask = useCallback(() => {
-    const target = hostsRef.current[0];
-    if (!target) return;
-    snackbar(t('watch.requesting'));
-    api.joinRequest(target, selfId, deviceName, contentRef.current)
-      .catch(() => snackbar(t('watch.requestFailed')));
-  }, [selfId, deviceName]);
-
-  const acceptOffer = useCallback(() => { setOffer(false); ask(); }, [ask]);
-  const dismissOffer = useCallback(() => setOffer(false), []);
-
-  const answer = useCallback((accept: boolean) => {
-    const current = incomingRef.current;
-    if (current) respond(current.peerId, accept);
-  }, [respond]);
-
-  // Guest asks the host for control.
-  const requestControl = useCallback(() => {
-    snackbar(t('watch.controlAsked'));
-    api.requestControl(selfId, deviceName).catch(() => {});
-  }, [selfId, deviceName]);
-
-  // Host answers a pending control request.
-  const grantControl = useCallback((grant: boolean) => {
-    const current = controlIncomingRef.current;
-    if (current) api.grantControl(selfId, current.peerId, grant).catch(() => {});
-    setControlIncoming(null);
-  }, [selfId]);
-
-  // New content: clear any stale prompt, and drop a room that belonged to the old content.
+  // New content: clear stale prompts, and drop a room that belonged to the old content.
   useEffect(() => {
-    setOffer(false);
-    setHosts([]);
-    setControlIncoming(null);
-    setLimited(false);
+    setPeers([]);
+    setBlocked(false);
+    setChecking(true);
     if (roomContent.current && roomContent.current !== contentKey) leave();
   }, [contentKey, leave]);
 
   // Ask the server who else is here and whether the provider is full - once per content.
   const checked = useRef<string | null>(null);
   useEffect(() => {
-    if (!active || !contentKey || room || checked.current === contentKey) return;
+    if (!active || !contentKey || inRoom || checked.current === contentKey) return;
     checked.current = contentKey;
     let cancelled = false;
+    // Never hold playback on the check for long: fail open if it's slow.
+    const failOpen = setTimeout(() => { if (!cancelled) setChecking(false); }, 4000);
     api.watchIntent(selfId, contentKey, source, playlistId).then((intent) => {
       if (cancelled) return;
-      if (intent.sameContent.length > 0) { setHosts(intent.sameContent); setOffer(true); }
-      else if (intent.atLimit) setLimited(true);
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [active, contentKey, room, selfId, source, playlistId]);
+      clearTimeout(failOpen);
+      setPeers(intent.sameContent);
+      // A remuxed file shared with a same-content viewer needs no new connection; anything
+      // else (live, or a different file) does, so a full provider blocks it.
+      const shareable = remuxRef.current && intent.sameContent.length > 0;
+      const isBlocked = intent.full && !shareable;
+      setBlocked(isBlocked);
+      setChecking(false);
+      if (intent.sameContent.length > 0 && !isBlocked) snackbar(t('watch.availableHint'));
+    }).catch(() => { if (!cancelled) { clearTimeout(failOpen); setChecking(false); } });
+    return () => { cancelled = true; clearTimeout(failOpen); };
+  }, [active, contentKey, inRoom, selfId, source, playlistId]);
 
-  // The host anchors the shared timeline on a tick, so drift is corrected and a fresh
-  // joiner catches up to where everyone else is.
+  // The host anchors the shared timeline on a tick, and immediately whenever the roster grows
+  // so a fresh joiner catches up to where everyone else is.
   useEffect(() => {
-    if (room?.role !== 'host') return;
+    if (!isHost) return;
     const v = video.current;
     if (!v) return;
     broadcast(false);
-    const timer = setInterval(() => broadcast(false), SYNC_MS);
+    const timer = setInterval(() => broadcast(false), ANCHOR_MS);
     return () => clearInterval(timer);
-  }, [room, broadcast, video]);
+  }, [isHost, members.length, broadcast, video]);
 
-  // Anyone with control drives: their play/pause/seek reaches the rest of the room.
+  // Anyone with control drives: their play/pause/seek/rate reaches the rest of the room at once.
   useEffect(() => {
-    if (!room?.canControl) return;
+    if (!canControl) return;
     const v = video.current;
     if (!v) return;
     const onEvt = () => broadcast(true);
-    v.addEventListener('play', onEvt);
-    v.addEventListener('pause', onEvt);
-    v.addEventListener('seeked', onEvt);
-    return () => {
-      v.removeEventListener('play', onEvt);
-      v.removeEventListener('pause', onEvt);
-      v.removeEventListener('seeked', onEvt);
-    };
-  }, [room, broadcast, video]);
+    const events = ['play', 'pause', 'seeked', 'ratechange'];
+    events.forEach((e) => v.addEventListener(e, onEvt));
+    return () => events.forEach((e) => v.removeEventListener(e, onEvt));
+  }, [canControl, broadcast, video]);
 
   return {
-    room, offer, incoming, controlIncoming, limited, canAsk: hosts.length > 0 && !room,
-    acceptOffer, dismissOffer, ask, answer, requestControl, grantControl, leave, onCommand,
+    selfId,
+    available: inRoom || peers.length > 0 || joinRequests.length > 0,
+    hasPending: joinRequests.length > 0 || controlRequests.length > 0,
+    inRoom, members, isHost, canControl, peers, joinRequests, controlRequests, checking, blocked,
+    ask, answerJoin, requestControl, answerControl, kick, leave, onCommand,
   };
 }
 
-/** A dialog portalled into [container] (the player frame) so it also shows in fullscreen. */
-function PlayerDialog({ title, body, buttons, onDismiss, container }: {
-  title: string;
-  body: string;
-  buttons: ReactNode;
+/** The watch-together sheet, opened from the top-bar icon: roster, pending requests, actions. */
+export function WatchTogetherSheet({ wt, onDismiss, container }: {
+  wt: WatchTogether;
   onDismiss: () => void;
-  container: Element | null;
+  container?: Element | null;
 }) {
-  return createPortal(
-    <div className="scrim" onClick={(e) => { if (e.target === e.currentTarget) onDismiss(); }}>
-      <div className="dialog">
-        <h2>{title}</h2>
-        <p className="type-body-medium text-on-surface-variant">{body}</p>
-        <div className="buttons">{buttons}</div>
-      </div>
-    </div>,
-    container ?? document.body,
-  );
-}
+  const rows: React.ReactNode[] = [];
 
-/** The join prompts, shown over the player frame. The room pill lives in PlayerSurface. */
-export function WatchTogetherModals({ wt, container }: { wt: WatchTogether; container: Element | null }) {
+  wt.members.forEach((m) => {
+    const isSelf = m.id === wt.selfId;
+    const tags = [
+      m.host ? t('watch.roleHost') : m.controller ? t('watch.roleController') : t('watch.roleViewer'),
+    ];
+    rows.push(
+      <div className="watch-row" key={`m-${m.id}`}>
+        <span className="min-w-0 flex-1 truncate">{isSelf ? t('watch.you') : m.name}</span>
+        <span className="watch-tag">{tags.join(' · ')}</span>
+        {wt.isHost && !isSelf && (
+          <button className="btn text watch-act" onClick={() => wt.kick(m.id)}>{t('watch.kick')}</button>
+        )}
+      </div>,
+    );
+  });
+
+  wt.joinRequests.forEach((r) => rows.push(
+    <div className="watch-row" key={`j-${r.peerId}`}>
+      <span className="min-w-0 flex-1 truncate">{t('watch.wantsToJoinShort', { name: r.peerName })}</span>
+      <button className="btn text watch-act" onClick={() => wt.answerJoin(r.peerId, false)}>{t('watch.decline')}</button>
+      <button className="btn text watch-act" onClick={() => wt.answerJoin(r.peerId, true)}>{t('watch.accept')}</button>
+    </div>,
+  ));
+
+  wt.controlRequests.forEach((r) => rows.push(
+    <div className="watch-row" key={`c-${r.peerId}`}>
+      <span className="min-w-0 flex-1 truncate">{t('watch.wantsControlShort', { name: r.peerName })}</span>
+      <button className="btn text watch-act" onClick={() => wt.answerControl(r.peerId, false)}>{t('watch.decline')}</button>
+      <button className="btn text watch-act" onClick={() => wt.answerControl(r.peerId, true)}>{t('watch.allow')}</button>
+    </div>,
+  ));
+
   return (
-    <>
-      {wt.offer && (
-        <PlayerDialog
-          title={t('watch.offerTitle')} body={t('watch.offerBody')} container={container}
-          onDismiss={wt.dismissOffer}
-          buttons={
-            <>
-              <button className="btn text" onClick={wt.dismissOffer}>{t('watch.solo')}</button>
-              <button className="btn text" onClick={wt.acceptOffer}>{t('watch.together')}</button>
-            </>
-          }
-        />
+    <Sheet onDismiss={onDismiss} container={container}
+           header={<h3 className="sheet-title">{t('watch.title')}</h3>}>
+      {!wt.inRoom && wt.peers.length > 0 && (
+        <p className="py-1 type-body-medium text-on-surface-variant">{t('watch.offerBody')}</p>
       )}
-      {wt.incoming && (
-        <PlayerDialog
-          title={t('watch.incomingTitle')} body={t('watch.incomingBody', { name: wt.incoming.peerName })}
-          container={container} onDismiss={() => wt.answer(false)}
-          buttons={
-            <>
-              <button className="btn text" onClick={() => wt.answer(false)}>{t('watch.decline')}</button>
-              <button className="btn text" onClick={() => wt.answer(true)}>{t('watch.accept')}</button>
-            </>
-          }
-        />
-      )}
-      {wt.controlIncoming && (
-        <PlayerDialog
-          title={t('watch.controlTitle')} body={t('watch.controlBody', { name: wt.controlIncoming.peerName })}
-          container={container} onDismiss={() => wt.grantControl(false)}
-          buttons={
-            <>
-              <button className="btn text" onClick={() => wt.grantControl(false)}>{t('watch.decline')}</button>
-              <button className="btn text" onClick={() => wt.grantControl(true)}>{t('watch.allow')}</button>
-            </>
-          }
-        />
-      )}
-    </>
+      {rows}
+      <div className="watch-actions">
+        {!wt.inRoom && wt.peers.length > 0 && (
+          <button className="btn tonal" onClick={() => { wt.ask(); onDismiss(); }}>{t('watch.ask')}</button>
+        )}
+        {wt.inRoom && !wt.canControl && (
+          <button className="btn tonal" onClick={() => { wt.requestControl(); onDismiss(); }}>{t('watch.requestControl')}</button>
+        )}
+        {wt.inRoom && (
+          <button className="btn text" onClick={() => { wt.leave(); onDismiss(); }}>{t('watch.leave')}</button>
+        )}
+      </div>
+    </Sheet>
   );
 }
