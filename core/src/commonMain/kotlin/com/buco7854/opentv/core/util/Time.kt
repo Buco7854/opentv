@@ -1,5 +1,5 @@
 package com.buco7854.opentv.core.util
 
-import kotlinx.datetime.Clock
+import kotlin.time.Clock
 
 fun nowMs(): Long = Clock.System.now().toEpochMilliseconds()

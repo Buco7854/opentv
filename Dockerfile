@@ -12,17 +12,17 @@ RUN npm ci
 COPY server/webapp/ ./
 RUN WEBAPP_OUT=/webapp/dist npm run build
 
-FROM gradle:8.14-jdk21 AS build
+FROM gradle:9.6.1-jdk25 AS build
 
 # The Android Gradle plugin needs an SDK just to configure the :app/:core/:data
 # modules, even though only the JVM server is compiled here.
 ENV ANDROID_HOME=/opt/android-sdk
 RUN mkdir -p $ANDROID_HOME/cmdline-tools && \
-    curl -sSLo /tmp/tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip && \
+    curl -sSLo /tmp/tools.zip https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip && \
     unzip -q /tmp/tools.zip -d $ANDROID_HOME/cmdline-tools && \
     mv $ANDROID_HOME/cmdline-tools/cmdline-tools $ANDROID_HOME/cmdline-tools/latest && \
     yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null && \
-    $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-35" > /dev/null && \
+    $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-37.0" > /dev/null && \
     rm /tmp/tools.zip
 
 WORKDIR /src
@@ -30,7 +30,7 @@ COPY . .
 COPY --from=webapp /webapp/dist server/src/main/resources/web
 RUN gradle --no-daemon -PwebappPrebuilt :server:installDist
 
-FROM eclipse-temurin:21-jre-noble
+FROM eclipse-temurin:25-jre-noble
 
 # ffmpeg powers the track-exposing remux for VOD files in browsers. Ubuntu 24.04
 # (noble) ships ffmpeg 6.1, so the read-rate throttle that bounds disk and how far

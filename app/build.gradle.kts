@@ -1,17 +1,18 @@
 plugins {
+    // Kotlin support is built into AGP 9, so the kotlin.android plugin is no
+    // longer applied here.
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
 
 android {
     namespace = "com.buco7854.opentv"
-    compileSdk = 35
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.buco7854.opentv"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 37
         versionCode = 1
         versionName = "0.1"
     }
@@ -64,11 +65,14 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
     buildFeatures {
         compose = true
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
 

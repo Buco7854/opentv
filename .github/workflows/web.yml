@@ -41,11 +41,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up JDK 25
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "25"
 
       - name: Set up Gradle (with caching)
         uses: gradle/actions/setup-gradle@v4
@@ -60,6 +60,11 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The default buildx builder uses the docker driver, which cannot export a
+      # GitHub Actions cache. This provisions a docker-container builder that can.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Docker metadata
         id: meta
@@ -78,3 +83,7 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Reuse layers across runs (base images, the Android SDK install, npm
+          # and ffmpeg) so only changed layers rebuild.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
