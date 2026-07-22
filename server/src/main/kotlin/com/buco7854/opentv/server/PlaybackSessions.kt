@@ -39,9 +39,10 @@ data class SessionHeartbeatDto(
     val name: String = "",
 )
 
-/** Host-driven playback state, mirrored to the other members of a watch-together room. */
+/** Driver playback state, mirrored to the other members of a watch-together room.
+ *  [seek] marks a deliberate jump (apply exactly) vs. a periodic anchor (only fix big drift). */
 @Serializable
-data class SyncStateDto(val positionMs: Long, val paused: Boolean, val rate: Double = 1.0)
+data class SyncStateDto(val positionMs: Long, val paused: Boolean, val rate: Double = 1.0, val seek: Boolean = false)
 
 /** One viewer in a watch-together room (server -> members). */
 @Serializable
@@ -258,6 +259,16 @@ class PlaybackSessionRegistry {
         return enqueue(peerId, SessionCommandDto(type = "control-response", accepted = grant))
     }
 
+    /** The host hands a member control (or takes it back) directly, no request needed. */
+    fun setControl(hostId: String, targetId: String, grant: Boolean): Boolean {
+        val room = memberRoom[hostId]?.let { rooms[it] } ?: return false
+        if (room.hostId != hostId || targetId == hostId || targetId !in room.members) return false
+        if (grant) room.controllers.add(targetId) else room.controllers.remove(targetId)
+        pushRoomState(room)
+        enqueue(targetId, SessionCommandDto(type = "control-response", accepted = grant))
+        return true
+    }
+
     /** The host removes [targetId] from the room. */
     fun kick(hostId: String, targetId: String): Boolean {
         val room = memberRoom[hostId]?.let { rooms[it] } ?: return false
@@ -307,16 +318,13 @@ class PlaybackSessionRegistry {
         removeFromRoom(room, id)
     }
 
+    // The room lives as long as anyone is in it - even a lone host, who can then admit someone
+    // back - and only dissolves once empty. A departing host hands off to whoever remains.
     private fun removeFromRoom(room: Room, id: String) {
         memberRoom.remove(id)
         room.members.remove(id)
         room.controllers.remove(id)
-        if (room.members.size <= 1) {
-            room.members.forEach { memberRoom.remove(it); enqueue(it, SessionCommandDto(type = "room-ended")) }
-            room.members.clear()
-            rooms.remove(room.id)
-            return
-        }
+        if (room.members.isEmpty()) { rooms.remove(room.id); return }
         if (room.hostId == id) {
             room.hostId = room.members.first()
             room.controllers.add(room.hostId)

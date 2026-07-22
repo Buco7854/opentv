@@ -2,7 +2,7 @@
 // show who is watching what, and applies remote pause/play/message commands the
 // admin queues. Web sessions only; kept isolated from the playback engine.
 
-import { RefObject, useEffect, useRef } from 'react';
+import { MutableRefObject, RefObject, useEffect, useRef } from 'react';
 import { api, SessionCommand, SessionHeartbeat } from '../api';
 import { snackbar } from '../components/Primitives';
 
@@ -50,6 +50,9 @@ export function useSessionReporter(
   snapshot: PlaybackSnapshot,
   video: RefObject<HTMLVideoElement>,
   onCommand?: (command: SessionCommand) => void,
+  /** Filled with a sender that pushes a frame over the live socket (false if it's down),
+   *  so the room layer can send sync in real time instead of POSTing. */
+  wsSend?: MutableRefObject<((command: SessionCommand) => boolean) | null>,
 ) {
   const snapRef = useRef(snapshot);
   snapRef.current = snapshot;
@@ -116,12 +119,20 @@ export function useSessionReporter(
     };
     connect();
 
+    if (wsSend) {
+      wsSend.current = (command) => {
+        if (ws && ws.readyState === WebSocket.OPEN) { ws.send(JSON.stringify(command)); return true; }
+        return false;
+      };
+    }
+
     return () => {
       stopped = true;
       clearInterval(timer);
       clearTimeout(wsRetry);
+      if (wsSend) wsSend.current = null;
       if (ws) { ws.onclose = null; ws.close(); }
       api.sessionEnd(id);
     };
-  }, [video]);
+  }, [video, wsSend]);
 }

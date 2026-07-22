@@ -159,8 +159,9 @@ export interface SessionHeartbeat {
   name: string;
 }
 
-/** Driver playback state mirrored to a watch-together room's other members. */
-export interface SyncState { positionMs: number; paused: boolean; rate: number }
+/** Driver playback state mirrored to a watch-together room's other members.
+ *  `seek` marks a deliberate jump (apply exactly) vs. a periodic anchor (only fix big drift). */
+export interface SyncState { positionMs: number; paused: boolean; rate: number; seek?: boolean }
 
 /** One viewer in a watch-together room. */
 export interface RoomMember { id: string; name: string; host: boolean; controller: boolean }
@@ -329,6 +330,9 @@ export const api = {
   /** Host grants or refuses a guest's control request. */
   grantControl: (hostId: string, peerId: string, grant: boolean) =>
     j<null>(`/api/sessions/${encodeURIComponent(hostId)}/grant-control`, post({ peerId, grant })),
+  /** Host hands a member control (or takes it back) directly, no request needed. */
+  setControl: (hostId: string, targetId: string, grant: boolean) =>
+    j<null>(`/api/sessions/${encodeURIComponent(hostId)}/set-control`, post({ targetId, grant })),
   /** Host removes a member from the room. */
   kick: (hostId: string, targetId: string) =>
     j<null>(`/api/sessions/${encodeURIComponent(hostId)}/kick`, post({ targetId })),

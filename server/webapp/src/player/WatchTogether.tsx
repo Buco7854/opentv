@@ -5,17 +5,19 @@
 // there is no second socket. When the provider's connections are all in use and this stream
 // would need its own, playback is blocked with a clear message instead of cutting someone off.
 
-import { RefObject, useCallback, useEffect, useRef, useState } from 'react';
-import { api, RoomMember, SessionCommand } from '../api';
+import { MutableRefObject, RefObject, useCallback, useEffect, useRef, useState } from 'react';
+import { api, RoomMember, SessionCommand, SyncState } from '../api';
 import { Sheet, snackbar } from '../components/Primitives';
 import { t } from '../i18n';
 
-// The driver's state is pushed on every transport change (instant) and on this tick (to
-// catch up joiners and re-align after buffering). Play/pause/seek propagate immediately.
+// The driver's state is pushed the instant it plays/pauses/seeks, plus this tick to catch a
+// fresh joiner up and re-align after buffering.
 const ANCHOR_MS = 2000;
-// Mirrors only re-seek past this drift, so small buffering differences don't fight playback
-// (catch-up seeks land inside hls.js's buffer, so they're cheap).
-const DRIFT_SEC = 2;
+// A deliberate seek is applied when off by more than this (small, so it feels tight)...
+const SEEK_SNAP_SEC = 0.75;
+// ...while the periodic anchor only corrects a real desync (a joiner, a long buffer), so
+// keyframe-rounding between players never turns into a tug-of-war of little seeks.
+const ANCHOR_DRIFT_SEC = 4;
 
 type Peer = { peerId: string; peerName: string };
 
@@ -41,6 +43,8 @@ export interface WatchTogether {
   answerJoin: (peerId: string, accept: boolean) => void;
   requestControl: () => void;
   answerControl: (peerId: string, grant: boolean) => void;
+  /** Host hands a member control (or takes it back) directly. */
+  setControl: (id: string, grant: boolean) => void;
   kick: (id: string) => void;
   leave: () => void;
   /** Pass to useSessionReporter so room commands reach this hook. */
@@ -60,8 +64,10 @@ export function useWatchTogether(opts: {
   /** Encrypted source token, for reading the provider's connection limit. */
   source: string | null;
   playlistId: number | null;
+  /** Sends a frame over the live socket (false when it's down); sync falls back to a POST. */
+  send: MutableRefObject<((command: SessionCommand) => boolean) | null>;
 }): WatchTogether {
-  const { selfId, deviceName, video, active, live, remuxEligible, contentKey, source, playlistId } = opts;
+  const { selfId, deviceName, video, active, live, remuxEligible, contentKey, source, playlistId, send } = opts;
 
   const [members, setMembers] = useState<RoomMember[]>([]);
   const [inRoom, setInRoom] = useState(false);
@@ -81,8 +87,9 @@ export function useWatchTogether(opts: {
   const peersRef = useRef(peers); peersRef.current = peers;
   // The content the room was formed on, so navigating elsewhere drops us out of it.
   const roomContent = useRef<string | null>(null);
-  // The last state we applied from a peer, so our own resulting events aren't echoed back.
-  const lastApplied = useRef<{ positionMs: number; paused: boolean; rate: number } | null>(null);
+  // The last state we applied from a peer (with when), so our own resulting events - which fire
+  // within a few ms - aren't echoed straight back, while genuine actions later still send.
+  const lastApplied = useRef<{ positionMs: number; paused: boolean; rate: number; atMs: number } | null>(null);
 
   const resetRoom = useCallback(() => {
     roomContent.current = null;
@@ -122,30 +129,41 @@ export function useWatchTogether(opts: {
 
   const kick = useCallback((id: string) => { api.kick(selfId, id).catch(() => {}); }, [selfId]);
 
+  const setControl = useCallback((id: string, grant: boolean) => {
+    api.setControl(selfId, id, grant).catch(() => {});
+  }, [selfId]);
+
   const applySync = useCallback((sync: NonNullable<SessionCommand['sync']>) => {
     const v = video.current;
     if (!v) return;
-    lastApplied.current = { positionMs: sync.positionMs, paused: sync.paused, rate: sync.rate };
+    lastApplied.current = { positionMs: sync.positionMs, paused: sync.paused, rate: sync.rate, atMs: performance.now() };
     if (sync.paused && !v.paused) v.pause();
     else if (!sync.paused && v.paused) v.play().catch(() => {});
     if (sync.rate > 0 && v.playbackRate !== sync.rate) v.playbackRate = sync.rate;
     if (!liveRef.current) {
       const target = sync.positionMs / 1000;
-      if (isFinite(target) && Math.abs(v.currentTime - target) > DRIFT_SEC) v.currentTime = target;
+      const off = Math.abs(v.currentTime - target);
+      if (isFinite(target) && off > (sync.seek ? SEEK_SNAP_SEC : ANCHOR_DRIFT_SEC)) v.currentTime = target;
     }
   }, [video]);
 
-  // Send our playback state to the room. Event-driven sends are guarded so applying a peer's
-  // state doesn't bounce straight back; the host's periodic anchor always sends.
-  const broadcast = useCallback((guarded: boolean) => {
+  // Send our playback state to the room, over the live socket (falling back to a POST). Event
+  // sends are guarded so applying a peer's state doesn't bounce straight back; the anchor always
+  // sends. [seek] tells receivers this is a deliberate jump, not a drift correction.
+  const broadcast = useCallback((guarded: boolean, seek: boolean) => {
     const v = video.current;
     if (!v) return;
-    const state = { positionMs: Math.floor((v.currentTime || 0) * 1000), paused: v.paused, rate: v.playbackRate || 1 };
+    const state: SyncState = {
+      positionMs: Math.floor((v.currentTime || 0) * 1000), paused: v.paused, rate: v.playbackRate || 1, seek,
+    };
+    // Suppress only the echo of a just-applied peer state (fires within a few ms); a real
+    // action later always sends, seek or not.
     const last = lastApplied.current;
-    if (guarded && last && last.paused === state.paused && last.rate === state.rate
-        && Math.abs(last.positionMs - state.positionMs) < 1200) return;
-    api.sessionSync(selfId, state);
-  }, [selfId, video]);
+    if (guarded && last && performance.now() - last.atMs < 800
+        && last.paused === state.paused && last.rate === state.rate
+        && Math.abs(last.positionMs - state.positionMs) < 1500) return;
+    if (!send.current?.({ type: 'sync', sync: state })) api.sessionSync(selfId, state);
+  }, [selfId, video, send]);
 
   const onCommand = useCallback((command: SessionCommand) => {
     if (command.type === 'join-request' && command.peerId) {
@@ -208,26 +226,31 @@ export function useWatchTogether(opts: {
     return () => { cancelled = true; clearTimeout(failOpen); };
   }, [active, contentKey, inRoom, selfId, source, playlistId]);
 
-  // The host anchors the shared timeline on a tick, and immediately whenever the roster grows
-  // so a fresh joiner catches up to where everyone else is.
+  // The host anchors the shared timeline: a snap whenever the roster grows (so a fresh joiner
+  // jumps to where everyone else is) plus a gentle tick that only fixes a real desync.
   useEffect(() => {
-    if (!isHost) return;
+    if (!isHost || members.length < 2) return;
     const v = video.current;
     if (!v) return;
-    broadcast(false);
-    const timer = setInterval(() => broadcast(false), ANCHOR_MS);
+    broadcast(false, true);
+    const timer = setInterval(() => broadcast(false, false), ANCHOR_MS);
     return () => clearInterval(timer);
   }, [isHost, members.length, broadcast, video]);
 
   // Anyone with control drives: their play/pause/seek/rate reaches the rest of the room at once.
+  // A seek is flagged so receivers apply it exactly instead of treating it as drift.
   useEffect(() => {
     if (!canControl) return;
     const v = video.current;
     if (!v) return;
-    const onEvt = () => broadcast(true);
-    const events = ['play', 'pause', 'seeked', 'ratechange'];
-    events.forEach((e) => v.addEventListener(e, onEvt));
-    return () => events.forEach((e) => v.removeEventListener(e, onEvt));
+    const onSeek = () => broadcast(true, true);
+    const onEvt = () => broadcast(true, false);
+    v.addEventListener('seeked', onSeek);
+    ['play', 'pause', 'ratechange'].forEach((e) => v.addEventListener(e, onEvt));
+    return () => {
+      v.removeEventListener('seeked', onSeek);
+      ['play', 'pause', 'ratechange'].forEach((e) => v.removeEventListener(e, onEvt));
+    };
   }, [canControl, broadcast, video]);
 
   return {
@@ -235,7 +258,7 @@ export function useWatchTogether(opts: {
     available: inRoom || peers.length > 0 || joinRequests.length > 0,
     hasPending: joinRequests.length > 0 || controlRequests.length > 0,
     inRoom, members, isHost, canControl, peers, joinRequests, controlRequests, checking, blocked,
-    ask, answerJoin, requestControl, answerControl, kick, leave, onCommand,
+    ask, answerJoin, requestControl, answerControl, setControl, kick, leave, onCommand,
   };
 }
 
@@ -249,14 +272,19 @@ export function WatchTogetherSheet({ wt, onDismiss, container }: {
 
   wt.members.forEach((m) => {
     const isSelf = m.id === wt.selfId;
-    const tags = [
-      m.host ? t('watch.roleHost') : m.controller ? t('watch.roleController') : t('watch.roleViewer'),
-    ];
+    const role = m.host ? t('watch.roleHost') : m.controller ? t('watch.roleController') : t('watch.roleViewer');
+    // The host manages each guest directly - hand over control (or take it back) and remove.
+    const manage = wt.isHost && !isSelf && !m.host;
     rows.push(
       <div className="watch-row" key={`m-${m.id}`}>
         <span className="min-w-0 flex-1 truncate">{isSelf ? t('watch.you') : m.name}</span>
-        <span className="watch-tag">{tags.join(' · ')}</span>
-        {wt.isHost && !isSelf && (
+        <span className="watch-tag">{role}</span>
+        {manage && (
+          <button className="btn text watch-act" onClick={() => wt.setControl(m.id, !m.controller)}>
+            {m.controller ? t('watch.removeControl') : t('watch.giveControl')}
+          </button>
+        )}
+        {manage && (
           <button className="btn text watch-act" onClick={() => wt.kick(m.id)}>{t('watch.kick')}</button>
         )}
       </div>,

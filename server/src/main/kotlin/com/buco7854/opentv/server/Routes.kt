@@ -38,8 +38,10 @@ import io.ktor.server.routing.put
 import io.ktor.server.routing.route
 import io.ktor.server.websocket.webSocket
 import io.ktor.websocket.Frame
+import io.ktor.websocket.readText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -104,6 +106,9 @@ data class GrantControlBody(val peerId: String, val grant: Boolean)
 
 @Serializable
 data class KickBody(val targetId: String)
+
+@Serializable
+data class SetControlBody(val targetId: String, val grant: Boolean)
 
 @Serializable
 data class RemuxAvailableDto(val available: Boolean)
@@ -723,6 +728,12 @@ fun Route.api(g: ServerGraph) = route("/api") {
             if (g.sessions.grantControl(hostId, req.peerId, req.grant)) call.respond(HttpStatusCode.NoContent)
             else call.respond(HttpStatusCode.NotFound, MessageDto("No such room"))
         }
+        post("/{id}/set-control") {
+            val hostId = call.parameters["id"] ?: throw IllegalArgumentException("Missing id")
+            val req = call.receive<SetControlBody>()
+            if (g.sessions.setControl(hostId, req.targetId, req.grant)) call.respond(HttpStatusCode.NoContent)
+            else call.respond(HttpStatusCode.NotFound, MessageDto("No such room"))
+        }
         post("/{id}/leave") {
             g.sessions.leaveRoom(call.parameters["id"] ?: "")
             call.respond(HttpStatusCode.NoContent)
@@ -736,14 +747,26 @@ fun Route.api(g: ServerGraph) = route("/api") {
             if (g.sessions.command(id, cmd)) call.respond(HttpStatusCode.NoContent)
             else call.respond(HttpStatusCode.NotFound, MessageDto("No such session"))
         }
-        // Pushes pause/play/message to a viewer instantly; the heartbeat still drains as fallback.
+        // Bidirectional: pushes queued commands to the viewer instantly (heartbeat drains as a
+        // fallback), and receives real-time watch-together sync from drivers so they never POST.
         webSocket("/{id}/ws") {
             val id = call.parameters["id"] ?: return@webSocket
             suspend fun flush() = g.sessions.drainCommands(id).forEach {
                 send(Frame.Text(Json.encodeToString(SessionCommandDto.serializer(), it)))
             }
-            flush()
-            for (signal in g.sessions.commandSignal(id)) flush()
+            val sender = launch {
+                flush()
+                for (signal in g.sessions.commandSignal(id)) flush()
+            }
+            try {
+                for (frame in incoming) {
+                    if (frame !is Frame.Text) continue
+                    val cmd = runCatching { Json.decodeFromString(SessionCommandDto.serializer(), frame.readText()) }.getOrNull()
+                    if (cmd?.type == "sync" && cmd.sync != null) g.sessions.syncRoom(id, cmd.sync)
+                }
+            } finally {
+                sender.cancel()
+            }
         }
         delete("/{id}") {
             val id = call.parameters["id"] ?: ""

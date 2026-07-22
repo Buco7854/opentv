@@ -8,7 +8,7 @@ import {
   createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState,
 } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api, ApiError, Channel, GuideEntry, prefs, ResumePoint, streamUrl, transcodeUrl } from '../api';
+import { api, ApiError, Channel, GuideEntry, prefs, ResumePoint, SessionCommand, streamUrl, transcodeUrl } from '../api';
 import { GuideSheet } from '../components/GuideSheet';
 import { Icon } from '../components/Icons';
 import { IconBtn, Segmented, Sheet, snackbar } from '../components/Primitives';
@@ -251,6 +251,9 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
   const providerBacked = !direct;
   const contentKey = catchup ? `cu:${url}` : channelId != null ? `ch:${channelId}` : `u:${url}`;
   const deviceName = useMemo(() => deviceLabel(navigator.userAgent) || t('watch.someone'), []);
+  // Filled by useSessionReporter with a sender over its live socket, so watch-together sync
+  // rides that socket in real time (with a POST fallback) instead of a request per event.
+  const wsSend = useRef<((command: SessionCommand) => boolean) | null>(null);
   const wt = useWatchTogether({
     selfId: tabSessionId(),
     deviceName,
@@ -261,6 +264,7 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     contentKey,
     source: url,
     playlistId: request.playlistId ?? null,
+    send: wsSend,
   });
 
   // Hold the engine while the provider check is in flight, and keep it off (with a clear
@@ -933,7 +937,7 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     remuxId: remux?.id ?? null,
     contentKey,
     name: deviceName,
-  }, videoRef, wt.onCommand);
+  }, videoRef, wt.onCommand, wsSend);
 
   const busy = holdEngine || remuxState === 'loading' || (buffering && !paused);
   // VOD/downloads and catch-up all get a scrubber.
