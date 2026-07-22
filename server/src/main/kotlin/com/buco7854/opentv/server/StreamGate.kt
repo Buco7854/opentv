@@ -49,6 +49,10 @@ class StreamGate(private val connections: ProviderConnections) {
         connections.close(sid)
     }
 
+    /** Distinct streams currently reading from [providerKey], ignoring the caller's own share
+     *  [group] (which it would join, not add to). Lets the intent check predict a refusal. */
+    fun streams(providerKey: String, group: String): Int = connections.distinctStreams(providerKey, group)
+
     companion object {
         /** Reap a stream this long after its last request/touch (segments arrive far faster). */
         private const val IDLE_MS = 20_000L

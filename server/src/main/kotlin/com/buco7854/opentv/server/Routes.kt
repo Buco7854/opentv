@@ -113,6 +113,9 @@ data class KickBody(val targetId: String)
 @Serializable
 data class SetControlBody(val targetId: String, val grant: Boolean)
 
+@Serializable
+data class RoomAudioBody(val audioIndex: Int)
+
 /** A frame a viewer sends over its socket: a heartbeat (state) or watch-together sync. */
 @Serializable
 data class ClientFrameDto(
@@ -132,6 +135,8 @@ data class RemuxStartDto(
     val audioTracks: List<String> = emptyList(),
     val subtitleTracks: List<String> = emptyList(),
     val nativeVideoCopy: Boolean = false,
+    /** The track actually muxed in - a room forces its shared one, overriding what was asked. */
+    val audio: Int = 0,
 )
 
 @Serializable
@@ -701,8 +706,11 @@ fun Route.api(g: ServerGraph) = route("/api") {
                 .map { WatchIntentPeer(it.id, it.state.name.ifBlank { "Someone" }) }
             val url = req.source?.let { g.cipher.tryDecrypt(it) }
             val limit = url?.let { g.connectionLimit(it) } ?: Int.MAX_VALUE
-            val others = g.sessions.otherStreamsOn(req.selfId, req.playlistId)
-            call.respond(WatchIntentResponse(peers, others >= limit.coerceAtLeast(1), limit))
+            // Full when the provider's actual distinct reads fill its cap: a solo viewer needs its
+            // own, so two people on one movie is only free once they're in a room (one share group).
+            val group = g.sessions.shareGroup(req.selfId)
+            val full = url != null && g.streamGate.streams(providerKeyOf(url), group) >= limit.coerceAtLeast(1)
+            call.respond(WatchIntentResponse(peers, full, limit))
         }
         // Watch-together handshake, routed over the same command channel as pause/play.
         post("/{id}/join-request") {
@@ -744,6 +752,12 @@ fun Route.api(g: ServerGraph) = route("/api") {
             val hostId = call.parameters["id"] ?: throw IllegalArgumentException("Missing id")
             val req = call.receive<SetControlBody>()
             if (g.sessions.setControl(hostId, req.targetId, req.grant)) call.respond(HttpStatusCode.NoContent)
+            else call.respond(HttpStatusCode.NotFound, MessageDto("No such room"))
+        }
+        post("/{id}/room-audio") {
+            val id = call.parameters["id"] ?: throw IllegalArgumentException("Missing id")
+            val req = call.receive<RoomAudioBody>()
+            if (g.sessions.setRoomAudio(id, req.audioIndex.coerceAtLeast(0))) call.respond(HttpStatusCode.NoContent)
             else call.respond(HttpStatusCode.NotFound, MessageDto("No such room"))
         }
         post("/{id}/leave") {
@@ -827,16 +841,25 @@ fun Route.api(g: ServerGraph) = route("/api") {
             return@get
         }
         val source = remuxSource(g, call) ?: return@get
-        val audio = call.request.queryParameters["audio"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
+        val requested = call.request.queryParameters["audio"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
         // hevc=1: browser can decode HEVC, so copy non-H.264 video instead of transcoding.
         val clientHevc = call.request.queryParameters["hevc"] == "1"
         // Catch-up forces the remux on so its finite recording becomes seekable.
         val force = call.request.queryParameters["force"] == "1"
         val limit = g.connectionLimit(source)
+        // The tab session groups this read: alone it's the tab's own connection; in a watch-together
+        // room it's the room's, shared by every member, so the file is read once. In a room the
+        // shared audio track wins over whatever this member asked for.
+        val sid = call.request.queryParameters["sid"].orEmpty()
+        val group = g.sessions.shareGroup(sid)
+        val audio = g.sessions.roomAudio(sid) ?: requested
+        // This read replaces the caller's own group and, when forming a room, every member's solo
+        // read - so the room converges on one connection whichever member re-keys first.
+        val supersede = g.sessions.roomMembers(sid) + sid + group
         try {
-            val result = withContext(Dispatchers.IO) { g.remux.start(source, audio, clientHevc, force, limit) }
+            val result = withContext(Dispatchers.IO) { g.remux.start(source, audio, clientHevc, force, limit, group, supersede) }
             call.respond(RemuxStartDto(result.id, result.playlistUrl, result.durationSec,
-                result.audioTracks, result.subtitleTracks, result.nativeVideoCopy))
+                result.audioTracks, result.subtitleTracks, result.nativeVideoCopy, audio))
         } catch (e: RemuxService.NoExtraTracksException) {
             call.respond(HttpStatusCode.NotFound, MessageDto(e.message ?: "No extra tracks"))
         } catch (e: RemuxService.ConnectionLimitException) {

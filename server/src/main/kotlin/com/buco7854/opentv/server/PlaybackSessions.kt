@@ -55,7 +55,8 @@ data class RoomMemberDto(val id: String, val name: String, val host: Boolean, va
 @Serializable
 data class SessionCommandDto(
     /** pause | play | message (admin) · join-request | join-response | control-request |
-     *  control-response | sync | room-state (roster changed) | room-ended (dropped/kicked). */
+     *  control-response | sync | room-state (roster changed) | room-ended (dropped/kicked) |
+     *  room-audio (a controller changed the shared audio track). */
     val type: String,
     val text: String? = null,
     /** join/control-request: the other viewer's session id and display name. */
@@ -69,6 +70,8 @@ data class SessionCommandDto(
     val sync: SyncStateDto? = null,
     /** room-state: the full roster, so each client can render who's in and their rights. */
     val members: List<RoomMemberDto>? = null,
+    /** room-audio: the shared audio-track index every member should re-request the remux with. */
+    val audioIndex: Int? = null,
 )
 
 @Serializable
@@ -150,6 +153,8 @@ class PlaybackSessionRegistry {
     private class Room(val id: String, @Volatile var hostId: String) {
         val members: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
         val controllers: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+        // The room shares one remux read, so one audio track: whichever a controller last chose.
+        @Volatile var audioIndex: Int = 0
     }
 
     private val sessions = ConcurrentHashMap<String, Live>()
@@ -204,15 +209,6 @@ class PlaybackSessionRegistry {
     fun sameContentPeers(selfId: String, contentKey: String): List<Live> {
         if (contentKey.isBlank()) return emptyList()
         return active().filter { it.id != selfId && it.state.contentKey == contentKey }
-    }
-
-    /** Distinct streams other viewers on [playlistId] currently pull from the provider
-     *  (two viewers of the same thing count once - they can share it). */
-    fun otherStreamsOn(selfId: String, playlistId: Long?): Int {
-        if (playlistId == null) return 0
-        return active()
-            .filter { it.id != selfId && it.state.playlistId == playlistId }
-            .map { it.state.contentKey }.distinct().size
     }
 
     /** Ask [hostId] to admit [peerId] into a watch-together room; false when the host is gone. */
@@ -289,6 +285,28 @@ class PlaybackSessionRegistry {
         val roomId = memberRoom[id] ?: return null
         val room = rooms[roomId] ?: return null
         return roomId to room.members.size
+    }
+
+    /** The share group that owns [id]'s provider connection: its room when in one (so the whole
+     *  room reads the file once), otherwise itself (a lone viewer with its own read/seat). */
+    fun shareGroup(id: String): String = memberRoom[id] ?: id
+
+    /** Every member of [id]'s room (so a read forming the room can free their solo seats),
+     *  or empty when [id] is watching alone. */
+    fun roomMembers(id: String): Set<String> =
+        memberRoom[id]?.let { rooms[it]?.members?.toSet() } ?: emptySet()
+
+    /** The audio track a room member must remux with, so everyone shares one read. Null when solo. */
+    fun roomAudio(id: String): Int? = memberRoom[id]?.let { rooms[it]?.audioIndex }
+
+    /** A controller picks the room's shared audio track; every member re-requests the remux with
+     *  it, so the room stays on one provider connection. Ignored from a non-controller. */
+    fun setRoomAudio(fromId: String, index: Int): Boolean {
+        val room = memberRoom[fromId]?.let { rooms[it] } ?: return false
+        if (fromId !in room.controllers) return false
+        room.audioIndex = index
+        room.members.forEach { enqueue(it, SessionCommandDto(type = "room-audio", audioIndex = index)) }
+        return true
     }
 
     private fun roster(room: Room): List<RoomMemberDto> = room.members.map { id ->

@@ -70,8 +70,11 @@ export function useWatchTogether(opts: {
   playlistId: number | null;
   /** Sends a frame over the live socket (false when it's down); sync falls back to a POST. */
   send: MutableRefObject<((command: SessionCommand) => boolean) | null>;
+  /** A controller changed the room's shared audio track: re-request the remux with it. */
+  onRoomAudio?: (index: number) => void;
 }): WatchTogether {
   const { selfId, deviceName, video, active, live, remuxEligible, contentKey, source, playlistId, send } = opts;
+  const roomAudioRef = useRef(opts.onRoomAudio); roomAudioRef.current = opts.onRoomAudio;
 
   const [members, setMembers] = useState<RoomMember[]>([]);
   const [inRoom, setInRoom] = useState(false);
@@ -207,11 +210,15 @@ export function useWatchTogether(opts: {
       roomContent.current = contentRef.current;
       setInRoom(true);
       setMembers(roster);
+      // In a room a remuxed viewer shares its read, so a full provider no longer blocks them.
+      if (remuxRef.current) setBlocked(false);
       // Anyone now in the room no longer has a pending request to answer.
       setJoinRequests((list) => list.filter((r) => !ids.has(r.peerId)));
       setControlRequests((list) => list.filter((r) => !ids.has(r.peerId)));
     } else if (command.type === 'sync' && command.sync) {
       applySync(command.sync);
+    } else if (command.type === 'room-audio' && command.audioIndex != null) {
+      roomAudioRef.current?.(command.audioIndex);
     } else if (command.type === 'room-ended') {
       if (roomContent.current) snackbar(t('watch.ended'));
       resetRoom();
@@ -238,13 +245,12 @@ export function useWatchTogether(opts: {
       if (cancelled) return;
       clearTimeout(failOpen);
       setPeers(intent.sameContent);
-      // A remuxed file shared with a same-content viewer needs no new connection; anything
-      // else (live, or a different file) does, so a full provider blocks it.
-      const shareable = remuxRef.current && intent.sameContent.length > 0;
-      const isBlocked = intent.full && !shareable;
-      setBlocked(isBlocked);
+      // A solo viewer needs its own connection even on the same content: sharing only happens
+      // inside a room. So a full provider blocks playing alone - join someone to watch together
+      // (which shares their read) or get the limit message.
+      setBlocked(intent.full);
       setChecking(false);
-      if (intent.sameContent.length > 0 && !isBlocked) snackbar(t('watch.availableHint'));
+      if (intent.sameContent.length > 0) snackbar(t(intent.full ? 'watch.joinToWatch' : 'watch.availableHint'));
     }).catch(() => { if (!cancelled) { clearTimeout(failOpen); setChecking(false); } });
     return () => { cancelled = true; clearTimeout(failOpen); };
   }, [active, contentKey, inRoom, selfId, source, playlistId]);

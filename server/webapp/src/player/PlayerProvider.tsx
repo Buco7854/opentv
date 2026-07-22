@@ -265,7 +265,13 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     source: url,
     playlistId: request.playlistId ?? null,
     send: wsSend,
+    // A controller changed the room's shared track: re-request the remux with it (startRemuxRef
+    // is set below; this only fires on a later command).
+    onRoomAudio: (index) => { chosenTracks.current.audio = index; startRemuxRef.current(index, videoRef.current?.currentTime ?? 0); },
   });
+  // Room rights read from inside pickAudio without rebuilding it each roster change.
+  const wtRef = useRef({ inRoom: false, canControl: false });
+  wtRef.current = { inRoom: wt.inRoom, canControl: wt.canControl };
 
   // Hold the engine while the provider check is in flight, and keep it off (with a clear
   // message) when the provider is full - so a blocked stream never plays in the background
@@ -276,6 +282,8 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
       (remuxAvailable && (remuxState === 'idle' || remuxState === 'loading'))));
   useEffect(() => {
     if (wt.blocked) setError((old) => old ?? t('player.connectionLimit'));
+    // Joining a room shares the read, so a previously blocked viewer can play: clear that error.
+    else setError((old) => (old === t('player.connectionLimit') ? null : old));
   }, [wt.blocked]);
 
   const poke = useCallback(() => {
@@ -684,6 +692,12 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
   }, [activeUrl]);
 
   const pickAudio = useCallback((index: number) => {
+    // In a room the audio is shared: only a controller can change it, and the switch comes back
+    // as a room-audio command that re-requests the remux for everyone, so don't touch local state.
+    if (remuxRef.current && wtRef.current.inRoom) {
+      if (wtRef.current.canControl) api.roomAudio(tabSessionId(), index);
+      return;
+    }
     chosenTracks.current.audio = index;
     setTracks((old) => ({ ...old, audio: { ...old.audio, current: index } }));
     if (remuxRef.current) {
@@ -825,17 +839,20 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     try {
       // Copy (not transcode) HEVC when the browser can decode it, unless a prior copy failed.
       const hevc = hevcCapable && !forceTranscode.current;
-      const result = await api.remuxStart(url, audioIdx, !!catchup, hevc);
-      // Switching audio makes a new session; release the old one so this viewer never
-      // holds two of the provider's connections at once.
+      // The tab id lets the server group this read: alone it's ours, in a room it's shared, and
+      // there the room's audio track overrides what we asked - result.audio is what it used.
+      const result = await api.remuxStart(url, audioIdx, !!catchup, hevc, tabSessionId());
+      // Switching audio or share group makes a new session; release the old one so this viewer
+      // never holds two of the provider's connections at once.
       if (prevId && prevId !== result.id) api.remuxStop(prevId);
+      chosenTracks.current.audio = result.audio;
       setRemux({
         id: result.id, playlistUrl: result.playlistUrl,
         duration: result.duration ?? remuxRef.current?.duration ?? null,
-        startAt, nativeCopy: result.nativeVideoCopy, audio: audioIdx,
+        startAt, nativeCopy: result.nativeVideoCopy, audio: result.audio,
       });
       setTracks({
-        audio: { names: result.audioTracks, current: audioIdx },
+        audio: { names: result.audioTracks, current: result.audio },
         subs: { names: result.subtitleTracks ?? [], current: chosenTracks.current.subs ?? -1 },
       });
     } catch (e) {
@@ -872,6 +889,19 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     })();
     return () => { cancelled = true; };
   }, [remuxEligible, remuxAvailable, remux, remuxState, url, catchup, startRemux, wt.checking, wt.blocked]);
+
+  // Joining or leaving a room changes the share group, so the server keys the remux to a
+  // different session: joiners collapse onto the room's one shared read, a leaver splits back to
+  // its own. Re-request at the current spot when membership flips. If none is running yet (the
+  // viewer was blocked on a full provider, or is still preparing), the prepare effect above starts
+  // it with the new group instead.
+  const wasInRoom = useRef(false);
+  useEffect(() => {
+    if (wt.inRoom === wasInRoom.current) return;
+    wasInRoom.current = wt.inRoom;
+    if (!remuxEligible || remuxAvailable !== true || !remuxRef.current) return;
+    startRemux(Math.max(0, chosenTracks.current.audio), videoRef.current?.currentTime ?? 0);
+  }, [wt.inRoom, remuxEligible, remuxAvailable, startRemux]);
 
   // Remux is the only path to sound for undecodable audio (AC3/E-AC3/DTS), so a failed
   // prepare can't be left as silent direct playback. Usual cause: a single-connection

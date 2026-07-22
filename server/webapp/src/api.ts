@@ -168,7 +168,7 @@ export interface RoomMember { id: string; name: string; host: boolean; controlle
 
 export interface SessionCommand {
   type: 'pause' | 'play' | 'message' | 'join-request' | 'join-response'
-    | 'control-request' | 'control-response' | 'sync' | 'room-state' | 'room-ended';
+    | 'control-request' | 'control-response' | 'sync' | 'room-state' | 'room-ended' | 'room-audio';
   text?: string;
   peerId?: string;
   peerName?: string;
@@ -176,6 +176,7 @@ export interface SessionCommand {
   quiet?: boolean;
   sync?: SyncState;
   members?: RoomMember[];
+  audioIndex?: number;
 }
 
 /** A viewer already on this content, offered as someone to watch together with. */
@@ -295,10 +296,11 @@ export const api = {
   metaEpisode: (series: string, season: number, episode: number) =>
     j<Metadata>(`/api/meta/episode?series=${encodeURIComponent(series)}&season=${season}&episode=${episode}`),
   remuxAvailable: () => j<{ available: boolean }>('/api/remux/available'),
-  /** Prepare an HLS session for a file; returns its VOD playlist URL and track lists. */
-  remuxStart: (u: string, audio = 0, force = false, hevc = false) =>
-    j<{ id: string; playlistUrl: string; duration: number | null; audioTracks: string[]; subtitleTracks: string[]; nativeVideoCopy: boolean }>(
-      `/api/remux/start?u=${encodeURIComponent(u)}&audio=${audio}${force ? '&force=1' : ''}${hevc ? '&hevc=1' : ''}`,
+  /** Prepare an HLS session for a file; returns its VOD playlist URL and track lists. [sid]
+   *  groups the provider read: alone it's this tab's, in a watch-together room it's the room's. */
+  remuxStart: (u: string, audio = 0, force = false, hevc = false, sid = '') =>
+    j<{ id: string; playlistUrl: string; duration: number | null; audioTracks: string[]; subtitleTracks: string[]; nativeVideoCopy: boolean; audio: number }>(
+      `/api/remux/start?u=${encodeURIComponent(u)}&audio=${audio}${force ? '&force=1' : ''}${hevc ? '&hevc=1' : ''}${sid ? `&sid=${encodeURIComponent(sid)}` : ''}`,
     ),
   /** Release a remux session (and its provider connection) when playback ends. */
   remuxStop: (id: string) => fetch(`/api/remux/${id}`, { method: 'DELETE', keepalive: true }).catch(() => {}),
@@ -335,6 +337,9 @@ export const api = {
   /** Host hands a member control (or takes it back) directly, no request needed. */
   setControl: (hostId: string, targetId: string, grant: boolean) =>
     j<null>(`/api/sessions/${encodeURIComponent(hostId)}/set-control`, post({ targetId, grant })),
+  /** A controller sets the room's shared audio track; every member re-requests the remux with it. */
+  roomAudio: (id: string, audioIndex: number) =>
+    j<null>(`/api/sessions/${encodeURIComponent(id)}/room-audio`, post({ audioIndex })),
   /** Host removes a member from the room. */
   kick: (hostId: string, targetId: string) =>
     j<null>(`/api/sessions/${encodeURIComponent(hostId)}/kick`, post({ targetId })),

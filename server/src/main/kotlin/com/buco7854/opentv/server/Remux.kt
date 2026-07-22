@@ -70,6 +70,10 @@ class RemuxService(private val http: ServerHttp, private val connections: Provid
         val url: String,
         // Groups sessions that share one provider's connection allowance.
         val providerKey: String,
+        // The share group holding this session's one provider connection: a lone viewer's own
+        // session id, or a watch-together room id shared by all its members (so a synced room
+        // reads the file once). Two sessions with the same shareKey never double-count a seat.
+        val shareKey: String,
         // How many reads that provider permits at once (its max_connections).
         val connectionLimit: Int,
         val clientHevc: Boolean,
@@ -269,8 +273,8 @@ class RemuxService(private val http: ServerHttp, private val connections: Provid
         )
     }
 
-    private fun sessionId(url: String, clientHevc: Boolean, audioIndex: Int): String =
-        MessageDigest.getInstance("SHA-1").digest("$url@${if (clientHevc) "n" else "s"}@$audioIndex".toByteArray())
+    private fun sessionId(url: String, clientHevc: Boolean, audioIndex: Int, group: String): String =
+        MessageDigest.getInstance("SHA-1").digest("$url@${if (clientHevc) "n" else "s"}@$audioIndex@$group".toByteArray())
             .joinToString("") { "%02x".format(it) }.take(16)
 
     // ---- probe ----
@@ -485,8 +489,14 @@ class RemuxService(private val http: ServerHttp, private val connections: Provid
      * playlist. ffmpeg is not started until the first segment is fetched. [connectionLimit]
      * is how many concurrent reads the provider permits (its max_connections).
      */
-    fun start(url: String, audioIndex: Int, clientHevc: Boolean, force: Boolean, connectionLimit: Int): StartResult {
-        val id = sessionId(url, clientHevc, audioIndex)
+    fun start(url: String, audioIndex: Int, clientHevc: Boolean, force: Boolean, connectionLimit: Int,
+              group: String, supersede: Set<String>): StartResult {
+        val id = sessionId(url, clientHevc, audioIndex, group)
+        // This read supersedes the share groups in [supersede]: the caller's own prior session,
+        // the group's stale one (a different track/file, or the room's previous audio), and - when
+        // forming a room - every member's solo session. Dropping them frees the provider slot so a
+        // room collapses to one read no matter which member re-keys first, and no one holds two.
+        sessions.values.filter { it.id != id && it.shareKey in supersede }.forEach { evict(it) }
         sessions[id]?.let {
             it.lastAccessMs = System.currentTimeMillis()
             return StartResult(id, playlistUrl(id, it.subLabels.isNotEmpty()), it.durationSec.takeIf { d -> d > 0 },
@@ -495,11 +505,11 @@ class RemuxService(private val http: ServerHttp, private val connections: Provid
 
         // Refuse a new stream when the provider's other streams (live or other VOD) already
         // fill its connection allowance, so the viewer sees a clear message instead of bumping
-        // someone else off. Same-url reads (an audio-track switch, or another viewer of this
-        // file) share one connection and don't count. Checked before probing, since ffprobe
-        // itself opens one of the provider's connections.
+        // someone else off. This group's own reads (an audio-track switch, or another member of
+        // the same room) share its one connection and don't count. Checked before probing, since
+        // ffprobe itself opens one of the provider's connections.
         val providerKey = providerKeyOf(url)
-        if (connections.distinctStreams(providerKey, url) >= connectionLimit.coerceAtLeast(1)) {
+        if (connections.distinctStreams(providerKey, group) >= connectionLimit.coerceAtLeast(1)) {
             throw ConnectionLimitException(connectionLimit)
         }
 
@@ -531,7 +541,7 @@ class RemuxService(private val http: ServerHttp, private val connections: Provid
         val dir = Files.createDirectories(root.resolve(id))
 
         val session = Session(
-            id, dir, url, providerKeyOf(url), connectionLimit.coerceAtLeast(1), clientHevc, audioIndex,
+            id, dir, url, providerKeyOf(url), group, connectionLimit.coerceAtLeast(1), clientHevc, audioIndex,
             duration, segLen, starts, force, transcode, video.codec, audio, subs,
             audioLabels(audios), subtitleLabels(subs), nativeVideoCopy, System.currentTimeMillis(),
         )
@@ -649,7 +659,7 @@ class RemuxService(private val http: ServerHttp, private val connections: Provid
         // Reserve the provider slot (this file's connection, shared with any other viewer of
         // it, evicting background downloads if need be); the callback stops this session if
         // we're ever bumped.
-        connections.openStream(session.id, session.providerKey, session.url, session.connectionLimit) { stopReading(session) }
+        connections.openStream(session.id, session.providerKey, session.shareKey, session.connectionLimit) { stopReading(session) }
         val process = ProcessBuilder(command(session, startNumber))
             // Run in the session dir so ffmpeg's bare fMP4 init filename lands here on every OS.
             .directory(session.dir.toFile())
@@ -822,7 +832,8 @@ class RemuxService(private val http: ServerHttp, private val connections: Provid
     /** Fold this session's freshly-extracted cues into the URL's persistent store (both on the
      *  same clock) and return the union, so switching audio or seeking never drops a cue. */
     private fun mergeSubStore(url: String, index: Int, fresh: String?): List<Cue> {
-        val key = sessionId(url, false, 0) + "_$index"
+        // Subtitles are per URL, not per share group, so key them with a blank group.
+        val key = sessionId(url, false, 0, "") + "_$index"
         val file = subStore.resolve("$key.vtt")
         synchronized(subStoreLocks.computeIfAbsent(key) { Any() }) {
             val stored = runCatching { Files.readString(file) }.getOrNull()
