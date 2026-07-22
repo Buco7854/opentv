@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Update
 import com.buco7854.opentv.core.model.GroupCount
 import com.buco7854.opentv.core.model.GroupHit
@@ -44,6 +45,13 @@ interface ChannelDao {
 
     @Query("DELETE FROM channels WHERE playlistId = :playlistId AND kind = :kind")
     suspend fun deleteForPlaylistKind(playlistId: Long, kind: Int)
+
+    /** Delete [kinds] then insert [rows] in one transaction, so observers see one atomic swap. */
+    @Transaction
+    suspend fun replaceKinds(playlistId: Long, kinds: List<Int>, rows: List<ChannelRow>) {
+        kinds.forEach { deleteForPlaylistKind(playlistId, it) }
+        insertAll(rows)
+    }
 
     @Query("SELECT COUNT(*) FROM channels WHERE playlistId = :playlistId AND kind = :kind")
     suspend fun count(playlistId: Long, kind: Int): Int
@@ -139,6 +147,13 @@ interface XtreamSeriesDao {
 
     @Query("DELETE FROM xtream_series WHERE playlistId = :playlistId")
     suspend fun deleteForPlaylist(playlistId: Long)
+
+    /** Delete then re-insert the catalog in one transaction, for one atomic swap. */
+    @Transaction
+    suspend fun replaceAll(playlistId: Long, rows: List<XtreamSeriesRow>) {
+        deleteForPlaylist(playlistId)
+        insertAll(rows)
+    }
 
     @Query("SELECT COUNT(*) FROM xtream_series WHERE playlistId = :playlistId")
     suspend fun count(playlistId: Long): Int

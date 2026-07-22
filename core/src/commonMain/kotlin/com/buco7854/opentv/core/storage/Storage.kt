@@ -41,6 +41,13 @@ interface ChannelStore {
     suspend fun insertAll(channels: List<Channel>)
     suspend fun deleteForPlaylist(playlistId: Long)
     suspend fun deleteForPlaylistKind(playlistId: Long, kind: Int)
+
+    /** Replace every row of [kinds] with [channels] atomically, so observers never see the
+     *  playlist mid-wipe. The Room adapter runs it in one transaction; this default does not. */
+    suspend fun replaceKinds(playlistId: Long, kinds: List<Int>, channels: List<Channel>) {
+        kinds.forEach { deleteForPlaylistKind(playlistId, it) }
+        insertAll(channels)
+    }
     suspend fun count(playlistId: Long, kind: Int): Int
     fun observeGroups(playlistId: Long, kind: Int): Flow<List<GroupCount>>
     fun observeInGroup(playlistId: Long, kind: Int, group: String): Flow<List<Channel>>
@@ -66,6 +73,12 @@ interface XtreamSeriesStore {
     suspend fun insertAll(series: List<XtreamSeries>)
     suspend fun deleteForPlaylist(playlistId: Long)
     suspend fun count(playlistId: Long): Int
+
+    /** Replace the whole catalog atomically (see [ChannelStore.replaceKinds]). */
+    suspend fun replaceAll(playlistId: Long, series: List<XtreamSeries>) {
+        deleteForPlaylist(playlistId)
+        insertAll(series)
+    }
     fun observeCategories(playlistId: Long): Flow<List<GroupCount>>
     fun observeInCategory(playlistId: Long, category: String): Flow<List<XtreamSeries>>
     fun observeAll(playlistId: Long): Flow<List<XtreamSeries>>

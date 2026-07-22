@@ -48,6 +48,9 @@ class RoomStorage(private val db: OpenTvDatabase) : Storage {
         override suspend fun deleteForPlaylist(playlistId: Long) = db.channelDao().deleteForPlaylist(playlistId)
         override suspend fun deleteForPlaylistKind(playlistId: Long, kind: Int) =
             db.channelDao().deleteForPlaylistKind(playlistId, kind)
+
+        override suspend fun replaceKinds(playlistId: Long, kinds: List<Int>, channels: List<Channel>) =
+            db.channelDao().replaceKinds(playlistId, kinds, channels.map { it.toRow() })
         override suspend fun count(playlistId: Long, kind: Int): Int = db.channelDao().count(playlistId, kind)
 
         override fun observeGroups(playlistId: Long, kind: Int): Flow<List<GroupCount>> =
@@ -104,6 +107,10 @@ class RoomStorage(private val db: OpenTvDatabase) : Storage {
 
         override suspend fun deleteForPlaylist(playlistId: Long) =
             db.xtreamSeriesDao().deleteForPlaylist(playlistId)
+
+        override suspend fun replaceAll(playlistId: Long, series: List<XtreamSeries>) =
+            db.xtreamSeriesDao().replaceAll(playlistId, series.map { it.toRow() })
+
         override suspend fun count(playlistId: Long): Int = db.xtreamSeriesDao().count(playlistId)
 
         override fun observeCategories(playlistId: Long): Flow<List<GroupCount>> =

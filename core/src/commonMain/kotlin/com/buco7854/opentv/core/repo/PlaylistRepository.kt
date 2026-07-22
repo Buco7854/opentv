@@ -293,24 +293,12 @@ class PlaylistRepository(
             )
         }
 
-        if (!keepLive) storage.channels.deleteForPlaylistKind(playlist.id, ChannelKind.LIVE)
-        if (!keepVod) storage.channels.deleteForPlaylistKind(playlist.id, ChannelKind.MOVIE)
-        if (!keepSeries) {
-            // Cached episodes are kind=SERIES channel rows; drop them with the catalog.
-            storage.channels.deleteForPlaylistKind(playlist.id, ChannelKind.SERIES)
-            storage.xtreamSeries.deleteForPlaylist(playlist.id)
-        }
-
+        // Build the new rows in memory, then swap each table in a single transaction, so
+        // browse observers never see the playlist momentarily empty during a refresh.
         var position = 0
-        val batch = ArrayList<Channel>(500)
-        suspend fun flush() {
-            if (batch.isNotEmpty()) {
-                storage.channels.insertAll(ArrayList(batch))
-                batch.clear()
-            }
-        }
+        val channelRows = ArrayList<Channel>(live.size + vod.size)
         for (stream in live) {
-            batch.add(
+            channelRows.add(
                 Channel(
                     playlistId = playlist.id,
                     name = stream.name,
@@ -327,10 +315,9 @@ class PlaylistRepository(
                     catchupDays = stream.archiveDays,
                 )
             )
-            if (batch.size >= 500) flush()
         }
         for (stream in vod) {
-            batch.add(
+            channelRows.add(
                 Channel(
                     playlistId = playlist.id,
                     name = stream.name,
@@ -346,13 +333,20 @@ class PlaylistRepository(
                     xtreamStreamId = stream.streamId,
                 )
             )
-            if (batch.size >= 500) flush()
         }
-        flush()
+        // A kept kind's source list is empty (that is what "keep" means), so it is neither
+        // deleted nor re-inserted. Cached episodes (kind=SERIES) drop with the catalog.
+        val replaceKinds = buildList {
+            if (!keepLive) add(ChannelKind.LIVE)
+            if (!keepVod) add(ChannelKind.MOVIE)
+            if (!keepSeries) add(ChannelKind.SERIES)
+        }
+        storage.channels.replaceKinds(playlist.id, replaceKinds, channelRows)
 
-        seriesList.chunked(500).forEach { chunk ->
-            storage.xtreamSeries.insertAll(
-                chunk.map { item ->
+        if (!keepSeries) {
+            storage.xtreamSeries.replaceAll(
+                playlist.id,
+                seriesList.map { item ->
                     com.buco7854.opentv.core.model.XtreamSeries(
                         playlistId = playlist.id,
                         seriesId = item.seriesId,
@@ -364,7 +358,7 @@ class PlaylistRepository(
                         genre = item.genre,
                         rating = item.rating,
                     )
-                }
+                },
             )
         }
 
