@@ -45,6 +45,8 @@ export interface WatchTogether {
   blocked: boolean;
   /** Someone's already on this content: hold playback until the viewer picks alone or together. */
   choosing: boolean;
+  /** The room is reloading a changed track: lock controls and show loading until all are back. */
+  loading: boolean;
   /** Viewer chose to watch alone: release the hold and play (may then hit the provider limit). */
   watchAlone: () => void;
   ask: (peerId: string) => void;
@@ -90,6 +92,10 @@ export function useWatchTogether(opts: {
   // 'pending' while someone is already on this content and the viewer hasn't said whether to watch
   // alone or together - playback is held until they choose, so a seat is never taken by surprise.
   const [choice, setChoice] = useState<'pending' | 'decided'>('decided');
+  // True while the room reloads a changed track: everyone holds, controls lock, and playback only
+  // resumes once every member has reloaded (or a safety timeout fires), so no one runs ahead.
+  const [loading, setLoading] = useState(false);
+  const loadingRef = useRef(false);
 
   const self = members.find((m) => m.id === selfId);
   const isHost = !!self?.host;
@@ -119,6 +125,8 @@ export function useWatchTogether(opts: {
 
   const resetRoom = useCallback(() => {
     roomContent.current = null;
+    loadingRef.current = false;
+    setLoading(false);
     setInRoom(false);
     setMembers([]);
     setJoinRequests([]);
@@ -183,6 +191,8 @@ export function useWatchTogether(opts: {
   const broadcast = useCallback((guarded: boolean, seek: boolean) => {
     const v = video.current;
     if (!v) return;
+    // Silent during a track-change reload: the pauses and plays it causes aren't real drives.
+    if (loadingRef.current) return;
     // Don't anchor a transient position while our own playback isn't settled - mid-seek, still
     // buffering (readyState below HAVE_FUTURE_DATA), or a seek still landing. A loading peer that
     // kept broadcasting its stuck position would rewind everyone else again and again.
@@ -229,7 +239,15 @@ export function useWatchTogether(opts: {
     } else if (command.type === 'sync' && command.sync) {
       applySync(command.sync);
     } else if (command.type === 'room-audio' && command.audioIndex != null) {
+      // Enter the reload barrier: hold here, reload the shared track, report in when ready.
+      loadingRef.current = true;
+      setLoading(true);
+      video.current?.pause();
       roomAudioRef.current?.(command.audioIndex);
+    } else if (command.type === 'room-go') {
+      loadingRef.current = false;
+      setLoading(false);
+      video.current?.play().catch(() => {});
     } else if (command.type === 'room-ended') {
       if (roomContent.current) snackbar(t('watch.ended'));
       resetRoom();
@@ -242,6 +260,8 @@ export function useWatchTogether(opts: {
     setBlocked(false);
     setChecking(true);
     setChoice('decided');
+    loadingRef.current = false;
+    setLoading(false);
     if (roomContent.current && roomContent.current !== contentKey) leave();
   }, [contentKey, leave]);
 
@@ -282,6 +302,22 @@ export function useWatchTogether(opts: {
     return () => clearInterval(timer);
   }, [isHost, members.length, broadcast, video]);
 
+  // Track-change barrier: report in once the reloaded track can play, staying paused until the
+  // room resumes together. A floor covers a missed event; a longer timeout fails open so one
+  // stuck member can't freeze everyone.
+  useEffect(() => {
+    if (!loading) return;
+    const v = video.current;
+    if (!v) return;
+    let done = false;
+    const report = () => { if (done) return; done = true; api.sessionReady(selfId); };
+    const onReady = () => { v.pause(); report(); };
+    v.addEventListener('canplay', onReady);
+    const floor = setTimeout(report, 4000);
+    const failOpen = setTimeout(() => { loadingRef.current = false; setLoading(false); v.play().catch(() => {}); }, 12000);
+    return () => { v.removeEventListener('canplay', onReady); clearTimeout(floor); clearTimeout(failOpen); };
+  }, [loading, selfId, video]);
+
   // Anyone with control drives: their play/pause/seek/rate reaches the rest of the room at once.
   // A seek is flagged so receivers apply it exactly instead of treating it as drift.
   useEffect(() => {
@@ -303,7 +339,7 @@ export function useWatchTogether(opts: {
     available: inRoom || peers.length > 0 || joinRequests.length > 0,
     hasPending: joinRequests.length > 0 || controlRequests.length > 0,
     inRoom, members, isHost, canControl, peers, joinRequests, controlRequests, checking, blocked,
-    choosing: choice === 'pending', watchAlone,
+    choosing: choice === 'pending', loading, watchAlone,
     ask, answerJoin, requestControl, answerControl, setControl, kick, leave, onCommand,
   };
 }

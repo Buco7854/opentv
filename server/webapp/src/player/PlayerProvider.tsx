@@ -984,7 +984,7 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
   // Buffering means we're waiting on data (initial load, a seek, a stall) - show the spinner even
   // while paused, so a loading player never shows a resting play icon. A deliberate pause clears
   // buffering (the media has data), so it correctly shows play then.
-  const busy = holdEngine || remuxState === 'loading' || buffering;
+  const busy = holdEngine || remuxState === 'loading' || buffering || wt.loading;
   // VOD/downloads and catch-up all get a scrubber.
   const showSeek = !live;
   const tracksEmptyText =
@@ -1038,7 +1038,12 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
         </div>
       )}
 
-      {!error && busy && !uiVisible && !wt.choosing && <div className="player-spinner" aria-hidden />}
+      {!error && busy && !uiVisible && !wt.choosing && !wt.loading && <div className="player-spinner" aria-hidden />}
+
+      {/* Room track change: block input for everyone and show loading until all have reloaded. */}
+      {!error && wt.loading && (
+        <div className="player-lock"><span className="btn-spinner" aria-hidden /></div>
+      )}
 
       {!error && wt.choosing && (
         <div className="player-error">

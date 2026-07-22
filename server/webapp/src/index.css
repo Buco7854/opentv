@@ -974,6 +974,10 @@
   }
   .player-error h3 { font: var(--type-title-large); letter-spacing: -0.2px; }
   .player-error p { @apply max-w-[460px] text-white/60; font: var(--type-body-medium); }
+  .player-lock {
+    @apply absolute inset-0 z-20 flex items-center justify-center;
+    background: rgba(0, 0, 0, 0.35);
+  }
   .player-choose-close { @apply absolute right-3 top-3; }
   .player-choose-close .icon-btn { @apply size-11 rounded-full text-white; }
   .player-choose-close .icon-btn .icon { @apply size-6; }

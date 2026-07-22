@@ -168,7 +168,7 @@ export interface RoomMember { id: string; name: string; host: boolean; controlle
 
 export interface SessionCommand {
   type: 'pause' | 'play' | 'message' | 'join-request' | 'join-response'
-    | 'control-request' | 'control-response' | 'sync' | 'room-state' | 'room-ended' | 'room-audio';
+    | 'control-request' | 'control-response' | 'sync' | 'room-state' | 'room-ended' | 'room-audio' | 'room-go';
   text?: string;
   peerId?: string;
   peerName?: string;
@@ -340,6 +340,9 @@ export const api = {
   /** A controller sets the room's shared audio track; every member re-requests the remux with it. */
   roomAudio: (id: string, audioIndex: number) =>
     j<null>(`/api/sessions/${encodeURIComponent(id)}/room-audio`, post({ audioIndex })),
+  /** A member reports it finished reloading after a track change; the room resumes once all have. */
+  sessionReady: (id: string) =>
+    fetch(`/api/sessions/${encodeURIComponent(id)}/ready`, { method: 'POST', keepalive: true }).catch(() => {}),
   /** Host removes a member from the room. */
   kick: (hostId: string, targetId: string) =>
     j<null>(`/api/sessions/${encodeURIComponent(hostId)}/kick`, post({ targetId })),

@@ -56,7 +56,7 @@ data class RoomMemberDto(val id: String, val name: String, val host: Boolean, va
 data class SessionCommandDto(
     /** pause | play | message (admin) · join-request | join-response | control-request |
      *  control-response | sync | room-state (roster changed) | room-ended (dropped/kicked) |
-     *  room-audio (a controller changed the shared audio track). */
+     *  room-audio (a controller changed the shared audio track) | room-go (all reloaded, resume). */
     val type: String,
     val text: String? = null,
     /** join/control-request: the other viewer's session id and display name. */
@@ -155,6 +155,9 @@ class PlaybackSessionRegistry {
         val controllers: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
         // The room shares one remux read, so one audio track: whichever a controller last chose.
         @Volatile var audioIndex: Int = 0
+        // Members that have finished reloading after a track change; when it covers everyone the
+        // room resumes together, so no one plays ahead while another is still buffering the switch.
+        val ready: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
     }
 
     private val sessions = ConcurrentHashMap<String, Live>()
@@ -305,7 +308,21 @@ class PlaybackSessionRegistry {
         val room = memberRoom[fromId]?.let { rooms[it] } ?: return false
         if (fromId !in room.controllers) return false
         room.audioIndex = index
+        // Start a reload barrier: everyone switches, and nobody resumes until all have reported in.
+        room.ready.clear()
         room.members.forEach { enqueue(it, SessionCommandDto(type = "room-audio", audioIndex = index)) }
+        return true
+    }
+
+    /** A member finished reloading the shared track; once every member has, release the room to
+     *  play again in step. Best-effort - a client also fails open on its own timeout. */
+    fun markReady(sid: String): Boolean {
+        val room = memberRoom[sid]?.let { rooms[it] } ?: return false
+        room.ready.add(sid)
+        if (room.ready.containsAll(room.members)) {
+            room.ready.clear()
+            room.members.forEach { enqueue(it, SessionCommandDto(type = "room-go")) }
+        }
         return true
     }
 

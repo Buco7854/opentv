@@ -761,6 +761,10 @@ fun Route.api(g: ServerGraph) = route("/api") {
             if (g.sessions.setRoomAudio(id, req.audioIndex.coerceAtLeast(0))) call.respond(HttpStatusCode.NoContent)
             else call.respond(HttpStatusCode.NotFound, MessageDto("No such room"))
         }
+        post("/{id}/ready") {
+            g.sessions.markReady(call.parameters["id"] ?: "")
+            call.respond(HttpStatusCode.NoContent)
+        }
         post("/{id}/leave") {
             g.sessions.leaveRoom(call.parameters["id"] ?: "")
             call.respond(HttpStatusCode.NoContent)
