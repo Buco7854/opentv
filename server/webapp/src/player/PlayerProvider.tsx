@@ -976,6 +976,12 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
   const busy = holdEngine || remuxState === 'loading' || buffering;
   // VOD/downloads and catch-up all get a scrubber.
   const showSeek = !live;
+  // Only offer the audio/subtitle buttons when there's actually a track to pick (or a remux still
+  // preparing/retrying, which will populate them). A direct MP4/MKV the browser can't switch has
+  // none, so showing a menu that only explains that is just noise.
+  const preparingTracks = remuxState === 'loading' || (remuxEligible && remuxState === 'failed');
+  const canPickAudio = tracks.audio.names.length > 0 || preparingTracks;
+  const canPickSubs = tracks.subs.names.length > 0 || preparingTracks;
   const tracksEmptyText =
     remuxState === 'loading' || holdEngine ? t('player.remuxPreparing')
       : remux || remuxState === 'none' ? t('player.noExtraTracks')
@@ -1123,8 +1129,8 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
             )}
             <div className="controls">
               {live && <span className="live-chip">{t('player.live').toUpperCase()}</span>}
-              <IconBtn name="audio" label={t('player.audio')} onClick={() => setMenu('audio')} />
-              <IconBtn name="subtitles" label={t('player.subtitles')} onClick={() => setMenu('subs')} />
+              {canPickAudio && <IconBtn name="audio" label={t('player.audio')} onClick={() => setMenu('audio')} />}
+              {canPickSubs && <IconBtn name="subtitles" label={t('player.subtitles')} onClick={() => setMenu('subs')} />}
               {!live && <IconBtn name="speed" label={t('player.speed')} onClick={() => setMenu('speed')} />}
               <IconBtn name="aspect" label={t('player.scaling')} onClick={() => setMenu('scale')} />
               {document.pictureInPictureEnabled &&
