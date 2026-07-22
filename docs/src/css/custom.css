@@ -131,11 +131,15 @@ h1, h2, h3, .navbar__title {
 .theme-edit-this-page { color: var(--otv-fg2); }
 
 /* Screenshot figures in the guide */
-.doc-screen { margin: 24px 0; }
+.doc-screen { margin: 28px 0; }
+/* The screenshot is already cropped to the macOS window frame (rounded, with
+   transparent corners); the page just floats it with a theme-aware shadow. */
 .doc-screen img {
   width: 100%;
-  border-radius: 12px;
-  border: 1px solid var(--otv-hairline);
+  filter: drop-shadow(0 16px 30px rgba(30, 40, 60, 0.18));
+}
+[data-theme='dark'] .doc-screen img {
+  filter: drop-shadow(0 16px 34px rgba(0, 0, 0, 0.55));
 }
 .doc-screen figcaption {
   margin-top: 8px;
