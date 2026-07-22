@@ -864,8 +864,6 @@ fun Route.api(g: ServerGraph) = route("/api") {
         }
         val source = remuxSource(g, call) ?: return@get
         val requested = call.request.queryParameters["audio"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
-        // hevc=1: browser can decode HEVC, so copy non-H.264 video instead of transcoding.
-        val clientHevc = call.request.queryParameters["hevc"] == "1"
         // Catch-up forces the remux on so its finite recording becomes seekable.
         val force = call.request.queryParameters["force"] == "1"
         val limit = g.connectionLimit(source)
@@ -874,7 +872,12 @@ fun Route.api(g: ServerGraph) = route("/api") {
         // shared audio track wins over whatever this member asked for.
         val sid = call.request.queryParameters["sid"].orEmpty()
         val group = g.sessions.shareGroup(sid)
+        val inRoom = group != sid
         val audio = g.sessions.roomAudio(sid) ?: requested
+        // hevc=1: browser can decode HEVC, so copy non-H.264 video instead of transcoding. A room
+        // shares one read, so it must be decodable by everyone: transcode HEVC to H.264 for the
+        // room rather than let a member who can't decode HEVC fork off its own (second) read.
+        val clientHevc = !inRoom && call.request.queryParameters["hevc"] == "1"
         // This read replaces the caller's own group and, when forming a room, every member's solo
         // read - so the room converges on one connection whichever member re-keys first.
         val supersede = g.sessions.roomMembers(sid) + sid + group
