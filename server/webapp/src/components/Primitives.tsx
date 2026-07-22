@@ -303,11 +303,13 @@ export function Menu({ anchor, options, onDismiss }: {
 }
 
 /** Select field with floating label and an option menu anchored under it. */
-export function SelectField<T extends string | number>({ label, options, selected, onSelect }: {
-  label: string;
+export function SelectField<T extends string | number>({ label, options, selected, onSelect, className }: {
+  /** Omit for a compact inline select (no floating label), e.g. inside a list row. */
+  label?: string;
   options: [T, string][];
   selected: T;
   onSelect: (value: T) => void;
+  className?: string;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -327,13 +329,13 @@ export function SelectField<T extends string | number>({ label, options, selecte
   }, [open]);
 
   return (
-    <div ref={rootRef} className="field select">
+    <div ref={rootRef} className={`field select${label ? '' : ' compact'}${className ? ` ${className}` : ''}`}>
       <button type="button" className="select-trigger" aria-haspopup="listbox" aria-expanded={open}
               onClick={() => setOpen((o) => !o)}>
         <span className="truncate">{options.find(([value]) => value === selected)?.[1] ?? ''}</span>
         <Icon name={open ? 'expandLess' : 'expandMore'} />
       </button>
-      <label>{label}</label>
+      {label && <label>{label}</label>}
       {open && (
         <div className="select-menu" role="listbox">
           {options.map(([value, text]) => (
