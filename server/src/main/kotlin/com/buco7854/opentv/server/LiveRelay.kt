@@ -35,6 +35,8 @@ import java.util.concurrent.CopyOnWriteArrayList
 class LiveRelay(
     private val http: ServerHttp,
     private val connections: ProviderConnections,
+    /** Whether ffmpeg is present, so the shared read can transcode audio to AAC for everyone. */
+    private val ffmpegAvailable: () -> Boolean,
 ) {
     private enum class Attach { ATTACHED, REFUSED, DEAD }
 
@@ -55,7 +57,11 @@ class LiveRelay(
         @Volatile private var reader: Job? = null
         @Volatile private var closer: Job? = null
         @Volatile private var upstream: InputStream? = null
+        @Volatile private var ffmpeg: Process? = null
         @Volatile private var dead = false
+        // The audio codec to output: "copy" when browsers can already decode the source, "aac"
+        // when they can't (AC3/E-AC3/DTS...). Probed once and reused across reconnects.
+        @Volatile private var audioCodec: String? = null
 
         /** Attach [member], starting the single upstream read if this is the first member.
          *  REFUSED when the provider is full; DEAD when this relay has been retired and the
@@ -97,7 +103,9 @@ class LiveRelay(
             reader?.cancel(); reader = null
             closer?.cancel(); closer = null
             runCatching { upstream?.close() } // unblock a read parked on the socket
+            runCatching { ffmpeg?.destroyForcibly() }
             upstream = null
+            ffmpeg = null
             relays.remove(key, this)
             connections.close(key)
             members.forEach { it.close() }
@@ -127,13 +135,32 @@ class LiveRelay(
                     // Providers drop long transfers; fall through and reconnect.
                 } finally {
                     runCatching { stream.close() }
+                    runCatching { ffmpeg?.destroyForcibly() }
                     upstream = null
+                    ffmpeg = null
                 }
                 delay(RECONNECT_MS)
             }
         }
 
         private fun open(): InputStream {
+            // One ffmpeg reads the provider (the room's single connection), copies the video, and
+            // transcodes the audio to AAC only when browsers can't decode the source codec -
+            // otherwise it's copied too. Remuxed back to a transport stream we tee; resent headers
+            // let a member that joins mid-stream sync.
+            if (ffmpegAvailable()) {
+                val audio = audioCodec ?: probeAudioCodec().also { audioCodec = it }
+                val cmd = mutableListOf("ffmpeg", "-nostdin", "-loglevel", "error")
+                if (url.startsWith("http")) cmd += listOf(
+                    "-user_agent", http.userAgent,
+                    "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "10")
+                cmd += listOf("-i", url, "-c:v", "copy", "-c:a", audio)
+                if (audio == "aac") cmd += listOf("-b:a", "192k")
+                cmd += listOf("-f", "mpegts", "-mpegts_flags", "+resend_headers", "-flush_packets", "1", "pipe:1")
+                val process = ProcessBuilder(cmd).redirectError(ProcessBuilder.Redirect.DISCARD).start()
+                ffmpeg = process
+                return process.inputStream
+            }
             val request = HttpRequest.newBuilder(URI(url))
                 .timeout(java.time.Duration.ofSeconds(30))
                 .header("User-Agent", http.userAgent)
@@ -144,6 +171,22 @@ class LiveRelay(
                 throw IllegalStateException("upstream HTTP ${response.statusCode()}")
             }
             return response.body()
+        }
+
+        /** "copy" when the source audio is browser-decodable, "aac" when it isn't. Falls back to
+         *  "copy" if the codec can't be read, so a transient probe failure never forces a needless
+         *  transcode. */
+        private fun probeAudioCodec(): String {
+            val cmd = mutableListOf("ffprobe", "-v", "error")
+            if (url.startsWith("http")) cmd += listOf("-user_agent", http.userAgent)
+            cmd += listOf("-select_streams", "a:0", "-show_entries", "stream=codec_name",
+                "-of", "default=nokey=1:noprint_wrappers=1", url)
+            return runCatching {
+                val process = ProcessBuilder(cmd).redirectError(ProcessBuilder.Redirect.DISCARD).start()
+                val codec = process.inputStream.bufferedReader().use { it.readText() }.trim().lowercase()
+                process.waitFor(15, java.util.concurrent.TimeUnit.SECONDS)
+                if (codec.isNotEmpty() && codec !in BROWSER_AUDIO) "aac" else "copy"
+            }.getOrDefault("copy")
         }
     }
 
@@ -182,5 +225,7 @@ class LiveRelay(
         private const val IDLE_KEEP_MS = 10_000L
         /** Back off this long before reopening a dropped live source. */
         private const val RECONNECT_MS = 500L
+        /** Audio codecs browsers decode natively; anything else the relay transcodes to AAC. */
+        private val BROWSER_AUDIO = setOf("aac", "mp3", "opus", "flac", "vorbis")
     }
 }

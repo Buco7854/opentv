@@ -115,6 +115,7 @@ fun main() {
     }
     val downloads = DownloadManager(storage, http, settings, dataDir, connections, connectionLimit)
     val streamGate = StreamGate(connections)
+    val remux = RemuxService(http, connections)
     val graph = ServerGraph(
         storage = storage,
         http = http,
@@ -126,12 +127,14 @@ fun main() {
         proxy = StreamProxy(http, cipher, streamGate, connectionLimit),
         settings = settings,
         downloads = downloads,
-        remux = RemuxService(http, connections),
+        remux = remux,
         transcoder = AudioTranscoder(http),
         cipher = cipher,
         sessions = PlaybackSessionRegistry(),
         streamGate = streamGate,
-        liveRelay = LiveRelay(http, connections),
+        // Room live shares one read; transcode its audio to AAC through one ffmpeg (when present)
+        // so every browser can decode it, instead of each viewer opening its own audio rescue.
+        liveRelay = LiveRelay(http, connections) { remux.available },
         trustedProxies = TrustedProxies.fromEnv(),
         connectionLimit = connectionLimit,
     )
