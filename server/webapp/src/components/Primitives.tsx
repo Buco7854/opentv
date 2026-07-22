@@ -302,51 +302,79 @@ export function Menu({ anchor, options, onDismiss }: {
   );
 }
 
-/** Select field with floating label and an option menu anchored under it. */
-export function SelectField<T extends string | number>({ label, options, selected, onSelect, className }: {
-  /** Omit for a compact inline select (no floating label), e.g. inside a list row. */
-  label?: string;
-  options: [T, string][];
-  selected: T;
-  onSelect: (value: T) => void;
-  className?: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-
+/** Close on Escape or a pointer down outside the returned ref - shared by the select components. */
+function useDismiss(open: boolean, close: () => void) {
+  const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
-    const onDown = (e: PointerEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    const onDown = (e: PointerEvent) => { if (!ref.current?.contains(e.target as Node)) close(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
     document.addEventListener('pointerdown', onDown);
     document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('pointerdown', onDown);
       document.removeEventListener('keydown', onKey);
     };
-  }, [open]);
+  }, [open, close]);
+  return ref;
+}
 
+/** The list of options shown under either select. */
+function SelectMenu<T extends string | number>({ options, selected, onPick }: {
+  options: [T, string][]; selected: T; onPick: (value: T) => void;
+}) {
   return (
-    <div ref={rootRef} className={`field select${label ? '' : ' compact'}${className ? ` ${className}` : ''}`}>
+    <div className="select-menu" role="listbox">
+      {options.map(([value, text]) => (
+        <button key={String(value)} role="option" aria-selected={value === selected}
+                className={`menu-option${value === selected ? ' selected' : ''}`}
+                onClick={() => onPick(value)}>
+          {text}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Form select: filled trigger with a floating label, option menu anchored under it. */
+export function SelectField<T extends string | number>({ label, options, selected, onSelect }: {
+  label: string;
+  options: [T, string][];
+  selected: T;
+  onSelect: (value: T) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useDismiss(open, () => setOpen(false));
+  return (
+    <div ref={rootRef} className="field select">
       <button type="button" className="select-trigger" aria-haspopup="listbox" aria-expanded={open}
               onClick={() => setOpen((o) => !o)}>
         <span className="truncate">{options.find(([value]) => value === selected)?.[1] ?? ''}</span>
         <Icon name={open ? 'expandLess' : 'expandMore'} />
       </button>
-      {label && <label>{label}</label>}
-      {open && (
-        <div className="select-menu" role="listbox">
-          {options.map(([value, text]) => (
-            <button key={String(value)} role="option" aria-selected={value === selected}
-                    className={`menu-option${value === selected ? ' selected' : ''}`}
-                    onClick={() => { setOpen(false); onSelect(value); }}>
-              {text}
-            </button>
-          ))}
-        </div>
-      )}
+      <label>{label}</label>
+      {open && <SelectMenu options={options} selected={selected} onPick={(v) => { setOpen(false); onSelect(v); }} />}
+    </div>
+  );
+}
+
+/** Compact inline dropdown (no label), for list rows like the watch-together roster. */
+export function Select<T extends string | number>({ options, selected, onSelect, ariaLabel }: {
+  options: [T, string][];
+  selected: T;
+  onSelect: (value: T) => void;
+  ariaLabel?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useDismiss(open, () => setOpen(false));
+  return (
+    <div ref={rootRef} className="select-dropdown">
+      <button type="button" className="select-trigger" aria-haspopup="listbox" aria-expanded={open}
+              aria-label={ariaLabel} onClick={() => setOpen((o) => !o)}>
+        <span className="truncate">{options.find(([value]) => value === selected)?.[1] ?? ''}</span>
+        <Icon name={open ? 'expandLess' : 'expandMore'} />
+      </button>
+      {open && <SelectMenu options={options} selected={selected} onPick={(v) => { setOpen(false); onSelect(v); }} />}
     </div>
   );
 }

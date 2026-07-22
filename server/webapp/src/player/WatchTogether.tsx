@@ -7,7 +7,7 @@
 
 import { MutableRefObject, RefObject, useCallback, useEffect, useRef, useState } from 'react';
 import { api, RoomMember, SessionCommand, SyncState, WatchIntentPeer } from '../api';
-import { SelectField, Sheet, snackbar } from '../components/Primitives';
+import { Select, Sheet, snackbar } from '../components/Primitives';
 import { t } from '../i18n';
 
 // The driver's state is pushed the instant it plays/pauses/seeks, plus this tick to catch a
@@ -369,7 +369,8 @@ export function WatchTogetherSheet({ wt, onDismiss, container }: {
       <div className="watch-row" key={`m-${m.id}`}>
         <span className="min-w-0 flex-1 truncate">{isSelf ? t('watch.you') : m.name}</span>
         {manage ? (
-          <SelectField
+          <Select
+            ariaLabel={m.name}
             selected={m.controller ? 'control' : 'viewer'}
             options={[['viewer', t('watch.roleViewer')], ['control', t('watch.roleController')], ['remove', t('watch.kick')]]}
             onSelect={(v) => { if (v === 'remove') wt.kick(m.id); else wt.setControl(m.id, v === 'control'); }}

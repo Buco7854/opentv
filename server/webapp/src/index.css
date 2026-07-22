@@ -444,10 +444,15 @@
   }
   .field.select .select-trigger > span { @apply flex-1; }
   .field.select .select-trigger .icon { @apply size-5 text-on-surface-variant; }
-  /* Compact inline select (list rows): shorter, auto-width, no floating-label padding. */
-  .field.select.compact { @apply w-auto shrink-0; }
-  .field.select.compact .select-trigger { @apply h-9 w-auto gap-1 rounded-lg px-3 pt-0; font: var(--type-label-large); }
-  .field.select.compact .select-menu { @apply inset-x-auto right-0 min-w-[8rem]; }
+  /* Compact inline dropdown (list rows): shorter, auto-width, menu anchored to the right. */
+  .select-dropdown { @apply relative inline-block w-auto shrink-0; }
+  .select-dropdown .select-trigger {
+    @apply flex h-9 items-center gap-1 rounded-lg px-3 text-on-surface;
+    background: var(--c-input);
+    font: var(--type-label-large);
+  }
+  .select-dropdown .select-trigger .icon { @apply size-5 text-on-surface-variant; }
+  .select-dropdown .select-menu { @apply inset-x-auto right-0 min-w-[9rem]; }
   .select-menu {
     @apply absolute inset-x-0 top-full z-30 mt-1.5 max-h-[320px] overflow-y-auto rounded-xl
            p-1.5 backdrop-blur-[20px];
