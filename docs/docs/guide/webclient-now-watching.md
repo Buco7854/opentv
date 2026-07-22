@@ -14,10 +14,10 @@ import useBaseUrl from '@docusaurus/useBaseUrl';
 
 <figure className="doc-screen">
   <ThemedImage
-    alt="The Now watching page with a stream's details expanded"
+    alt="The Now watching page, one card per viewer"
     sources={{ light: useBaseUrl('/img/web/now-watching-light.png'), dark: useBaseUrl('/img/web/now-watching-dark.png') }}
   />
-  <figcaption>A transcoding stream's details, with the plain-language summary above the technical facts.</figcaption>
+  <figcaption>One card per viewer: transcoding, remuxing, a relayed live channel, and a stream still preparing.</figcaption>
 </figure>
 
 Each card shows the title, the playlist it came from, and who is watching,
@@ -48,11 +48,19 @@ before listing the technical facts:
 - **Audio transcoding** converts undecodable audio (AC3, E-AC3, DTS) to AAC while
   the video is copied.
 
-The details below the summary spell out the codecs in play, whether video is
-copied or transcoded and to what encoder, the audio layout, how many HLS
-segments, which provider connection the stream holds, and whether ffmpeg is
-running. It is meant for debugging a stream on the spot, without opening a shell
-on the server.
+The details open in a modal off the info button. Below the summary they spell
+out the codecs in play, whether video is copied or transcoded and to what
+encoder, the audio layout, how many HLS segments, which provider connection the
+stream holds, and whether ffmpeg is running. It is meant for debugging a stream
+on the spot, without opening a shell on the server.
+
+<figure className="doc-screen">
+  <ThemedImage
+    alt="Stream details open in a modal"
+    sources={{ light: useBaseUrl('/img/web/now-watching-details-light.png'), dark: useBaseUrl('/img/web/now-watching-details-dark.png') }}
+  />
+  <figcaption>A transcoding stream's details, with the plain-language summary above the technical facts.</figcaption>
+</figure>
 
 <figure className="doc-screen doc-screen--phone">
   <ThemedImage
