@@ -50,6 +50,10 @@ class RemuxService(private val http: ServerHttp, private val connections: Provid
     /** The file has one audio track and no text subtitles: nothing to expose. */
     class NoExtraTracksException : Exception("This file has no additional tracks to expose")
 
+    /** The provider's other active streams already fill its connection allowance. */
+    class ConnectionLimitException(val limit: Int) :
+        Exception("The provider allows only $limit connection${if (limit == 1) "" else "s"} at once, all in use")
+
     class StartResult(
         val id: String,
         val playlistUrl: String,
@@ -488,6 +492,17 @@ class RemuxService(private val http: ServerHttp, private val connections: Provid
             return StartResult(id, playlistUrl(id, it.subLabels.isNotEmpty()), it.durationSec.takeIf { d -> d > 0 },
                 it.audioLabels, it.subLabels, it.nativeVideoCopy)
         }
+
+        // Refuse a new stream when the provider's other active streams already fill its
+        // connection allowance, so the viewer sees a clear message instead of bumping
+        // someone else off. Same-url sessions (e.g. an audio-track switch) don't count,
+        // and idle prepared sessions that hold no live connection don't either. Checked
+        // before probing, since ffprobe itself opens one of the provider's connections.
+        val providerKey = providerKeyOf(url)
+        val busyOtherStreams = sessions.values
+            .filter { it.providerKey == providerKey && it.url != url && connections.isOpen(it.id) }
+            .map { it.url }.distinct().size
+        if (busyOtherStreams >= connectionLimit.coerceAtLeast(1)) throw ConnectionLimitException(connectionLimit)
 
         val probed = probeCached(url)
         val audios = probed.streams.filter { it.type == "audio" }

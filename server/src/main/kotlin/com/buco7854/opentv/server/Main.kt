@@ -23,6 +23,7 @@ import io.ktor.server.plugins.partialcontent.PartialContent
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.response.respond
 import io.ktor.server.routing.routing
+import io.ktor.server.websocket.WebSockets
 import io.ktor.util.cio.ChannelIOException
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
@@ -150,6 +151,7 @@ fun main() {
         install(Compression)
         // Range support for serving downloaded files.
         install(PartialContent)
+        install(WebSockets)
         install(StatusPages) {
             exception<IllegalArgumentException> { call, cause ->
                 call.respond(HttpStatusCode.BadRequest, MessageDto(cause.message ?: "Bad request"))

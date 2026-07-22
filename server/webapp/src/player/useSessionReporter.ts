@@ -76,9 +76,28 @@ export function useSessionReporter(snapshot: PlaybackSnapshot, video: RefObject<
 
     beat();
     const timer = setInterval(beat, HEARTBEAT_MS);
+
+    // Push channel: pause/play/message arrive instantly instead of on the next beat.
+    let ws: WebSocket | null = null;
+    let wsRetry: ReturnType<typeof setTimeout> | undefined;
+    const connect = () => {
+      if (stopped) return;
+      ws = new WebSocket(api.sessionSocketUrl(id));
+      ws.onmessage = (ev) => {
+        const el = video.current;
+        if (!el) return;
+        try { applyCommand(JSON.parse(ev.data as string) as SessionCommand, el); } catch { /* ignore */ }
+      };
+      ws.onclose = () => { if (!stopped) wsRetry = setTimeout(connect, HEARTBEAT_MS); };
+      ws.onerror = () => ws?.close();
+    };
+    connect();
+
     return () => {
       stopped = true;
       clearInterval(timer);
+      clearTimeout(wsRetry);
+      if (ws) { ws.onclose = null; ws.close(); }
       api.sessionEnd(id);
     };
   }, [video]);

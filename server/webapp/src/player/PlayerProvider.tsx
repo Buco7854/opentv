@@ -8,7 +8,7 @@ import {
   createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState,
 } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api, Channel, GuideEntry, prefs, ResumePoint, streamUrl, transcodeUrl } from '../api';
+import { api, ApiError, Channel, GuideEntry, prefs, ResumePoint, streamUrl, transcodeUrl } from '../api';
 import { GuideSheet } from '../components/GuideSheet';
 import { Icon } from '../components/Icons';
 import { IconBtn, Segmented, Sheet, snackbar } from '../components/Primitives';
@@ -800,6 +800,14 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
         subs: { names: result.subtitleTracks ?? [], current: chosenTracks.current.subs ?? -1 },
       });
     } catch (e) {
+      // Provider connection limit reached: surface it as a player error like the
+      // decode failure, not a passing snackbar.
+      if ((e as ApiError).status === 429) {
+        setRemuxState('failed');
+        setRemux(null);
+        setError(t('player.connectionLimit'));
+        return;
+      }
       // "No additional tracks" is normal (source plays directly); anything else surfaces.
       const noTracks = /no additional tracks/i.test((e as Error).message);
       setRemuxState(noTracks ? 'none' : 'failed');

@@ -36,10 +36,13 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.put
 import io.ktor.server.routing.route
+import io.ktor.server.websocket.webSocket
+import io.ktor.websocket.Frame
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 
 /** Server composition: shared repositories + storage, plus web-only pieces. */
 class ServerGraph(
@@ -643,6 +646,15 @@ fun Route.api(g: ServerGraph) = route("/api") {
             if (g.sessions.enqueue(id, cmd)) call.respond(HttpStatusCode.NoContent)
             else call.respond(HttpStatusCode.NotFound, MessageDto("No such session"))
         }
+        // Pushes pause/play/message to a viewer instantly; the heartbeat still drains as fallback.
+        webSocket("/{id}/ws") {
+            val id = call.parameters["id"] ?: return@webSocket
+            suspend fun flush() = g.sessions.drainCommands(id).forEach {
+                send(Frame.Text(Json.encodeToString(SessionCommandDto.serializer(), it)))
+            }
+            flush()
+            for (signal in g.sessions.commandSignal(id)) flush()
+        }
         delete("/{id}") {
             g.sessions.remove(call.parameters["id"] ?: "")
             call.respond(HttpStatusCode.NoContent)
@@ -688,6 +700,8 @@ fun Route.api(g: ServerGraph) = route("/api") {
                 result.audioTracks, result.subtitleTracks, result.nativeVideoCopy))
         } catch (e: RemuxService.NoExtraTracksException) {
             call.respond(HttpStatusCode.NotFound, MessageDto(e.message ?: "No extra tracks"))
+        } catch (e: RemuxService.ConnectionLimitException) {
+            call.respond(HttpStatusCode.TooManyRequests, MessageDto(e.message ?: "Connection limit reached"))
         } catch (e: IllegalStateException) {
             call.respond(HttpStatusCode.BadGateway, MessageDto(e.message ?: "Remux failed"))
         }

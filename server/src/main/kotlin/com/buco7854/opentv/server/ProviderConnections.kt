@@ -74,6 +74,9 @@ class ProviderConnections {
     /** Keep a live connection from looking idle to the LRU eviction. */
     fun touch(id: String) { holders[id]?.lastMs = System.currentTimeMillis() }
 
+    /** True while [id] holds a live slot (used to tell an active stream from a prepared-but-idle one). */
+    fun isOpen(id: String): Boolean = holders.containsKey(id)
+
     /** Release a slot; wakes anything waiting for the provider to free up. */
     fun close(id: String) {
         val freed = synchronized(lock) { holders.remove(id) != null }

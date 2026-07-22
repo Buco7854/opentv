@@ -205,12 +205,17 @@ export interface XtreamSeriesDetail { series: XtreamSeries; episodes: Channel[];
 export interface FavoritesResolved { live: Channel[]; movies: Channel[]; series: SeriesHit[] }
 export interface Settings { userAgent: string; downloadLimit: number; pageSize: number }
 
+/** An Error from a failed API call, carrying the HTTP status so callers can branch on it. */
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
+
 async function j<T>(url: string, opts?: RequestInit): Promise<T> {
   const r = await fetch(url, opts);
   if (!r.ok) {
     let message = `HTTP ${r.status}`;
     try { message = ((await r.json()) as { message?: string }).message || message; } catch { /* not json */ }
-    throw new Error(message);
+    throw new ApiError(message, r.status);
   }
   return (r.status === 204 ? null : r.json()) as Promise<T>;
 }
@@ -269,6 +274,8 @@ export const api = {
   /** Release a remux session (and its provider connection) when playback ends. */
   remuxStop: (id: string) => fetch(`/api/remux/${id}`, { method: 'DELETE', keepalive: true }).catch(() => {}),
   sessions: () => j<Session[]>('/api/sessions'),
+  sessionSocketUrl: (id: string) =>
+    `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/sessions/${encodeURIComponent(id)}/ws`,
   /** keepalive so a heartbeat still fires from the player's unmount/unload. */
   sessionHeartbeat: (body: SessionHeartbeat) =>
     fetch('/api/sessions/heartbeat', { ...post(body), keepalive: true })

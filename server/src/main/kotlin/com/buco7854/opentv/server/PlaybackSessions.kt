@@ -1,6 +1,8 @@
 package com.buco7854.opentv.server
 
 import com.buco7854.opentv.core.util.nowMs
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.serialization.Serializable
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -112,27 +114,39 @@ class PlaybackSessionRegistry {
     )
 
     private val sessions = ConcurrentHashMap<String, Live>()
+    // Signals a session's WebSocket to drain immediately; heartbeat draining is the fallback.
+    private val wakes = ConcurrentHashMap<String, Channel<Unit>>()
+    private fun wake(id: String) = wakes.computeIfAbsent(id) { Channel(Channel.CONFLATED) }
 
     /** Upsert from a heartbeat and drain any commands queued for this session. */
     fun heartbeat(ip: String, userAgent: String, dto: SessionHeartbeatDto): List<SessionCommandDto> {
         val now = nowMs()
-        val live = sessions.compute(dto.id) { _, existing ->
+        sessions.compute(dto.id) { _, existing ->
             existing?.apply { this.ip = ip; this.userAgent = userAgent; state = dto; lastSeenMs = now }
                 ?: Live(dto.id, ip, userAgent, dto, now, now)
-        }!!
-        val drained = ArrayList<SessionCommandDto>()
-        while (true) drained.add(live.commands.poll() ?: break)
-        return drained
+        }
+        return drainCommands(dto.id)
     }
 
     /** Queue a command for [id]; false when no such live session. */
     fun enqueue(id: String, command: SessionCommandDto): Boolean {
         val live = sessions[id] ?: return false
         live.commands.add(command)
+        wake(id).trySend(Unit)
         return true
     }
 
-    fun remove(id: String) { sessions.remove(id) }
+    /** Fires whenever a command is queued for [id]; the WebSocket drains on each signal. */
+    fun commandSignal(id: String): ReceiveChannel<Unit> = wake(id)
+
+    fun drainCommands(id: String): List<SessionCommandDto> {
+        val live = sessions[id] ?: return emptyList()
+        val out = ArrayList<SessionCommandDto>()
+        while (true) out.add(live.commands.poll() ?: break)
+        return out
+    }
+
+    fun remove(id: String) { sessions.remove(id); wakes.remove(id)?.close() }
 
     /** Live sessions (stale ones pruned first), newest first. */
     fun active(): List<Live> {
