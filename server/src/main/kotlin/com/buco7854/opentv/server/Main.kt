@@ -114,6 +114,7 @@ fun main() {
         (account.accountInfo(playlist)?.maxConnections ?: 0).takeIf { it > 0 } ?: fallback
     }
     val downloads = DownloadManager(storage, http, settings, dataDir, connections, connectionLimit)
+    val streamGate = StreamGate()
     val graph = ServerGraph(
         storage = storage,
         http = http,
@@ -122,13 +123,14 @@ fun main() {
         xtream = XtreamRepository(storage, xtreamApi, epg, account, coreLog),
         account = account,
         metadata = MetadataRepository(storage.metadata, http.fetcher, coreLog),
-        proxy = StreamProxy(http, cipher),
+        proxy = StreamProxy(http, cipher, streamGate, connectionLimit),
         settings = settings,
         downloads = downloads,
         remux = RemuxService(http, connections),
         transcoder = AudioTranscoder(http),
         cipher = cipher,
         sessions = PlaybackSessionRegistry(),
+        streamGate = streamGate,
         trustedProxies = TrustedProxies.fromEnv(),
         connectionLimit = connectionLimit,
     )

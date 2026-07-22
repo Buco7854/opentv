@@ -371,7 +371,7 @@
     background: var(--c-panel-top);
   }
   .sheet-head .sheet-close { display: none; }
-  .sheet-body { @apply min-h-0 flex-1 overflow-y-auto px-5 pb-6; overscroll-behavior: contain; }
+  .sheet-body { @apply min-h-0 flex-1 overflow-y-auto px-5 pb-6 pt-1.5; overscroll-behavior: contain; }
   .sheet-head.bare + .sheet-body { @apply pt-1; }
   .sheet h3 { @apply mt-1 mb-2.5; font: var(--type-title-large); letter-spacing: -0.2px; }
   .sheet .sheet-title { @apply m-0 flex-1 self-center; }

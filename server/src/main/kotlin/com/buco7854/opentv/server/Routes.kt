@@ -60,6 +60,7 @@ class ServerGraph(
     val transcoder: AudioTranscoder,
     val cipher: StreamCipher,
     val sessions: PlaybackSessionRegistry,
+    val streamGate: StreamGate,
     val trustedProxies: TrustedProxies,
     /** Concurrent reads the provider behind a source URL permits (its max_connections). */
     val connectionLimit: suspend (String) -> Int,
@@ -732,7 +733,7 @@ fun Route.api(g: ServerGraph) = route("/api") {
             if (cmd.type !in setOf("pause", "play", "message")) {
                 throw IllegalArgumentException("Unknown command")
             }
-            if (g.sessions.enqueue(id, cmd)) call.respond(HttpStatusCode.NoContent)
+            if (g.sessions.command(id, cmd)) call.respond(HttpStatusCode.NoContent)
             else call.respond(HttpStatusCode.NotFound, MessageDto("No such session"))
         }
         // Pushes pause/play/message to a viewer instantly; the heartbeat still drains as fallback.
@@ -745,12 +746,14 @@ fun Route.api(g: ServerGraph) = route("/api") {
             for (signal in g.sessions.commandSignal(id)) flush()
         }
         delete("/{id}") {
-            g.sessions.remove(call.parameters["id"] ?: "")
+            val id = call.parameters["id"] ?: ""
+            g.sessions.remove(id)
+            g.streamGate.release(id)
             call.respond(HttpStatusCode.NoContent)
         }
     }
 
-    get("/stream") { g.proxy.handle(call) }
+    get("/stream") { g.proxy.handle(call, sid = call.request.queryParameters["sid"]) }
     get("/img") { g.proxy.handle(call, cache = true) }
 
     // Live audio rescue: client fallback for an undecodable audio track (AudioTranscoder).
@@ -763,6 +766,12 @@ fun Route.api(g: ServerGraph) = route("/api") {
         val url = call.request.queryParameters["u"]?.let { g.cipher.tryDecrypt(it) }
         if (url.isNullOrBlank() || !(url.startsWith("http://") || url.startsWith("https://"))) {
             call.respond(HttpStatusCode.BadRequest, MessageDto("Invalid or missing target url"))
+            return@get
+        }
+        // The AAC rescue replaces the live stream, so it counts against the same cap.
+        val sid = call.request.queryParameters["sid"]
+        if (sid != null && !g.streamGate.admit(sid, providerKeyOf(url), g.connectionLimit(url))) {
+            call.respond(HttpStatusCode.TooManyRequests, MessageDto("Provider connection limit reached"))
             return@get
         }
         g.transcoder.stream(url, call)

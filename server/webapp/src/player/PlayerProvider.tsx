@@ -233,7 +233,9 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
   useEffect(() => { chosenTracks.current = { audio: -1, subs: null }; }, [url]);
 
   const src = useCallback(
-    (u: string, hls = false) => (activeDirect ? u : streamUrl(u, hls)),
+    // The session id rides on proxied URLs so the server counts this stream against the
+    // provider's connection cap; direct (remux/download) URLs bypass the proxy entirely.
+    (u: string, hls = false) => (activeDirect ? u : streamUrl(u, hls, tabSessionId())),
     [activeDirect],
   );
 
@@ -337,7 +339,7 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
       setAudioTranscoded(transcoded);
       const player = mpegts.createPlayer({
         type: 'mpegts', isLive: true,
-        url: transcoded ? transcodeUrl(target) : src(target),
+        url: transcoded ? transcodeUrl(target, tabSessionId()) : src(target),
       });
       mpegtsRef.current = player;
       player.attachMediaElement(video);

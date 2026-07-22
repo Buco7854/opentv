@@ -179,6 +179,20 @@ class PlaybackSessionRegistry {
         return true
     }
 
+    /** Deliver an admin command. A pause/play aimed at someone in a watch-together room drives
+     *  the whole room, whatever the target's role - the operator's action then can't be undone
+     *  by another member's next sync. A message still goes to just that viewer. */
+    fun command(id: String, command: SessionCommandDto): Boolean {
+        if (command.type == "pause" || command.type == "play") {
+            val room = memberRoom[id]?.let { rooms[it] }
+            if (room != null) {
+                room.members.forEach { enqueue(it, command) }
+                return true
+            }
+        }
+        return enqueue(id, command)
+    }
+
     /** Other live viewers watching the same [contentKey] as [selfId] - watch-together candidates. */
     fun sameContentPeers(selfId: String, contentKey: String): List<Live> {
         if (contentKey.isBlank()) return emptyList()

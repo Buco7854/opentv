@@ -348,11 +348,13 @@ export const api = {
 };
 
 /** Proxy every provider URL (CORS, mixed content). `u` is an opaque token, never a raw URL;
- *  `hls` requests the HLS variant of an Xtream live `.ts` source. */
-export const streamUrl = (u: string, hls = false) =>
-  `/api/stream?u=${encodeURIComponent(u)}${hls ? '&hls=1' : ''}`;
+ *  `hls` requests the HLS variant of an Xtream live `.ts` source. `sid` (the player's session)
+ *  lets the server count this stream against the provider's concurrent-connection cap. */
+export const streamUrl = (u: string, hls = false, sid?: string) =>
+  `/api/stream?u=${encodeURIComponent(u)}${hls ? '&hls=1' : ''}${sid ? `&sid=${encodeURIComponent(sid)}` : ''}`;
 /** Audio re-encoded to AAC (video copied); live-playback fallback when the browser can't decode the codec. */
-export const transcodeUrl = (u: string) => `/api/transcode?u=${encodeURIComponent(u)}`;
+export const transcodeUrl = (u: string, sid?: string) =>
+  `/api/transcode?u=${encodeURIComponent(u)}${sid ? `&sid=${encodeURIComponent(sid)}` : ''}`;
 export const imgUrl = (u: string) => `/api/img?u=${encodeURIComponent(u)}`;
 export const downloadFileUrl = (id: number, save = false) => `/api/downloads/${id}/file${save ? '?save=1' : ''}`;
 
