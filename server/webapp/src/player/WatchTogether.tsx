@@ -18,6 +18,10 @@ const SEEK_SNAP_SEC = 0.75;
 // ...while the periodic anchor only corrects a real desync (a joiner, a long buffer), so
 // keyframe-rounding between players never turns into a tug-of-war of little seeks.
 const ANCHOR_DRIFT_SEC = 4;
+// After a seek, a stream (especially a remuxed VOD) takes a moment to land on the new spot; for
+// this long we treat its position as still settling, so no one broadcasts or trusts a stale one.
+const SETTLE_MS = 4000;
+const SETTLE_TOL_MS = 1500;
 
 type Peer = { peerId: string; peerName: string };
 
@@ -89,6 +93,19 @@ export function useWatchTogether(opts: {
   // The last state we applied from a peer (with when), so our own resulting events - which fire
   // within a few ms - aren't echoed straight back, while genuine actions later still send.
   const lastApplied = useRef<{ positionMs: number; paused: boolean; rate: number; atMs: number } | null>(null);
+  // Where a just-issued seek is heading. Until our stream lands there (or it times out) we neither
+  // broadcast our transient position nor let a stale drift anchor rewind us.
+  const pendingSeek = useRef<{ ms: number; atMs: number } | null>(null);
+  // True while a seek is still landing; clears once we're within tolerance of the target.
+  const settling = useCallback((v: HTMLVideoElement) => {
+    const p = pendingSeek.current;
+    if (!p) return false;
+    if (performance.now() - p.atMs > SETTLE_MS || Math.abs((v.currentTime || 0) * 1000 - p.ms) < SETTLE_TOL_MS) {
+      pendingSeek.current = null;
+      return false;
+    }
+    return true;
+  }, []);
 
   const resetRoom = useCallback(() => {
     roomContent.current = null;
@@ -138,11 +155,16 @@ export function useWatchTogether(opts: {
     if (sync.paused && !v.paused) v.pause();
     else if (!sync.paused && v.paused) v.play().catch(() => {});
     if (sync.rate > 0 && v.playbackRate !== sync.rate) v.playbackRate = sync.rate;
-    if (!liveRef.current) {
-      const target = sync.positionMs / 1000;
-      const off = Math.abs(v.currentTime - target);
-      if (isFinite(target) && off > (sync.seek ? SEEK_SNAP_SEC : ANCHOR_DRIFT_SEC)) v.currentTime = target;
-    }
+    // Never re-seek while we're mid-seek ourselves (a fresh jump would fight the one in flight).
+    if (liveRef.current || v.seeking) return;
+    // While our own seek is still settling, ignore a peer's drift anchor: it's a stale position
+    // reported by a stream that hasn't caught up, and would rewind us right off the new spot.
+    const p = pendingSeek.current;
+    if (!sync.seek && p && performance.now() - p.atMs < SETTLE_MS && Math.abs(sync.positionMs - p.ms) > SETTLE_TOL_MS) return;
+    const target = sync.positionMs / 1000;
+    const off = Math.abs(v.currentTime - target);
+    if (isFinite(target) && off > (sync.seek ? SEEK_SNAP_SEC : ANCHOR_DRIFT_SEC)) v.currentTime = target;
+    if (sync.seek) pendingSeek.current = { ms: sync.positionMs, atMs: performance.now() };
   }, [video]);
 
   // Send our playback state to the room, over the live socket (falling back to a POST). Event
@@ -151,9 +173,12 @@ export function useWatchTogether(opts: {
   const broadcast = useCallback((guarded: boolean, seek: boolean) => {
     const v = video.current;
     if (!v) return;
+    // Don't anchor a transient position while a seek is still landing: it would rewind the room.
+    if (!seek && (v.seeking || settling(v))) return;
     const state: SyncState = {
       positionMs: Math.floor((v.currentTime || 0) * 1000), paused: v.paused, rate: v.playbackRate || 1, seek,
     };
+    if (seek) pendingSeek.current = { ms: state.positionMs, atMs: performance.now() };
     // Suppress only the echo of a just-applied peer state (fires within a few ms); a real
     // action later always sends, seek or not.
     const last = lastApplied.current;
@@ -161,7 +186,7 @@ export function useWatchTogether(opts: {
         && last.paused === state.paused && last.rate === state.rate
         && Math.abs(last.positionMs - state.positionMs) < 1500) return;
     if (!send.current?.({ type: 'sync', sync: state })) api.sessionSync(selfId, state);
-  }, [selfId, video, send]);
+  }, [selfId, video, send, settling]);
 
   const onCommand = useCallback((command: SessionCommand) => {
     if (command.type === 'join-request' && command.peerId) {
