@@ -872,12 +872,11 @@ fun Route.api(g: ServerGraph) = route("/api") {
         // shared audio track wins over whatever this member asked for.
         val sid = call.request.queryParameters["sid"].orEmpty()
         val group = g.sessions.shareGroup(sid)
-        val inRoom = group != sid
         val audio = g.sessions.roomAudio(sid) ?: requested
-        // hevc=1: browser can decode HEVC, so copy non-H.264 video instead of transcoding. A room
-        // shares one read, so it must be decodable by everyone: transcode HEVC to H.264 for the
-        // room rather than let a member who can't decode HEVC fork off its own (second) read.
-        val clientHevc = !inRoom && call.request.queryParameters["hevc"] == "1"
+        // hevc=1: this browser can decode HEVC, so copy non-H.264 video instead of transcoding.
+        // A room shares one read, so it can only copy HEVC while every member can decode it - as
+        // soon as one that can't joins, the room transcodes to H.264 (and everyone reloads).
+        val clientHevc = g.sessions.roomHevc(sid, call.request.queryParameters["hevc"] == "1")
         // This read replaces the caller's own group and, when forming a room, every member's solo
         // read - so the room converges on one connection whichever member re-keys first.
         val supersede = g.sessions.roomMembers(sid) + sid + group

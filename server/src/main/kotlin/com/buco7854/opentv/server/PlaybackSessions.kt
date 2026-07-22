@@ -158,6 +158,9 @@ class PlaybackSessionRegistry {
         // Members that have finished reloading after a track change; when it covers everyone the
         // room resumes together, so no one plays ahead while another is still buffering the switch.
         val ready: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+        // Members whose browser can't decode HEVC. While any are present the shared read must
+        // transcode to H.264; empty means everyone can decode it and it's copied.
+        val noHevc: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
     }
 
     private val sessions = ConcurrentHashMap<String, Live>()
@@ -302,6 +305,21 @@ class PlaybackSessionRegistry {
     /** The audio track a room member must remux with, so everyone shares one read. Null when solo. */
     fun roomAudio(id: String): Int? = memberRoom[id]?.let { rooms[it]?.audioIndex }
 
+    /** Whether [id]'s shared read may copy HEVC: true only while every member can decode it.
+     *  Records this member's own [clientCanHevc]; when that flips the room's answer, everyone
+     *  reloads onto the new format. Solo viewers just get their own capability back. */
+    fun roomHevc(id: String, clientCanHevc: Boolean): Boolean {
+        val room = memberRoom[id]?.let { rooms[it] } ?: return clientCanHevc
+        val before = room.noHevc.isEmpty()
+        if (clientCanHevc) room.noHevc.remove(id) else room.noHevc.add(id)
+        val after = room.noHevc.isEmpty()
+        if (after != before) {
+            room.ready.clear()
+            room.members.forEach { enqueue(it, SessionCommandDto(type = "room-audio", audioIndex = room.audioIndex)) }
+        }
+        return after
+    }
+
     /** A controller picks the room's shared audio track; every member re-requests the remux with
      *  it, so the room stays on one provider connection. Ignored from a non-controller. */
     fun setRoomAudio(fromId: String, index: Int): Boolean {
@@ -365,6 +383,8 @@ class PlaybackSessionRegistry {
         memberRoom.remove(id)
         room.members.remove(id)
         room.controllers.remove(id)
+        room.ready.remove(id)
+        room.noHevc.remove(id)
         if (room.members.isEmpty()) { rooms.remove(room.id); return }
         if (room.hostId == id) {
             room.hostId = room.members.first()
