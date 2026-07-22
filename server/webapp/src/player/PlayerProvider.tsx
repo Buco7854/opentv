@@ -913,9 +913,20 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
   const wasInRoom = useRef(false);
   useEffect(() => {
     if (wt.inRoom === wasInRoom.current) return;
+    const joined = wt.inRoom && !wasInRoom.current;
     wasInRoom.current = wt.inRoom;
     if (!remuxEligible || remuxAvailable !== true || !remuxRef.current) return;
-    startRemux(Math.max(0, chosenTracks.current.audio), videoRef.current?.currentTime ?? 0);
+    if (joined) {
+      // Collapse onto the room's shared read at the current spot.
+      startRemux(Math.max(0, chosenTracks.current.audio), videoRef.current?.currentTime ?? 0);
+    } else {
+      // Left or kicked: drop the room's shared read now (so we don't keep playing a session we're
+      // no longer part of); the re-check then blocks us if the provider is full, or the prepare
+      // effect starts our own solo read.
+      api.remuxStop(remuxRef.current.id);
+      setRemux(null);
+      setRemuxState('idle');
+    }
   }, [wt.inRoom, remuxEligible, remuxAvailable, startRemux]);
 
   // Remux is the only path to sound for undecodable audio (AC3/E-AC3/DTS), so a failed
