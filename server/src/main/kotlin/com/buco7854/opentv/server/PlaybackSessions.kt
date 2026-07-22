@@ -1,8 +1,11 @@
 package com.buco7854.opentv.server
 
 import com.buco7854.opentv.core.util.nowMs
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.serialization.Serializable
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -117,6 +120,9 @@ class PlaybackSessionRegistry {
     // Signals a session's WebSocket to drain immediately; heartbeat draining is the fallback.
     private val wakes = ConcurrentHashMap<String, Channel<Unit>>()
     private fun wake(id: String) = wakes.computeIfAbsent(id) { Channel(Channel.CONFLATED) }
+    // Fires whenever the live set changes, so the dashboard socket pushes fresh state.
+    private val changed = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    fun changes(): SharedFlow<Unit> = changed
 
     /** Upsert from a heartbeat and drain any commands queued for this session. */
     fun heartbeat(ip: String, userAgent: String, dto: SessionHeartbeatDto): List<SessionCommandDto> {
@@ -125,6 +131,7 @@ class PlaybackSessionRegistry {
             existing?.apply { this.ip = ip; this.userAgent = userAgent; state = dto; lastSeenMs = now }
                 ?: Live(dto.id, ip, userAgent, dto, now, now)
         }
+        changed.tryEmit(Unit)
         return drainCommands(dto.id)
     }
 
@@ -146,7 +153,7 @@ class PlaybackSessionRegistry {
         return out
     }
 
-    fun remove(id: String) { sessions.remove(id); wakes.remove(id)?.close() }
+    fun remove(id: String) { sessions.remove(id); wakes.remove(id)?.close(); changed.tryEmit(Unit) }
 
     /** Live sessions (stale ones pruned first), newest first. */
     fun active(): List<Live> {

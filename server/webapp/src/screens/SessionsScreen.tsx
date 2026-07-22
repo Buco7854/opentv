@@ -112,9 +112,27 @@ export function SessionsScreen() {
   };
   useEffect(() => { tick(); return () => clearTimeout(timer.current); }, []);
 
+  // Live updates over the socket; the poll above stays as a fallback.
+  useEffect(() => {
+    let ws: WebSocket | null = null;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let stopped = false;
+    const connect = () => {
+      if (stopped) return;
+      ws = new WebSocket(api.sessionsSocketUrl());
+      ws.onmessage = (ev) => {
+        try { setSessions(reconcile(JSON.parse(ev.data as string) as Session[])); } catch { /* ignore */ }
+      };
+      ws.onclose = () => { if (!stopped) retry = setTimeout(connect, POLL_MS); };
+      ws.onerror = () => ws?.close();
+    };
+    connect();
+    return () => { stopped = true; clearTimeout(retry); if (ws) { ws.onclose = null; ws.close(); } };
+  }, []);
+
   const command = async (session: Session, type: 'pause' | 'play') => {
     const paused = type === 'pause';
-    pendingPaused.current.set(session.id, { paused, until: Date.now() + 8000 });
+    pendingPaused.current.set(session.id, { paused, until: Date.now() + 1500 });
     setSessions((list) => list?.map((s) => (s.id === session.id ? { ...s, paused } : s)) ?? list);
     await api.sessionCommand(session.id, { type }).catch(() => { pendingPaused.current.delete(session.id); });
   };

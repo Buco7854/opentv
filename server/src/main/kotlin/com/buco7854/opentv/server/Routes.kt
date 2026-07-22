@@ -38,10 +38,13 @@ import io.ktor.server.routing.put
 import io.ktor.server.routing.route
 import io.ktor.server.websocket.webSocket
 import io.ktor.websocket.Frame
+import io.ktor.websocket.readText
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 
 /** Server composition: shared repositories + storage, plus web-only pieces. */
@@ -232,6 +235,19 @@ private fun escapeLike(q: String) = q.trim()
     .replace("\\", "\\\\")
     .replace("%", "\\%")
     .replace("_", "\\_")
+
+private suspend fun sessionDtos(g: ServerGraph): List<SessionDto> = g.sessions.active().map { live ->
+    val s = live.state
+    val diag = s.remuxId?.let { g.remux.diagnostics(it) }?.toDto()
+    SessionDto(
+        id = live.id, ip = live.ip, userAgent = live.userAgent,
+        playlistName = s.playlistId?.let { g.storage.playlists.get(it)?.name },
+        title = s.title, kind = s.kind, logo = s.logo,
+        positionMs = s.positionMs, durationMs = s.durationMs, paused = s.paused, live = s.live,
+        startedAtMs = live.startedAtMs, lastSeenMs = live.lastSeenMs,
+        stream = SessionStreamDto(s.engine, s.direct, s.audioTranscoded, s.preparing, diag),
+    )
+}
 
 fun Route.api(g: ServerGraph) = route("/api") {
 
@@ -605,32 +621,10 @@ fun Route.api(g: ServerGraph) = route("/api") {
         }
     }
 
-    // Active web-client playback sessions: viewers heartbeat here, the admin dashboard
-    // lists them and queues pause/play/message commands delivered on the next heartbeat.
+    // Active web-client playback sessions. Viewers report state and receive
+    // pause/play/message over a WebSocket; the REST routes stay as a fallback.
     route("/sessions") {
-        get {
-            val dtos = g.sessions.active().map { live ->
-                val s = live.state
-                val diag = s.remuxId?.let { g.remux.diagnostics(it) }?.toDto()
-                SessionDto(
-                    id = live.id,
-                    ip = live.ip,
-                    userAgent = live.userAgent,
-                    playlistName = s.playlistId?.let { g.storage.playlists.get(it)?.name },
-                    title = s.title,
-                    kind = s.kind,
-                    logo = s.logo,
-                    positionMs = s.positionMs,
-                    durationMs = s.durationMs,
-                    paused = s.paused,
-                    live = s.live,
-                    startedAtMs = live.startedAtMs,
-                    lastSeenMs = live.lastSeenMs,
-                    stream = SessionStreamDto(s.engine, s.direct, s.audioTranscoded, s.preparing, diag),
-                )
-            }
-            call.respond(dtos)
-        }
+        get { call.respond(sessionDtos(g)) }
         post("/heartbeat") {
             val dto = call.receive<SessionHeartbeatDto>()
             val ip = g.trustedProxies.clientIp(call)
@@ -646,14 +640,33 @@ fun Route.api(g: ServerGraph) = route("/api") {
             if (g.sessions.enqueue(id, cmd)) call.respond(HttpStatusCode.NoContent)
             else call.respond(HttpStatusCode.NotFound, MessageDto("No such session"))
         }
-        // Pushes pause/play/message to a viewer instantly; the heartbeat still drains as fallback.
+        // Live session list for the dashboard: pushed on connect and on every change.
+        webSocket("/ws") {
+            suspend fun push() = send(Frame.Text(Json.encodeToString(ListSerializer(SessionDto.serializer()), sessionDtos(g))))
+            push()
+            g.sessions.changes().collect { push() }
+        }
+        // Viewer channel: reports state (incoming heartbeats) and receives commands (outgoing).
         webSocket("/{id}/ws") {
             val id = call.parameters["id"] ?: return@webSocket
-            suspend fun flush() = g.sessions.drainCommands(id).forEach {
-                send(Frame.Text(Json.encodeToString(SessionCommandDto.serializer(), it)))
+            val ip = g.trustedProxies.clientIp(call)
+            val userAgent = call.request.headers[HttpHeaders.UserAgent].orEmpty()
+            val sender = launch {
+                suspend fun flush() = g.sessions.drainCommands(id).forEach {
+                    send(Frame.Text(Json.encodeToString(SessionCommandDto.serializer(), it)))
+                }
+                flush()
+                for (signal in g.sessions.commandSignal(id)) flush()
             }
-            flush()
-            for (signal in g.sessions.commandSignal(id)) flush()
+            try {
+                for (frame in incoming) {
+                    if (frame !is Frame.Text) continue
+                    runCatching { Json.decodeFromString(SessionHeartbeatDto.serializer(), frame.readText()) }
+                        .getOrNull()?.let { g.sessions.heartbeat(ip, userAgent, it) }
+                }
+            } finally {
+                sender.cancel()
+            }
         }
         delete("/{id}") {
             g.sessions.remove(call.parameters["id"] ?: "")

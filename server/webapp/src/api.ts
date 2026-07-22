@@ -276,6 +276,8 @@ export const api = {
   sessions: () => j<Session[]>('/api/sessions'),
   sessionSocketUrl: (id: string) =>
     `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/sessions/${encodeURIComponent(id)}/ws`,
+  sessionsSocketUrl: () =>
+    `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/sessions/ws`,
   /** keepalive so a heartbeat still fires from the player's unmount/unload. */
   sessionHeartbeat: (body: SessionHeartbeat) =>
     fetch('/api/sessions/heartbeat', { ...post(body), keepalive: true })

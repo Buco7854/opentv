@@ -46,43 +46,44 @@ export function useSessionReporter(snapshot: PlaybackSnapshot, video: RefObject<
   useEffect(() => {
     const id = tabSessionId();
     let stopped = false;
+    let ws: WebSocket | null = null;
+    let wsRetry: ReturnType<typeof setTimeout> | undefined;
 
-    const beat = async () => {
+    const buildBody = (): SessionHeartbeat | null => {
       const v = video.current;
-      if (!v || stopped) return;
+      if (!v) return null;
       const s = snapRef.current;
       const duration = s.durationSec;
-      const body: SessionHeartbeat = {
-        id,
-        playlistId: s.playlistId,
-        title: s.title,
-        kind: s.kind,
-        logo: s.logo,
+      return {
+        id, playlistId: s.playlistId, title: s.title, kind: s.kind, logo: s.logo,
         positionMs: Math.floor((v.currentTime || 0) * 1000),
         durationMs: isFinite(duration) && duration > 0 ? Math.floor(duration * 1000) : 0,
-        paused: v.paused,
-        live: s.live,
-        engine: s.engine,
-        direct: s.direct,
-        audioTranscoded: s.audioTranscoded,
-        preparing: s.preparing,
-        remuxId: s.remuxId,
+        paused: v.paused, live: s.live, engine: s.engine, direct: s.direct,
+        audioTranscoded: s.audioTranscoded, preparing: s.preparing, remuxId: s.remuxId,
       };
+    };
+
+    // Instant state report over the socket (on connect and on pause/play).
+    const report = () => {
+      const body = buildBody();
+      if (body && ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(body));
+    };
+
+    // POST heartbeat: periodic state and the command fallback when the socket is down.
+    const beat = async () => {
+      if (stopped) return;
+      const body = buildBody();
+      if (!body) return;
       const { commands } = await api.sessionHeartbeat(body);
       if (stopped) return;
       const el = video.current;
       if (el) commands.forEach((c) => applyCommand(c, el));
     };
 
-    beat();
-    const timer = setInterval(beat, HEARTBEAT_MS);
-
-    // Push channel: pause/play/message arrive instantly instead of on the next beat.
-    let ws: WebSocket | null = null;
-    let wsRetry: ReturnType<typeof setTimeout> | undefined;
     const connect = () => {
       if (stopped) return;
       ws = new WebSocket(api.sessionSocketUrl(id));
+      ws.onopen = report;
       ws.onmessage = (ev) => {
         const el = video.current;
         if (!el) return;
@@ -91,12 +92,20 @@ export function useSessionReporter(snapshot: PlaybackSnapshot, video: RefObject<
       ws.onclose = () => { if (!stopped) wsRetry = setTimeout(connect, HEARTBEAT_MS); };
       ws.onerror = () => ws?.close();
     };
+
+    beat();
     connect();
+    const timer = setInterval(beat, HEARTBEAT_MS);
+    const v = video.current;
+    v?.addEventListener('pause', report);
+    v?.addEventListener('play', report);
 
     return () => {
       stopped = true;
       clearInterval(timer);
       clearTimeout(wsRetry);
+      v?.removeEventListener('pause', report);
+      v?.removeEventListener('play', report);
       if (ws) { ws.onclose = null; ws.close(); }
       api.sessionEnd(id);
     };
