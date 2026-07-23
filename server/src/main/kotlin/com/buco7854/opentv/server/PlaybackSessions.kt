@@ -176,6 +176,9 @@ class PlaybackSessionRegistry {
     private val wakes = ConcurrentHashMap<String, Channel<Unit>>()
     private fun wake(id: String) = wakes.computeIfAbsent(id) { Channel(Channel.CONFLATED) }
 
+    /** The watch-together room [id] belongs to, or null when it's watching alone. */
+    private fun roomFor(id: String): Room? = memberRoom[id]?.let { rooms[it] }
+
     /** Upsert session state from a heartbeat. Commands are drained separately - the HTTP
      *  heartbeat returns them, the WebSocket pushes them as they're queued. */
     fun update(ip: String, userAgent: String, dto: SessionHeartbeatDto) {
@@ -205,11 +208,7 @@ class PlaybackSessionRegistry {
      *  by another member's next sync. A message still goes to just that viewer. */
     fun command(id: String, command: SessionCommandDto): Boolean {
         if (command.type == "pause" || command.type == "play") {
-            val room = memberRoom[id]?.let { rooms[it] }
-            if (room != null) {
-                room.members.forEach { enqueue(it, command) }
-                return true
-            }
+            roomFor(id)?.let { broadcast(it, command); return true }
         }
         return enqueue(id, command)
     }
@@ -239,7 +238,7 @@ class PlaybackSessionRegistry {
             return enqueue(peerId, SessionCommandDto(type = "join-response", accepted = false))
         }
         declined[hostId]?.remove(declineKey(peerId, contentKey))
-        val room = memberRoom[hostId]?.let { rooms[it] } ?: Room("r-$hostId", hostId).also {
+        val room = roomFor(hostId) ?: Room("r-$hostId", hostId).also {
             it.members.add(hostId)
             it.controllers.add(hostId)
             rooms[it.id] = it
@@ -254,7 +253,7 @@ class PlaybackSessionRegistry {
 
     /** A guest asks the room's host to let it control playback too. */
     fun requestControl(fromId: String, fromName: String): Boolean {
-        val room = memberRoom[fromId]?.let { rooms[it] } ?: return false
+        val room = roomFor(fromId) ?: return false
         if (fromId in room.controllers) return true
         return enqueue(room.hostId, SessionCommandDto(
             type = "control-request", peerId = fromId, peerName = fromName,
@@ -264,7 +263,7 @@ class PlaybackSessionRegistry {
     /** The host's answer to a control request. Only the host may grant; on grant the guest
      *  joins [controllers] and can drive playback alongside everyone else already allowed. */
     fun grantControl(hostId: String, peerId: String, grant: Boolean): Boolean {
-        val room = memberRoom[hostId]?.let { rooms[it] } ?: return false
+        val room = roomFor(hostId) ?: return false
         if (room.hostId != hostId || peerId !in room.members) return false
         if (grant) { room.controllers.add(peerId); pushRoomState(room) }
         return enqueue(peerId, SessionCommandDto(type = "control-response", accepted = grant))
@@ -272,7 +271,7 @@ class PlaybackSessionRegistry {
 
     /** The host hands a member control (or takes it back) directly, no request needed. */
     fun setControl(hostId: String, targetId: String, grant: Boolean): Boolean {
-        val room = memberRoom[hostId]?.let { rooms[it] } ?: return false
+        val room = roomFor(hostId) ?: return false
         if (room.hostId != hostId || targetId == hostId || targetId !in room.members) return false
         if (grant) room.controllers.add(targetId) else room.controllers.remove(targetId)
         pushRoomState(room)
@@ -282,7 +281,7 @@ class PlaybackSessionRegistry {
 
     /** The host removes [targetId] from the room. */
     fun kick(hostId: String, targetId: String): Boolean {
-        val room = memberRoom[hostId]?.let { rooms[it] } ?: return false
+        val room = roomFor(hostId) ?: return false
         if (room.hostId != hostId || targetId == hostId || targetId !in room.members) return false
         enqueue(targetId, SessionCommandDto(type = "room-ended"))
         removeFromRoom(room, targetId)
@@ -303,46 +302,41 @@ class PlaybackSessionRegistry {
     /** Every member of [id]'s room (so a read forming the room can free their solo seats),
      *  or empty when [id] is watching alone. */
     fun roomMembers(id: String): Set<String> =
-        memberRoom[id]?.let { rooms[it]?.members?.toSet() } ?: emptySet()
+        roomFor(id)?.members?.toSet() ?: emptySet()
 
     /** The audio track a room member must remux with, so everyone shares one read. Null when solo. */
-    fun roomAudio(id: String): Int? = memberRoom[id]?.let { rooms[it]?.audioIndex }
+    fun roomAudio(id: String): Int? = roomFor(id)?.audioIndex
 
     /** Whether [id]'s shared read may copy HEVC: true only while every member can decode it.
      *  Records this member's own [clientCanHevc]; when that flips the room's answer, everyone
      *  reloads onto the new format. Solo viewers just get their own capability back. */
     fun roomHevc(id: String, clientCanHevc: Boolean): Boolean {
-        val room = memberRoom[id]?.let { rooms[it] } ?: return clientCanHevc
+        val room = roomFor(id) ?: return clientCanHevc
         val before = room.noHevc.isEmpty()
         if (clientCanHevc) room.noHevc.remove(id) else room.noHevc.add(id)
         val after = room.noHevc.isEmpty()
-        if (after != before) {
-            room.ready.clear()
-            room.members.forEach { enqueue(it, SessionCommandDto(type = "room-audio", audioIndex = room.audioIndex)) }
-        }
+        if (after != before) startReload(room)
         return after
     }
 
     /** A controller picks the room's shared audio track; every member re-requests the remux with
      *  it, so the room stays on one provider connection. Ignored from a non-controller. */
     fun setRoomAudio(fromId: String, index: Int): Boolean {
-        val room = memberRoom[fromId]?.let { rooms[it] } ?: return false
+        val room = roomFor(fromId) ?: return false
         if (fromId !in room.controllers) return false
         room.audioIndex = index
-        // Start a reload barrier: everyone switches, and nobody resumes until all have reported in.
-        room.ready.clear()
-        room.members.forEach { enqueue(it, SessionCommandDto(type = "room-audio", audioIndex = index)) }
+        startReload(room)
         return true
     }
 
     /** A member finished reloading the shared track; once every member has, release the room to
      *  play again in step. Best-effort - a client also fails open on its own timeout. */
     fun markReady(sid: String): Boolean {
-        val room = memberRoom[sid]?.let { rooms[it] } ?: return false
+        val room = roomFor(sid) ?: return false
         room.ready.add(sid)
         if (room.ready.containsAll(room.members)) {
             room.ready.clear()
-            room.members.forEach { enqueue(it, SessionCommandDto(type = "room-go")) }
+            broadcast(room, SessionCommandDto(type = "room-go"))
         }
         return true
     }
@@ -356,21 +350,28 @@ class PlaybackSessionRegistry {
         )
     }
 
-    /** Push the current roster to every member, so each renders who's in and their rights. */
-    private fun pushRoomState(room: Room) {
-        val members = roster(room)
-        room.members.forEach { enqueue(it, SessionCommandDto(type = "room-state", members = members)) }
+    /** Queue [command] for every member of [room]. */
+    private fun broadcast(room: Room, command: SessionCommandDto) = room.members.forEach { enqueue(it, command) }
+
+    /** Start a reload barrier: reset the ready set and have every member re-request the shared read
+     *  (its audio track rides along), so nobody resumes until all are back. */
+    private fun startReload(room: Room) {
+        room.ready.clear()
+        broadcast(room, SessionCommandDto(type = "room-audio", audioIndex = room.audioIndex))
     }
+
+    /** Push the current roster to every member, so each renders who's in and their rights. */
+    private fun pushRoomState(room: Room) = broadcast(room, SessionCommandDto(type = "room-state", members = roster(room)))
 
     /** Re-send the roster to [id] alone if it's still in a room, so a socket that just (re)connected
      *  - after a page refresh - picks its watch-together session back up instead of dropping out. */
     fun resendRoomState(id: String) {
-        memberRoom[id]?.let { rooms[it] }?.let { enqueue(id, SessionCommandDto(type = "room-state", members = roster(it))) }
+        roomFor(id)?.let { enqueue(id, SessionCommandDto(type = "room-state", members = roster(it))) }
     }
 
     /** Mirror a controller's [state] to the room's other members (non-controllers can't drive). */
     fun syncRoom(fromId: String, state: SyncStateDto) {
-        val room = memberRoom[fromId]?.let { rooms[it] } ?: return
+        val room = roomFor(fromId) ?: return
         if (fromId !in room.controllers) return
         room.members.filter { it != fromId }.forEach { member ->
             // Keep only the freshest sync queued, so a brief socket outage can't back them up.
@@ -382,7 +383,7 @@ class PlaybackSessionRegistry {
     /** Take [id] out of its room, dissolving it when only one lone member would be left,
      *  promoting a new host if the host left, and re-broadcasting the roster otherwise. */
     fun leaveRoom(id: String) {
-        val room = memberRoom[id]?.let { rooms[it] } ?: return
+        val room = roomFor(id) ?: return
         removeFromRoom(room, id)
     }
 
