@@ -3,12 +3,13 @@
 // admin queues. Web sessions only; kept isolated from the playback engine.
 
 import { MutableRefObject, RefObject, useEffect, useRef } from 'react';
-import { api, SessionCommand, SessionCommandInput, SessionHeartbeat } from '../api';
+import {
+  api, ApiError, SessionCommand, SessionCommandInput, SessionHeartbeat,
+} from '../api';
 import { snackbar } from '../components/Primitives';
 
 /** Live playback facts, read fresh on each heartbeat via a ref. */
 export interface PlaybackSnapshot {
-  playlistId: number | null;
   title: string;
   kind: SessionHeartbeat['kind'];
   logo: string | null;
@@ -19,21 +20,9 @@ export interface PlaybackSnapshot {
   audioTranscoded: boolean;
   preparing: boolean;
   remuxId: string | null;
-  contentKey: string;
-  name: string;
 }
 
 const HEARTBEAT_MS = 3000;
-
-/** Stable per browser tab, so navigating between channels stays one session. */
-export function tabSessionId(): string {
-  let id = sessionStorage.getItem('opentvSessionId');
-  if (!id) {
-    id = (crypto.randomUUID?.() ?? `s-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    sessionStorage.setItem('opentvSessionId', id);
-  }
-  return id;
-}
 
 function applyCommand(command: SessionCommand, video: HTMLVideoElement) {
   if (command.type === 'pause') video.pause();
@@ -47,20 +36,24 @@ function applyCommand(command: SessionCommand, video: HTMLVideoElement) {
  * opening a second socket.
  */
 export function useSessionReporter(
+  leaseId: string,
   snapshot: PlaybackSnapshot,
   video: RefObject<HTMLVideoElement>,
   onCommand?: (command: SessionCommand) => void,
   /** Filled with a sender that pushes a frame over the live socket (false if it's down),
    *  so the room layer can send sync in real time instead of POSTing. */
   wsSend?: MutableRefObject<((command: SessionCommandInput) => boolean) | null>,
+  onRevoked?: () => void,
 ) {
   const snapRef = useRef(snapshot);
   snapRef.current = snapshot;
   const cmdRef = useRef(onCommand);
   cmdRef.current = onCommand;
+  const revokedRef = useRef(onRevoked);
+  revokedRef.current = onRevoked;
 
   useEffect(() => {
-    const id = tabSessionId();
+    const id = leaseId;
     let stopped = false;
 
     let ws: WebSocket | null = null;
@@ -80,7 +73,6 @@ export function useSessionReporter(
       const duration = s.durationSec;
       const body: SessionHeartbeat = {
         id,
-        playlistId: s.playlistId,
         title: s.title,
         kind: s.kind,
         logo: s.logo,
@@ -93,31 +85,44 @@ export function useSessionReporter(
         audioTranscoded: s.audioTranscoded,
         preparing: s.preparing,
         remuxId: s.remuxId,
-        contentKey: s.contentKey,
-        name: s.name,
       };
       // Over the socket while it's up (commands come back via onmessage); POST otherwise.
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'heartbeat', heartbeat: body }));
         return;
       }
-      const { commands } = await api.sessionHeartbeat(body);
-      if (stopped) return;
-      const el = video.current;
-      if (el) commands.forEach((c) => handle(c, el));
+      try {
+        const { commands } = await api.playbackHeartbeat(id, body);
+        if (stopped) return;
+        const el = video.current;
+        if (el) commands.forEach((c) => handle(c, el));
+      } catch (cause) {
+        if (cause instanceof ApiError && (cause.status === 401 || cause.status === 410)) {
+          stopped = true;
+          revokedRef.current?.();
+        }
+      }
     };
 
     // Push channel: commands arrive instantly; the client also sends heartbeat/sync over it.
     let wsRetry: ReturnType<typeof setTimeout> | undefined;
     const connect = () => {
       if (stopped) return;
-      ws = new WebSocket(api.sessionSocketUrl(id));
+      ws = new WebSocket(api.playbackSocketUrl(id));
       ws.onmessage = (ev) => {
         const el = video.current;
         if (!el) return;
         try { handle(JSON.parse(ev.data as string) as SessionCommand, el); } catch { /* ignore */ }
       };
-      ws.onclose = () => { if (!stopped) wsRetry = setTimeout(connect, HEARTBEAT_MS); };
+      ws.onclose = (event) => {
+        if (stopped) return;
+        if (event.code === 1000 && /lease ended|revoked/i.test(event.reason)) {
+          stopped = true;
+          revokedRef.current?.();
+          return;
+        }
+        wsRetry = setTimeout(connect, HEARTBEAT_MS);
+      };
       ws.onerror = () => ws?.close();
     };
     connect();
@@ -145,7 +150,7 @@ export function useSessionReporter(
       window.removeEventListener('pagehide', onPageHide);
       if (wsSend) wsSend.current = null;
       if (ws) { ws.onclose = null; ws.close(); }
-      if (!unloading) api.sessionEnd(id);
+      if (!unloading) api.playbackEnd(id);
     };
-  }, [video, wsSend]);
+  }, [leaseId, video, wsSend]);
 }

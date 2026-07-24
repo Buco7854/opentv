@@ -9,6 +9,9 @@ import { Spinner } from './components/Primitives';
 import { localeStore, t } from './i18n';
 import { LibraryProvider, useLibrary } from './library';
 import { PlayerNavigationProvider } from './player/PlayerNavigation';
+import {
+  AuthProvider, AuthReturnHandler, RequireAdmin, RequireAuth, useAuth,
+} from './auth/AuthProvider';
 
 // Screens are feature boundaries. In particular, the watch route owns hls.js,
 // mpegts.js and the session stack, so browsing never downloads playback engines.
@@ -21,6 +24,11 @@ const SessionsScreen = lazy(() => import('./screens/SessionsScreen').then((m) =>
 const SettingsScreen = lazy(() => import('./screens/SettingsScreen').then((m) => ({ default: m.SettingsScreen })));
 const AccountScreen = lazy(() => import('./screens/AccountScreen').then((m) => ({ default: m.AccountScreen })));
 const XtreamSeriesScreen = lazy(() => import('./screens/XtreamSeriesScreen').then((m) => ({ default: m.XtreamSeriesScreen })));
+const AdminScreen = lazy(() => import('./admin/AdminScreen').then((m) => ({ default: m.AdminScreen })));
+const LoginScreen = lazy(() => import('./auth/AuthScreens').then((m) => ({ default: m.LoginScreen })));
+const SetupScreen = lazy(() => import('./auth/AuthScreens').then((m) => ({ default: m.SetupScreen })));
+const ActivateScreen = lazy(() => import('./auth/AuthScreens').then((m) => ({ default: m.ActivateScreen })));
+const SecurityScreen = lazy(() => import('./auth/AuthScreens').then((m) => ({ default: m.SecurityScreen })));
 
 const MovieDetailScreen = lazy(() => import('./screens/DetailScreens').then((m) => ({ default: m.MovieDetailScreen })));
 const EpisodeDetailScreen = lazy(() => import('./screens/DetailScreens').then((m) => ({ default: m.EpisodeDetailScreen })));
@@ -45,6 +53,7 @@ function PlaylistRoute({ children }: { children: ReactNode }) {
   const {
     playlists, loading, error, reload, setPlaylistPanelOpen,
   } = useLibrary();
+  const { user } = useAuth();
 
   if (playlists === null && loading) return <Spinner />;
   if (playlists === null) {
@@ -65,11 +74,11 @@ function PlaylistRoute({ children }: { children: ReactNode }) {
       <EmptyState
         title={t('playlists.requiredTitle')}
         subtitle={t('playlists.requiredSub')}
-        action={
+        action={user?.role === 'ADMIN' ? (
           <button className="btn" onClick={() => setPlaylistPanelOpen(true)}>
             <Icon name="add" />{t('playlists.add')}
           </button>
-        }
+        ) : undefined}
       >
         <div className="empty-home-art"><Icon name="playlist" /></div>
       </EmptyState>
@@ -93,38 +102,67 @@ function PlaylistRoute({ children }: { children: ReactNode }) {
 
 const forPlaylist = (screen: ReactNode) => <PlaylistRoute>{screen}</PlaylistRoute>;
 
+function AuthenticatedApp() {
+  return (
+    <LibraryProvider>
+      <PlayerNavigationProvider>
+        <main className="shell-content">
+          <Suspense fallback={<RouteFallback />}>
+            <Routes>
+              <Route path="/" element={<HomeScreen />} />
+              <Route path="/browse/:playlistId" element={forPlaylist(<BrowseScreen />)} />
+              <Route path="/search/:playlistId" element={forPlaylist(<SearchScreen />)} />
+              <Route path="/favorites/:playlistId" element={forPlaylist(<FavoritesScreen />)} />
+              <Route path="/movie/:channelId" element={<MovieDetailScreen />} />
+              <Route path="/episode/:channelId" element={<EpisodeDetailScreen />} />
+              <Route path="/series/:playlistId/:seriesKey" element={forPlaylist(<SeriesDetailScreen />)} />
+              <Route path="/xseries/:playlistId/:seriesId" element={forPlaylist(<XtreamSeriesScreen />)} />
+              <Route path="/downloads" element={<DownloadsScreen />} />
+              <Route path="/sessions" element={<RequireAdmin><SessionsScreen /></RequireAdmin>} />
+              <Route path="/admin" element={<RequireAdmin><AdminScreen /></RequireAdmin>} />
+              <Route path="/security" element={<SecurityScreen />} />
+              <Route path="/watch/:channelId" element={<WatchChannelScreen />} />
+              <Route path="/watch/catchup/:channelId/:startMs/:endMs" element={<WatchCatchupScreen />} />
+              <Route path="/watch/download/:downloadId" element={<WatchDownloadScreen />} />
+              <Route path="/settings" element={<SettingsScreen />} />
+              <Route path="/account/:playlistId" element={<RequireAdmin>{forPlaylist(<AccountScreen />)}</RequireAdmin>} />
+              <Route path="*" element={<HomeScreen />} />
+            </Routes>
+          </Suspense>
+        </main>
+        <Dock />
+      </PlayerNavigationProvider>
+    </LibraryProvider>
+  );
+}
+
+function AuthenticatedBoundary() {
+  const { user } = useAuth();
+  const ownershipKey = user
+    ? `${user.id}:${user.role}:${[...user.playlistIds].sort((a, b) => a - b).join(',')}`
+    : 'signed-out';
+  return <AuthenticatedApp key={ownershipKey} />;
+}
+
 export function App() {
   // Remount on language change so plain t() calls re-render.
   const locale = useSyncExternalStore(localeStore.subscribe, localeStore.get);
   return (
     <BrowserRouter key={locale}>
-      <LibraryProvider>
-        <PlayerNavigationProvider>
-          <main className="shell-content">
-            <Suspense fallback={<RouteFallback />}>
-              <Routes>
-                <Route path="/" element={<HomeScreen />} />
-                <Route path="/browse/:playlistId" element={forPlaylist(<BrowseScreen />)} />
-                <Route path="/search/:playlistId" element={forPlaylist(<SearchScreen />)} />
-                <Route path="/favorites/:playlistId" element={forPlaylist(<FavoritesScreen />)} />
-                <Route path="/movie/:channelId" element={<MovieDetailScreen />} />
-                <Route path="/episode/:channelId" element={<EpisodeDetailScreen />} />
-                <Route path="/series/:playlistId/:seriesKey" element={forPlaylist(<SeriesDetailScreen />)} />
-                <Route path="/xseries/:playlistId/:seriesId" element={forPlaylist(<XtreamSeriesScreen />)} />
-                <Route path="/downloads" element={<DownloadsScreen />} />
-                <Route path="/sessions" element={<SessionsScreen />} />
-                <Route path="/watch/:channelId" element={<WatchChannelScreen />} />
-                <Route path="/watch/catchup/:channelId/:startMs/:endMs" element={<WatchCatchupScreen />} />
-                <Route path="/watch/download/:downloadId" element={<WatchDownloadScreen />} />
-                <Route path="/settings" element={<SettingsScreen />} />
-                <Route path="/account/:playlistId" element={forPlaylist(<AccountScreen />)} />
-                <Route path="*" element={<HomeScreen />} />
-              </Routes>
-            </Suspense>
-          </main>
-          <Dock />
-        </PlayerNavigationProvider>
-      </LibraryProvider>
+      <AuthProvider>
+        <AuthReturnHandler />
+        <Suspense fallback={<RouteFallback />}>
+          <Routes>
+            <Route path="/login" element={<LoginScreen />} />
+            <Route path="/setup" element={<SetupScreen />} />
+            <Route path="/activate" element={<ActivateScreen />} />
+            <Route
+              path="*"
+              element={<RequireAuth><AuthenticatedBoundary /></RequireAuth>}
+            />
+          </Routes>
+        </Suspense>
+      </AuthProvider>
     </BrowserRouter>
   );
 }

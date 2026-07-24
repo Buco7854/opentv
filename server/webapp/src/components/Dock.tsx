@@ -11,6 +11,7 @@ import { prefs } from '../preferences';
 import { Icon } from './Icons';
 import { ConfirmDialog, IconBtn, Menu, MenuOption, snackbar } from './Primitives';
 import { PlaylistDialog } from './PlaylistDialog';
+import { useAuth } from '../auth/AuthProvider';
 
 function DockButton({ icon, label, active, disabled, dot, onClick }: {
   icon: string;
@@ -43,7 +44,7 @@ export function Dock() {
   // The fullscreen player covers the dock; don't keep polling downloads underneath it.
   const downloads = useDownloads(!pathname.startsWith('/watch'));
   const downloading = downloads.list.some(
-    (d) => d.status === DownloadStatus.QUEUED || d.status === DownloadStatus.RUNNING,
+    (d) => d.active && (d.status === DownloadStatus.QUEUED || d.status === DownloadStatus.RUNNING),
   );
 
   // Active playlist: a valid URL id, else a valid last-used id, else first.
@@ -98,6 +99,8 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
   onClose: () => void;
 }) {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const admin = user?.role === 'ADMIN';
   const {
     playlists, loading, error, reload, rememberPlaylist, forgetPlaylist,
   } = useLibrary();
@@ -126,7 +129,7 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
       <div ref={panelRef} className="dock-panel">
         <div className="panel-head">
           <h3>{t('nav.playlists')}</h3>
-          <IconBtn name="add" label={t('playlists.add')} onClick={() => setDialog('add')} />
+          {admin && <IconBtn name="add" label={t('playlists.add')} onClick={() => setDialog('add')} />}
         </div>
         <div className="panel-body">
           {playlists === null && loading && <div className="spinner" />}
@@ -158,13 +161,15 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
                   <div className="name">{p.name}</div>
                   <div className="sub">{meta}</div>
                 </div>
-                <div className="actions" onClick={(e) => e.stopPropagation()}>
-                  <IconBtn name="more" label={t('playlists.actions')} className="muted"
-                           onClick={(e) => {
-                             const anchor = e.currentTarget as HTMLElement;
-                             setActionsFor((cur) => cur?.playlist.id === p.id ? null : { playlist: p, anchor });
-                           }} />
-                </div>
+                {admin && (
+                  <div className="actions" onClick={(e) => e.stopPropagation()}>
+                    <IconBtn name="more" label={t('playlists.actions')} className="muted"
+                             onClick={(e) => {
+                               const anchor = e.currentTarget as HTMLElement;
+                               setActionsFor((cur) => cur?.playlist.id === p.id ? null : { playlist: p, anchor });
+                             }} />
+                  </div>
+                )}
               </div>
             );
           })}
@@ -176,19 +181,31 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
                 <div className="name">{downloading ? t('playlists.downloadsActive') : t('nav.downloads')}</div>
               </div>
             </button>
-            <button className="panel-row" onClick={() => { onClose(); navigate('/sessions'); }}>
-              <Icon name="activity" />
-              <div className="body"><div className="name">{t('nav.activity')}</div></div>
-            </button>
+            {admin && (
+              <>
+                <button className="panel-row" onClick={() => { onClose(); navigate('/sessions'); }}>
+                  <Icon name="activity" />
+                  <div className="body"><div className="name">{t('nav.activity')}</div></div>
+                </button>
+                <button className="panel-row" onClick={() => { onClose(); navigate('/admin'); }}>
+                  <Icon name="person" />
+                  <div className="body"><div className="name">{t('nav.administration')}</div></div>
+                </button>
+              </>
+            )}
             <button className="panel-row" onClick={() => { onClose(); navigate('/settings'); }}>
               <Icon name="settings" />
               <div className="body"><div className="name">{t('nav.settings')}</div></div>
+            </button>
+            <button className="panel-row" onClick={() => { onClose(); navigate('/security'); }}>
+              <Icon name="person" />
+              <div className="body"><div className="name">{t('nav.security')}</div></div>
             </button>
           </div>
         </div>
       </div>
 
-      {actionsFor && (() => {
+      {admin && actionsFor && (() => {
         const p = actionsFor.playlist;
         const options: MenuOption[] = [];
         if (p.hasXtreamPanel) {
@@ -214,7 +231,7 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
         return <Menu anchor={actionsFor.anchor} options={options} onDismiss={() => setActionsFor(null)} />;
       })()}
 
-      {dialog && (
+      {admin && dialog && (
         <PlaylistDialog
           editing={dialog === 'add' ? null : dialog}
           onDismiss={() => setDialog(null)}

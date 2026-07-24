@@ -45,10 +45,13 @@ function DownloadCard({ item, onPlay, onChanged }: {
   const progressText = item.totalBytes > 0
     ? t('downloads.ofBytes', { done: formatBytes(item.downloadedBytes), total: formatBytes(item.totalBytes) })
     : formatBytes(item.downloadedBytes);
+  const displayedStatus = !item.active &&
+    (item.status === DownloadStatus.QUEUED || item.status === DownloadStatus.RUNNING)
+    ? DownloadStatus.PAUSED : item.status;
   const statusText =
-    item.status === DownloadStatus.QUEUED ? t('downloads.queued')
-    : item.status === DownloadStatus.RUNNING ? progressText
-    : item.status === DownloadStatus.PAUSED ? `${t('downloads.paused')} · ${progressText}`
+    displayedStatus === DownloadStatus.QUEUED ? t('downloads.queued')
+    : displayedStatus === DownloadStatus.RUNNING ? progressText
+    : displayedStatus === DownloadStatus.PAUSED ? `${t('downloads.paused')} · ${progressText}`
     : item.status === DownloadStatus.DONE ? `${t('downloads.saved')} · ${formatBytes(item.totalBytes)}`
     : item.status === DownloadStatus.FAILED ? `${t('downloads.failed')}${item.error ? `: ${item.error}` : ''}`
     : t('downloads.cancelled');
@@ -67,14 +70,14 @@ function DownloadCard({ item, onPlay, onChanged }: {
           </a>
         </>
       )
-      : item.status === DownloadStatus.QUEUED || item.status === DownloadStatus.RUNNING
+      : displayedStatus === DownloadStatus.QUEUED || displayedStatus === DownloadStatus.RUNNING
         ? <IconBtn name="pause" label={t('common.pause')} onClick={act(() => api.pauseDownload(item.id))} />
-        : item.status === DownloadStatus.PAUSED
+        : displayedStatus === DownloadStatus.PAUSED
           ? <IconBtn name="play" label={t('common.resume')} className="primary" onClick={act(() => api.resumeDownload(item.id))} />
           : <IconBtn name="refresh" label={t('common.retry')} onClick={act(() => api.retryDownload(item.id))} />;
 
   const showBar =
-    (item.status === DownloadStatus.RUNNING || item.status === DownloadStatus.PAUSED) && item.totalBytes > 0;
+    (displayedStatus === DownloadStatus.RUNNING || displayedStatus === DownloadStatus.PAUSED) && item.totalBytes > 0;
 
   return (
     <div className="card download-card">

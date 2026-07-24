@@ -3,12 +3,9 @@ package com.buco7854.opentv.server
 import com.buco7854.opentv.core.meta.decodeCast
 import com.buco7854.opentv.core.meta.encodeCast
 import com.buco7854.opentv.core.model.Channel
-import com.buco7854.opentv.core.model.Download
-import com.buco7854.opentv.core.model.Favorite
 import com.buco7854.opentv.core.model.GroupCount
 import com.buco7854.opentv.core.model.Metadata
 import com.buco7854.opentv.core.model.Programme
-import com.buco7854.opentv.core.model.ResumePoint
 import com.buco7854.opentv.core.model.SeriesGroup
 import com.buco7854.opentv.core.model.XtreamSeries
 import com.buco7854.opentv.core.repo.GuideEntry
@@ -17,10 +14,10 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class ChannelDto(
+    val contentId: String,
     val id: Long,
     val playlistId: Long,
     val name: String,
-    val url: String,
     val logo: String?,
     val groupTitle: String,
     val tvgId: String?,
@@ -54,6 +51,7 @@ data class MetadataDto(
 
 @Serializable
 data class FavoriteDto(
+    val contentId: String,
     val playlistId: Long,
     val key: String,
     val kind: Int,
@@ -62,7 +60,7 @@ data class FavoriteDto(
 
 @Serializable
 data class ResumePointDto(
-    val url: String,
+    val contentId: String,
     val positionMs: Long,
     val durationMs: Long,
     val updatedMs: Long = 0,
@@ -70,11 +68,12 @@ data class ResumePointDto(
 
 @Serializable
 data class DownloadDto(
-    val id: Long,
+    val id: String,
+    val contentId: String,
     val title: String,
-    val url: String,
-    val filePath: String,
-    val status: Int,
+    val status: String,
+    val active: Boolean,
+    val suspended: Boolean,
     val totalBytes: Long,
     val downloadedBytes: Long,
     val error: String?,
@@ -82,10 +81,27 @@ data class DownloadDto(
 )
 
 @Serializable
+data class AdminDownloadDto(
+    val userId: String,
+    val userDownloadId: String,
+    val blobId: String,
+    val contentId: String,
+    val title: String,
+    val status: String,
+    val active: Boolean,
+    val suspended: Boolean,
+    val totalBytes: Long,
+    val downloadedBytes: Long,
+)
+
+@Serializable data class AdminBlobCancellationDto(val affectedUserIds: List<String>)
+
+@Serializable
 data class GroupCountDto(val groupTitle: String, val count: Int)
 
 @Serializable
 data class SeriesGroupDto(
+    val contentId: String,
     val seriesKey: String,
     val count: Int,
     val logo: String?,
@@ -94,6 +110,7 @@ data class SeriesGroupDto(
 
 @Serializable
 data class XtreamSeriesDto(
+    val contentId: String,
     val playlistId: Long,
     val seriesId: Long,
     val name: String,
@@ -138,8 +155,8 @@ data class AccountInfoDto(
     val timezone: String?,
 )
 
-internal fun Channel.toDto(cipher: StreamCipher) = ChannelDto(
-    id, playlistId, name, cipher.encrypt(url), cipher.encryptOrNull(logo), groupTitle,
+internal fun Channel.toDto(cipher: StreamCipher, contentId: String) = ChannelDto(
+    contentId, id, playlistId, name, cipher.encryptOrNull(logo), groupTitle,
     tvgId, kind, seriesKey, season, episode, position, xtreamStreamId, catchupDays,
     catchupSource, description, durationSecs, airDate,
 )
@@ -164,25 +181,12 @@ internal fun Metadata?.toDto(cipher: StreamCipher) = (this ?: Metadata(cacheKey 
     )
 }
 
-internal fun Favorite.toDto(cipher: StreamCipher) = FavoriteDto(
-    playlistId = playlistId,
-    key = if (kind == com.buco7854.opentv.core.model.ChannelKind.SERIES) key else cipher.encrypt(key),
-    kind = kind,
-    addedMs = addedMs,
-)
-
-internal fun ResumePoint.toDto(cipher: StreamCipher) =
-    ResumePointDto(cipher.encrypt(url), positionMs, durationMs, updatedMs)
-
-internal fun Download.toDto(cipher: StreamCipher) =
-    DownloadDto(id, title, cipher.encrypt(url), filePath, status, totalBytes, downloadedBytes, error, createdMs)
-
 internal fun GroupCount.toDto() = GroupCountDto(groupTitle, count)
-internal fun SeriesGroup.toDto(cipher: StreamCipher) =
-    SeriesGroupDto(seriesKey, count, cipher.encryptOrNull(logo), groupTitle)
+internal fun SeriesGroup.toDto(cipher: StreamCipher, contentId: String) =
+    SeriesGroupDto(contentId, seriesKey, count, cipher.encryptOrNull(logo), groupTitle)
 
-internal fun XtreamSeries.toDto(cipher: StreamCipher) = XtreamSeriesDto(
-    playlistId, seriesId, name, categoryName, cipher.encryptOrNull(cover), plot,
+internal fun XtreamSeries.toDto(cipher: StreamCipher, contentId: String) = XtreamSeriesDto(
+    contentId, playlistId, seriesId, name, categoryName, cipher.encryptOrNull(cover), plot,
     castNames, genre, rating, episodesFetchedAtMs,
 )
 

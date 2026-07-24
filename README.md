@@ -45,25 +45,27 @@ losing your data. Full instructions and documentation are on the
 
 OpenTV also ships as a self-hosted web app with the same experience: the
 Android app and the web server share the same core modules (parsing,
-classification, Xtream, EPG, catch-up, metadata and the SQLite data layer);
-only the UI differs. Playlists are stored server-side in SQLite.
+classification, Xtream, EPG, catch-up, metadata, and catalog storage
+contracts); only the UI differs. Server users, grants, activity, sessions, and
+downloads are isolated in the JVM-only `:server-data` database and are never
+bundled into Android. Playlists are stored server-side in SQLite.
 
 ```bash
 docker run -d -p 127.0.0.1:8080:8080 -v opentv-data:/data \
+  -e OPENTV_AUTH_ENCRYPTION_KEY='PASTE_OPENSSL_RAND_BASE64_32_OUTPUT' \
   ghcr.io/buco7854/opentv-web:latest
 ```
 
-> [!WARNING]
-> The web server has **no authentication**: anyone who can reach it can use
-> your playlists and read your provider credentials. Always run it behind an
-> authenticated reverse proxy (or a VPN); never expose it directly to the
-> internet. See the [web client guide](https://buco7854.github.io/opentv/guide/webclient)
-> for a Caddy basic-auth example, configuration and limitations.
+The server has local password authentication with MFA, OIDC SSO, revocable
+sessions, users, roles, and playlist assignments. Generate the required secret
+with `openssl rand -base64 32`; use HTTPS and set `OPENTV_PUBLIC_URL` when
+deploying beyond localhost. See the
+[authentication guide](https://buco7854.github.io/opentv/guide/server-authentication).
 
 The **Now watching** page (in the playlists panel) shows who is watching what,
 with remote pause/resume, a message channel, and live stream diagnostics
 (direct / proxied / remux, and why ffmpeg is copying or transcoding). Viewers
-are identified by IP; set `OPENTV_TRUSTED_PROXIES` to a comma-separated list of
+are identified by their account and lease; set `OPENTV_TRUSTED_PROXIES` to a comma-separated list of
 proxy IPs/CIDRs (e.g. `127.0.0.1,10.0.0.0/8`) so the real client IP is read from
 `X-Forwarded-For` when the request comes through your reverse proxy.
 

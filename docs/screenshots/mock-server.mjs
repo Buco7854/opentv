@@ -76,7 +76,7 @@ const byId = new Map();
 function makeLive(i, group) {
   const name = liveNames[i % liveNames.length];
   const c = {
-    id: 2001 + i, playlistId: 1, name, url: `live:${2001 + i}`, logo: `logo:${name}`,
+    contentId: `content-live-${2001 + i}`, id: 2001 + i, playlistId: 1, name, logo: `logo:${name}`,
     groupTitle: group, tvgId: `tvg.${2001 + i}`, kind: 0, seriesKey: null, season: null, episode: null,
     xtreamStreamId: 2001 + i, catchupDays: i % 2 === 0 ? 7 : 0, catchupSource: null,
     description: null, durationSecs: null, airDate: null,
@@ -86,7 +86,7 @@ function makeLive(i, group) {
 function makeMovie(i, group) {
   const name = movieTitles[i % movieTitles.length];
   const c = {
-    id: 1001 + i, playlistId: 1, name, url: `s:${1001 + i}`, logo: `poster:${name}`,
+    contentId: `content-movie-${1001 + i}`, id: 1001 + i, playlistId: 1, name, logo: `poster:${name}`,
     groupTitle: group, tvgId: null, kind: 1, seriesKey: null, season: null, episode: null,
     xtreamStreamId: 1001 + i, catchupDays: 0, catchupSource: null, description: null,
     durationSecs: 7200 + (i % 5) * 600, airDate: null,
@@ -100,7 +100,7 @@ function episodesFor(seriesId, title, count = 8) {
   return Array.from({ length: count }, (_, k) => {
     const id = 3000 + seriesId * 20 + k;
     const c = {
-      id, playlistId: 1, name: `Episode ${k + 1}`, url: `s:${id}`, logo: `poster:${title} ${k}`,
+      contentId: `content-episode-${id}`, id, playlistId: 1, name: `Episode ${k + 1}`, logo: `poster:${title} ${k}`,
       groupTitle: 'Series', tvgId: null, kind: 2, seriesKey: `xs:${seriesId}`,
       season: 1, episode: k + 1, xtreamStreamId: id, catchupDays: 0, catchupSource: null,
       description: `In episode ${k + 1}, the story deepens as the characters face a new turn.`,
@@ -110,7 +110,7 @@ function episodesFor(seriesId, title, count = 8) {
   });
 }
 const xtreamSeries = seriesTitles.map(([name, genre, rating], i) => ({
-  playlistId: 1, seriesId: 5001 + i, name, categoryName: i % 2 ? 'Apple TV+' : 'Netflix',
+  contentId: `content-series-${5001 + i}`, playlistId: 1, seriesId: 5001 + i, name, categoryName: i % 2 ? 'Apple TV+' : 'Netflix',
   cover: `poster:${name}`, plot: `${name} follows a sharp, character-driven story that critics and audiences keep coming back to.`,
   castNames: 'Ayo Edebiri, Jeremy Allen White, Ebon Moss-Bachrach', genre, rating,
 }));
@@ -133,6 +133,12 @@ function movieMeta(c) {
   };
 }
 
+const sessionUsers = [
+  ['user-alex', 'alex', 'Alex'],
+  ['user-sam', 'sam', 'Sam'],
+  ['user-morgan', 'morgan', 'Morgan'],
+  ['user-jules', 'jules', 'Jules'],
+];
 const sessions = [
   {
     id: 'a', ip: '192.168.1.42', userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Mobile Safari/537.36',
@@ -164,13 +170,21 @@ const sessions = [
     positionMs: 0, durationMs: 0, paused: false, live: false, startedAtMs: now - 5_000, lastSeenMs: now,
     stream: { engine: 'native', direct: false, audioTranscoded: false, preparing: true, remux: null },
   },
-];
+].map((session, index) => ({
+  ...session,
+  userId: sessionUsers[index][0],
+  username: sessionUsers[index][1],
+  displayName: sessionUsers[index][2],
+  clientKind: 'BROWSER',
+  roomId: null,
+  roomSize: 0,
+}));
 
 const downloads = [
-  { id: 1, title: 'Dune: Part Two (2024)', url: 's:1001', filePath: '/data/dl/1', status: 1, totalBytes: 8_400_000_000, downloadedBytes: 5_500_000_000, error: null, createdMs: now - 20 * 60_000 },
-  { id: 2, title: 'The Bear S03E01', url: 's:3001', filePath: '/data/dl/2', status: 2, totalBytes: 1_200_000_000, downloadedBytes: 1_200_000_000, error: null, createdMs: now - 3 * DAY },
-  { id: 3, title: 'Interstellar (2014)', url: 's:1005', filePath: '/data/dl/3', status: 5, totalBytes: 6_100_000_000, downloadedBytes: 2_200_000_000, error: null, createdMs: now - DAY },
-  { id: 4, title: 'Arrival (2016)', url: 's:1010', filePath: '/data/dl/4', status: 0, totalBytes: 0, downloadedBytes: 0, error: null, createdMs: now - 60_000 },
+  { id: 'download-1', contentId: 'content-movie-1001', title: 'Dune: Part Two (2024)', status: 'RUNNING', active: true, suspended: false, totalBytes: 8_400_000_000, downloadedBytes: 5_500_000_000, error: null, createdMs: now - 20 * 60_000 },
+  { id: 'download-2', contentId: 'content-episode-103021', title: 'The Bear S03E01', status: 'DONE', active: true, suspended: false, totalBytes: 1_200_000_000, downloadedBytes: 1_200_000_000, error: null, createdMs: now - 3 * DAY },
+  { id: 'download-3', contentId: 'content-movie-1005', title: 'Interstellar (2014)', status: 'PAUSED', active: false, suspended: false, totalBytes: 6_100_000_000, downloadedBytes: 2_200_000_000, error: null, createdMs: now - DAY },
+  { id: 'download-4', contentId: 'content-movie-1010', title: 'Arrival (2016)', status: 'QUEUED', active: true, suspended: false, totalBytes: 0, downloadedBytes: 0, error: null, createdMs: now - 60_000 },
 ];
 
 const guideEntries = () => {
@@ -200,6 +214,16 @@ const server = http.createServer((req, res) => {
   const q = (k) => u.searchParams.get(k);
   const seg = p.split('/').filter(Boolean); // ["api", ...]
 
+  if (p === '/api/auth/capabilities') return send(res, {
+    passwordEnabled: true, oidcEnabled: true, bootstrapRequired: false,
+    webAuthnRpId: 'localhost', oidcStartUrl: '/api/v1/auth/oidc/start',
+  });
+  if (p === '/api/auth/me') return send(res, {
+    id: 'admin-docs', username: 'admin', displayName: 'Documentation Admin',
+    role: 'ADMIN', authMethod: 'PASSWORD', clientKind: 'BROWSER',
+    playlistIds: [1, 2], csrfToken: 'docs-csrf',
+  });
+
   if (req.method !== 'GET') { res.writeHead(200, { 'Access-Control-Allow-Origin': '*' }); return res.end('{}'); }
 
   if (p === '/api/img') {
@@ -212,8 +236,8 @@ const server = http.createServer((req, res) => {
   if (p === '/api/remux/available') return send(res, { available: true });
   if (p === '/api/settings') return send(res, { userAgent: '', downloadLimit: 1, pageSize: 50 });
   if (p === '/api/downloads') return send(res, downloads);
-  if (p === '/api/sessions') return send(res, sessions);
-  if (p === '/api/resume') return send(res, [{ url: 's:1001', positionMs: 2_640_000, durationMs: 9_960_000, updatedMs: now }]);
+  if (p === '/api/admin/playback') return send(res, sessions);
+  if (p === '/api/resume') return send(res, [{ contentId: 'content-movie-1001', positionMs: 2_640_000, durationMs: 9_960_000, updatedMs: now }]);
 
   if (seg[1] === 'playlists' && seg[2]) {
     const id = Number(seg[2]); const pl = playlists.find((x) => x.id === id) || playlists[0];
@@ -227,9 +251,13 @@ const server = http.createServer((req, res) => {
     if (sub === 'xtream-series') return send(res, xtreamSeries);
     if (sub === 'now-airing') { const m = {}; liveChannels.forEach((c, i) => { m[c.tvgId] = { tvgId: c.tvgId, title: guideEntries()[3].title, description: null, startMs: now - (10 + i) * 60_000, endMs: now + (35 - i) * 60_000 }; }); return send(res, m); }
     if (sub === 'guide-ids') return send(res, liveChannels.map((c) => c.tvgId));
-    if (sub === 'favorites' && seg[4] === 'resolved') return send(res, { live: [liveChannels[4]], movies: [movies[0], movies[2], movies[6]], series: xtreamSeries.slice(0, 4).map((s) => ({ seriesKey: s.name, count: 0, logo: s.cover, groupTitle: s.categoryName, xtreamSeriesId: s.seriesId })) });
-    if (sub === 'favorites') return send(res, [{ playlistId: 1, key: 's:1001', kind: 1 }, { playlistId: 1, key: 'x:5001', kind: 2 }, { playlistId: 1, key: 'live:2005', kind: 0 }]);
-    if (sub === 'search') return send(res, { live: liveChannels.slice(0, 3), movies: movies.slice(0, 4), series: xtreamSeries.slice(0, 3).map((s) => ({ seriesKey: s.name, count: 0, logo: s.cover, groupTitle: s.categoryName, xtreamSeriesId: s.seriesId })) });
+    if (sub === 'favorites' && seg[4] === 'resolved') return send(res, { live: [liveChannels[4]], movies: [movies[0], movies[2], movies[6]], series: xtreamSeries.slice(0, 4).map((s) => ({ contentId: s.contentId, seriesKey: s.name, count: 0, logo: s.cover, groupTitle: s.categoryName, xtreamSeriesId: s.seriesId })) });
+    if (sub === 'favorites') return send(res, [
+      { contentId: movies[0].contentId, playlistId: 1, key: movies[0].contentId, kind: 1, addedMs: now },
+      { contentId: xtreamSeries[0].contentId, playlistId: 1, key: xtreamSeries[0].contentId, kind: 2, addedMs: now },
+      { contentId: liveChannels[4].contentId, playlistId: 1, key: liveChannels[4].contentId, kind: 0, addedMs: now },
+    ]);
+    if (sub === 'search') return send(res, { live: liveChannels.slice(0, 3), movies: movies.slice(0, 4), series: xtreamSeries.slice(0, 3).map((s) => ({ contentId: s.contentId, seriesKey: s.name, count: 0, logo: s.cover, groupTitle: s.categoryName, xtreamSeriesId: s.seriesId })) });
     if (sub === 'series' && seg[5] === 'episodes') return send(res, []);
     if (sub === 'xseries') { const sid = Number(seg[4]); const s = xtreamSeries.find((x) => x.seriesId === sid) || xtreamSeries[0]; return send(res, { series: s, episodes: episodesFor(sid, s.name, 8), error: null }); }
   }

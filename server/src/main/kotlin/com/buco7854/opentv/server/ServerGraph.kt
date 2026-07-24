@@ -6,6 +6,7 @@ import com.buco7854.opentv.core.repo.MetadataRepository
 import com.buco7854.opentv.core.repo.PlaylistRepository
 import com.buco7854.opentv.core.repo.XtreamRepository
 import com.buco7854.opentv.core.storage.Storage
+import com.buco7854.opentv.serverdata.db.ServerUserDatabase
 
 /** Server composition: shared repositories plus web-only adapters and orchestrators. */
 class ServerGraph(
@@ -30,6 +31,13 @@ class ServerGraph(
     val trustedProxies: TrustedProxies,
     /** Concurrent reads the provider behind a source URL permits. */
     val connectionLimit: suspend (String) -> Int,
+    val auth: AuthService,
+    val oidc: OidcService,
+    val webAuthn: WebAuthnService,
+    val authConfig: AuthConfig,
+    val userDatabase: ServerUserDatabase,
+    val contentIdentities: ContentIdentityService,
+    val userActivity: UserActivityService,
 )
 
 data class ApiServices(
@@ -49,5 +57,6 @@ data class MediaRouteDependencies(
     val liveRelay: LiveRelay,
     val transcoder: AudioTranscoder,
     val remux: RemuxService,
+    val mediaGrants: PlaybackMediaGrants,
     val connectionLimit: suspend (String) -> Int,
 )

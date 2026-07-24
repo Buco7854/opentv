@@ -13,6 +13,8 @@ import kotlinx.coroutines.withContext
 import java.net.URI
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.io.InputStream
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Streams provider content through the server (browsers can't reach IPTV panels
@@ -26,12 +28,14 @@ class StreamProxy(
     /** Concurrent reads the provider behind a URL permits (its max_connections). */
     private val connectionLimit: suspend (String) -> Int,
 ) {
+    private val activeBodies = ConcurrentHashMap<String, MutableSet<InputStream>>()
 
     // URIs go back as tokens so a rewritten playlist never exposes provider URLs; the stream
     // id rides along so a segment fetch counts against the same connection as its playlist.
-    private fun proxied(absoluteUrl: String, sid: String?): String {
+    private fun proxied(absoluteUrl: String, sid: String?, mediaGrant: String?): String {
         val base = "/api/v1/stream?u=${java.net.URLEncoder.encode(cipher.encrypt(absoluteUrl), Charsets.UTF_8)}"
-        return if (sid == null) base else "$base&sid=${java.net.URLEncoder.encode(sid, Charsets.UTF_8)}"
+        return if (sid == null) base else "$base&sid=${java.net.URLEncoder.encode(sid, Charsets.UTF_8)}" +
+            "&g=${java.net.URLEncoder.encode(mediaGrant.orEmpty(), Charsets.UTF_8)}"
     }
 
     private val hlsContentTypes = listOf("mpegurl", "m3u8")
@@ -43,21 +47,27 @@ class StreamProxy(
     }
 
     /** Rewrite every URI in an HLS playlist to go through the proxy, carrying [sid] on each. */
-    internal fun rewriteHls(body: String, baseUri: URI, sid: String?): String {
+    internal fun rewriteHls(body: String, baseUri: URI, sid: String?, mediaGrant: String? = null): String {
         val uriAttr = Regex("""URI="([^"]+)"""")
         return body.lineSequence().joinToString("\n") { line ->
             val trimmed = line.trim()
             when {
                 trimmed.isEmpty() -> line
                 trimmed.startsWith("#") -> uriAttr.replace(line) { match ->
-                    """URI="${proxied(baseUri.resolve(match.groupValues[1]).toString(), sid)}""""
+                    """URI="${proxied(baseUri.resolve(match.groupValues[1]).toString(), sid, mediaGrant)}""""
                 }
-                else -> proxied(baseUri.resolve(trimmed).toString(), sid)
+                else -> proxied(baseUri.resolve(trimmed).toString(), sid, mediaGrant)
             }
         }
     }
 
-    suspend fun handle(call: ApplicationCall, cache: Boolean = false, sid: String? = null) {
+    suspend fun handle(
+        call: ApplicationCall,
+        cache: Boolean = false,
+        sid: String? = null,
+        mediaGrant: String? = null,
+        leaseGuard: (() -> Unit)? = null,
+    ) {
         // Only tokens are accepted - a raw provider URL is never a valid input.
         var target = call.request.queryParameters["u"]?.let { cipher.tryDecrypt(it) }
         // Xtream live: the client asks for the HLS variant of a `.ts` token.
@@ -105,6 +115,16 @@ class StreamProxy(
         }
 
         val status = HttpStatusCode.fromValue(upstream.statusCode())
+        if (sid != null) activeBodies
+            .computeIfAbsent(sid) { ConcurrentHashMap.newKeySet() }
+            .add(upstream.body())
+        try {
+            leaseGuard?.invoke()
+        } catch (error: Exception) {
+            upstream.body().close()
+            if (sid != null) activeBodies[sid]?.remove(upstream.body())
+            throw error
+        }
         val headers = upstream.headers()
         val contentType = headers.firstValue("Content-Type").orElse(null)
 
@@ -119,10 +139,14 @@ class StreamProxy(
 
         // HLS playlists are text and small: buffer, rewrite, respond.
         if (looksLikeHls(uri.toString(), contentType)) {
-            val text = upstream.body().use { withContext(Dispatchers.IO) { it.readBytes() } }.decodeToString()
+            val text = try {
+                upstream.body().use { withContext(Dispatchers.IO) { it.readBytes() } }.decodeToString()
+            } finally {
+                if (sid != null) activeBodies[sid]?.remove(upstream.body())
+            }
             if (text.startsWith("#EXTM3U")) {
                 call.respondText(
-                    rewriteHls(text, upstream.uri(), sid),
+                    rewriteHls(text, upstream.uri(), sid, mediaGrant),
                     ContentType.parse("application/vnd.apple.mpegurl"),
                 )
                 return
@@ -138,8 +162,9 @@ class StreamProxy(
         val length = headers.firstValue("Content-Length").orElse(null)?.toLongOrNull()
         val type = contentType?.let { runCatching { ContentType.parse(it) }.getOrNull() }
             ?: ContentType.Application.OctetStream
-        call.respondOutputStream(type, status, length) {
-            upstream.body().use { input ->
+        try {
+            call.respondOutputStream(type, status, length) {
+                upstream.body().use { input ->
                 withContext(Dispatchers.IO) {
                     // A continuous transport stream is one long read: touch the gate as bytes
                     // flow so its slot isn't reaped mid-stream. Segment reads finish fast and
@@ -157,6 +182,16 @@ class StreamProxy(
                     }
                 }
             }
+            }
+        } finally {
+            if (sid != null) activeBodies[sid]?.let {
+                it.remove(upstream.body())
+                if (it.isEmpty()) activeBodies.remove(sid, it)
+            }
         }
+    }
+
+    fun drop(sid: String) {
+        activeBodies.remove(sid)?.forEach { runCatching { it.close() } }
     }
 }

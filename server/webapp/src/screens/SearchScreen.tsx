@@ -23,7 +23,7 @@ export function SearchScreen() {
   const [results, setResults] = useState<SearchResults | null>(null);
   const [expanded, setExpanded] = useState({ live: true, movies: true, series: true });
   const [guideChannel, setGuideChannel] = useState<Channel | null>(null);
-  const { favoriteKeys, toggleFavorite } = useFavorites(playlistId);
+  const { favoriteContentIds, toggleFavorite } = useFavorites(playlistId);
   const downloads = useDownloads();
   const { guideIds } = useGuideIds(playlistId);
 
@@ -67,7 +67,8 @@ export function SearchScreen() {
             <MediaListRow
               key={c.id} title={c.name} subtitle={c.groupTitle}
               logo={c.logo} kind={c.kind} tags={mediaTags(c.name, 1)}
-              isFavorite={favoriteKeys.has(c.url)} onToggleFavorite={() => toggleFavorite(c.url, c.kind)}
+              isFavorite={favoriteContentIds.has(c.contentId)}
+              onToggleFavorite={() => toggleFavorite(c.contentId)}
               onGuide={canShowGuide(c, guideIds) ? () => setGuideChannel(c) : null}
               guideHighlight={hasCatchup(c)}
               onClick={() => playChannel(c.id)}
@@ -80,10 +81,11 @@ export function SearchScreen() {
             <MediaListRow
               key={c.id} title={c.name} subtitle={c.groupTitle}
               logo={c.logo} kind={c.kind} tags={mediaTags(c.name, 1)}
-              isFavorite={favoriteKeys.has(c.url)} onToggleFavorite={() => toggleFavorite(c.url, c.kind)}
+              isFavorite={favoriteContentIds.has(c.contentId)}
+              onToggleFavorite={() => toggleFavorite(c.contentId)}
               downloadSlot={
-                <DownloadStateIcon state={downloads.byUrl.get(c.url)}
-                                   onDownload={() => api.enqueueDownload(c.id)} onChanged={downloads.refresh} />
+                <DownloadStateIcon state={downloads.byContentId.get(c.contentId)}
+                                   onDownload={() => api.enqueueDownload(c.contentId)} onChanged={downloads.refresh} />
               }
               onClick={() => navigate(`/movie/${c.id}`)}
             />
@@ -92,15 +94,15 @@ export function SearchScreen() {
 
           {results.series.length > 0 && section('series', t('nav.series'), results.series.length)}
           {expanded.series && pagedSeries.pageItems.map((s) => {
-            const favKey = s.xtreamSeriesId != null ? `x:${s.xtreamSeriesId}` : s.seriesKey;
+            const routeKey = s.xtreamSeriesId != null ? `x:${s.xtreamSeriesId}` : s.seriesKey;
             return (
               <MediaListRow
-                key={favKey}
+                key={routeKey}
                 title={s.seriesKey}
                 subtitle={s.groupTitle + (s.count > 0 ? ` · ${t('search.matchingEpisodes', { count: s.count })}` : '')}
                 logo={s.logo} kind={ChannelKind.SERIES} chevron
-                isFavorite={favoriteKeys.has(favKey)}
-                onToggleFavorite={() => toggleFavorite(favKey, ChannelKind.SERIES)}
+                isFavorite={favoriteContentIds.has(s.contentId)}
+                onToggleFavorite={() => toggleFavorite(s.contentId)}
                 onClick={() => s.xtreamSeriesId != null
                   ? navigate(`/xseries/${playlistId}/${s.xtreamSeriesId}`)
                   : navigate(`/series/${playlistId}/${encodeURIComponent(s.seriesKey)}`)}

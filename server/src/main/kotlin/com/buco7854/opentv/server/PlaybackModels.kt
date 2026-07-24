@@ -6,7 +6,6 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class SessionHeartbeatDto(
     val id: String,
-    val playlistId: Long? = null,
     val title: String = "",
     val kind: String = "live",
     val logo: String? = null,
@@ -19,8 +18,6 @@ data class SessionHeartbeatDto(
     val audioTranscoded: Boolean = false,
     val preparing: Boolean = false,
     val remuxId: String? = null,
-    val contentKey: String = "",
-    val name: String = "",
 )
 
 @Serializable
@@ -87,6 +84,10 @@ data class SessionStreamDto(
 @Serializable
 data class SessionDto(
     val id: String,
+    val userId: String,
+    val username: String,
+    val displayName: String,
+    val clientKind: String,
     val ip: String,
     val userAgent: String,
     val playlistName: String? = null,

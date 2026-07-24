@@ -9,8 +9,14 @@ export { ApiError } from './api/http';
 export const ChannelKind = { LIVE: 0, MOVIE: 1, SERIES: 2 } as const;
 
 export const DownloadStatus = {
-  QUEUED: 0, RUNNING: 1, DONE: 2, FAILED: 3, CANCELLED: 4, PAUSED: 5,
+  QUEUED: 'QUEUED',
+  RUNNING: 'RUNNING',
+  DONE: 'DONE',
+  FAILED: 'FAILED',
+  CANCELLED: 'CANCELLED',
+  PAUSED: 'PAUSED',
 } as const;
+export type DownloadStatus = typeof DownloadStatus[keyof typeof DownloadStatus];
 
 export type PlaylistMode = 'xtream' | 'url' | 'file';
 
@@ -25,10 +31,10 @@ export interface Playlist {
 }
 
 export interface Channel {
+  contentId: string;
   id: number;
   playlistId: number;
   name: string;
-  url: string;
   logo: string | null;
   groupTitle: string;
   tvgId: string | null;
@@ -52,9 +58,16 @@ export const canShowGuide = (c: Channel, guideIds: Set<string>) =>
   c.xtreamStreamId != null || (c.tvgId != null && guideIds.has(c.tvgId));
 
 export interface GroupCount { groupTitle: string; count: number }
-export interface SeriesGroup { seriesKey: string; count: number; logo: string | null; groupTitle: string }
+export interface SeriesGroup {
+  contentId: string;
+  seriesKey: string;
+  count: number;
+  logo: string | null;
+  groupTitle: string;
+}
 
 export interface XtreamSeries {
+  contentId: string;
   playlistId: number;
   seriesId: number;
   name: string;
@@ -103,10 +116,22 @@ export interface Metadata {
   fetchedAtMs: number;
 }
 
-export interface Favorite { playlistId: number; key: string; kind: number; addedMs: number }
-export interface ResumePoint { url: string; positionMs: number; durationMs: number; updatedMs: number }
+export interface Favorite {
+  contentId: string;
+  playlistId: number;
+  key: string;
+  kind: number;
+  addedMs: number;
+}
+export interface ResumePoint {
+  contentId: string;
+  positionMs: number;
+  durationMs: number;
+  updatedMs: number;
+}
 
 export interface SeriesHit {
+  contentId: string;
   seriesKey: string;
   count: number;
   logo: string | null;
@@ -136,21 +161,56 @@ export interface PlaylistUpsertRequest {
 }
 
 export interface Download {
-  id: number;
+  id: string;
+  contentId: string;
   title: string;
-  url: string;
-  filePath: string;
-  status: number;
+  status: DownloadStatus;
+  active: boolean;
+  suspended: boolean;
   totalBytes: number;
   downloadedBytes: number;
   error: string | null;
   createdMs: number;
 }
 
+export interface PlaybackCreateRequest {
+  contentId: string;
+  mode?: 'play' | 'catchup' | 'download';
+  catchupStartMs?: number;
+  catchupDurationMs?: number;
+  downloadId?: string;
+}
+
+export interface PlaybackLease {
+  id: string;
+  contentId: string;
+  playlistId: number;
+  mediaGrant: string;
+  mediaGrantExpiresAtMs: number;
+  streamUrl: string | null;
+  relayUrl: string | null;
+  transcodeUrl: string | null;
+  remuxStartUrl: string;
+}
+
+export interface MediaGrant {
+  token: string;
+  expiresAtMs: number;
+}
+
+export interface RemuxStart {
+  id: string;
+  playlistUrl: string;
+  duration: number | null;
+  audioTracks: string[];
+  subtitleTracks: string[];
+  nativeVideoCopy: boolean;
+  audio: number;
+}
+
 /** What a player reports about current playback (mirrors server SessionHeartbeatDto). */
 export interface SessionHeartbeat {
   id: string;
-  playlistId: number | null;
   title: string;
   kind: 'live' | 'movie' | 'series' | 'catchup' | 'download';
   logo: string | null;
@@ -164,10 +224,6 @@ export interface SessionHeartbeat {
   /** Server is still probing the file to choose remux vs transcode; mode is undecided. */
   preparing: boolean;
   remuxId: string | null;
-  /** Stable id of the content, so the server can spot two viewers of the same thing. */
-  contentKey: string;
-  /** Friendly device label, shown in the watch-together roster. */
-  name: string;
 }
 
 /** Driver playback state mirrored to a watch-together room's other members.
@@ -197,15 +253,9 @@ export interface SessionCommand {
 
 /** Sparse client-to-server command; omitted fields use the Kotlin DTO defaults. */
 export interface SessionCommandInput {
-  type: SessionCommandType;
+  type: 'pause' | 'play' | 'message' | 'sync';
   text?: string;
-  peerId?: string;
-  peerName?: string;
-  accepted?: boolean;
-  quiet?: boolean;
   sync?: SyncState;
-  members?: RoomMember[];
-  audioIndex?: number;
 }
 
 /** A viewer already on this content, offered as someone to watch together with. */
@@ -242,6 +292,10 @@ export interface SessionStream {
 /** One active viewer on the activity dashboard. */
 export interface Session {
   id: string;
+  userId: string;
+  username: string;
+  displayName: string;
+  clientKind: string;
   ip: string;
   userAgent: string;
   playlistName: string | null;
@@ -291,101 +345,103 @@ export const api = {
   setGroupKind: (id: number, groupTitle: string, kind: number | null) =>
     j<null>(`/playlists/${id}/group-kind`, put({ groupTitle, kind })),
   favorites: (id: number) => j<Favorite[]>(`/playlists/${id}/favorites`),
-  addFavorite: (id: number, key: string, kind: number) =>
-    j<null>(`/playlists/${id}/favorites`, put({ key, kind })),
-  removeFavorite: (id: number, key: string) =>
-    j<null>(`/playlists/${id}/favorites?key=${encodeURIComponent(key)}`, { method: 'DELETE' }),
+  addFavorite: (id: number, contentId: string) =>
+    j<null>(`/playlists/${id}/favorites`, put({ contentId })),
+  removeFavorite: (id: number, contentId: string) =>
+    j<null>(`/playlists/${id}/favorites?contentId=${encodeURIComponent(contentId)}`, { method: 'DELETE' }),
   favoritesResolved: (id: number) => j<FavoritesResolved>(`/playlists/${id}/favorites/resolved`),
   episodes: (id: number, seriesKey: string) =>
     j<Channel[]>(`/playlists/${id}/series/${encodeURIComponent(seriesKey)}/episodes`),
   xseries: (id: number, seriesId: number) => j<XtreamSeriesDetail>(`/playlists/${id}/xseries/${seriesId}`),
   channel: (id: number) => j<Channel>(`/channels/${id}`),
   guide: (id: number) => j<GuideEntry[]>(`/channels/${id}/guide`),
-  catchupUrl: (id: number, start: number, end: number) =>
-    j<{ url: string | null }>(`/channels/${id}/catchup-url?start=${start}&end=${end}`),
   vodInfo: (id: number) => j<Metadata>(`/channels/${id}/vod-info`),
   meta: (type: 'movie' | 'series', title: string) =>
     j<Metadata>(`/meta?type=${type}&title=${encodeURIComponent(title)}`),
   metaEpisode: (series: string, season: number, episode: number) =>
     j<Metadata>(`/meta/episode?series=${encodeURIComponent(series)}&season=${season}&episode=${episode}`),
   remuxAvailable: () => j<{ available: boolean }>('/remux/available'),
-  /** Prepare an HLS session for a file; returns its VOD playlist URL and track lists. [sid]
-   *  groups the provider read: alone it's this tab's, in a watch-together room it's the room's. */
-  remuxStart: (u: string, audio = 0, force = false, hevc = false, sid = '') =>
-    j<{ id: string; playlistUrl: string; duration: number | null; audioTracks: string[]; subtitleTracks: string[]; nativeVideoCopy: boolean; audio: number }>(
-      `/remux/start?u=${encodeURIComponent(u)}&audio=${audio}${force ? '&force=1' : ''}${hevc ? '&hevc=1' : ''}${sid ? `&sid=${encodeURIComponent(sid)}` : ''}`,
-    ),
-  /** Release a remux session (and its provider connection) when playback ends. */
-  remuxStop: (id: string) => apiFetch(`/remux/${id}`, { method: 'DELETE', keepalive: true }).catch(() => {}),
-  sessions: () => j<Session[]>('/sessions'),
-  sessionSocketUrl: (id: string) =>
-    browserApiHttp.socketUrl(`/sessions/${encodeURIComponent(id)}/ws`),
+  /** Start a remux from the lease-scoped URL supplied by createPlayback(). */
+  remuxStart: (startUrl: string, audio = 0, force = false, hevc = false) => {
+    const url = new URL(startUrl, window.location.origin);
+    url.searchParams.set('audio', String(audio));
+    if (force) url.searchParams.set('force', '1'); else url.searchParams.delete('force');
+    if (hevc) url.searchParams.set('hevc', '1'); else url.searchParams.delete('hevc');
+    const path = url.pathname.startsWith(API_PREFIX)
+      ? url.pathname.slice(API_PREFIX.length) : url.pathname;
+    return j<RemuxStart>(path + url.search, { method: 'POST' });
+  },
+  /** Release a remux resource using its owning lease and current media grant. */
+  remuxStop: (id: string, leaseId: string, grant: string) =>
+    apiFetch(
+      `/remux/${encodeURIComponent(id)}?sid=${encodeURIComponent(leaseId)}&g=${encodeURIComponent(grant)}`,
+      { method: 'DELETE', keepalive: true },
+    ).catch(() => {}),
+  createPlayback: (request: PlaybackCreateRequest) => j<PlaybackLease>('/playback', post(request)),
+  playbackSocketUrl: (id: string) =>
+    browserApiHttp.socketUrl(`/playback/${encodeURIComponent(id)}/ws`),
   /** keepalive so a heartbeat still fires from the player's unmount/unload. */
-  sessionHeartbeat: (body: SessionHeartbeat) =>
-    apiFetch('/sessions/heartbeat', { ...post(body), keepalive: true })
-      .then((r) => (r.ok ? (r.json() as Promise<{ commands: SessionCommand[] }>) : { commands: [] }))
-      .catch(() => ({ commands: [] as SessionCommand[] })),
-  sessionCommand: (id: string, command: SessionCommandInput) =>
-    j<null>(`/sessions/${encodeURIComponent(id)}/command`, post(command)),
-  sessionEnd: (id: string) =>
-    apiFetch(`/sessions/${encodeURIComponent(id)}`, { method: 'DELETE', keepalive: true }).catch(() => {}),
+  playbackHeartbeat: (id: string, body: SessionHeartbeat) =>
+    j<{ commands: SessionCommand[] }>(
+      `/playback/${encodeURIComponent(id)}/heartbeat`,
+      { ...post(body), keepalive: true },
+    ),
+  playbackEnd: (id: string) =>
+    apiFetch(`/playback/${encodeURIComponent(id)}`, { method: 'DELETE', keepalive: true }).catch(() => {}),
+  refreshMediaGrant: (id: string) =>
+    j<MediaGrant>(`/playback/${encodeURIComponent(id)}/media-grant`, { method: 'POST' }),
   /** Who else is watching this content, and whether the provider is at its limit. */
-  watchIntent: (selfId: string, contentKey: string, source: string | null, playlistId: number | null) =>
-    j<WatchIntent>('/sessions/intent', post({ selfId, contentKey, source, playlistId })),
+  playbackIntent: (id: string) =>
+    j<WatchIntent>(`/playback/${encodeURIComponent(id)}/intent`, { method: 'POST' }),
   /** Ask [hostId]'s viewer to admit us into a watch-together room. */
-  joinRequest: (hostId: string, peerId: string, peerName: string, contentKey: string) =>
-    j<null>(`/sessions/${encodeURIComponent(hostId)}/join-request`, post({ peerId, peerName, contentKey })),
+  joinRequest: (id: string, peerId: string) =>
+    j<null>(`/playback/${encodeURIComponent(id)}/join-request`, post({ peerId })),
   /** The host's answer to a pending join request. */
-  joinAnswer: (hostId: string, peerId: string, hostName: string, contentKey: string, accept: boolean) =>
-    j<null>(`/sessions/${encodeURIComponent(hostId)}/join-answer`, post({ peerId, hostName, contentKey, accept })),
+  joinAnswer: (id: string, peerId: string, accept: boolean) =>
+    j<null>(`/playback/${encodeURIComponent(id)}/join-answer`, post({ peerId, accept })),
   /** Host pushes its playback state to the room. keepalive so a final pause still lands. */
   sessionSync: (id: string, state: SyncState) =>
-    apiFetch(`/sessions/${encodeURIComponent(id)}/sync`, { ...post(state), keepalive: true }).catch(() => {}),
+    apiFetch(`/playback/${encodeURIComponent(id)}/sync`, { ...post(state), keepalive: true }).catch(() => {}),
   /** A guest asks the room's host to let it control playback too. */
-  requestControl: (id: string, peerName: string) =>
-    j<null>(`/sessions/${encodeURIComponent(id)}/request-control`, post({ peerName })),
+  requestControl: (id: string, requested = true) =>
+    j<null>(`/playback/${encodeURIComponent(id)}/request-control`, post({ requested })),
   /** Host grants or refuses a guest's control request. */
   grantControl: (hostId: string, peerId: string, grant: boolean) =>
-    j<null>(`/sessions/${encodeURIComponent(hostId)}/grant-control`, post({ peerId, grant })),
+    j<null>(`/playback/${encodeURIComponent(hostId)}/grant-control`, post({ peerId, grant })),
   /** Host hands a member control (or takes it back) directly, no request needed. */
   setControl: (hostId: string, targetId: string, grant: boolean) =>
-    j<null>(`/sessions/${encodeURIComponent(hostId)}/set-control`, post({ targetId, grant })),
+    j<null>(`/playback/${encodeURIComponent(hostId)}/set-control`, post({ targetId, grant })),
   /** A controller sets the room's shared audio track; every member re-requests the remux with it. */
   roomAudio: (id: string, audioIndex: number) =>
-    j<null>(`/sessions/${encodeURIComponent(id)}/room-audio`, post({ audioIndex })),
+    j<null>(`/playback/${encodeURIComponent(id)}/room-audio`, post({ audioIndex })),
   /** A member reports it finished reloading after a track change; the room resumes once all have. */
   sessionReady: (id: string) =>
-    apiFetch(`/sessions/${encodeURIComponent(id)}/ready`, { method: 'POST', keepalive: true }).catch(() => {}),
+    apiFetch(`/playback/${encodeURIComponent(id)}/ready`, { method: 'POST', keepalive: true }).catch(() => {}),
   /** Host removes a member from the room. */
   kick: (hostId: string, targetId: string) =>
-    j<null>(`/sessions/${encodeURIComponent(hostId)}/kick`, post({ targetId })),
+    j<null>(`/playback/${encodeURIComponent(hostId)}/kick`, post({ targetId })),
   sessionLeave: (id: string) =>
-    apiFetch(`/sessions/${encodeURIComponent(id)}/leave`, { method: 'POST', keepalive: true }).catch(() => {}),
+    apiFetch(`/playback/${encodeURIComponent(id)}/leave`, { method: 'POST', keepalive: true }).catch(() => {}),
+  adminPlayback: () => j<Session[]>('/admin/playback'),
+  adminPlaybackCommand: (id: string, command: SessionCommandInput) =>
+    j<null>(`/admin/playback/${encodeURIComponent(id)}/command`, post(command)),
+  adminPlaybackEnd: (id: string) =>
+    apiFetch(`/admin/playback/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {}),
   resumeAll: () => j<ResumePoint[]>('/resume'),
-  saveResume: (url: string, positionMs: number, durationMs: number) =>
-    j<null>('/resume', put({ url, positionMs, durationMs, updatedMs: Date.now() })),
+  saveResume: (contentId: string, positionMs: number, durationMs: number) =>
+    j<null>('/resume', put({ contentId, positionMs, durationMs, updatedMs: Date.now() })),
+  deleteResume: (contentId: string) =>
+    j<null>(`/resume?contentId=${encodeURIComponent(contentId)}`, { method: 'DELETE' }),
   settings: () => j<Settings>('/settings'),
   saveSettings: (s: Settings) => j<null>('/settings', put(s)),
   downloads: () => j<Download[]>('/downloads'),
-  enqueueDownload: (channelId: number) => j<{ message: string }>('/downloads', post({ channelId })),
-  pauseDownload: (id: number) => j<null>(`/downloads/${id}/pause`, { method: 'POST' }),
-  resumeDownload: (id: number) => j<null>(`/downloads/${id}/resume`, { method: 'POST' }),
-  retryDownload: (id: number) => j<null>(`/downloads/${id}/retry`, { method: 'POST' }),
-  deleteDownload: (id: number) => j<null>(`/downloads/${id}`, { method: 'DELETE' }),
+  enqueueDownload: (contentId: string) => j<{ message: string }>('/downloads', post({ contentId })),
+  pauseDownload: (id: string) => j<null>(`/downloads/${encodeURIComponent(id)}/pause`, { method: 'POST' }),
+  resumeDownload: (id: string) => j<null>(`/downloads/${encodeURIComponent(id)}/resume`, { method: 'POST' }),
+  retryDownload: (id: string) => j<null>(`/downloads/${encodeURIComponent(id)}/retry`, { method: 'POST' }),
+  deleteDownload: (id: string) => j<null>(`/downloads/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 };
 
-/** Proxy every provider URL (CORS, mixed content). `u` is an opaque token, never a raw URL;
- *  `hls` requests the HLS variant of an Xtream live `.ts` source. `sid` (the player's session)
- *  lets the server count this stream against the provider's concurrent-connection cap. */
-export const streamUrl = (u: string, hls = false, sid?: string) =>
-  `${API_PREFIX}/stream?u=${encodeURIComponent(u)}${hls ? '&hls=1' : ''}${sid ? `&sid=${encodeURIComponent(sid)}` : ''}`;
-/** Audio re-encoded to AAC (video copied); live-playback fallback when the browser can't decode the codec. */
-export const transcodeUrl = (u: string, sid?: string) =>
-  `${API_PREFIX}/transcode?u=${encodeURIComponent(u)}${sid ? `&sid=${encodeURIComponent(sid)}` : ''}`;
-/** Watch-together live: the room's shared upstream (one provider connection), keyed by the
- *  viewer's session so the server groups the whole room onto a single read. */
-export const relayUrl = (u: string, sid: string) =>
-  `${API_PREFIX}/relay?u=${encodeURIComponent(u)}&sid=${encodeURIComponent(sid)}`;
 export const imgUrl = (u: string) => `${API_PREFIX}/img?u=${encodeURIComponent(u)}`;
-export const downloadFileUrl = (id: number, save = false) =>
-  `${API_PREFIX}/downloads/${id}/file${save ? '?save=1' : ''}`;
+export const downloadFileUrl = (id: string, save = false) =>
+  `${API_PREFIX}/downloads/${encodeURIComponent(id)}/file${save ? '?save=1' : ''}`;

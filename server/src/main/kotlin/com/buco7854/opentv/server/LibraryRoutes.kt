@@ -12,16 +12,9 @@ import io.ktor.server.routing.route
 /** Ktor adapter for library, progress, and settings use cases. */
 internal fun Route.libraryRoutes(service: LibraryApplicationService) {
     route("/channels/{id}") {
-        get { call.respond(service.channel(call.id())) }
-        get("/guide") { call.respond(service.guide(call.id())) }
-        get("/catchup-url") {
-            val start = call.request.queryParameters["start"]?.toLongOrNull()
-                ?: throw IllegalArgumentException("Missing start")
-            val end = call.request.queryParameters["end"]?.toLongOrNull()
-                ?: throw IllegalArgumentException("Missing end")
-            call.respond(service.catchupUrl(call.id(), start, end))
-        }
-        get("/vod-info") { call.respond(service.vodInfo(call.id())) }
+        get { call.respond(service.channel(call.actor, call.id())) }
+        get("/guide") { call.respond(service.guide(call.actor, call.id())) }
+        get("/vod-info") { call.respond(service.vodInfo(call.actor, call.id())) }
     }
 
     get("/meta") {
@@ -43,23 +36,23 @@ internal fun Route.libraryRoutes(service: LibraryApplicationService) {
     }
 
     route("/resume") {
-        get { call.respond(service.resumePoints()) }
+        get { call.respond(service.resumePoints(call.actor)) }
         put {
-            service.saveResume(call.receive())
+            service.saveResume(call.actor, call.receive())
             call.respond(HttpStatusCode.NoContent)
         }
         delete {
-            val url = call.request.queryParameters["url"]
-                ?: throw IllegalArgumentException("Missing url")
-            service.deleteResume(url)
+            val contentId = call.request.queryParameters["contentId"]
+                ?: throw IllegalArgumentException("Missing contentId")
+            service.deleteResume(call.actor, contentId)
             call.respond(HttpStatusCode.NoContent)
         }
     }
 
     route("/settings") {
-        get { call.respond(service.settings()) }
+        get { call.respond(service.settings(call.actor)) }
         put {
-            service.saveSettings(call.receive())
+            service.saveSettings(call.actor, call.receive())
             call.respond(HttpStatusCode.NoContent)
         }
     }

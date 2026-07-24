@@ -8,32 +8,31 @@ import {
   ReactNode, useCallback, useEffect, useMemo, useRef, useState,
 } from 'react';
 import {
-  api, ApiError, Channel, GuideEntry, relayUrl, ResumePoint,
-  SessionCommandInput, streamUrl, transcodeUrl,
+  api, ApiError, Channel, GuideEntry, PlaybackLease, ResumePoint,
+  SessionCommandInput,
 } from '../api';
+import { browserApiHttp } from '../api/http';
 import { GuideSheet } from '../components/GuideSheet';
 import { Icon } from '../components/Icons';
 import { IconBtn, snackbar } from '../components/Primitives';
-import { tabSessionId, useSessionReporter } from './useSessionReporter';
+import { useSessionReporter } from './useSessionReporter';
 import { useWatchTogether, WatchTogetherSheet } from './WatchTogether';
-import { deviceLabel } from '../lib/format';
 import { t } from '../i18n';
 import { prefs } from '../preferences';
 import { MenuSheet, SubtitleStyleSheet } from './PlaybackSheets';
 import { formatPlaybackTime, streamKind, supportsHevc } from './playbackPolicy';
 
 export interface PlayRequest {
-  url: string;
+  contentId: string;
   title: string;
   channelId?: number;
   live?: boolean;
   tvgId?: string | null;
   hasGuide?: boolean;
-  catchup?: boolean;
-  /** Served by this server (downloaded file): skip the stream proxy. */
-  direct?: boolean;
-  /** Reported to the activity dashboard (who is watching what). */
-  playlistId?: number | null;
+  mode?: 'play' | 'catchup' | 'download';
+  catchupStartMs?: number;
+  catchupDurationMs?: number;
+  downloadId?: string;
   kind?: 'live' | 'movie' | 'series' | 'catchup' | 'download';
   logo?: string | null;
 }
@@ -61,12 +60,116 @@ const hevcCapable = supportsHevc(typeof MediaSource === 'undefined' ? undefined 
 
 type TrackKind = { audio: { names: string[]; current: number }; subs: { names: string[]; current: number } };
 
-export function PlayerSurface({ request, onClose, onPlayCatchup }: {
+function replaceGrant(url: string | null, grant: string): string | null {
+  if (!url) return null;
+  const next = new URL(url, window.location.origin);
+  next.searchParams.set('g', grant);
+  return `${next.pathname}${next.search}${next.hash}`;
+}
+
+function mediaSourceKey(url: string | null): string {
+  if (!url) return '';
+  const next = new URL(url, window.location.origin);
+  next.searchParams.delete('g');
+  return `${next.pathname}${next.search}${next.hash}`;
+}
+
+function sourceKind(url: string | null) {
+  if (!url) return 'direct' as const;
+  const parsed = new URL(url, window.location.origin);
+  return streamKind(parsed.searchParams.get('u') ?? url);
+}
+
+export function PlayerSurface(props: {
   request: PlayRequest;
   onClose: () => void;
   onPlayCatchup: (channelId: number, startMs: number, endMs: number) => void;
 }) {
-  const { url, title, channelId, live, tvgId, hasGuide, catchup, direct } = request;
+  const { request, onClose } = props;
+  const [lease, setLease] = useState<PlaybackLease | null>(null);
+  const [leaseError, setLeaseError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let created: PlaybackLease | null = null;
+    setLease(null);
+    setLeaseError(null);
+    api.createPlayback({
+      contentId: request.contentId,
+      mode: request.mode ?? 'play',
+      catchupStartMs: request.catchupStartMs,
+      catchupDurationMs: request.catchupDurationMs,
+      downloadId: request.downloadId,
+    }).then((next) => {
+      created = next;
+      if (cancelled) api.playbackEnd(next.id);
+      else setLease(next);
+    }).catch((cause: unknown) => {
+      if (cancelled) return;
+      const error = cause as ApiError;
+      if (error.status === 401 || error.status === 410) onClose();
+      else setLeaseError(error.message);
+    });
+    return () => {
+      cancelled = true;
+      if (created) api.playbackEnd(created.id);
+    };
+  }, [
+    request.contentId, request.mode, request.catchupStartMs,
+    request.catchupDurationMs, request.downloadId, onClose,
+  ]);
+
+  useEffect(() => {
+    if (!lease) return;
+    const delay = Math.max(10_000, lease.mediaGrantExpiresAtMs - Date.now() - 60_000);
+    const timer = window.setTimeout(() => {
+      api.refreshMediaGrant(lease.id).then((issued) => {
+        setLease((current) => current?.id === lease.id ? {
+          ...current,
+          mediaGrant: issued.token,
+          mediaGrantExpiresAtMs: issued.expiresAtMs,
+          streamUrl: replaceGrant(current.streamUrl, issued.token),
+          relayUrl: replaceGrant(current.relayUrl, issued.token),
+          transcodeUrl: replaceGrant(current.transcodeUrl, issued.token),
+          remuxStartUrl: replaceGrant(current.remuxStartUrl, issued.token)!,
+        } : current);
+      }).catch((cause: unknown) => {
+        const error = cause as ApiError;
+        if (error.status === 401 || error.status === 410) onClose();
+        else setLeaseError(error.message);
+      });
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [lease, onClose]);
+
+  if (leaseError) {
+    return (
+      <div className="player-frame">
+        <div className="player-error">
+          <h3>{t('player.errorTitle')}</h3>
+          <p>{leaseError}</p>
+          <button className="btn tonal" style={{ width: 'auto' }} onClick={onClose}>{t('common.close')}</button>
+        </div>
+      </div>
+    );
+  }
+  if (!lease) return <div className="player-frame"><div className="player-spinner" aria-hidden /></div>;
+  return <LeasedPlayerSurface {...props} lease={lease} />;
+}
+
+function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
+  request: PlayRequest;
+  lease: PlaybackLease;
+  onClose: () => void;
+  onPlayCatchup: (channelId: number, startMs: number, endMs: number) => void;
+}) {
+  const {
+    title, channelId, live, tvgId, hasGuide,
+  } = request;
+  const catchup = request.mode === 'catchup';
+  const direct = request.mode === 'download';
+  const url = lease.streamUrl ?? lease.remuxStartUrl;
+  const sourceKey = mediaSourceKey(url);
   // Server remux override: the file re-served as a VOD HLS playlist (all tracks exposed,
   // seeking handled by hls.js). `startAt` is the resume/switch position; `audio` is the
   // muxed-in track (switching re-requests).
@@ -84,19 +187,34 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
   useEffect(() => {
     // Switching files: release the old session (frees its provider connection).
     const prev = remuxRef.current;
-    if (prev) api.remuxStop(prev.id);
+    if (prev) api.remuxStop(prev.id, lease.id, lease.mediaGrant);
     setRemux(null); setRemuxState('idle'); forceTranscode.current = false;
     setError(null);
-  }, [url]);
+  }, [sourceKey, lease.id]);
   useEffect(() => {
     api.remuxAvailable().then((r) => setRemuxAvailable(r.available)).catch(() => setRemuxAvailable(false));
   }, []);
-  const activeUrl = remux?.playlistUrl ?? url;
+  const activeUrl = remux?.playlistUrl ?? lease.streamUrl ?? '';
   const activeDirect = remux ? true : !!direct;
   const rootRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const mpegtsRef = useRef<mpegts.Player | null>(null);
+
+  // Renewing a media grant changes only authorization, not playback identity. Refresh
+  // remux child URLs and restart HLS at the current VOD position without releasing the
+  // shared physical remux attachment.
+  const previousGrant = useRef(lease.mediaGrant);
+  useEffect(() => {
+    if (previousGrant.current === lease.mediaGrant) return;
+    previousGrant.current = lease.mediaGrant;
+    const at = videoRef.current?.currentTime ?? 0;
+    setRemux((current) => current ? {
+      ...current,
+      playlistUrl: replaceGrant(current.playlistUrl, lease.mediaGrant)!,
+      startAt: at,
+    } : current);
+  }, [lease.mediaGrant]);
 
   const [error, setError] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
@@ -130,40 +248,37 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
   // Explicit track picks, kept across engine restarts (seek re-anchors rebuild hls.js).
   // audio -1 = untouched; subs null = untouched, -1 = explicitly off.
   const chosenTracks = useRef<{ audio: number; subs: number | null }>({ audio: -1, subs: null });
-  useEffect(() => { chosenTracks.current = { audio: -1, subs: null }; }, [url]);
+  useEffect(() => { chosenTracks.current = { audio: -1, subs: null }; }, [sourceKey]);
 
   const src = useCallback(
-    // The session id rides on proxied URLs so the server counts this stream against the
-    // provider's connection cap; direct (remux/download) URLs bypass the proxy entirely.
-    (u: string, hls = false) => (activeDirect ? u : streamUrl(u, hls, tabSessionId())),
-    [activeDirect],
+    (u: string, hls = false) => {
+      if (!hls) return u;
+      const next = new URL(u, window.location.origin);
+      next.searchParams.set('hls', '1');
+      return `${next.pathname}${next.search}${next.hash}`;
+    },
+    [],
   );
 
   // Non-live files (VOD, downloads, raw-TS VOD) and catch-up go through the remux:
   // it exposes tracks, normalizes audio the browser can't decode (E-AC3/AC3), and
   // gives catch-up a seekable timeline. Engine stays off while pending so
   // single-connection providers never see two concurrent opens. Live `.ts` is excluded.
-  const remuxEligible = !live &&
-    (streamKind(url) === 'direct' || streamKind(url) === 'ts' || !!catchup);
+  const remuxEligible = !live;
 
   // Watch-together: stable content identity, and whether this stream draws on the provider
   // (downloads are local). Defined here so the connection check can gate the engine below.
   const providerBacked = !direct;
-  const contentKey = catchup ? `cu:${url}` : channelId != null ? `ch:${channelId}` : `u:${url}`;
-  const deviceName = useMemo(() => deviceLabel(navigator.userAgent) || t('watch.someone'), []);
   // Filled by useSessionReporter with a sender over its live socket, so watch-together sync
   // rides that socket in real time (with a POST fallback) instead of a request per event.
   const wsSend = useRef<((command: SessionCommandInput) => boolean) | null>(null);
   const wt = useWatchTogether({
-    selfId: tabSessionId(),
-    deviceName,
+    selfId: lease.id,
     video: videoRef,
     active: !error,
     live: !!live,
     remuxEligible,
-    contentKey,
-    source: url,
-    playlistId: request.playlistId ?? null,
+    contentId: request.contentId,
     send: wsSend,
     // A controller changed the room's shared track: re-request the remux with it (startRemuxRef
     // is set below; this only fires on a later command).
@@ -201,6 +316,11 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
       if (!videoRef.current?.paused) setUiVisible(false);
     }, 3000);
   }, []);
+  const terminatePlayback = useCallback((status: number) => {
+    snackbar(status === 403 ? t('player.forbidden') : t('player.revoked'));
+    if (status === 401) browserApiHttp.notifyUnauthorized();
+    onClose();
+  }, [onClose]);
 
   // Native <video> failures give no reason; probe the URL to surface an upstream
   // HTTP error instead of a misleading "cannot decode".
@@ -208,6 +328,10 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     try {
       const r = await fetch(src(url), { headers: { Range: 'bytes=0-0' } });
       if (!r.ok) {
+        if (r.status === 401 || r.status === 403 || r.status === 410) {
+          terminatePlayback(r.status);
+          return;
+        }
         let message = `HTTP ${r.status}`;
         try { message = ((await r.json()) as { message?: string }).message || message; } catch { /* not json */ }
         setError(t('player.upstreamFailed', { message }));
@@ -216,7 +340,7 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
       try { await r.body?.cancel(); } catch { /* stream already closed */ }
     } catch { /* network failed; keep the generic message */ }
     setError((old) => old ?? t('player.decodeFailed'));
-  }, [src, url]);
+  }, [src, terminatePlayback, url]);
 
   // ---- engine wiring ----
   const lastUrl = useRef<string>();
@@ -234,7 +358,7 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
       video.playbackRate = 1;
     }
 
-    const kind = streamKind(activeUrl);
+    const kind = remux ? streamKind(activeUrl) : sourceKind(lease.streamUrl);
 
     const stopEngines = () => {
       hlsRef.current?.destroy(); hlsRef.current = null;
@@ -258,11 +382,17 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
         setError(t('player.mpegtsUnsupported'));
         return;
       }
+      const mediaUrl = relay
+        ? lease.relayUrl
+        : transcoded ? lease.transcodeUrl : lease.streamUrl;
+      if (!mediaUrl) {
+        setError(t('player.decodeFailed'));
+        return;
+      }
       setAudioTranscoded(transcoded);
       const player = mpegts.createPlayer({
         type: 'mpegts', isLive: true,
-        url: relay ? relayUrl(target, tabSessionId())
-          : transcoded ? transcodeUrl(target, tabSessionId()) : src(target),
+        url: mediaUrl,
       });
       mpegtsRef.current = player;
       player.attachMediaElement(video);
@@ -289,7 +419,17 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
       let lastErr = 0;
       let noticed = false;
       const noteAudio = () => { if (!noticed) { noticed = true; snackbar(t('player.audioUnsupported')); } };
-      player.on(mpegts.Events.ERROR, (type: string) => {
+      player.on(mpegts.Events.ERROR, (type: string, _detail: string, info: unknown) => {
+        const response = info as {
+          code?: number;
+          status?: number;
+          statusCode?: number;
+        } | null;
+        const status = Number(response?.code ?? response?.status ?? response?.statusCode);
+        if (status === 401 || status === 403 || status === 410) {
+          terminatePlayback(status);
+          return;
+        }
         if (type === mpegts.ErrorTypes.NETWORK_ERROR) {
           if (hasPicture()) return; // a frozen frame recovers via the watchdog
           const now = performance.now();
@@ -341,6 +481,11 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
       hls.loadSource(src(target, hlsVariant));
       hls.attachMedia(video);
       hls.on(Hls.Events.ERROR, (_e, data) => {
+        const status = data.response?.code;
+        if (status === 401 || status === 403 || status === 410) {
+          terminatePlayback(status);
+          return;
+        }
         if (!data.fatal) return;
         // A copied HEVC the browser claimed to support but can't actually decode: force a
         // transcode and re-prepare the session at the current spot.
@@ -404,7 +549,7 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     if (!live && !catchup && !remux) {
       // Resume VOD position (remux already starts there); catch-up never resumes.
       api.resumeAll().then((points) => {
-        const p = points.find((x) => x.url === url);
+        const p = points.find((x) => x.contentId === request.contentId);
         if (p && p.positionMs >= 10_000) {
           const apply = () => { video.currentTime = p.positionMs / 1000; };
           if (video.readyState >= 1) apply();
@@ -417,7 +562,11 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
       if (live || catchup) return;
       const duration = remux?.duration ?? video.duration;
       if (!duration || !isFinite(duration)) return;
-      api.saveResume(url, Math.floor(video.currentTime * 1000), Math.floor(duration * 1000)).catch(() => {});
+      api.saveResume(
+        request.contentId,
+        Math.floor(video.currentTime * 1000),
+        Math.floor(duration * 1000),
+      ).catch(() => {});
     };
     const resumeTimer = live || catchup ? undefined : setInterval(saveResume, 5000);
 
@@ -457,15 +606,20 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
       video.removeAttribute('src');
       video.load();
     };
-  }, [url, activeUrl, live, remux, src, holdEngine, roomLive]);
+  }, [
+    url, activeUrl, live, remux, src, holdEngine, roomLive, lease,
+    request.contentId, catchup, terminatePlayback,
+  ]);
 
   // PiP/fullscreen end when the player closes, not on engine swaps. Closing also
   // releases the remux session so nothing keeps reading the provider.
+  const latestGrant = useRef(lease.mediaGrant);
+  latestGrant.current = lease.mediaGrant;
   useEffect(() => () => {
     if (document.pictureInPictureElement) document.exitPictureInPicture().catch(() => {});
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-    if (remuxRef.current) api.remuxStop(remuxRef.current.id);
-  }, []);
+    if (remuxRef.current) api.remuxStop(remuxRef.current.id, lease.id, latestGrant.current);
+  }, [lease.id]);
 
   // ---- video element state -> React ----
   useEffect(() => {
@@ -610,7 +764,7 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     // In a room the audio is shared: only a controller can change it, and the switch comes back
     // as a room-audio command that re-requests the remux for everyone, so don't touch local state.
     if (remuxRef.current && wtRef.current.inRoom) {
-      if (wtRef.current.canControl) api.roomAudio(tabSessionId(), index);
+      if (wtRef.current.canControl) api.roomAudio(lease.id, index);
       return;
     }
     chosenTracks.current.audio = index;
@@ -623,7 +777,7 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     }
     if (hlsRef.current) { hlsRef.current.audioTrack = index; return; }
     nativeTracks.current.audio.forEach((track, i) => { track.enabled = i === index; });
-  }, []);
+  }, [lease.id]);
 
   const pickSubtitle = useCallback((index: number) => {
     chosenTracks.current.subs = index;
@@ -756,10 +910,12 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
       const hevc = hevcCapable && !forceTranscode.current;
       // The tab id lets the server group this read: alone it's ours, in a room it's shared, and
       // there the room's audio track overrides what we asked - result.audio is what it used.
-      const result = await api.remuxStart(url, audioIdx, !!catchup, hevc, tabSessionId());
+      const result = await api.remuxStart(lease.remuxStartUrl, audioIdx, !!catchup, hevc);
       // Switching audio or share group makes a new session; release the old one so this viewer
       // never holds two of the provider's connections at once.
-      if (prevId && prevId !== result.id) api.remuxStop(prevId);
+      if (prevId && prevId !== result.id) {
+        api.remuxStop(prevId, lease.id, lease.mediaGrant);
+      }
       chosenTracks.current.audio = result.audio;
       setRemux({
         id: result.id, playlistUrl: result.playlistUrl,
@@ -785,7 +941,7 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
       setRemux(null);
       if (!noTracks) snackbar((e as Error).message);
     }
-  }, [url, catchup]);
+  }, [lease, catchup]);
   startRemuxRef.current = startRemux;
 
   // Prepare the remux when the file opens, opening at the saved resume position so
@@ -798,12 +954,15 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     (async () => {
       const points = catchup ? [] : await api.resumeAll().catch(() => [] as ResumePoint[]);
       if (cancelled) return;
-      const point = points.find((x) => x.url === url);
+      const point = points.find((x) => x.contentId === request.contentId);
       const at = point && point.positionMs >= 10_000 ? Math.floor(point.positionMs / 1000) : 0;
       startRemux(Math.max(0, chosenTracks.current.audio), at);
     })();
     return () => { cancelled = true; };
-  }, [remuxEligible, remuxAvailable, remux, remuxState, url, catchup, startRemux, wt.checking, wt.blocked]);
+  }, [
+    remuxEligible, remuxAvailable, remux, remuxState, url, catchup,
+    startRemux, wt.checking, wt.blocked, request.contentId,
+  ]);
 
   // Joining or leaving a room changes the share group, so the server keys the remux to a
   // different session: joiners collapse onto the room's one shared read, a leaver splits back to
@@ -823,11 +982,14 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
       // Left or kicked: drop the room's shared read now (so we don't keep playing a session we're
       // no longer part of); the re-check then blocks us if the provider is full, or the prepare
       // effect starts our own solo read.
-      api.remuxStop(remuxRef.current.id);
+      api.remuxStop(remuxRef.current.id, lease.id, lease.mediaGrant);
       setRemux(null);
       setRemuxState('idle');
     }
-  }, [wt.inRoom, remuxEligible, remuxAvailable, startRemux]);
+  }, [
+    wt.inRoom, remuxEligible, remuxAvailable, startRemux,
+    lease.id, lease.mediaGrant,
+  ]);
 
   // Remux is the only path to sound for undecodable audio (AC3/E-AC3/DTS), so a failed
   // prepare can't be left as silent direct playback. Usual cause: a single-connection
@@ -876,10 +1038,9 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
   // choice; remux takes precedence since it re-serves the source as HLS.
   const reportEngine = roomLive ? 'mpegts'
     : remux ? 'remux'
-      : streamKind(activeUrl) === 'ts' ? 'mpegts'
-        : streamKind(activeUrl) === 'direct' ? 'native' : 'hls';
-  useSessionReporter({
-    playlistId: request.playlistId ?? null,
+      : sourceKind(lease.streamUrl) === 'ts' ? 'mpegts'
+        : sourceKind(lease.streamUrl) === 'direct' ? 'native' : 'hls';
+  useSessionReporter(lease.id, {
     title,
     kind: request.kind ?? (catchup ? 'catchup' : live ? 'live' : 'movie'),
     logo: request.logo ?? null,
@@ -892,9 +1053,10 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
     // dashboard shows that, not the transient pre-remux (proxied) mode.
     preparing: holdEngine,
     remuxId: remux?.id ?? null,
-    contentKey,
-    name: deviceName,
-  }, videoRef, wt.onCommand, wsSend);
+  }, videoRef, wt.onCommand, wsSend, () => {
+    snackbar(t('player.revoked'));
+    onClose();
+  });
 
   // Buffering means we're waiting on data (initial load, a seek, a stall) - show the spinner even
   // while paused, so a loading player never shows a resting play icon. A deliberate pause clears

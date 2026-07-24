@@ -6,7 +6,7 @@ import { t } from '../i18n';
 import { dayKey, fmtGuideDay, fmtTime } from '../lib/format';
 import { ChannelLogo } from './Common';
 import { Icon } from './Icons';
-import { Sheet, snackbar, Spinner } from './Primitives';
+import { Sheet, Spinner } from './Primitives';
 
 export function GuideSheet({ channel, onDismiss, onPlayCatchup, container }: {
   channel: Channel;
@@ -39,19 +39,9 @@ export function GuideSheet({ channel, onDismiss, onPlayCatchup, container }: {
     });
   };
 
-  async function replay(entry: GuideEntry) {
-    try {
-      // Confirm the panel has this window before navigating.
-      const { url } = await api.catchupUrl(channel.id, entry.startMs, entry.endMs);
-      if (!url) {
-        snackbar(t('guide.catchupUnavailable'));
-        return;
-      }
-      onDismiss();
-      onPlayCatchup(channel.id, entry.startMs, entry.endMs);
-    } catch (e) {
-      snackbar((e as Error).message);
-    }
+  function replay(entry: GuideEntry) {
+    onDismiss();
+    onPlayCatchup(channel.id, entry.startMs, entry.endMs);
   }
 
   return (

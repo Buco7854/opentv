@@ -13,13 +13,17 @@ import io.ktor.util.AttributeKey
  * Authentication data available to application endpoints.
  *
  * Keeping this type independent from a particular authentication mechanism lets a
- * future bearer-token, session-cookie, or reverse-proxy implementation replace the
- * current open-access adapter without changing route handlers.
+ * future native bearer-token implementation coexist with browser cookies without
+ * changing route handlers.
  */
 data class ApiPrincipal(
     val subject: String,
     val displayName: String? = null,
     val roles: Set<String> = emptySet(),
+    val authSessionId: String = "",
+    val username: String = subject,
+    val authMethod: String = "unknown",
+    val clientKind: String = "BROWSER",
 )
 
 data class ApiRequestCredentials(
@@ -28,6 +32,8 @@ data class ApiRequestCredentials(
     val method: String,
     val path: String,
     val clientIp: String,
+    val csrfToken: String? = null,
+    val origin: String? = null,
 )
 
 fun interface ApiAuthenticator {
@@ -41,6 +47,7 @@ fun interface ApiAccessPolicy {
 class ApiSecurity(
     private val authenticator: ApiAuthenticator,
     private val accessPolicy: ApiAccessPolicy = ApiAccessPolicy { _, _ -> true },
+    private val requestGuard: suspend (ApiPrincipal, ApiRequestCredentials) -> Unit = { _, _ -> },
 ) {
     suspend fun authenticate(request: ApiRequestCredentials): ApiPrincipal? =
         authenticator.authenticate(request)
@@ -48,21 +55,67 @@ class ApiSecurity(
     suspend fun isAllowed(principal: ApiPrincipal, request: ApiRequestCredentials): Boolean =
         accessPolicy.isAllowed(principal, request)
 
+    suspend fun validate(principal: ApiPrincipal, request: ApiRequestCredentials) =
+        requestGuard(principal, request)
+
     companion object {
         /**
-         * Preserves the application's current deployment contract. Replace this adapter
-         * at the composition root when real authentication is introduced.
+         * Test-only open-access adapter. Production composition uses [authenticated].
          */
         fun openAccess(): ApiSecurity = ApiSecurity(
             ApiAuthenticator { ApiPrincipal(subject = "anonymous", roles = setOf("user")) },
         )
+
+        fun authenticated(auth: AuthService, config: AuthConfig): ApiSecurity = ApiSecurity(
+            authenticator = ApiAuthenticator { request ->
+                val token = request.cookie
+                    ?.split(';')
+                    ?.map(String::trim)
+                    ?.firstOrNull { it.startsWith("$SESSION_COOKIE=") }
+                    ?.substringAfter('=')
+                auth.requestAuthenticator.authenticate(token)?.let { actor ->
+                    ApiPrincipal(
+                        subject = actor.userId,
+                        displayName = actor.displayName,
+                        roles = actor.roles,
+                        authSessionId = actor.authSessionId,
+                        username = actor.username,
+                        authMethod = actor.authMethod,
+                        clientKind = actor.clientKind,
+                    )
+                }
+            },
+            requestGuard = { principal, request ->
+                val actor = principal.toActor()
+                val unsafe = request.method !in setOf("GET", "HEAD", "OPTIONS")
+                if (unsafe) auth.validateCsrf(actor, request.csrfToken)
+                if (unsafe || request.path.endsWith("/ws")) {
+                    val expected = "${config.publicUrl.scheme}://${config.publicUrl.rawAuthority}"
+                    if (request.origin != expected) throw CsrfException()
+                }
+            },
+        )
     }
 }
 
+internal const val SESSION_COOKIE = "opentv_session"
 private val ApiPrincipalKey = AttributeKey<ApiPrincipal>("OpenTvApiPrincipal")
 
 val ApplicationCall.apiPrincipal: ApiPrincipal
     get() = attributes[ApiPrincipalKey]
+
+val ApplicationCall.actor: Actor
+    get() = apiPrincipal.toActor()
+
+private fun ApiPrincipal.toActor() = Actor(
+    userId = subject,
+    authSessionId = authSessionId,
+    username = username,
+    displayName = displayName ?: username,
+    roles = roles,
+    authMethod = authMethod,
+    clientKind = clientKind,
+)
 
 internal class UnauthenticatedApiException : RuntimeException()
 internal class ForbiddenApiException : RuntimeException()
@@ -85,9 +138,12 @@ private val ApiSecurityPlugin = createRouteScopedPlugin(
             method = call.request.httpMethod.value,
             path = call.request.path(),
             clientIp = clientIp(call),
+            csrfToken = call.request.headers["X-CSRF-Token"],
+            origin = call.request.headers[HttpHeaders.Origin],
         )
         val principal = security.authenticate(request) ?: throw UnauthenticatedApiException()
         if (!security.isAllowed(principal, request)) throw ForbiddenApiException()
+        security.validate(principal, request)
         call.attributes.put(ApiPrincipalKey, principal)
     }
 }

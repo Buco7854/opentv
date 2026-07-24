@@ -253,6 +253,11 @@ class RemuxService(
         sessions[id]?.let { evict(it) }
     }
 
+    /** Stop only reads owned by this playback lease/share group. */
+    fun stopGroup(group: String) {
+        sessions.values.filter { it.shareKey == group }.forEach { evict(it) }
+    }
+
     /** Read-only snapshot of a live session's ffmpeg pipeline, for the admin dashboard's
      *  "why is this transcoding/remuxing" panel. Null when the session is gone. */
     data class RemuxDiagnostics(
@@ -621,11 +626,19 @@ class RemuxService(
         }
     }
 
-    suspend fun playlist(id: String, call: ApplicationCall) {
+    suspend fun playlist(id: String, call: ApplicationCall, mediaQuery: String = "") {
         val session = sessions[id] ?: return notFound(call)
         session.lastAccessMs = System.currentTimeMillis()
         call.response.header(HttpHeaders.CacheControl, "no-store")
-        call.respondText(withContext(Dispatchers.IO) { Files.readString(session.dir.resolve("main.m3u8")) },
+        val body = withContext(Dispatchers.IO) { Files.readString(session.dir.resolve("main.m3u8")) }
+            .replace("URI=\"init.mp4\"", "URI=\"init.mp4$mediaQuery\"")
+            .lineSequence()
+            .joinToString("\n") { line ->
+                if (mediaQuery.isNotEmpty() && line.isNotBlank() && !line.startsWith("#")) {
+                    line + mediaQuery
+                } else line
+            }
+        call.respondText(body,
             ContentType.parse("application/vnd.apple.mpegurl"))
     }
 
@@ -681,18 +694,18 @@ class RemuxService(
     private val timestampMap = "X-TIMESTAMP-MAP=MPEGTS:0,LOCAL:00:00:00.000"
 
     /** Master playlist: the video/audio rendition plus one WebVTT subtitle rendition per track. */
-    suspend fun master(id: String, call: ApplicationCall) {
+    suspend fun master(id: String, call: ApplicationCall, mediaQuery: String = "") {
         val session = sessions[id] ?: return notFound(call)
         session.lastAccessMs = System.currentTimeMillis()
         val body = buildString {
             append("#EXTM3U\n#EXT-X-VERSION:7\n")
             session.subLabels.forEachIndexed { i, label ->
                 append("#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\",NAME=\"${label.replace('"', '\'')}\",")
-                append("AUTOSELECT=YES,DEFAULT=NO,FORCED=NO,URI=\"sub_$i.m3u8\"\n")
+                append("AUTOSELECT=YES,DEFAULT=NO,FORCED=NO,URI=\"sub_$i.m3u8$mediaQuery\"\n")
             }
             append("#EXT-X-STREAM-INF:BANDWIDTH=3000000")
             if (session.subLabels.isNotEmpty()) append(",SUBTITLES=\"subs\"")
-            append("\nmain.m3u8\n")
+            append("\nmain.m3u8$mediaQuery\n")
         }
         call.response.header(HttpHeaders.CacheControl, "no-store")
         call.respondText(body, ContentType.parse("application/vnd.apple.mpegurl"))
@@ -700,7 +713,12 @@ class RemuxService(
 
     /** A subtitle rendition's own VOD playlist: one WebVTT segment per video segment, so cues
      *  become available in step with the video as ffmpeg produces them. */
-    suspend fun subtitlePlaylist(id: String, index: Int, call: ApplicationCall) {
+    suspend fun subtitlePlaylist(
+        id: String,
+        index: Int,
+        call: ApplicationCall,
+        mediaQuery: String = "",
+    ) {
         val session = sessions[id] ?: return notFound(call)
         session.lastAccessMs = System.currentTimeMillis()
         val lengths = segLengths(session)
@@ -710,7 +728,7 @@ class RemuxService(
             append("#EXT-X-MEDIA-SEQUENCE:0\n")
             lengths.forEachIndexed { n, len ->
                 append("#EXTINF:%.6f,\n".format(len))
-                append("sub_${index}_$n.vtt\n")
+                append("sub_${index}_$n.vtt$mediaQuery\n")
             }
             append("#EXT-X-ENDLIST\n")
         }

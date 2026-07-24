@@ -13,14 +13,6 @@ data class ApiErrorDto(
 )
 
 @Serializable
-data class WatchIntentRequest(
-    val selfId: String,
-    val contentKey: String,
-    val source: String? = null,
-    val playlistId: Long? = null,
-)
-
-@Serializable
 data class WatchIntentPeer(val id: String, val name: String)
 
 @Serializable
@@ -31,21 +23,41 @@ data class WatchIntentResponse(
 )
 
 @Serializable
-data class JoinRequestBody(val peerId: String, val peerName: String, val contentKey: String = "")
+data class JoinRequestBody(val peerId: String)
 
 @Serializable
 data class JoinAnswerBody(
     val peerId: String,
-    val hostName: String,
-    val contentKey: String = "",
     val accept: Boolean,
 )
 
-@Serializable data class RequestControlBody(val peerName: String)
+@Serializable data class RequestControlBody(val requested: Boolean = true)
 @Serializable data class GrantControlBody(val peerId: String, val grant: Boolean)
 @Serializable data class KickBody(val targetId: String)
 @Serializable data class SetControlBody(val targetId: String, val grant: Boolean)
 @Serializable data class RoomAudioBody(val audioIndex: Int)
+
+@Serializable
+data class PlaybackCreateRequest(
+    val contentId: String,
+    val mode: String = "play",
+    val catchupStartMs: Long? = null,
+    val catchupDurationMs: Long? = null,
+    val downloadId: String? = null,
+)
+
+@Serializable
+data class PlaybackLeaseDto(
+    val id: String,
+    val contentId: String,
+    val playlistId: Long,
+    val mediaGrant: String,
+    val mediaGrantExpiresAtMs: Long,
+    val streamUrl: String? = null,
+    val relayUrl: String? = null,
+    val transcodeUrl: String? = null,
+    val remuxStartUrl: String,
+)
 
 @Serializable
 data class ClientFrameDto(
@@ -100,6 +112,7 @@ data class PlaylistDetailDto(
 
 @Serializable
 data class SeriesHitDto(
+    val contentId: String,
     val seriesKey: String,
     val count: Int,
     val logo: String? = null,
@@ -128,8 +141,7 @@ data class FavoritesResolvedDto(
     val series: List<SeriesHitDto> = emptyList(),
 )
 
-@Serializable data class CatchupUrlDto(val url: String?)
 @Serializable data class GroupKindRequest(val groupTitle: String, val kind: Int? = null)
 @Serializable data class SettingsDto(val userAgent: String = "", val downloadLimit: Int = 1, val pageSize: Int = 50)
-@Serializable data class EnqueueDownloadRequest(val channelId: Long)
-@Serializable data class FavoriteRequest(val key: String, val kind: Int)
+@Serializable data class EnqueueDownloadRequest(val contentId: String)
+@Serializable data class FavoriteRequest(val contentId: String)

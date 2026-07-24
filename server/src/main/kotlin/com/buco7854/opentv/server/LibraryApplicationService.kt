@@ -15,19 +15,20 @@ class LibraryApplicationService(
     private val cipher: StreamCipher,
     private val settings: ServerSettings,
     private val http: ServerHttp,
+    private val auth: AuthService,
+    private val content: ContentIdentityService,
+    private val activity: UserActivityService,
 ) {
-    suspend fun channel(id: Long): ChannelDto = channelModel(id).toDto(cipher)
+    suspend fun channel(actor: Actor, id: Long): ChannelDto {
+        val channel = channelModel(actor, id)
+        return channel.toDto(cipher, content.channel(channel).contentId)
+    }
 
-    suspend fun guide(id: Long): List<GuideEntryDto> =
-        xtream.guideFor(channelModel(id)).map { it.toDto() }
+    suspend fun guide(actor: Actor, id: Long): List<GuideEntryDto> =
+        xtream.guideFor(channelModel(actor, id)).map { it.toDto() }
 
-    suspend fun catchupUrl(id: Long, startMs: Long, endMs: Long): CatchupUrlDto =
-        CatchupUrlDto(
-            xtream.catchupUrlFor(channelModel(id), startMs, endMs)?.let(cipher::encrypt)
-        )
-
-    suspend fun vodInfo(id: Long): MetadataDto {
-        val channel = channelModel(id)
+    suspend fun vodInfo(actor: Actor, id: Long): MetadataDto {
+        val channel = channelModel(actor, id)
         val result = channel.xtreamStreamId?.let { xtream.vodMetadata(channel) }
             ?: metadata.forTitle(isSeries = false, rawName = channel.name)
         return result.toDto(cipher)
@@ -45,34 +46,31 @@ class LibraryApplicationService(
         return result.toDto(cipher)
     }
 
-    suspend fun resumePoints(): List<ResumePointDto> =
-        storage.resume.getAll().map { it.toDto(cipher) }
+    suspend fun resumePoints(actor: Actor): List<ResumePointDto> = activity.resume(actor)
 
-    suspend fun saveResume(request: ResumePointDto) {
-        storage.resume.upsert(
-            ResumePoint(
-                cipher.resolve(request.url),
-                request.positionMs,
-                request.durationMs,
-                nowMs(),
-            )
-        )
-    }
+    suspend fun saveResume(actor: Actor, request: ResumePointDto) = activity.saveResume(actor, request)
 
-    suspend fun deleteResume(url: String) = storage.resume.delete(cipher.resolve(url))
+    suspend fun deleteResume(actor: Actor, contentId: String) = activity.deleteResume(actor, contentId)
 
-    fun settings(): SettingsDto = SettingsDto(
+    fun settings(actor: Actor): SettingsDto {
+        if (!actor.isAdmin) throw ForbiddenApiException()
+        return SettingsDto(
         userAgent = settings.userAgent,
         downloadLimit = settings.downloadLimit,
         pageSize = settings.pageSize,
-    )
+        )
+    }
 
-    fun saveSettings(request: SettingsDto) {
+    fun saveSettings(actor: Actor, request: SettingsDto) {
+        if (!actor.isAdmin) throw ForbiddenApiException()
         settings.userAgent = request.userAgent
         settings.downloadLimit = request.downloadLimit
         http.userAgent = request.userAgent.trim().ifBlank { ServerHttp.DEFAULT_USER_AGENT }
     }
 
-    private suspend fun channelModel(id: Long): Channel =
-        storage.channels.get(id) ?: throw ResourceNotFound("channel")
+    private suspend fun channelModel(actor: Actor, id: Long): Channel {
+        val channel = storage.channels.get(id) ?: throw ResourceNotFound("channel")
+        if (!auth.hasPlaylistAccess(actor, channel.playlistId)) throw ForbiddenApiException()
+        return channel
+    }
 }

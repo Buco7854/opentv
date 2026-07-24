@@ -7,6 +7,7 @@ import { Icon } from '../components/Icons';
 import { Segmented, snackbar, Spinner, TextField, ScreenHeader } from '../components/Primitives';
 import { Language, languageSetting, MessageKey, t } from '../i18n';
 import { applyTheme, prefs, Theme } from '../preferences';
+import { useAuth } from '../auth/AuthProvider';
 
 const USER_AGENT_PRESETS: [string, string][] = [
   ['', ''],
@@ -29,6 +30,8 @@ const SECTIONS: { id: SectionId; icon: string }[] = [
 const sectionLabel = (id: SectionId) => t(`settings.${id}` as MessageKey);
 
 export function SettingsScreen() {
+  const { user } = useAuth();
+  const admin = user?.role === 'ADMIN';
   const [server, setServer] = useState<Settings | null>(null);
   const [seek, setSeek] = useState(prefs.seekSeconds);
   const [resize, setResize] = useState(prefs.resizeMode);
@@ -37,7 +40,14 @@ export function SettingsScreen() {
   const [current, setCurrent] = useState<SectionId>('appearance');
   const saveTimer = useRef<ReturnType<typeof setTimeout>>();
 
-  useEffect(() => { api.settings().then(setServer).catch(() => snackbar(t('settings.loadFailed'))); }, []);
+  useEffect(() => {
+    if (admin) api.settings().then(setServer).catch(() => snackbar(t('settings.loadFailed')));
+    else setServer(null);
+  }, [admin]);
+
+  useEffect(() => () => {
+    clearTimeout(saveTimer.current);
+  }, []);
 
   // Debounced persist so typing a custom User-Agent doesn't spam the server.
   const saveServer = (next: Settings, immediate = false) => {
@@ -47,7 +57,10 @@ export function SettingsScreen() {
     if (immediate) run(); else saveTimer.current = setTimeout(run, 500);
   };
 
-  const sectionOptions: [SectionId, string][] = SECTIONS.map(({ id }) => [id, sectionLabel(id)]);
+  const visibleSections = admin
+    ? SECTIONS
+    : SECTIONS.filter(({ id }) => id !== 'downloads' && id !== 'network');
+  const sectionOptions: [SectionId, string][] = visibleSections.map(({ id }) => [id, sectionLabel(id)]);
 
   return (
     <>
@@ -59,7 +72,7 @@ export function SettingsScreen() {
 
       <div className="settings-shell">
         <nav className="settings-nav">
-          {SECTIONS.map(({ id, icon }) => (
+          {visibleSections.map(({ id, icon }) => (
             <button key={id} className={`panel-row${current === id ? ' selected' : ''}`}
                     onClick={() => setCurrent(id)}>
               <Icon name={icon} />
@@ -107,7 +120,7 @@ export function SettingsScreen() {
             </Section>
           )}
 
-          {current === 'downloads' && (
+          {admin && current === 'downloads' && (
             server === null ? <Spinner /> : (
               <Section title={sectionLabel('downloads')}>
                 <ChipSetting
@@ -121,7 +134,7 @@ export function SettingsScreen() {
             )
           )}
 
-          {current === 'network' && (
+          {admin && current === 'network' && (
             server === null ? <Spinner /> : (
               <Section title={sectionLabel('network')}>
                 <div>

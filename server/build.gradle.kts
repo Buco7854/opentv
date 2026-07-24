@@ -44,8 +44,12 @@ tasks.withType<Test>().configureEach {
 dependencies {
     implementation(project(":core"))
     implementation(project(":data"))
+    implementation(project(":server-data"))
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.bouncycastle)
+    implementation(libs.webauthn4j.core)
+    implementation(libs.nimbus.oidc)
     implementation(libs.ktor.server.core)
     implementation(libs.ktor.server.netty)
     implementation(libs.ktor.server.content.negotiation)

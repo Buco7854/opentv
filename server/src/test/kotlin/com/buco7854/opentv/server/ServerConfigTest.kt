@@ -8,7 +8,9 @@ import kotlin.test.assertTrue
 class ServerConfigTest {
     @Test
     fun defaultsAreSafeAndNormalized() {
-        val config = ServerConfig.fromEnv(emptyMap())
+        val config = ServerConfig.fromEnv(
+            mapOf("OPENTV_AUTH_ENCRYPTION_KEY" to "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="),
+        )
 
         assertEquals(8080, config.port)
         assertEquals(50, config.pageSize)

@@ -2,7 +2,7 @@
 // shared PlayerSurface, keeping tokens and provider URLs out of the address bar.
 
 import { useNavigate, useParams } from 'react-router-dom';
-import { api, ChannelKind, downloadFileUrl } from '../api';
+import { api, ChannelKind } from '../api';
 import { useAsync } from '../hooks';
 import { PlaybackErrorBoundary, PlayerSurface, PlayRequest } from '../player/PlayerProvider';
 
@@ -36,13 +36,12 @@ export function WatchChannelScreen() {
   const { data: channel } = useAsync(() => api.channel(channelId), [channelId]);
   if (!channel) return <WatchLoading />;
   const request: PlayRequest = {
-    url: channel.url,
+    contentId: channel.contentId,
     title: channel.name,
     channelId: channel.id,
     live: channel.kind === ChannelKind.LIVE,
     tvgId: channel.tvgId,
     hasGuide: channel.tvgId != null || channel.xtreamStreamId != null,
-    playlistId: channel.playlistId,
     kind: channel.kind === ChannelKind.LIVE ? 'live' : channel.kind === ChannelKind.SERIES ? 'series' : 'movie',
     logo: channel.logo,
   };
@@ -55,21 +54,21 @@ export function WatchCatchupScreen() {
   const startMs = Number(p.startMs);
   const endMs = Number(p.endMs);
   const { data } = useAsync(async () => {
-    const [channel, cu, guide] = await Promise.all([
+    const [channel, guide] = await Promise.all([
       api.channel(channelId),
-      api.catchupUrl(channelId, startMs, endMs),
       api.guide(channelId).catch(() => []),
     ]);
-    return { channel, url: cu.url, title: guide.find((g) => g.startMs === startMs)?.title };
+    return { channel, title: guide.find((g) => g.startMs === startMs)?.title };
   }, [channelId, startMs, endMs]);
   if (!data) return <WatchLoading />;
   const request: PlayRequest = {
-    url: data.url ?? '',
+    contentId: data.channel.contentId,
     title: data.title ? `${data.channel.name} · ${data.title}` : data.channel.name,
     channelId,
     live: false,
-    catchup: true,
-    playlistId: data.channel.playlistId,
+    mode: 'catchup',
+    catchupStartMs: startMs,
+    catchupDurationMs: endMs - startMs,
     kind: 'catchup',
     logo: data.channel.logo,
   };
@@ -77,16 +76,17 @@ export function WatchCatchupScreen() {
 }
 
 export function WatchDownloadScreen() {
-  const downloadId = Number(useParams().downloadId);
+  const downloadId = useParams().downloadId ?? '';
   const { data: item } = useAsync(
     async () => (await api.downloads()).find((d) => d.id === downloadId) ?? null,
     [downloadId],
   );
   if (item === null) return <WatchLoading />;
   const request: PlayRequest = {
-    url: downloadFileUrl(downloadId),
+    contentId: item.contentId,
     title: item.title,
-    direct: true,
+    mode: 'download',
+    downloadId: item.id,
     kind: 'download',
   };
   return <Stage request={request} />;

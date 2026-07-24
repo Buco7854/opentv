@@ -2,8 +2,16 @@ package com.buco7854.opentv.server
 
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.UUID
 
 /**
  * In-memory registry of active web-client playback sessions. A player heartbeats
@@ -16,10 +24,28 @@ import java.util.concurrent.ConcurrentLinkedQueue
 class PlaybackSessionRegistry(
     private val clock: ServerClock = ServerClock.SYSTEM,
     private val staleMs: Long = DEFAULT_STALE_MS,
-) {
+) : AutoCloseable {
+    private val reaperScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    init {
+        reaperScope.launch {
+            while (isActive) {
+                delay(staleMs.coerceAtLeast(1_000L))
+                active()
+            }
+        }
+    }
 
     class Live(
         val id: String,
+        val userId: String,
+        val authSessionId: String,
+        val username: String,
+        val displayName: String,
+        val clientKind: String,
+        val playlistId: Long,
+        val contentId: String,
+        internal val sourceUrl: String,
         @Volatile var ip: String,
         @Volatile var userAgent: String,
         @Volatile var state: SessionHeartbeatDto,
@@ -44,11 +70,14 @@ class PlaybackSessionRegistry(
     }
 
     private val sessions = ConcurrentHashMap<String, Live>()
+    private val tombstones = ConcurrentHashMap<String, Long>()
     private val rooms = ConcurrentHashMap<String, Room>()
     private val memberRoom = ConcurrentHashMap<String, String>()
     // Notified when a viewer leaves or is kicked from a room, so a shared live connection it was
     // riding can be cut server-side rather than trusting the client to disconnect itself.
     private val leaveListeners = java.util.concurrent.CopyOnWriteArrayList<(String) -> Unit>()
+    private val terminateListeners =
+        java.util.concurrent.CopyOnWriteArrayList<(leaseId: String, unusedShareGroup: String?) -> Unit>()
     // A host that declined a peer for some content isn't pestered with a modal again for it.
     private val declined = ConcurrentHashMap<String, MutableSet<String>>()
     private fun declineKey(peerId: String, contentKey: String) = "$peerId@$contentKey"
@@ -61,17 +90,48 @@ class PlaybackSessionRegistry(
 
     /** Upsert session state from a heartbeat. Commands are drained separately - the HTTP
      *  heartbeat returns them, the WebSocket pushes them as they're queued. */
-    fun update(ip: String, userAgent: String, dto: SessionHeartbeatDto) {
+    fun create(
+        actor: Actor,
+        playlistId: Long,
+        contentId: String,
+        sourceUrl: String,
+        ip: String,
+        userAgent: String,
+    ): Live {
+        val now = clock.nowMs()
+        val id = UUID.randomUUID().toString()
+        val heartbeat = SessionHeartbeatDto(id = id)
+        return Live(
+            id, actor.userId, actor.authSessionId, actor.username, actor.displayName,
+            actor.clientKind, playlistId, contentId, sourceUrl, ip, userAgent, heartbeat, now, now,
+        ).also { sessions[id] = it }
+    }
+
+    fun owned(actor: Actor, id: String): Live {
+        if (tombstones.containsKey(id)) throw PlaybackRevokedException()
+        val live = sessions[id] ?: throw ResourceNotFound("playback")
+        if (live.userId != actor.userId || live.authSessionId != actor.authSessionId) {
+            throw ResourceNotFound("playback")
+        }
+        return live
+    }
+
+    fun update(actor: Actor, ip: String, userAgent: String, dto: SessionHeartbeatDto) {
+        owned(actor, dto.id)
         val now = clock.nowMs()
         sessions.compute(dto.id) { _, existing ->
-            existing?.apply { this.ip = ip; this.userAgent = userAgent; state = dto; lastSeenMs = now }
-                ?: Live(dto.id, ip, userAgent, dto, now, now)
+            existing?.apply {
+                this.ip = ip
+                this.userAgent = userAgent
+                state = dto
+                lastSeenMs = now
+            }
         }
     }
 
     /** Upsert from a heartbeat and drain any commands queued for this session (HTTP fallback). */
-    fun heartbeat(ip: String, userAgent: String, dto: SessionHeartbeatDto): List<SessionCommandDto> {
-        update(ip, userAgent, dto)
+    fun heartbeat(actor: Actor, ip: String, userAgent: String, dto: SessionHeartbeatDto): List<SessionCommandDto> {
+        update(actor, ip, userAgent, dto)
         return drainCommands(dto.id)
     }
 
@@ -96,12 +156,12 @@ class PlaybackSessionRegistry(
     /** Other live viewers watching the same [contentKey] as [selfId] - watch-together candidates. */
     fun sameContentPeers(selfId: String, contentKey: String): List<Live> {
         if (contentKey.isBlank()) return emptyList()
-        return active().filter { it.id != selfId && it.state.contentKey == contentKey }
+        return active().filter { it.id != selfId && it.contentId == contentKey }
     }
 
     /** Ask [hostId] to admit [peerId] into a watch-together room; false when the host is gone. */
     fun requestJoin(hostId: String, peerId: String, peerName: String, contentKey: String): Boolean {
-        if (hostId == peerId || !sessions.containsKey(hostId)) return false
+        if (hostId == peerId || sessions[hostId]?.contentId != contentKey) return false
         val quiet = declined[hostId]?.contains(declineKey(peerId, contentKey)) == true
         return enqueue(hostId, SessionCommandDto(
             type = "join-request", peerId = peerId, peerName = peerName, quiet = quiet,
@@ -112,7 +172,9 @@ class PlaybackSessionRegistry(
      *  remembered so the same peer can't pop another modal for the same content. */
     @Synchronized
     fun answerJoin(hostId: String, peerId: String, hostName: String, contentKey: String, accept: Boolean): Boolean {
-        if (!sessions.containsKey(peerId)) return false
+        if (sessions[hostId]?.contentId != contentKey ||
+            sessions[peerId]?.contentId != contentKey
+        ) return false
         if (!accept) {
             declined.computeIfAbsent(hostId) { java.util.concurrent.ConcurrentHashMap.newKeySet() }
                 .add(declineKey(peerId, contentKey))
@@ -169,7 +231,7 @@ class PlaybackSessionRegistry(
         val room = roomFor(hostId) ?: return false
         if (room.hostId != hostId || targetId == hostId || targetId !in room.members) return false
         enqueue(targetId, SessionCommandDto(type = "room-ended"))
-        removeFromRoom(room, targetId)
+        terminate(targetId)
         return true
     }
 
@@ -236,7 +298,7 @@ class PlaybackSessionRegistry(
     private fun roster(room: Room): List<RoomMemberDto> = room.members.map { id ->
         RoomMemberDto(
             id = id,
-            name = sessions[id]?.state?.name?.takeIf { it.isNotBlank() } ?: "Someone",
+            name = sessions[id]?.displayName?.takeIf { it.isNotBlank() } ?: "Someone",
             host = id == room.hostId,
             controller = id in room.controllers,
         )
@@ -302,6 +364,9 @@ class PlaybackSessionRegistry(
 
     /** Register to be told when [onMemberLeave]'s id leaves or is kicked from a room. */
     fun onMemberLeave(listener: (String) -> Unit) { leaveListeners.add(listener) }
+    fun onTerminate(listener: (leaseId: String, unusedShareGroup: String?) -> Unit) {
+        terminateListeners.add(listener)
+    }
 
     /** Fires whenever a command is queued for [id]; the WebSocket drains on each signal. */
     fun commandSignal(id: String): ReceiveChannel<Unit> = wake(id)
@@ -315,15 +380,41 @@ class PlaybackSessionRegistry(
 
     @Synchronized
     fun remove(id: String) {
+        val priorRoom = memberRoom[id]
         leaveRoom(id)
         declined.remove(id)
-        sessions.remove(id)
+        if (sessions.remove(id) != null) {
+            tombstones[id] = clock.nowMs() + TOMBSTONE_MS
+            val unusedGroup = when {
+                priorRoom == null -> id
+                rooms.containsKey(priorRoom) -> null
+                else -> priorRoom
+            }
+            terminateListeners.forEach { runCatching { it(id, unusedGroup) } }
+        }
         wakes.remove(id)?.close()
     }
 
+    fun terminate(id: String) = remove(id)
+
+    fun terminateSession(authSessionId: String) =
+        sessions.values.filter { it.authSessionId == authSessionId }.forEach { remove(it.id) }
+
+    fun terminateUser(userId: String) =
+        sessions.values.filter { it.userId == userId }.forEach { remove(it.id) }
+
+    fun terminatePlaylist(userId: String, playlistId: Long) =
+        sessions.values.filter { it.userId == userId && it.playlistId == playlistId }
+            .forEach { remove(it.id) }
+
+    fun terminatePlaylist(playlistId: Long) =
+        sessions.values.filter { it.playlistId == playlistId }.forEach { remove(it.id) }
+
     /** Live sessions (stale ones pruned first), newest first. */
     fun active(): List<Live> {
-        val cutoff = clock.nowMs() - staleMs
+        val now = clock.nowMs()
+        tombstones.entries.removeIf { it.value <= now }
+        val cutoff = now - staleMs
         val stale = sessions.values.filter { it.lastSeenMs < cutoff }.map { it.id }
         stale.forEach { remove(it) }
         return sessions.values.sortedByDescending { it.startedAtMs }
@@ -332,5 +423,14 @@ class PlaybackSessionRegistry(
     companion object {
         /** Drop a session this long after its last heartbeat (client beats ~every 3s). */
         private const val DEFAULT_STALE_MS = 12_000L
+        // Must outlive every media grant so stale lease-scoped URLs consistently return 410.
+        private const val TOMBSTONE_MS = 30 * 60_000L
+    }
+
+    override fun close() {
+        sessions.keys.toList().forEach(::remove)
+        reaperScope.cancel()
     }
 }
+
+internal class PlaybackRevokedException : RuntimeException()

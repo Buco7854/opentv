@@ -33,8 +33,9 @@ server/build
 server/webapp/node_modules/
 server/src/main/resources/web/
 
-# Web server runtime data (SQLite db + downloads) when run from the repo
-/server-data/
+# JVM server identity module build output. Runtime state belongs under OPENTV_DATA
+# (which defaults to ./data), not in this source directory.
+/server-data/build/
 server/webapp/tsconfig.tsbuildinfo
 
 # Sample/test media dropped at the repo root — never commit

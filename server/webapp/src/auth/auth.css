@@ -1,0 +1,55 @@
+@reference "../index.css";
+
+@layer components {
+  .auth-page {
+    @apply flex min-h-dvh items-center justify-center p-5;
+    background:
+      radial-gradient(circle at 50% 10%, color-mix(in srgb, var(--c-accent) 12%, transparent), transparent 38%),
+      var(--c-bg);
+  }
+  .auth-card {
+    @apply w-full max-w-[440px] rounded-2xl p-6 md:p-8;
+    background: var(--c-panel);
+    border: 1px solid var(--c-hairline);
+    box-shadow: var(--shadow-float);
+  }
+  .auth-brand {
+    @apply mb-5 text-on-surface-variant;
+    font: var(--type-label-large);
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  .auth-card > h1 { @apply mb-5; font: var(--type-headline-medium); }
+  .auth-step { @apply flex flex-col gap-3; }
+  .auth-step > h2 { @apply mb-0; font: var(--type-title-large); }
+  .auth-step > p { @apply text-on-surface-variant; font: var(--type-body-medium); }
+  .auth-step > a { @apply mt-1 text-center; color: var(--c-accent); font: var(--type-label-large); }
+  .auth-button-row { @apply grid grid-cols-2 gap-2; }
+  .auth-error {
+    @apply rounded-lg px-3 py-2 text-error;
+    background: color-mix(in srgb, var(--color-error) 10%, transparent);
+    font: var(--type-body-medium);
+  }
+  .auth-hint { @apply text-on-surface-variant; font: var(--type-body-small); }
+  .auth-qr { @apply mx-auto size-56 rounded-xl bg-white p-2; }
+  .auth-secret {
+    @apply flex flex-col gap-1 rounded-lg p-3 text-on-surface-variant;
+    background: var(--c-input);
+    font: var(--type-label-small);
+  }
+  .auth-secret code { @apply break-all text-on-surface; font-family: ui-monospace, monospace; }
+  .auth-recovery {
+    @apply select-all rounded-xl p-4 text-center text-on-surface;
+    background: var(--c-input);
+    font: var(--type-body-large);
+    font-family: ui-monospace, monospace;
+    line-height: 1.8;
+  }
+  .auth-state { @apply mx-auto flex max-w-lg flex-col items-center gap-4 p-8 text-center; }
+  .auth-security { @apply mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 pb-28 pt-5 md:px-0; }
+  .auth-security > header { @apply mb-2; }
+  .auth-security > header h1 { font: var(--type-headline-medium); }
+  .auth-security > header p { @apply mt-1 text-on-surface-variant; font: var(--type-body-medium); }
+  .auth-security .settings-card h2 { font: var(--type-title-large); }
+}
+

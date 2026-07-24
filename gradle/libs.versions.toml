@@ -20,6 +20,9 @@ serialization = "1.11.0"
 datetime = "0.8.0"
 ktor = "3.5.1"
 logback = "1.5.38"
+bouncycastle = "1.81"
+webauthn4j = "0.31.8.RELEASE"
+nimbus = "11.31"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -64,6 +67,9 @@ ktor-server-status-pages = { group = "io.ktor", name = "ktor-server-status-pages
 ktor-server-partial-content = { group = "io.ktor", name = "ktor-server-partial-content", version.ref = "ktor" }
 ktor-server-test-host = { group = "io.ktor", name = "ktor-server-test-host", version.ref = "ktor" }
 logback-classic = { group = "ch.qos.logback", name = "logback-classic", version.ref = "logback" }
+bouncycastle = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }
+webauthn4j-core = { group = "com.webauthn4j", name = "webauthn4j-core", version.ref = "webauthn4j" }
+nimbus-oidc = { group = "com.nimbusds", name = "oauth2-oidc-sdk", version.ref = "nimbus" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

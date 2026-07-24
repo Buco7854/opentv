@@ -29,6 +29,7 @@ const sidebars: SidebarsConfig = {
       items: [
         'guide/webclient-tour',
         'guide/webclient-now-watching',
+        'guide/server-authentication',
         'guide/webclient-hosting',
       ],
     },

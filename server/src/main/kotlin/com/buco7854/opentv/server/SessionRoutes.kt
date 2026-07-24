@@ -12,11 +12,13 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import io.ktor.server.websocket.webSocket
 import io.ktor.websocket.Frame
+import io.ktor.websocket.CloseReason
+import io.ktor.websocket.close
 import io.ktor.websocket.readText
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 
-/** Ktor and WebSocket adapter for playback-session use cases. */
+/** Ktor adapter for owner-bound playback leases and admin playback control. */
 internal fun Route.sessionRoutes(
     service: SessionApplicationService,
     trustedProxies: TrustedProxies,
@@ -26,86 +28,110 @@ internal fun Route.sessionRoutes(
         userAgent = request.headers[HttpHeaders.UserAgent].orEmpty(),
     )
 
-    route("/sessions") {
-        get { call.respond(service.active()) }
-        post("/heartbeat") {
-            call.respond(service.heartbeat(call.playbackClient(), call.receive()))
+    route("/playback") {
+        post {
+            call.respond(service.create(call.actor, call.playbackClient(), call.receive()))
         }
-        post("/intent") {
-            call.respond(service.watchIntent(call.receive()))
-        }
-        post("/{id}/join-request") {
-            service.requestJoin(call.requiredParameter("id"), call.receive())
-            call.respond(HttpStatusCode.NoContent)
-        }
-        post("/{id}/join-answer") {
-            service.answerJoin(call.requiredParameter("id"), call.receive())
-            call.respond(HttpStatusCode.NoContent)
-        }
-        post("/{id}/sync") {
-            service.sync(call.requiredParameter("id"), call.receive())
-            call.respond(HttpStatusCode.NoContent)
-        }
-        post("/{id}/kick") {
-            service.kick(call.requiredParameter("id"), call.receive())
-            call.respond(HttpStatusCode.NoContent)
-        }
-        post("/{id}/request-control") {
-            service.requestControl(call.requiredParameter("id"), call.receive())
-            call.respond(HttpStatusCode.NoContent)
-        }
-        post("/{id}/grant-control") {
-            service.grantControl(call.requiredParameter("id"), call.receive())
-            call.respond(HttpStatusCode.NoContent)
-        }
-        post("/{id}/set-control") {
-            service.setControl(call.requiredParameter("id"), call.receive())
-            call.respond(HttpStatusCode.NoContent)
-        }
-        post("/{id}/room-audio") {
-            service.setRoomAudio(call.requiredParameter("id"), call.receive())
-            call.respond(HttpStatusCode.NoContent)
-        }
-        post("/{id}/ready") {
-            service.ready(call.requiredParameter("id"))
-            call.respond(HttpStatusCode.NoContent)
-        }
-        post("/{id}/leave") {
-            service.leave(call.requiredParameter("id"))
-            call.respond(HttpStatusCode.NoContent)
-        }
-        post("/{id}/command") {
-            service.command(call.requiredParameter("id"), call.receive())
-            call.respond(HttpStatusCode.NoContent)
-        }
-        webSocket("/{id}/ws") {
-            val id = call.requiredParameter("id")
-            val client = call.playbackClient()
-            suspend fun flush() = service.commands(id).forEach {
-                send(Frame.Text(Json.encodeToString(SessionCommandDto.serializer(), it)))
+        route("/{id}") {
+            post("/heartbeat") {
+                val id = call.requiredParameter("id")
+                val heartbeat = call.receive<SessionHeartbeatDto>()
+                require(heartbeat.id == id) { "Playback lease mismatch" }
+                call.respond(service.heartbeat(call.actor, call.playbackClient(), heartbeat))
             }
-            service.resendRoomState(id)
-            val sender = launch {
-                flush()
-                for (signal in service.commandSignal(id)) flush()
+            post("/media-grant") {
+                call.respond(service.refreshMediaGrant(call.actor, call.requiredParameter("id")))
             }
-            try {
-                for (frame in incoming) {
-                    if (frame !is Frame.Text) continue
-                    val message = runCatching {
-                        Json.decodeFromString(ClientFrameDto.serializer(), frame.readText())
-                    }.getOrNull() ?: continue
-                    when (message.type) {
-                        "heartbeat" -> message.heartbeat?.let { service.update(client, it) }
-                        "sync" -> message.sync?.let { service.sync(id, it) }
-                    }
+            post("/intent") {
+                call.respond(service.watchIntent(call.actor, call.requiredParameter("id")))
+            }
+            post("/join-request") {
+                service.requestJoin(call.actor, call.requiredParameter("id"), call.receive())
+                call.respond(HttpStatusCode.NoContent)
+            }
+            post("/join-answer") {
+                service.answerJoin(call.actor, call.requiredParameter("id"), call.receive())
+                call.respond(HttpStatusCode.NoContent)
+            }
+            post("/sync") {
+                service.sync(call.actor, call.requiredParameter("id"), call.receive())
+                call.respond(HttpStatusCode.NoContent)
+            }
+            post("/kick") {
+                service.kick(call.actor, call.requiredParameter("id"), call.receive())
+                call.respond(HttpStatusCode.NoContent)
+            }
+            post("/request-control") {
+                service.requestControl(call.actor, call.requiredParameter("id"), call.receive())
+                call.respond(HttpStatusCode.NoContent)
+            }
+            post("/grant-control") {
+                service.grantControl(call.actor, call.requiredParameter("id"), call.receive())
+                call.respond(HttpStatusCode.NoContent)
+            }
+            post("/set-control") {
+                service.setControl(call.actor, call.requiredParameter("id"), call.receive())
+                call.respond(HttpStatusCode.NoContent)
+            }
+            post("/room-audio") {
+                service.setRoomAudio(call.actor, call.requiredParameter("id"), call.receive())
+                call.respond(HttpStatusCode.NoContent)
+            }
+            post("/ready") {
+                service.ready(call.actor, call.requiredParameter("id"))
+                call.respond(HttpStatusCode.NoContent)
+            }
+            post("/leave") {
+                service.leave(call.actor, call.requiredParameter("id"))
+                call.respond(HttpStatusCode.NoContent)
+            }
+            webSocket("/ws") {
+                val id = call.requiredParameter("id")
+                val actor = call.actor
+                val client = call.playbackClient()
+                suspend fun flush() = service.commands(actor, id).forEach {
+                    send(Frame.Text(Json.encodeToString(SessionCommandDto.serializer(), it)))
                 }
-            } finally {
-                sender.cancel()
+                service.resendRoomState(actor, id)
+                val sender = launch {
+                    flush()
+                    for (signal in service.commandSignal(actor, id)) flush()
+                    this@webSocket.close(
+                        CloseReason(CloseReason.Codes.NORMAL, "playback lease ended"),
+                    )
+                }
+                try {
+                    for (frame in incoming) {
+                        if (frame !is Frame.Text) continue
+                        val message = runCatching {
+                            Json.decodeFromString(ClientFrameDto.serializer(), frame.readText())
+                        }.getOrNull() ?: continue
+                        when (message.type) {
+                            "heartbeat" -> message.heartbeat
+                                ?.takeIf { it.id == id }
+                                ?.let { service.update(actor, client, it) }
+                            "sync" -> message.sync?.let { service.sync(actor, id, it) }
+                        }
+                    }
+                } finally {
+                    sender.cancel()
+                }
             }
+            delete {
+                service.remove(call.actor, call.requiredParameter("id"))
+                call.respond(HttpStatusCode.NoContent)
+            }
+        }
+    }
+
+    route("/admin/playback") {
+        get { call.respond(service.active(call.actor)) }
+        post("/{id}/command") {
+            service.command(call.actor, call.requiredParameter("id"), call.receive())
+            call.respond(HttpStatusCode.NoContent)
         }
         delete("/{id}") {
-            service.remove(call.requiredParameter("id"))
+            service.adminRemove(call.actor, call.requiredParameter("id"))
             call.respond(HttpStatusCode.NoContent)
         }
     }

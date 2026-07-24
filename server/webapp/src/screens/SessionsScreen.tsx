@@ -94,7 +94,7 @@ export function SessionsScreen() {
 
   const tick = async () => {
     clearTimeout(timer.current);
-    try { setSessions(reconcile(await api.sessions())); } catch { /* keep last */ }
+    try { setSessions(reconcile(await api.adminPlayback())); } catch { /* keep last */ }
     timer.current = setTimeout(tick, POLL_MS);
   };
   useEffect(() => { tick(); return () => clearTimeout(timer.current); }, []);
@@ -103,7 +103,7 @@ export function SessionsScreen() {
     const paused = type === 'pause';
     pendingPaused.current.set(session.id, { paused, until: Date.now() + 4000 });
     setSessions((list) => list?.map((s) => (s.id === session.id ? { ...s, paused } : s)) ?? list);
-    await api.sessionCommand(session.id, { type }).catch(() => { pendingPaused.current.delete(session.id); });
+    await api.adminPlaybackCommand(session.id, { type }).catch(() => { pendingPaused.current.delete(session.id); });
     // The viewer confirms over its socket within a round-trip; poll shortly to pick it up.
     setTimeout(tick, 700);
   };
@@ -129,6 +129,10 @@ export function SessionsScreen() {
               session={s}
               onToggle={() => command(s, s.paused ? 'play' : 'pause')}
               onMessage={() => setMessaging(s)}
+              onStop={async () => {
+                await api.adminPlaybackEnd(s.id);
+                setSessions((current) => current?.filter((item) => item.id !== s.id) ?? current);
+              }}
             />
           ))}
         </div>
@@ -144,10 +148,11 @@ export function SessionsScreen() {
   );
 }
 
-function SessionCard({ session, onToggle, onMessage }: {
+function SessionCard({ session, onToggle, onMessage, onStop }: {
   session: Session;
   onToggle: () => void;
   onMessage: () => void;
+  onStop: () => void;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const { positionMs, durationMs, live } = session;
@@ -162,7 +167,14 @@ function SessionCard({ session, onToggle, onMessage }: {
           <div className="sub truncate">
             {[session.playlistName, kindLabel(session.kind)].filter(Boolean).join(' · ')}
           </div>
-          <div className="who truncate">{[deviceLabel(session.userAgent), session.ip].filter(Boolean).join(' · ')}</div>
+          <div className="who truncate">
+            {[
+              session.displayName || session.username,
+              `@${session.username}`,
+              deviceLabel(session.userAgent),
+              session.ip,
+            ].filter(Boolean).join(' · ')}
+          </div>
         </div>
         <div className="tags">
           {live && <span className="live-chip">{t('player.live').toUpperCase()}</span>}
@@ -193,6 +205,7 @@ function SessionCard({ session, onToggle, onMessage }: {
           onClick={onToggle}
         />
         <IconBtn name="message" label={t('sessions.sendMessage')} onClick={onMessage} />
+        <IconBtn name="close" label={t('player.stop')} className="muted" onClick={onStop} />
         <IconBtn name="info" label={t('sessions.details')}
                  onClick={() => setDetailsOpen(true)} />
       </div>
@@ -267,7 +280,7 @@ function MessageDialog({ session, onDismiss }: { session: Session; onDismiss: ()
     const message = text.trim();
     if (!message) return;
     onDismiss();
-    await api.sessionCommand(session.id, { type: 'message', text: message }).catch(() => {});
+    await api.adminPlaybackCommand(session.id, { type: 'message', text: message }).catch(() => {});
     snackbar(t('sessions.messageSent'));
   };
   return (

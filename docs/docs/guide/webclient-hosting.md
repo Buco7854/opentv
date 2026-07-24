@@ -4,15 +4,9 @@ title: Self-hosting
 
 # Self-hosting
 
-The web client is one Docker image. Run it, put it behind an authenticating
-reverse proxy, and point it at the `/data` volume for its SQLite database.
-
-:::danger[No authentication]
-The server has no authentication of its own. Anyone who can reach it can use
-your playlists and read your provider credentials. Always keep it behind a
-reverse proxy with auth, a VPN, or a tailnet, and never expose the port to the
-internet.
-:::
+The web client is one Docker image. It includes local password/MFA and optional
+OIDC authentication. Put it behind a TLS reverse proxy and point it at the
+`/data` volume for its catalog and user databases.
 
 ## Quick start (Docker)
 
@@ -21,14 +15,21 @@ docker run -d \
   --name opentv-web \
   -p 127.0.0.1:8080:8080 \
   -v opentv-data:/data \
+  -e OPENTV_AUTH_ENCRYPTION_KEY='PASTE_OPENSSL_RAND_BASE64_32_OUTPUT' \
   ghcr.io/buco7854/opentv-web:latest
 ```
 
-Then open `http://127.0.0.1:8080`. Playlists, guide data, favorites and resume
-positions live in the `/data` volume (a SQLite database, the same schema the
-Android app uses).
+Generate the value with `openssl rand -base64 32`, then open
+`http://localhost:8080`. The browser origin must exactly match
+`OPENTV_PUBLIC_URL` (whose default is `http://localhost:8080`); do not switch
+between `localhost` and `127.0.0.1`. For a different host port, publish that
+port and set the same origin explicitly, for example
+`-p 127.0.0.1:9090:8080 -e OPENTV_PUBLIC_URL=http://localhost:9090`.
+Playlists and guide data use the catalog database;
+users, grants, favorites, resume points, and downloads use
+`/data/server-users.db`.
 
-## docker-compose, behind Caddy with basic auth
+## docker-compose, behind Caddy TLS
 
 ```yaml
 services:
@@ -37,6 +38,9 @@ services:
     restart: unless-stopped
     volumes:
       - opentv-data:/data
+    environment:
+      OPENTV_PUBLIC_URL: https://tv.example.com
+      OPENTV_AUTH_ENCRYPTION_KEY: ${OPENTV_AUTH_ENCRYPTION_KEY}
     # no ports: only the proxy talks to it
 
   caddy:
@@ -53,11 +57,7 @@ volumes:
 ```
 
 ```text
-# Caddyfile. Generate the password hash with: caddy hash-password
 tv.example.com {
-    basic_auth {
-        me $2a$14$...hashed-password...
-    }
     reverse_proxy opentv-web:8080
 }
 ```
@@ -73,6 +73,15 @@ tv.example.com {
 | `OPENTV_X264_PRESET`       | `veryfast` | Software encode speed vs size (`ultrafast` to `slow`); only used by the default `libx264` encoder                                    |
 | `OPENTV_PROVIDER_CONNECTIONS` | `1`     | How many concurrent provider reads to allow when a panel does not report its own `max_connections`. Playback and downloads share this budget |
 | `OPENTV_TRUSTED_PROXIES`   | (unset)    | Comma-separated proxy IPs and CIDRs (e.g. `127.0.0.1,10.0.0.0/8`). When a request comes from one of these, the real viewer IP is read from `X-Forwarded-For` for the [Now watching](/guide/webclient-now-watching) page |
+| `OPENTV_PUBLIC_URL`        | `http://localhost:8080` | Exact external browser origin, including a non-default port. Cookies, Origin checks, WebAuthn, and OIDC callbacks are derived from it. |
+| `OPENTV_ALLOW_INSECURE_HTTP` | `false` | Development-only escape hatch for non-loopback HTTP. It does not make credentials or cookies safe on an untrusted network. |
+
+Authentication, OIDC, WebAuthn, initial administrator, and recovery variables
+are documented in [Server authentication and user data](/guide/server-authentication).
+Your reverse proxy must serve HTTPS at exactly `OPENTV_PUBLIC_URL`; OpenTV does
+not derive security decisions from forwarded headers. Register
+`${OPENTV_PUBLIC_URL}/api/v1/auth/oidc/callback` exactly at the identity
+provider.
 
 Mutable settings are stored atomically in `/data/server-settings.json`. On the
 first start after upgrading, the previous `settings.properties` is imported and
@@ -129,7 +138,9 @@ caches for metadata.
 
 ```bash
 ./gradlew :server:installDist
-PORT=8080 OPENTV_DATA=./server-data ./server/build/install/server/bin/server
+PORT=8080 OPENTV_DATA=./runtime-data \
+  OPENTV_AUTH_ENCRYPTION_KEY='PASTE_OPENSSL_RAND_BASE64_32_OUTPUT' \
+  ./server/build/install/server/bin/server
 ```
 
 Requires JDK 25+, Node.js 20+, and `ffmpeg` / `ffprobe` on `PATH` (they power

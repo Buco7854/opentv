@@ -9,6 +9,7 @@ import { PlaylistDialog } from '../components/PlaylistDialog';
 import { t } from '../i18n';
 import { useLibrary } from '../library';
 import { prefs } from '../preferences';
+import { useAuth } from '../auth/AuthProvider';
 
 export function HomeScreen() {
   const navigate = useNavigate();
@@ -16,6 +17,7 @@ export function HomeScreen() {
     playlists, loading, error, reload, rememberPlaylist,
   } = useLibrary();
   const [adding, setAdding] = useState(false);
+  const { user } = useAuth();
 
   useEffect(() => {
     if (!playlists?.length) return;
@@ -43,14 +45,19 @@ export function HomeScreen() {
   return (
     <>
       <div className="flex min-h-[75vh] flex-col items-center justify-center">
-        <EmptyState title={t('home.welcome')} subtitle={t('home.welcomeSub')}>
+        <EmptyState
+          title={t('home.welcome')}
+          subtitle={user?.role === 'ADMIN' ? t('home.welcomeSub') : t('playlists.assignmentRequired')}
+        >
           <div className="empty-home-art"><Icon name="playlist" /></div>
         </EmptyState>
-        <button className="btn" style={{ width: 'auto' }} onClick={() => setAdding(true)}>
-          <Icon name="add" />{t('playlists.add')}
-        </button>
+        {user?.role === 'ADMIN' && (
+          <button className="btn" style={{ width: 'auto' }} onClick={() => setAdding(true)}>
+            <Icon name="add" />{t('playlists.add')}
+          </button>
+        )}
       </div>
-      {adding && (
+      {adding && user?.role === 'ADMIN' && (
         <PlaylistDialog
           editing={null}
           onDismiss={() => setAdding(false)}

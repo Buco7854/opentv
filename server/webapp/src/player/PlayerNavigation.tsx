@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom';
 export interface PlayerNav {
   playChannel: (channelId: number) => void;
   playCatchup: (channelId: number, startMs: number, endMs: number) => void;
-  playDownload: (downloadId: number) => void;
+  playDownload: (downloadId: string) => void;
 }
 
 const PlayerNavigationContext = createContext<PlayerNav | null>(null);

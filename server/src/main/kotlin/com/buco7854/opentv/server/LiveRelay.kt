@@ -204,7 +204,15 @@ class LiveRelay(
     }
 
     /** Serve [url] to the room member [sid], sharing the room's single upstream read. */
-    suspend fun stream(call: ApplicationCall, url: String, group: String, providerKey: String, limit: Int, sid: String) {
+    suspend fun stream(
+        call: ApplicationCall,
+        url: String,
+        group: String,
+        providerKey: String,
+        limit: Int,
+        sid: String,
+        leaseGuard: () -> Unit,
+    ) {
         val key = "$group|$url"
         val member = Channel<ByteArray>(capacity = 256, onBufferOverflow = BufferOverflow.DROP_OLDEST)
         while (true) {
@@ -220,6 +228,7 @@ class LiveRelay(
                 Attach.DEAD -> continue // retired as we grabbed it; computeIfAbsent makes a fresh one
                 Attach.ATTACHED -> {
                     try {
+                        leaseGuard()
                         call.response.header(HttpHeaders.CacheControl, "no-store")
                         call.respondOutputStream(ContentType.parse("video/mp2t")) {
                             for (chunk in member) {

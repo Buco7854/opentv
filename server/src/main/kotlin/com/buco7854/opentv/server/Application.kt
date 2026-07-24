@@ -12,7 +12,9 @@ import com.buco7854.opentv.core.util.nowMs
 import com.buco7854.opentv.core.xtream.XtreamApi
 import com.buco7854.opentv.core.xtream.XtreamAuthException
 import com.buco7854.opentv.data.createRoomStorage
+import com.buco7854.opentv.serverdata.createServerUserDatabase
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.HttpHeaders
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationStopped
@@ -46,17 +48,20 @@ data class HealthDto(
 class ServerRuntime(
     val graph: ServerGraph,
     private val storage: Storage,
+    private val userDatabase: com.buco7854.opentv.serverdata.db.ServerUserDatabase,
     private val connections: ProviderConnections,
 ) : AutoCloseable {
     private val closed = AtomicBoolean()
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
+        graph.sessions.close()
         graph.downloads.close()
         graph.liveRelay.close()
         graph.remux.close()
         graph.streamGate.close()
         connections.closeAll()
+        userDatabase.close()
         storage.close()
     }
 }
@@ -67,6 +72,19 @@ object ServerBootstrap {
         Files.createDirectories(config.dataDir)
         val log = LoggerFactory.getLogger("opentv")
         val storage = createRoomStorage(config.dataDir.resolve("opentv.db").toString())
+        val userDatabase = createServerUserDatabase(config.dataDir.resolve("server-users.db").toString())
+        val cleanup = RuntimeUserStateCleanupCoordinator()
+        val auth = AuthService(
+            userDatabase,
+            config.auth,
+            config.dataDir,
+            playlistExists = { storage.playlists.get(it) != null },
+            cleanup = cleanup,
+        )
+        val oidc = OidcService(auth, config.auth)
+        val webAuthn = WebAuthnService(userDatabase, auth, config.auth)
+        val contentIdentities = ContentIdentityService(userDatabase, storage)
+        val userActivity = UserActivityService(userDatabase, auth, contentIdentities)
         val settings = ServerSettings(config.dataDir, config.pageSize)
         val http = ServerHttp().apply {
             settings.userAgent.takeIf { it.isNotBlank() }?.let { userAgent = it }
@@ -90,7 +108,7 @@ object ServerBootstrap {
                 .takeIf { it > 0 } ?: config.fallbackProviderConnections
         }
         val downloads = DownloadManager(
-            storage, http, settings, config.dataDir, connections, connectionLimit
+            userDatabase, http, settings, config.dataDir, connections, connectionLimit
         )
         val streamGate = StreamGate(connections)
         val remux = RemuxService(
@@ -101,8 +119,26 @@ object ServerBootstrap {
             processRunner = processRunner,
         )
         val sessions = PlaybackSessionRegistry()
+        val mediaGrants = PlaybackMediaGrants(sessions)
         val liveRelay = LiveRelay(http, connections, { remux.available }, processRunner)
-        sessions.onMemberLeave(liveRelay::drop)
+        val proxy = StreamProxy(http, cipher, streamGate, connectionLimit)
+        val transcoder = AudioTranscoder(http, processRunner)
+        cleanup.bind(sessions, downloads)
+        sessions.onMemberLeave { id ->
+            mediaGrants.detachResources(id)
+            proxy.drop(id)
+            liveRelay.drop(id)
+            transcoder.drop(id)
+            streamGate.release(id)
+        }
+        sessions.onTerminate { id, unusedGroup ->
+            mediaGrants.revokeLease(id)
+            proxy.drop(id)
+            liveRelay.drop(id)
+            transcoder.drop(id)
+            streamGate.release(id)
+            unusedGroup?.let(remux::stopGroup)
+        }
         val xtream = XtreamRepository(storage, xtreamApi, epg, account, coreLog)
         val metadata = MetadataRepository(storage.metadata, http.fetcher, coreLog)
         val apiServices = ApiServices(
@@ -113,6 +149,12 @@ object ServerBootstrap {
                 xtream,
                 account,
                 cipher,
+                auth,
+                contentIdentities,
+                userActivity,
+                userDatabase,
+                downloads,
+                cleanup,
             ),
             library = LibraryApplicationService(
                 storage,
@@ -121,8 +163,11 @@ object ServerBootstrap {
                 cipher,
                 settings,
                 http,
+                auth,
+                contentIdentities,
+                userActivity,
             ),
-            downloads = DownloadApplicationService(storage, downloads, cipher),
+            downloads = DownloadApplicationService(downloads, contentIdentities, auth),
             sessions = SessionApplicationService(
                 storage,
                 sessions,
@@ -130,10 +175,13 @@ object ServerBootstrap {
                 cipher,
                 streamGate,
                 connectionLimit,
+                auth,
+                contentIdentities,
+                mediaGrants,
+                xtream,
+                downloads,
             ),
         )
-        val proxy = StreamProxy(http, cipher, streamGate, connectionLimit)
-        val transcoder = AudioTranscoder(http, processRunner)
         val mediaApi = MediaRouteDependencies(
             proxy,
             cipher,
@@ -143,6 +191,7 @@ object ServerBootstrap {
             liveRelay,
             transcoder,
             remux,
+            mediaGrants,
             connectionLimit,
         )
         val graph = ServerGraph(
@@ -166,13 +215,28 @@ object ServerBootstrap {
             liveRelay = liveRelay,
             trustedProxies = TrustedProxies.fromSpec(config.trustedProxies.orEmpty()),
             connectionLimit = connectionLimit,
+            auth = auth,
+            oidc = oidc,
+            webAuthn = webAuthn,
+            authConfig = config.auth,
+            userDatabase = userDatabase,
+            contentIdentities = contentIdentities,
+            userActivity = userActivity,
         )
-        downloads.start()
-        runBlocking {
-            storage.resume.prune(nowMs() - 90L * 24 * 60 * 60 * 1000)
+        val runtime = ServerRuntime(graph, storage, userDatabase, connections)
+        try {
+            runBlocking {
+                auth.initialize()
+                oidc.validateConfiguration()
+                apiServices.playlists.reconcilePendingDeletions()
+                userActivity.prune()
+            }
+            downloads.start()
+            return runtime
+        } catch (error: Throwable) {
+            runtime.close()
+            throw error
         }
-        log.warn("OpenTV web has no authentication - put it behind an authenticated reverse proxy.")
-        return ServerRuntime(graph, storage, connections)
     }
 }
 
@@ -180,7 +244,7 @@ object ServerBootstrap {
 fun Application.openTvModule(
     graph: ServerGraph,
     runtime: ServerRuntime,
-    apiSecurity: ApiSecurity = ApiSecurity.openAccess(),
+    apiSecurity: ApiSecurity = ApiSecurity.authenticated(graph.auth, graph.authConfig),
 ) {
     install(ContentNegotiation) {
         json(Json {
@@ -208,6 +272,38 @@ fun Application.openTvModule(
             call.respond(
                 HttpStatusCode.Forbidden,
                 ApiErrorDto("forbidden", "You are not allowed to perform this action"),
+            )
+        }
+        exception<CsrfException> { call, _ ->
+            call.respond(
+                HttpStatusCode.Forbidden,
+                ApiErrorDto("csrf_rejected", "Request origin or CSRF token was rejected"),
+            )
+        }
+        exception<InvalidCredentialsException> { call, _ ->
+            call.respond(
+                HttpStatusCode.Unauthorized,
+                ApiErrorDto("invalid_credentials", "Authentication failed"),
+            )
+        }
+        exception<InvalidChallengeException> { call, _ ->
+            call.respond(
+                HttpStatusCode.Conflict,
+                ApiErrorDto("challenge_invalid", "Authentication challenge expired or was already used"),
+            )
+        }
+        exception<AuthRateLimitedException> { call, cause ->
+            val retrySeconds = ((cause.retryAtMs - System.currentTimeMillis()).coerceAtLeast(0) + 999) / 1000
+            call.response.headers.append(HttpHeaders.RetryAfter, retrySeconds.toString())
+            call.respond(
+                HttpStatusCode.TooManyRequests,
+                ApiErrorDto("auth_rate_limited", "Authentication is temporarily rate limited"),
+            )
+        }
+        exception<PlaybackRevokedException> { call, _ ->
+            call.respond(
+                HttpStatusCode.Gone,
+                ApiErrorDto("playback_revoked", "Playback lease or media grant has expired"),
             )
         }
         exception<IllegalArgumentException> { call, cause ->

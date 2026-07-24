@@ -5,6 +5,7 @@ import io.ktor.server.application.ApplicationCall
 import io.ktor.server.response.respondOutputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Copies video, re-encodes audio to AAC, remuxes to MPEG-TS. Client fallback for
@@ -14,8 +15,14 @@ class AudioTranscoder(
     private val http: ServerHttp,
     private val processRunner: MediaProcessRunner = JvmMediaProcessRunner,
 ) {
+    private val processes = ConcurrentHashMap<String, Process>()
 
-    suspend fun stream(url: String, call: ApplicationCall) {
+    suspend fun stream(
+        url: String,
+        call: ApplicationCall,
+        sid: String,
+        leaseGuard: () -> Unit,
+    ) {
         val command = mutableListOf(
             "ffmpeg", "-nostdin", "-loglevel", "error", "-user_agent", http.userAgent,
         )
@@ -33,13 +40,20 @@ class AudioTranscoder(
         val process = processRunner.start(
             MediaProcessRequest(command, discardStderr = true)
         )
+        processes.put(sid, process)?.destroyForcibly()
         try {
+            leaseGuard()
             call.respondOutputStream(ContentType.parse("video/mp2t")) {
                 withContext(Dispatchers.IO) { process.inputStream.copyTo(this@respondOutputStream) }
             }
         } finally {
             // Free ffmpeg and its upstream connection when the peer is gone.
             process.destroyForcibly()
+            processes.remove(sid, process)
         }
+    }
+
+    fun drop(sid: String) {
+        processes.remove(sid)?.destroyForcibly()
     }
 }

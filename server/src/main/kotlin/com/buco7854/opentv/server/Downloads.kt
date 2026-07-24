@@ -1,17 +1,19 @@
 package com.buco7854.opentv.server
 
-import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.core.download.DownloadFileName
-import com.buco7854.opentv.core.model.Download
-import com.buco7854.opentv.core.model.DownloadStatus
-import com.buco7854.opentv.core.storage.Storage
+import com.buco7854.opentv.core.model.Channel
+import com.buco7854.opentv.serverdata.DownloadBlobStatus
+import com.buco7854.opentv.serverdata.db.ContentIdentityRow
+import com.buco7854.opentv.serverdata.db.DownloadBlobRow
+import com.buco7854.opentv.serverdata.db.ServerUserDatabase
+import com.buco7854.opentv.serverdata.db.UserDownloadRow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -24,190 +26,274 @@ import java.net.http.HttpResponse
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.coroutineContext
+import kotlin.math.absoluteValue
 
-/**
- * Server-side VOD download queue. Pause keeps the partial file; resume continues
- * from the same byte via Range. Concurrency limited to respect provider caps.
- */
+/** Shared physical transfers with private per-user references. */
 class DownloadManager(
-    private val storage: Storage,
+    private val db: ServerUserDatabase,
     private val http: ServerHttp,
     private val settings: ServerSettings,
     dataDir: Path,
     private val connections: ProviderConnections,
-    // How many concurrent reads the provider behind a URL permits (its max_connections).
     private val connectionLimit: suspend (String) -> Int,
+    private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private val log = LoggerFactory.getLogger("opentv")
-    private val dir: Path = dataDir.resolve("downloads")
+    private val dir = dataDir.resolve("user-downloads")
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val jobs = ConcurrentHashMap<Long, Job>()
+    private val jobs = ConcurrentHashMap<String, Job>()
     private val pumpMutex = Mutex()
 
-    /** Cancel every owned transfer; safe to call more than once during server shutdown. */
     fun close() {
         scope.cancel()
         jobs.clear()
     }
 
-    /** Re-queue transfers interrupted by a restart and resume the queue. */
     fun start() {
-        // A freed provider slot (a stream ending, or another download finishing) may let a
-        // waiting download in.
         connections.onSlotFreed { pump() }
         scope.launch {
-            for (item in storage.downloads.getByStatus(DownloadStatus.RUNNING)) {
-                storage.downloads.update(item.copy(status = DownloadStatus.QUEUED))
+            db.downloads().blobsByStatus(DownloadBlobStatus.RUNNING).forEach {
+                db.downloads().upsertBlob(it.copy(status = DownloadBlobStatus.QUEUED, updatedAtMs = clock()))
             }
             pump()
         }
     }
 
-    private fun targetPath(channel: Channel, downloadId: Long): String {
-        return dir.resolve(DownloadFileName.from(channel.name, channel.url, downloadId).fileName).toString()
-    }
-
-    /** Only paths created below this server's download root may be served or deleted. */
-    private fun safePath(raw: String): Path? {
-        if (raw.isBlank()) return null
-        val root = dir.toAbsolutePath().normalize()
-        val path = runCatching { Path.of(raw).toAbsolutePath().normalize() }.getOrNull() ?: return null
-        return path.takeIf { it.startsWith(root) }
-    }
-
-    /**
-     * Queue a VOD download. Returns a user-facing message: a reason when the same URL is already
-     * queued/running/finished, a heads-up when the provider is full so it will wait for a free
-     * connection, or null when it starts right away.
-     */
-    suspend fun enqueue(channel: Channel): String? {
-        val existing = storage.downloads.findByUrlWithStatus(
-            channel.url,
-            listOf(DownloadStatus.QUEUED, DownloadStatus.RUNNING, DownloadStatus.DONE, DownloadStatus.PAUSED),
-        )
-        if (existing != null) {
-            return when (existing.status) {
-                DownloadStatus.DONE -> "Already downloaded"
-                DownloadStatus.PAUSED -> "Paused. Resume it from Downloads"
-                else -> "Already downloading"
-            }
+    suspend fun enqueue(
+        userId: String,
+        identity: ContentIdentityRow,
+        channel: Channel,
+    ): Pair<UserDownloadRow, String?> = pumpMutex.withLock {
+        var blob = db.downloads().blobForContent(identity.contentId)
+        val now = clock()
+        if (blob == null) {
+            val id = UUID.randomUUID().toString()
+            val numeric = id.hashCode().toLong().absoluteValue
+            blob = DownloadBlobRow(
+                id,
+                identity.contentId,
+                channel.name,
+                channel.url,
+                dir.resolve(DownloadFileName.from(channel.name, channel.url, numeric).fileName).toString(),
+                DownloadBlobStatus.QUEUED,
+                0,
+                0,
+                null,
+                now,
+                now,
+            )
+            db.downloads().upsertBlob(blob)
         }
-        val id = storage.downloads.insert(Download(title = channel.name, url = channel.url, filePath = ""))
-        storage.downloads.get(id)?.let {
-            storage.downloads.update(it.copy(filePath = targetPath(channel, id)))
+        val existing = db.downloads().forUser(userId).firstOrNull { it.blobId == blob.id }
+        val association = existing?.copy(active = true, suspended = false, updatedAtMs = now)
+            ?: UserDownloadRow(UUID.randomUUID().toString(), userId, blob.id, true, false, now, now)
+        db.downloads().upsertUserDownload(association)
+        if (blob.status == DownloadBlobStatus.PAUSED || blob.status == DownloadBlobStatus.FAILED) {
+            db.downloads().upsertBlob(blob.copy(status = DownloadBlobStatus.QUEUED, error = null, updatedAtMs = now))
         }
-        // The provider's connections may all be in use by playback; the download then waits its
-        // turn rather than cutting a stream. Tell the user instead of leaving it spinning silently.
         val waiting = channel.url.startsWith("http") &&
             !connections.downloadFits(providerKeyOf(channel.url), connectionLimit(channel.url))
         pump()
-        return if (waiting) "Queued — it will start when a connection is free" else null
-    }
-
-    /** Write PAUSED before cancelling so the worker doesn't mark the row FAILED. */
-    suspend fun pause(id: Long) {
-        val item = storage.downloads.get(id) ?: return
-        if (item.status == DownloadStatus.QUEUED || item.status == DownloadStatus.RUNNING) {
-            storage.downloads.update(item.copy(status = DownloadStatus.PAUSED))
-            jobs.remove(id)?.cancel()
+        association to when {
+            blob.status == DownloadBlobStatus.DONE -> "Already downloaded"
+            existing != null -> "Already in your downloads"
+            waiting -> "Queued — it will start when a connection is free"
+            else -> null
         }
     }
 
-    suspend fun resume(id: Long) = retry(id)
+    suspend fun list(userId: String): List<Pair<UserDownloadRow, DownloadBlobRow>> =
+        db.downloads().forUser(userId).mapNotNull { user ->
+            db.downloads().blob(user.blobId)?.let { user to it }
+        }
 
-    suspend fun retry(id: Long) {
-        val item = storage.downloads.get(id) ?: return
-        storage.downloads.update(item.copy(status = DownloadStatus.QUEUED, error = null))
+    suspend fun adminList(): List<Pair<UserDownloadRow, DownloadBlobRow>> =
+        db.downloads().allUserDownloads().mapNotNull { user ->
+            db.downloads().blob(user.blobId)?.let { user to it }
+        }
+
+    suspend fun get(userId: String, userDownloadId: String): Pair<UserDownloadRow, DownloadBlobRow> {
+        val user = owned(userId, userDownloadId)
+        val blob = db.downloads().blob(user.blobId) ?: throw ResourceNotFound("download")
+        return user to blob
+    }
+
+    suspend fun adminCancelBlob(blobId: String): List<String> {
+        val affected = db.downloads().forBlob(blobId).map { it.userId }.distinct()
+        deleteBlob(blobId)
+        return affected
+    }
+
+    suspend fun pause(userId: String, userDownloadId: String) {
+        val row = owned(userId, userDownloadId)
+        db.downloads().upsertUserDownload(row.copy(active = false, updatedAtMs = clock()))
+        if (db.downloads().activeReferenceCount(row.blobId) == 0) {
+            db.downloads().blob(row.blobId)?.let {
+                if (it.status == DownloadBlobStatus.QUEUED || it.status == DownloadBlobStatus.RUNNING) {
+                    db.downloads().upsertBlob(it.copy(status = DownloadBlobStatus.PAUSED, updatedAtMs = clock()))
+                    jobs.remove(it.id)?.cancel()
+                }
+            }
+        }
+    }
+
+    suspend fun resume(userId: String, userDownloadId: String) {
+        val row = owned(userId, userDownloadId)
+        db.downloads().upsertUserDownload(
+            row.copy(active = true, suspended = false, updatedAtMs = clock())
+        )
+        db.downloads().blob(row.blobId)?.let {
+            if (it.status in setOf(DownloadBlobStatus.PAUSED, DownloadBlobStatus.FAILED, DownloadBlobStatus.CANCELLED)) {
+                db.downloads().upsertBlob(it.copy(status = DownloadBlobStatus.QUEUED, error = null, updatedAtMs = clock()))
+            }
+        }
         pump()
     }
 
-    suspend fun cancel(id: Long) {
-        val item = storage.downloads.get(id) ?: return
-        storage.downloads.update(item.copy(status = DownloadStatus.CANCELLED))
-        jobs.remove(id)?.cancel()
-    }
-
-    suspend fun delete(id: Long) {
-        jobs.remove(id)?.cancel()
-        storage.downloads.get(id)?.let { item ->
-            safePath(item.filePath)?.let { path -> runCatching { Files.deleteIfExists(path) } }
+    suspend fun delete(userId: String, userDownloadId: String) {
+        val row = owned(userId, userDownloadId)
+        db.downloads().deleteUserDownload(row.id)
+        if (db.downloads().referenceCount(row.blobId) == 0) deleteBlob(row.blobId)
+        else if (db.downloads().activeReferenceCount(row.blobId) == 0) {
+            db.downloads().blob(row.blobId)?.let {
+                db.downloads().upsertBlob(it.copy(status = DownloadBlobStatus.PAUSED, updatedAtMs = clock()))
+                jobs.remove(it.id)?.cancel()
+            }
         }
-        storage.downloads.delete(id)
     }
 
-    /** The finished file for serving/playback, or null when not ready. */
-    suspend fun fileFor(id: Long): Pair<Download, Path>? {
-        val item = storage.downloads.get(id) ?: return null
-        if (item.status != DownloadStatus.DONE) return null
-        val path = safePath(item.filePath) ?: return null
-        return if (Files.exists(path)) item to path else null
+    suspend fun fileFor(userId: String, userDownloadId: String): Pair<DownloadBlobRow, Path>? {
+        val row = owned(userId, userDownloadId)
+        if (row.suspended) return null
+        val blob = db.downloads().blob(row.blobId) ?: return null
+        if (blob.status != DownloadBlobStatus.DONE) return null
+        val path = safePath(blob.filePath) ?: return null
+        return if (Files.exists(path)) blob to path else null
+    }
+
+    suspend fun blobFile(blobId: String): Pair<DownloadBlobRow, Path>? {
+        val blob = db.downloads().blob(blobId) ?: return null
+        if (blob.status != DownloadBlobStatus.DONE) return null
+        val path = safePath(blob.filePath) ?: return null
+        return if (Files.exists(path)) blob to path else null
+    }
+
+    suspend fun deletePlaylist(playlistId: Long) {
+        db.downloads().blobsForPlaylist(playlistId).forEach { deleteBlob(it.id) }
+    }
+
+    fun scheduleOrphanCleanup() {
+        scope.launch {
+            db.downloads().orphanBlobs().forEach { deleteBlob(it.id) }
+        }
+    }
+
+    fun scheduleGrantRevocation(playlistId: Long) {
+        scope.launch {
+            db.downloads().blobsForPlaylist(playlistId).forEach { blob ->
+                if (db.downloads().activeReferenceCount(blob.id) == 0 &&
+                    blob.status in setOf(DownloadBlobStatus.QUEUED, DownloadBlobStatus.RUNNING)
+                ) {
+                    db.downloads().upsertBlob(
+                        blob.copy(status = DownloadBlobStatus.PAUSED, updatedAtMs = clock()),
+                    )
+                    jobs.remove(blob.id)?.cancel()
+                }
+            }
+        }
+    }
+
+    private suspend fun owned(userId: String, id: String): UserDownloadRow =
+        db.downloads().userDownload(id)?.takeIf { it.userId == userId }
+            ?: throw ResourceNotFound("download")
+
+    private suspend fun deleteBlob(id: String) {
+        jobs.remove(id)?.cancel()
+        db.downloads().blob(id)?.let { safePath(it.filePath)?.let { path -> Files.deleteIfExists(path) } }
+        db.downloads().deleteBlob(id)
+    }
+
+    private fun safePath(raw: String): Path? {
+        if (raw.isBlank()) return null
+        val root = dir.toAbsolutePath().normalize()
+        return runCatching { Path.of(raw).toAbsolutePath().normalize() }.getOrNull()
+            ?.takeIf { it.startsWith(root) }
     }
 
     private fun pump() {
         scope.launch {
             pumpMutex.withLock {
+                var active = jobs.values.count(Job::isActive)
                 val limit = settings.downloadLimit.coerceIn(1, 3)
-                var active = jobs.values.count { it.isActive }
-                if (active >= limit) return@withLock
-                for (item in storage.downloads.getByStatus(DownloadStatus.QUEUED).sortedBy { it.id }) {
+                for (blob in db.downloads().blobsByStatus(DownloadBlobStatus.QUEUED)) {
                     if (active >= limit) break
-                    if (jobs[item.id]?.isActive == true) continue
-                    jobs[item.id] = scope.launch { run(item.id) }
+                    if (jobs[blob.id]?.isActive == true || db.downloads().activeReferenceCount(blob.id) == 0) continue
+                    jobs[blob.id] = scope.launch { run(blob.id) }
                     active++
                 }
             }
         }
     }
 
-    /** The provider answered with a non-2xx status: not worth retrying. */
     private class HttpStatusException(code: Int) : IOException("HTTP $code")
 
-    private suspend fun run(id: Long) {
-        val item = storage.downloads.get(id) ?: return
-        if (item.status != DownloadStatus.QUEUED || item.filePath.isEmpty()) return
-        // Take a provider connection within its cap (shared with playback). If the provider
-        // is full, stay queued - a freed slot pumps the queue again. A stream that needs the
-        // slot evicts this download back to queued (see onSlotFreed).
+    private suspend fun run(id: String) {
+        val blob = db.downloads().blob(id) ?: return
+        if (blob.status != DownloadBlobStatus.QUEUED) return
         val slot = "dl:$id"
-        val evict = { requeueIfRunning(id); jobs[id]?.cancel(); Unit }
-        if (!connections.tryOpenDownload(slot, providerKeyOf(item.url), item.url, connectionLimit(item.url), evict)) {
+        val evict = {
+            scope.launch {
+                db.downloads().updateBlobStatus(
+                    id, DownloadBlobStatus.QUEUED, null, clock(), listOf(DownloadBlobStatus.RUNNING),
+                )
+            }
+            jobs[id]?.cancel()
+            Unit
+        }
+        if (!connections.tryOpenDownload(
+                slot, providerKeyOf(blob.sourceUrl), blob.contentId,
+                connectionLimit(blob.sourceUrl), evict,
+            )
+        ) {
             jobs.remove(id)
             return
         }
-        storage.downloads.update(item.copy(status = DownloadStatus.RUNNING, error = null))
-        val target = Path.of(item.filePath)
+        db.downloads().updateBlobStatus(
+            id, DownloadBlobStatus.RUNNING, null, clock(), listOf(DownloadBlobStatus.QUEUED),
+        )
+        val target = Path.of(blob.filePath)
         try {
             Files.createDirectories(target.parent)
-            // Providers drop long transfers; retry (Range-resumed) while the file grows,
-            // giving up only after consecutive zero-progress attempts or an HTTP error.
-            var stalledAttempts = 0
+            var stalled = 0
             while (true) {
-                val before = if (Files.exists(target)) Files.size(target) else 0L
+                val before = if (Files.exists(target)) Files.size(target) else 0
                 try {
-                    transfer(id, item.url, target, before)
+                    transfer(id, blob.sourceUrl, target, before)
                     break
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: HttpStatusException) {
                     throw e
                 } catch (e: Exception) {
-                    val after = if (Files.exists(target)) Files.size(target) else 0L
-                    stalledAttempts = if (after > before) 0 else stalledAttempts + 1
-                    if (stalledAttempts >= 3) throw e
+                    val after = if (Files.exists(target)) Files.size(target) else 0
+                    stalled = if (after > before) 0 else stalled + 1
+                    if (stalled >= 3) throw e
                     kotlinx.coroutines.delay(2_000)
                 }
             }
-            log.info("Download finished: {}", item.title)
         } catch (_: CancellationException) {
-            // Paused or deleted: the row's status was already set by the caller.
-        } catch (e: Exception) {
-            log.warn("Download failed ({}): {}", item.title, e.message)
-            val current = storage.downloads.get(id)
-            if (current?.status == DownloadStatus.RUNNING) {
-                storage.downloads.update(current.copy(status = DownloadStatus.FAILED, error = (e.message ?: e::class.simpleName)?.take(200)))
-            }
+        } catch (error: Exception) {
+            log.warn("Download failed ({}): {}", blob.title, error.message)
+            db.downloads().updateBlobStatus(
+                id,
+                DownloadBlobStatus.FAILED,
+                (error.message ?: error::class.simpleName)?.take(200),
+                clock(),
+                listOf(DownloadBlobStatus.RUNNING),
+            )
         } finally {
             connections.close(slot)
             jobs.remove(id)
@@ -215,80 +301,56 @@ class DownloadManager(
         }
     }
 
-    /** An evicting stream bumps a running download back to the queue to await a free slot. */
-    private fun requeueIfRunning(id: Long) {
-        scope.launch {
-            storage.downloads.get(id)?.let {
-                if (it.status == DownloadStatus.RUNNING) storage.downloads.update(it.copy(status = DownloadStatus.QUEUED))
-            }
-        }
-    }
-
-    /** One HTTP request copying from [existing] to EOF; throws on any break. */
-    private suspend fun transfer(id: Long, url: String, target: Path, existing: Long) {
+    private suspend fun transfer(id: String, url: String, target: Path, existing: Long) {
         var from = existing
-        val builder = HttpRequest.newBuilder(URI(url))
+        val request = HttpRequest.newBuilder(URI(url))
             .timeout(Duration.ofHours(6))
             .header("User-Agent", http.userAgent)
-        if (from > 0) builder.header("Range", "bytes=$from-")
-
-        val response = http.client.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream())
-        val code = response.statusCode()
-        if (code !in 200..299) {
+            .apply { if (from > 0) header("Range", "bytes=$from-") }
+            .build()
+        val response = http.client.send(request, HttpResponse.BodyHandlers.ofInputStream())
+        if (response.statusCode() !in 200..299) {
             response.body().close()
-            throw HttpStatusException(code)
+            throw HttpStatusException(response.statusCode())
         }
-        val resumed = code == 206
-        if (!resumed) from = 0 // server ignored the Range: start over
-        val contentLength = response.headers().firstValue("Content-Length").orElse(null)?.toLongOrNull()
-        val total = if (resumed) {
-            response.headers().firstValue("Content-Range").orElse(null)
-                ?.substringAfter('/')?.toLongOrNull()
-                ?: contentLength?.plus(from) ?: 0
-        } else contentLength ?: 0
-
+        val resumed = response.statusCode() == 206
+        if (!resumed) from = 0
+        val length = response.headers().firstValue("Content-Length").orElse(null)?.toLongOrNull()
+        val total = if (resumed) response.headers().firstValue("Content-Range").orElse(null)
+            ?.substringAfter('/')?.toLongOrNull() ?: length?.plus(from) ?: 0 else length ?: 0
         var downloaded = from
-        if (!storage.downloads.updateProgressIfStatus(
-                id,
-                downloaded,
-                total,
-                listOf(DownloadStatus.QUEUED, DownloadStatus.RUNNING),
-                DownloadStatus.RUNNING,
-            )
-        ) throw CancellationException("Download is no longer running")
+        updateProgress(id, downloaded, total, DownloadBlobStatus.RUNNING)
         response.body().use { input ->
             FileOutputStream(target.toFile(), resumed).use { out ->
                 val buffer = ByteArray(256 * 1024)
                 var lastWrite = 0L
                 while (true) {
                     coroutineContext.ensureActive()
-                    val n = input.read(buffer)
-                    if (n < 0) break
-                    out.write(buffer, 0, n)
-                    downloaded += n
-                    val now = System.currentTimeMillis()
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    out.write(buffer, 0, count)
+                    downloaded += count
+                    val now = clock()
                     if (now - lastWrite > 500) {
                         lastWrite = now
                         connections.touch("dl:$id")
-                        if (!storage.downloads.updateProgressIfStatus(
-                                id,
-                                downloaded,
-                                total,
-                                listOf(DownloadStatus.RUNNING),
-                                DownloadStatus.RUNNING,
-                            )
-                        ) throw CancellationException("Download is no longer running")
+                        updateProgress(id, downloaded, total, DownloadBlobStatus.RUNNING)
                     }
                 }
             }
         }
-        if (!storage.downloads.updateProgressIfStatus(
+        updateProgress(id, downloaded, total.takeIf { it > 0 } ?: downloaded, DownloadBlobStatus.DONE)
+    }
+
+    private suspend fun updateProgress(id: String, downloaded: Long, total: Long, status: String) {
+        if (db.downloads().updateBlobProgress(
                 id,
                 downloaded,
-                if (total > 0) total else downloaded,
-                listOf(DownloadStatus.RUNNING),
-                DownloadStatus.DONE,
-            )
+                total,
+                status,
+                clock(),
+                listOf(DownloadBlobStatus.QUEUED, DownloadBlobStatus.RUNNING),
+            ) != 1
         ) throw CancellationException("Download is no longer running")
     }
 }

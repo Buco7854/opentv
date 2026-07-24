@@ -36,16 +36,11 @@ fullscreen player. It ships dark, light and system-following themes and works on
 big landscape touchscreens (including in-car browsers) down to phones, where the
 dock becomes a tab bar.
 
-:::danger[No authentication: read this before deploying]
-The web server has **no authentication and no user accounts**. Anyone who can
-reach it can browse your playlists, play streams, and read your Xtream
-credentials (they are embedded in stream URLs and editable in the UI).
-
-Run it **behind an authenticating reverse proxy** (Authelia, Caddy
-`basic_auth`, nginx `auth_basic`, a VPN, or a tailnet) and never expose the port
-directly to the internet. The [self-hosting guide](/guide/webclient-hosting) has
-a Caddy example.
-:::
+The server supports local password accounts with TOTP or WebAuthn MFA, OIDC
+SSO, administrator/user roles, playlist assignments, and revocable playback
+leases. Provider credentials stay server-side. See
+[Server authentication and user data](/guide/server-authentication) before
+deploying, and terminate public deployments with HTTPS.
 
 ## Where to next
 

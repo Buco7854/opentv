@@ -2,12 +2,12 @@ package com.buco7854.opentv.server
 
 import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.core.model.ChannelKind
-import com.buco7854.opentv.core.model.Favorite
 import java.util.Base64
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
+import kotlin.test.assertTrue
+import kotlinx.serialization.json.Json
 
 class ResourceDtoTest {
     private val cipher = StreamCipher(
@@ -30,20 +30,11 @@ class ResourceDtoTest {
             season = null,
             episode = null,
             position = 0,
-        ).toDto(cipher)
+        ).toDto(cipher, "content-42")
 
-        assertNotEquals(source, dto.url)
+        assertTrue(source !in Json.encodeToString(ChannelDto.serializer(), dto))
+        assertEquals("content-42", dto.contentId)
         assertNotEquals(logo, dto.logo)
-        assertEquals(source, cipher.tryDecrypt(dto.url))
         assertEquals(logo, dto.logo?.let(cipher::tryDecrypt))
-    }
-
-    @Test
-    fun `series favorite keeps domain key while live favorite is opaque`() {
-        val live = Favorite(1, "https://provider.example/live/1.ts", ChannelKind.LIVE, 1).toDto(cipher)
-        val series = Favorite(1, "my-series", ChannelKind.SERIES, 1).toDto(cipher)
-
-        assertFalse(live.key.startsWith("http"))
-        assertEquals("my-series", series.key)
     }
 }

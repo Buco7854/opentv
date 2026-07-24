@@ -14,28 +14,29 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 
 /** Ktor adapter for download use cases and completed-file delivery. */
-internal fun Route.downloadRoutes(service: DownloadApplicationService) = route("/downloads") {
-    get { call.respond(service.list()) }
-    post { call.respond(service.enqueue(call.receive())) }
-    route("/{id}") {
+internal fun Route.downloadRoutes(service: DownloadApplicationService) {
+    route("/downloads") {
+        get { call.respond(service.list(call.actor)) }
+        post { call.respond(service.enqueue(call.actor, call.receive())) }
+        route("/{id}") {
         post("/pause") {
-            service.pause(call.id())
+            service.pause(call.actor, call.requiredParameter("id"))
             call.respond(HttpStatusCode.NoContent)
         }
         post("/resume") {
-            service.resume(call.id())
+            service.resume(call.actor, call.requiredParameter("id"))
             call.respond(HttpStatusCode.NoContent)
         }
         post("/retry") {
-            service.retry(call.id())
+            service.retry(call.actor, call.requiredParameter("id"))
             call.respond(HttpStatusCode.NoContent)
         }
         delete {
-            service.delete(call.id())
+            service.delete(call.actor, call.requiredParameter("id"))
             call.respond(HttpStatusCode.NoContent)
         }
         get("/file") {
-            val file = service.file(call.id())
+            val file = service.file(call.actor, call.requiredParameter("id"))
             if (call.request.queryParameters["save"] == "1") {
                 call.response.header(
                     HttpHeaders.ContentDisposition,
@@ -45,6 +46,13 @@ internal fun Route.downloadRoutes(service: DownloadApplicationService) = route("
                 )
             }
             call.respondFile(file.path.toFile())
+        }
+        }
+    }
+    route("/admin/downloads") {
+        get { call.respond(service.adminList(call.actor)) }
+        delete("/blobs/{id}") {
+            call.respond(service.adminCancelBlob(call.actor, call.requiredParameter("id")))
         }
     }
 }

@@ -13,6 +13,8 @@ export class ApiError extends Error {
     readonly status: number,
     readonly code: string | null = null,
     readonly field: string | null = null,
+    /** The decoded response is retained for typed errors such as auth challenges. */
+    readonly body: unknown = null,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -20,6 +22,13 @@ export class ApiError extends Error {
 }
 
 export type AccessTokenProvider = () => string | null | Promise<string | null>;
+export type CsrfTokenProvider = () => string | null;
+export type UnauthorizedListener = () => void;
+export type ForbiddenListener = () => void;
+export interface RequestBehavior {
+  /** Public authentication failures must not expire an already valid browser session. */
+  broadcastAuthFailure?: boolean;
+}
 
 // Calling a browser's native fetch as an object method can give it the wrong
 // receiver and cause "Illegal invocation". The wrapper keeps injection easy
@@ -34,28 +43,69 @@ const browserFetch: typeof fetch = (input, init) => globalThis.fetch(input, init
  * installed once at composition instead of modifying every feature call.
  */
 export class ApiHttpClient {
+  private csrfToken?: CsrfTokenProvider;
+  private unauthorizedListeners = new Set<UnauthorizedListener>();
+  private forbiddenListeners = new Set<ForbiddenListener>();
+
   constructor(
     private readonly fetchImpl: typeof fetch = browserFetch,
     private readonly accessToken?: AccessTokenProvider,
   ) {}
 
+  setCsrfTokenProvider(provider?: CsrfTokenProvider) {
+    this.csrfToken = provider;
+  }
+
+  onUnauthorized(listener: UnauthorizedListener): () => void {
+    this.unauthorizedListeners.add(listener);
+    return () => this.unauthorizedListeners.delete(listener);
+  }
+
+  onForbidden(listener: ForbiddenListener): () => void {
+    this.forbiddenListeners.add(listener);
+    return () => this.forbiddenListeners.delete(listener);
+  }
+
+  notifyUnauthorized() {
+    this.unauthorizedListeners.forEach((listener) => listener());
+  }
+
   endpoint(path: string): string {
     return `${API_PREFIX}${path}`;
   }
 
-  async raw(path: string, init: RequestInit = {}): Promise<Response> {
+  async raw(
+    path: string,
+    init: RequestInit = {},
+    behavior: RequestBehavior = {},
+  ): Promise<Response> {
     const headers = new Headers(init.headers);
     const token = await this.accessToken?.();
     if (token) headers.set('Authorization', `Bearer ${token}`);
-    return this.fetchImpl(this.endpoint(path), {
+    const method = (init.method ?? 'GET').toUpperCase();
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+      const csrf = this.csrfToken?.();
+      if (csrf) headers.set('X-CSRF-Token', csrf);
+    }
+    const response = await this.fetchImpl(this.endpoint(path), {
       credentials: 'same-origin',
       ...init,
       headers,
     });
+    if (response.status === 401 && behavior.broadcastAuthFailure !== false) {
+      this.unauthorizedListeners.forEach((listener) => listener());
+    } else if (response.status === 403 && behavior.broadcastAuthFailure !== false) {
+      this.forbiddenListeners.forEach((listener) => listener());
+    }
+    return response;
   }
 
-  async json<T>(path: string, init?: RequestInit): Promise<T> {
-    const response = await this.raw(path, init);
+  async json<T>(
+    path: string,
+    init?: RequestInit,
+    behavior?: RequestBehavior,
+  ): Promise<T> {
+    const response = await this.raw(path, init, behavior);
     if (!response.ok) throw await this.toError(response);
     return (response.status === 204 ? null : await response.json()) as T;
   }
@@ -69,21 +119,23 @@ export class ApiHttpClient {
     let message = `HTTP ${response.status}`;
     let code: string | null = null;
     let field: string | null = null;
+    let body: unknown = null;
     try {
-      const body = (await response.json()) as ApiErrorBody;
-      message = body.message || message;
-      code = body.code ?? null;
-      field = body.field ?? null;
+      body = await response.json();
+      const errorBody = body as ApiErrorBody;
+      message = errorBody.message || message;
+      code = errorBody.code ?? null;
+      field = errorBody.field ?? null;
     } catch {
       // Non-JSON upstream failures retain their useful HTTP status.
     }
-    return new ApiError(message, response.status, code, field);
+    return new ApiError(message, response.status, code, field, body);
   }
 }
 
 export const browserApiHttp = new ApiHttpClient();
 
-export const jsonBody = (method: 'POST' | 'PUT', body: unknown): RequestInit => ({
+export const jsonBody = (method: 'POST' | 'PUT' | 'PATCH', body: unknown): RequestInit => ({
   method,
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(body),

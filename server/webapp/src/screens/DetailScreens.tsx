@@ -80,8 +80,8 @@ function DownloadButton({ channel }: { channel: Channel }) {
   return (
     <div className="dl-slot">
       <DownloadStateIcon
-        state={downloads.byUrl.get(channel.url)}
-        onDownload={() => api.enqueueDownload(channel.id)}
+        state={downloads.byContentId.get(channel.contentId)}
+        onDownload={() => api.enqueueDownload(channel.contentId)}
         onChanged={downloads.refresh}
       />
     </div>
@@ -111,18 +111,18 @@ export function MovieDetailScreen() {
     [channelId, movie != null],
   );
   const progress = useWatchProgress();
-  const { favoriteKeys, toggleFavorite } = useFavorites(movie?.playlistId ?? 0);
+  const { favoriteContentIds, toggleFavorite } = useFavorites(movie?.playlistId ?? 0);
 
   if (error) return <DetailShell onBack={() => navigate(-1)}><EmptyState title={t('detail.notFound')} subtitle={error} /></DetailShell>;
   if (!movie) return <DetailShell onBack={() => navigate(-1)}><Spinner /></DetailShell>;
 
-  const fraction = progress.get(movie.url);
+  const fraction = progress.get(movie.contentId);
   return (
     <DetailShell
       onBack={() => navigate(-1)}
       favorite={
-        <FavoriteIcon isFavorite={favoriteKeys.has(movie.url)}
-                      onToggle={() => toggleFavorite(movie.url, movie.kind)} />
+        <FavoriteIcon isFavorite={favoriteContentIds.has(movie.contentId)}
+                      onToggle={() => toggleFavorite(movie.contentId)} />
       }
     >
       <Poster image={meta?.posterUrl ?? movie.logo} kind={ChannelKind.MOVIE} />
@@ -165,7 +165,7 @@ export function EpisodeList({ episodes }: { episodes: Channel[] }) {
       <div className="mt-3 flex flex-col gap-2">
         {paged.pageItems.map((ep) => (
           <EpisodeRow key={ep.id} episode={ep}
-                      progress={progress.get(ep.url)}
+                      progress={progress.get(ep.contentId)}
                       downloads={downloads}
                       onOpen={() => navigate(`/episode/${ep.id}`)} />
         ))}
@@ -200,8 +200,8 @@ function EpisodeRow({ episode, progress, downloads, onOpen }: {
           <div className="title">{episode.name}</div>
           {metaLine && <div className="sub">{metaLine}</div>}
         </div>
-        <DownloadStateIcon state={downloads.byUrl.get(episode.url)}
-                           onDownload={() => api.enqueueDownload(episode.id)}
+        <DownloadStateIcon state={downloads.byContentId.get(episode.contentId)}
+                           onDownload={() => api.enqueueDownload(episode.contentId)}
                            onChanged={downloads.refresh} />
       </div>
     </button>
@@ -215,7 +215,13 @@ export function SeriesDetailScreen() {
   const navigate = useNavigate();
   const { data: episodes } = useAsync(() => api.episodes(playlistId, key), [playlistId, key]);
   const { data: meta } = useAsync(() => api.meta('series', key), [key]);
-  const { favoriteKeys, toggleFavorite } = useFavorites(playlistId);
+  const { data: seriesContentId } = useAsync(async () => {
+    const group = episodes?.[0]?.groupTitle;
+    if (!group) return null;
+    const series = await api.seriesGroups(playlistId, group);
+    return series.find((item) => item.seriesKey === key)?.contentId ?? null;
+  }, [playlistId, key, episodes?.[0]?.groupTitle]);
+  const { favoriteContentIds, toggleFavorite } = useFavorites(playlistId);
 
   if (!episodes) return <DetailShell onBack={() => navigate(-1)}><Spinner /></DetailShell>;
 
@@ -224,8 +230,10 @@ export function SeriesDetailScreen() {
   return (
     <DetailShell
       onBack={() => navigate(-1)}
-      favorite={<FavoriteIcon isFavorite={favoriteKeys.has(key)}
-                              onToggle={() => toggleFavorite(key, ChannelKind.SERIES)} />}
+      favorite={seriesContentId
+        ? <FavoriteIcon isFavorite={favoriteContentIds.has(seriesContentId)}
+                        onToggle={() => toggleFavorite(seriesContentId)} />
+        : undefined}
     >
       <Poster image={poster} kind={ChannelKind.SERIES} />
       <h2>{key}</h2>
@@ -287,7 +295,7 @@ export function EpisodeDetailScreen() {
     info?.rating != null ? starRating(info.rating) : null,
   ].filter((x): x is string => !!x);
   const plot = ep.description ?? info?.overview;
-  const fraction = progress.get(ep.url);
+  const fraction = progress.get(ep.contentId);
 
   return (
     <DetailShell onBack={() => navigate(-1)}>

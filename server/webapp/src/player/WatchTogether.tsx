@@ -65,23 +65,21 @@ export interface WatchTogether {
 
 export function useWatchTogether(opts: {
   selfId: string;
-  deviceName: string;
   video: RefObject<HTMLVideoElement>;
   /** The player is up on real content (not an error), so an intent check is worthwhile. */
   active: boolean;
   live: boolean;
   /** This content is served through the remux, so a same-content viewer shares its connection. */
   remuxEligible: boolean;
-  contentKey: string;
-  /** Encrypted source token, for reading the provider's connection limit. */
-  source: string | null;
-  playlistId: number | null;
+  contentId: string;
   /** Sends a frame over the live socket (false when it's down); sync falls back to a POST. */
   send: MutableRefObject<((command: SessionCommandInput) => boolean) | null>;
   /** A controller changed the room's shared audio track: re-request the remux with it. */
   onRoomAudio?: (index: number) => void;
 }): WatchTogether {
-  const { selfId, deviceName, video, active, live, remuxEligible, contentKey, source, playlistId, send } = opts;
+  const {
+    selfId, video, active, live, remuxEligible, contentId, send,
+  } = opts;
   const roomAudioRef = useRef(opts.onRoomAudio); roomAudioRef.current = opts.onRoomAudio;
 
   const [members, setMembers] = useState<RoomMember[]>([]);
@@ -103,7 +101,6 @@ export function useWatchTogether(opts: {
   const isHost = !!self?.host;
   const canControl = !!self?.controller;
 
-  const contentRef = useRef(contentKey); contentRef.current = contentKey;
   const liveRef = useRef(live); liveRef.current = live;
   const remuxRef = useRef(remuxEligible); remuxRef.current = remuxEligible;
   // The content the room was formed on, so navigating elsewhere drops us out of it.
@@ -150,19 +147,19 @@ export function useWatchTogether(opts: {
   // Ask a specific viewer to watch together (there can be several on the same content).
   const ask = useCallback((peerId: string) => {
     snackbar(t('watch.requesting'));
-    api.joinRequest(peerId, selfId, deviceName, contentRef.current)
+    api.joinRequest(selfId, peerId)
       .catch(() => snackbar(t('watch.requestFailed')));
-  }, [selfId, deviceName]);
+  }, [selfId]);
 
   const answerJoin = useCallback((peerId: string, accept: boolean) => {
-    api.joinAnswer(selfId, peerId, deviceName, contentRef.current, accept).catch(() => {});
+    api.joinAnswer(selfId, peerId, accept).catch(() => {});
     setJoinRequests((list) => list.filter((r) => r.peerId !== peerId));
-  }, [selfId, deviceName]);
+  }, [selfId]);
 
   const requestControl = useCallback(() => {
     snackbar(t('watch.controlAsked'));
-    api.requestControl(selfId, deviceName).catch(() => {});
-  }, [selfId, deviceName]);
+    api.requestControl(selfId, true).catch(() => {});
+  }, [selfId]);
 
   const answerControl = useCallback((peerId: string, grant: boolean) => {
     api.grantControl(selfId, peerId, grant).catch(() => {});
@@ -236,7 +233,7 @@ export function useWatchTogether(opts: {
     } else if (command.type === 'room-state' && command.members) {
       const roster = command.members;
       const ids = new Set(roster.map((m) => m.id));
-      roomContent.current = contentRef.current;
+      roomContent.current = contentId;
       setInRoom(true);
       setMembers(roster);
       // Now watching together: the choice is settled and the room shares one read (a movie through
@@ -262,7 +259,7 @@ export function useWatchTogether(opts: {
       if (roomContent.current) snackbar(t('watch.ended'));
       resetRoom();
     }
-  }, [applySync, resetRoom]);
+  }, [applySync, contentId, resetRoom, video]);
 
   // New content: clear stale prompts, and drop a room that belonged to the old content.
   useEffect(() => {
@@ -272,19 +269,19 @@ export function useWatchTogether(opts: {
     setChoice('decided');
     loadingRef.current = false;
     setLoading(false);
-    if (roomContent.current && roomContent.current !== contentKey) leave();
-  }, [contentKey, leave]);
+    if (roomContent.current && roomContent.current !== contentId) leave();
+  }, [contentId, leave]);
 
   const watchAlone = useCallback(() => setChoice('decided'), []);
 
   // Ask the server who else is here and whether the provider is full - once per content.
   useEffect(() => {
-    if (!active || !contentKey || inRoom || checked.current === contentKey) return;
-    checked.current = contentKey;
+    if (!active || !contentId || inRoom || checked.current === contentId) return;
+    checked.current = contentId;
     let cancelled = false;
     // Never hold playback on the check for long: fail open if it's slow.
     const failOpen = setTimeout(() => { if (!cancelled) setChecking(false); }, 4000);
-    api.watchIntent(selfId, contentKey, source, playlistId).then((intent) => {
+    api.playbackIntent(selfId).then((intent) => {
       if (cancelled) return;
       clearTimeout(failOpen);
       setPeers(intent.sameContent);
@@ -298,7 +295,7 @@ export function useWatchTogether(opts: {
       if (intent.sameContent.length > 0) setChoice('pending');
     }).catch(() => { if (!cancelled) { clearTimeout(failOpen); setChecking(false); } });
     return () => { cancelled = true; clearTimeout(failOpen); };
-  }, [active, contentKey, inRoom, selfId, source, playlistId]);
+  }, [active, contentId, inRoom, selfId]);
 
   // The host anchors the shared timeline: a snap whenever the roster grows (so a fresh joiner
   // jumps to where everyone else is) plus a gentle tick that only fixes a real desync.

@@ -35,18 +35,22 @@ export function DownloadStateIcon({ state, onDownload, onChanged }: {
   const openDelete = (e: React.MouseEvent) => { e.preventDefault(); e.stopPropagation(); setConfirmDelete(true); };
 
   let button;
-  switch (state?.status) {
+  const displayedStatus = state && !state.active &&
+    (state.status === DownloadStatus.RUNNING || state.status === DownloadStatus.QUEUED)
+    ? DownloadStatus.PAUSED : state?.status;
+  switch (displayedStatus) {
     case DownloadStatus.RUNNING:
     case DownloadStatus.QUEUED: {
       // Queued means the provider's connections are busy: it waits (spinner + a hint saying so)
       // rather than looking like a stuck active download.
-      const queued = state.status === DownloadStatus.QUEUED;
-      const fraction = !queued && state.totalBytes > 0
-        ? Math.min(1, state.downloadedBytes / state.totalBytes) : null;
+      const queued = displayedStatus === DownloadStatus.QUEUED;
+      const download = state!;
+      const fraction = !queued && download.totalBytes > 0
+        ? Math.min(1, download.downloadedBytes / download.totalBytes) : null;
       button = (
         <button className="icon-btn relative" aria-label={t('downloads.pauseAria')}
                 title={t(queued ? 'downloads.queuedHint' : 'downloads.pauseHint')}
-                onClick={act(() => api.pauseDownload(state.id))} onContextMenu={openDelete}>
+                onClick={act(() => api.pauseDownload(download.id))} onContextMenu={openDelete}>
           <Ring fraction={fraction} />
           <Icon name="pause" className="dl-pause-glyph" />
         </button>
@@ -57,7 +61,7 @@ export function DownloadStateIcon({ state, onDownload, onChanged }: {
       button = (
         <button className="icon-btn primary" aria-label={t('downloads.resumeAria')}
                 title={t('downloads.resumeHint')}
-                onClick={act(() => api.resumeDownload(state.id))} onContextMenu={openDelete}>
+                onClick={act(() => api.resumeDownload(state!.id))} onContextMenu={openDelete}>
           <Icon name="play" />
         </button>
       );

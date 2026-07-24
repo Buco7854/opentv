@@ -16,8 +16,7 @@ export function XtreamSeriesScreen() {
   const seriesId = Number(sid);
   const navigate = useNavigate();
   const { data: detail } = useAsync(() => api.xseries(playlistId, seriesId), [playlistId, seriesId]);
-  const { favoriteKeys, toggleFavorite } = useFavorites(playlistId);
-  const favKey = `x:${seriesId}`;
+  const { favoriteContentIds, toggleFavorite } = useFavorites(playlistId);
 
   if (!detail) {
     return (
@@ -35,8 +34,8 @@ export function XtreamSeriesScreen() {
     <>
       <ScreenHeader
         title="" onBack={() => navigate(-1)}
-        actions={<FavoriteIcon isFavorite={favoriteKeys.has(favKey)}
-                               onToggle={() => toggleFavorite(favKey, ChannelKind.SERIES)} />}
+        actions={<FavoriteIcon isFavorite={favoriteContentIds.has(series.contentId)}
+                               onToggle={() => toggleFavorite(series.contentId)} />}
       />
       <div className="detail">
         <Poster image={series.cover} kind={ChannelKind.SERIES} />

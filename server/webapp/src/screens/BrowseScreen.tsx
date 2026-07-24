@@ -8,6 +8,7 @@ import {
   api, canShowGuide, Channel, ChannelKind, GroupCount, hasCatchup,
   Programme, SeriesGroup, XtreamSeries,
 } from '../api';
+import { useAuth } from '../auth/AuthProvider';
 import { mediaTags } from '../components/Badges';
 import { EmptyState } from '../components/Common';
 import { DownloadStateIcon } from '../components/DownloadStateIcon';
@@ -30,10 +31,12 @@ export function BrowseScreen() {
   const [search, setSearch] = useSearchParams();
   const tab = Number(search.get('t') ?? ChannelKind.LIVE);
   const group = search.get('g');
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'ADMIN';
 
   const { playChannel, playCatchup } = usePlayer();
   const { data: detail } = useAsync(() => api.playlistDetail(playlistId), [playlistId]);
-  const { favoriteKeys, toggleFavorite } = useFavorites(playlistId);
+  const { favoriteContentIds, toggleFavorite } = useFavorites(playlistId);
   const downloads = useDownloads();
   const [filter, setFilter] = useState('');
   const [grid, setGrid] = useState(prefs.gridBrowse);
@@ -54,9 +57,10 @@ export function BrowseScreen() {
 
   // Background refresh (throttled server-side).
   useEffect(() => {
+    if (!isAdmin) return;
     api.refreshPlaylist(playlistId, false).then(reloadGuideIds, (e: Error) =>
       snackbar(t('browse.refreshFailed', { message: e.message })));
-  }, [playlistId, reloadGuideIds]);
+  }, [isAdmin, playlistId, reloadGuideIds]);
 
   const { data: groups } = useAsync(async () => {
     if (tab === ChannelKind.SERIES && isXtreamNative) {
@@ -120,7 +124,7 @@ export function BrowseScreen() {
       <ScreenHeader
         title={title}
         onBack={atRoot ? undefined : () => setTabGroup(tab, null)}
-        subtitle={detail?.playlist.hasXtreamPanel
+        subtitle={detail?.playlist.hasXtreamPanel && isAdmin
           ? <ConnectionLine playlistId={playlistId} />
           : `${sectionNames[tab as 0 | 1 | 2] ?? ''} · ${counts[tab as 0 | 1 | 2] ?? 0}`}
         actions={
@@ -144,7 +148,7 @@ export function BrowseScreen() {
             groups={pagedGroups.pageItems}
             loaded={groups != null}
             // Only M3U group guessing needs correcting; Xtream categories are authoritative.
-            onCorrect={isXtreamNative ? null : setCorrectingGroup}
+            onCorrect={isXtreamNative || !isAdmin ? null : setCorrectingGroup}
             onSelect={(g) => setTabGroup(tab, g)}
           />
           <Pager {...pagedGroups} onPage={pagedGroups.setPage} />
@@ -167,8 +171,8 @@ export function BrowseScreen() {
                   title={s.name}
                   subtitle={[s.genre, s.rating != null ? starRating(s.rating) : null].filter(Boolean).join(' · ') || null}
                   logo={s.cover} kind={ChannelKind.SERIES} chevron
-                  isFavorite={favoriteKeys.has(`x:${s.seriesId}`)}
-                  onToggleFavorite={() => toggleFavorite(`x:${s.seriesId}`, ChannelKind.SERIES)}
+                  isFavorite={favoriteContentIds.has(s.contentId)}
+                  onToggleFavorite={() => toggleFavorite(s.contentId)}
                   onClick={() => navigate(`/xseries/${playlistId}/${s.seriesId}`)}
                 />
               ))}
@@ -194,8 +198,8 @@ export function BrowseScreen() {
                   key={s.seriesKey}
                   title={s.seriesKey} subtitle={t('browse.episodes', { count: s.count })}
                   logo={s.logo} kind={ChannelKind.SERIES} chevron
-                  isFavorite={favoriteKeys.has(s.seriesKey)}
-                  onToggleFavorite={() => toggleFavorite(s.seriesKey, ChannelKind.SERIES)}
+                  isFavorite={favoriteContentIds.has(s.contentId)}
+                  onToggleFavorite={() => toggleFavorite(s.contentId)}
                   onClick={() => navigate(`/series/${playlistId}/${encodeURIComponent(s.seriesKey)}`)}
                 />
               ))}
@@ -220,8 +224,8 @@ export function BrowseScreen() {
             channels={pagedChannels.pageItems}
             loaded={channels != null}
             nowAiring={tab === ChannelKind.LIVE ? nowAiring : {}}
-            favoriteKeys={favoriteKeys}
-            onToggleFavorite={(c) => toggleFavorite(c.url, c.kind)}
+            favoriteContentIds={favoriteContentIds}
+            onToggleFavorite={(c) => toggleFavorite(c.contentId)}
             onGuide={tab === ChannelKind.LIVE ? setGuideChannel : null}
             guideIds={guideIds}
             downloads={tab === ChannelKind.MOVIE ? downloads : null}
@@ -241,7 +245,7 @@ export function BrowseScreen() {
           onPlayCatchup={(cid, s, e) => playCatchup(cid, s, e)}
         />
       )}
-      {correctingGroup && (
+      {isAdmin && correctingGroup && (
         <GroupKindDialog
           groupTitle={correctingGroup}
           onDismiss={() => setCorrectingGroup(null)}
@@ -300,11 +304,11 @@ function GroupList({ groups, loaded, onCorrect, onSelect }: {
   );
 }
 
-function ChannelList({ channels, loaded, nowAiring, favoriteKeys, onToggleFavorite, onGuide, guideIds, downloads, onOpen }: {
+function ChannelList({ channels, loaded, nowAiring, favoriteContentIds, onToggleFavorite, onGuide, guideIds, downloads, onOpen }: {
   channels: Channel[];
   loaded: boolean;
   nowAiring: Record<string, Programme>;
-  favoriteKeys: Set<string>;
+  favoriteContentIds: Set<string>;
   onToggleFavorite: (c: Channel) => void;
   onGuide: ((c: Channel) => void) | null;
   guideIds: Set<string>;
@@ -329,14 +333,14 @@ function ChannelList({ channels, loaded, nowAiring, favoriteKeys, onToggleFavori
             airingProgress={airing
               ? Math.min(1, Math.max(0, (now - airing.startMs) / Math.max(1, airing.endMs - airing.startMs)))
               : null}
-            isFavorite={favoriteKeys.has(c.url)}
+            isFavorite={favoriteContentIds.has(c.contentId)}
             onToggleFavorite={() => onToggleFavorite(c)}
             onGuide={onGuide && canShowGuide(c, guideIds) ? () => onGuide(c) : null}
             guideHighlight={hasCatchup(c)}
             downloadSlot={downloads && (
               <DownloadStateIcon
-                state={downloads.byUrl.get(c.url)}
-                onDownload={() => api.enqueueDownload(c.id)}
+                state={downloads.byContentId.get(c.contentId)}
+                onDownload={() => api.enqueueDownload(c.contentId)}
                 onChanged={downloads.refresh}
               />
             )}
