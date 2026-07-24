@@ -1,59 +1,175 @@
-# OpenTV agent guide
+# OpenTV repository memory
 
-OpenTV is a Kotlin multiplatform Android app plus a Kotlin/JVM Ktor server and
-React web client. Keep it a modular monolith: `:core` owns platform-neutral
-domain/application logic, `:data` owns Room adapters, `:app` owns Android
-adapters/UI, and `:server` owns the HTTP/media runtime.
+This file records stable repository facts that are expensive to rediscover.
+Source and build files remain authoritative when this summary becomes stale.
 
-## Boundaries
+## Project shape
 
-- Ktor types belong at the server transport edge. Route handlers validate/map
-  requests and delegate; they must not own provider, database, or process policy.
-- Server feature routes depend on their `*ApplicationService`, never directly on
-  `Storage` or Room-facing models. Application services remain Ktor-independent
-  and return server-owned DTOs.
-- Keep each API family in its own `*Routes.kt` adapter. Cross-cutting concerns
-  such as authentication belong in route-scoped plugins, not repeated handlers.
-- API authentication is injected through `ApiSecurity`. The open-access adapter
-  preserves today's behavior; replace it at the composition root instead of
-  adding credential checks throughout feature routes.
-- Serialize server DTOs, not `:core` persistence/domain models directly.
-- External effects need an owned lifecycle. Do not create an unmanaged
-  `CoroutineScope`, shutdown hook, or infinite thread; attach work to
-  `ServerRuntime` and make shutdown idempotent.
-- Provider URLs and credentials never leave the server. Browser-visible URLs
-  must remain opaque `StreamCipher` tokens.
-- Live playback, VOD remuxing, and downloads share one provider-connection
-  budget. Interactive streams may evict downloads, never another viewer.
-- Keep Kotlin DTOs and TypeScript API types synchronized whenever a JSON or
-  WebSocket contract changes. Do not add a hand-maintained OpenAPI document;
-  introduce OpenAPI only together with build-time generation and validation
-  from the executable route/DTO definitions.
-- Room schema changes require an explicit migration and migration test. Never
-  restore destructive migration fallback.
-- Android composables render state and emit events; provider, Room, and
-  filesystem work belongs in ViewModels or application repositories. Prefer
-  lifecycle-aware Flow collection for screen state.
-- Android background workers receive dependencies through the application
-  `WorkerFactory`. Do not reach into `OpenTvApp.graph` from a worker or call
-  WorkManager statics from application repositories.
-- Android remains a standalone IPTV reader. Do not make local M3U/Xtream flows
-  depend on the OpenTV server; a future server integration belongs behind an
-  optional provider adapter at the existing application boundary.
-- Shared `:core` dependencies stay implementation-scoped unless their types
-  appear in a public signature. Do not apply compiler plugins without matching
-  source annotations or generated code.
+OpenTV is a modular monolith with two independent clients:
 
-## Validation
+- `:app`: standalone Android/Android TV IPTV reader.
+- `:server`: Kotlin/JVM Ktor server that embeds the React web client.
+- `:core`: platform-neutral logic shared by Android and server.
+- `:data`: Room implementation of `:core` storage ports for Android and JVM.
+- `server/webapp`: React/TypeScript/Vite client for `:server`.
 
-Use JDK 25 for the server and JDK 17-compatible code for Android/shared modules.
+Android does not use or bundle the server. It includes `:core` and Android
+`:data`; it does not include `:server` or JVM `:data`. R8 and resource shrinking
+are currently disabled.
+
+Future Android support for an OpenTV server is expected to be an optional source
+adapter. Existing local M3U/Xtream behavior must remain independent.
+
+## Where things are
+
+### Shared
+
+- Domain models: `core/.../model/Models.kt`
+- Storage ports: `core/.../storage/Storage.kt`
+- Repositories/use cases: `core/.../repo/`
+- M3U/XMLTV/Xtream/catch-up logic: corresponding packages under `core/.../`
+- Room database/DAOs: `data/.../db/OpenTvDatabase.kt`, `Daos.kt`
+- Room adapter: `data/.../RoomStorage.kt`
+- Exported Room schemas: `data/schemas/`
+
+### Server
+
+- Process entry point: `server/.../Main.kt`
+- Environment configuration: `ServerConfig.kt`
+- Composition and lifecycle: `Application.kt`, `ServerGraph.kt`
+- API root: `ApiRoutes.kt` at `/api/v1`
+- Feature adapters: `PlaylistRoutes.kt`, `LibraryRoutes.kt`,
+  `DownloadRoutes.kt`, `SessionRoutes.kt`, `MediaRoutes.kt`
+- Feature use cases: matching `*ApplicationService.kt`
+- HTTP contracts: `ApiModels.kt`, `ResourceDtos.kt`, `PlaybackModels.kt`
+- Authentication seam: `ApiSecurity.kt`
+- Media runtime: `Remux.kt`, `LiveRelay.kt`, `StreamGate.kt`,
+  `MediaProcessRunner.kt`
+
+### Web
+
+- Composition/routes: `server/webapp/src/App.tsx`
+- Typed API facade and TS contracts: `src/api.ts`
+- HTTP/errors/auth transport: `src/api/http.ts`
+- Browser-only preferences: `src/preferences.ts`
+- Shared async/download state: `src/hooks.ts`
+- Lightweight player navigation: `src/player/PlayerNavigation.tsx`
+- Playback runtime: `src/player/PlayerProvider.tsx`
+
+All screens are lazy route boundaries. Player runtime code is intentionally
+absent from the initial bundle.
+
+### Android
+
+- Composition root: `app/.../OpenTvApp.kt` (`AppGraph`)
+- Navigation: `MainActivity.kt`
+- Screens and ViewModels: `app/.../ui/`
+- Player coordinator: `ui/player/PlayerScreen.kt`
+- Player data: `PlayerViewModel.kt`
+- ExoPlayer lifecycle: `PlayerSession.kt`
+- PiP/window/lifecycle effects: `PlayerSystemEffects.kt`
+- Player presentation: `PlayerControls.kt`, `PlayerSheets.kt`
+- Download application API: `download/DownloadRepository.kt`
+- WorkManager boundary: `DownloadScheduler.kt`,
+  `DownloadWorkerFactory.kt`, `DownloadWorker.kt`
+
+## Current contracts and decisions
+
+- `/api/v1` is the only API prefix; there is no legacy `/api` alias.
+- There is no OpenAPI document. OpenAPI is only wanted if generated and
+  validated from executable routes/DTOs.
+- `ApiSecurity.openAccess()` is the current authentication adapter. The API is
+  structurally ready for real auth, but current deployments still need an
+  authenticated reverse proxy or VPN.
+- Authentication is installed once as a route-scoped plugin. Feature handlers
+  contain no credential policy.
+- API failures use `ApiErrorDto(code, message, field)`.
+- Server DTOs are separate from `:core` models.
+- Kotlin DTO and TypeScript contract changes must remain synchronized.
+- Provider URLs and credentials never leave the server.
+- Browser playlist credentials are write-only. There is no credential-read
+  endpoint. Blank secret fields on update preserve existing values.
+- Browser playback URLs are opaque `StreamCipher` tokens.
+- `api/http.ts` already supports same-origin cookies and has one future bearer
+  token provider seam.
+- Browser preferences and server settings are intentionally separate.
+- The web client has no test runner; `npm run build` is its typecheck/bundle
+  validation.
+
+## Runtime ownership
+
+- `ServerRuntime` owns and closes long-lived server components.
+- Feature routes call `*ApplicationService`; they do not directly own Room,
+  provider, or process policy.
+- `MediaRoutes` owns streaming transport only; remux/relay/gating policy lives
+  in the media services.
+- Live playback, remuxing, and downloads share one provider-connection budget.
+  Interactive streams may evict downloads, never another viewer.
+- Android workers receive dependencies through `DownloadWorkerFactory`.
+- Android repositories use `DownloadScheduler`, not WorkManager statics.
+- Android composables consume ViewModel state; direct graph access is confined
+  to composition/ViewModel-factory boundaries.
+- `PlayerSession` owns ExoPlayer, listeners, polling, progress persistence, and
+  cleanup.
+
+## Persistence and identity
+
+- Room schema version is 8.
+- Destructive migration fallback is not used.
+- Schema changes require explicit Android and JVM migrations, exported schema,
+  and migration coverage.
+- Favorites, resume points, and downloads currently use existing URL/key
+  identities. A future stable-content identity migration must update all three
+  together rather than piecemeal.
+
+## Build facts
+
+- Server target/runtime: JDK 25.
+- Android/shared target: JVM 17 compatibility.
+- Android: compile/target SDK 37, min SDK 26.
+- Generated web output: `server/src/main/resources/web/` (ignored).
+- Generated APKs, Gradle output, `node_modules`, `local.properties`, and server
+  runtime data are ignored and must not be committed.
+- Gradle normally builds the web client during server resource processing.
+  `-PwebappPrebuilt` skips that step when web output was already built or is
+  irrelevant to focused server tests.
+
+Focused validation:
 
 ```bash
-./gradlew :core:jvmTest :data:compileKotlinJvm :server:test
-./gradlew :server:installDist
-cd server/webapp && npm ci && npm run build
-./gradlew testDebugUnitTest assembleDebug
+./gradlew :core:jvmTest
+./gradlew -PwebappPrebuilt :server:test
+cd server/webapp && npm run build
+./gradlew testDebugUnitTest assembleDebug :app:lintDebug
 ```
 
-For focused server work, run `./gradlew :server:test` before the broader matrix.
-Generated web output under `server/src/main/resources/web/` is ignored.
+Cross-layer validation without rebuilding web twice:
+
+```bash
+cd server/webapp
+npm ci --no-audit --no-fund
+npm run build
+cd ../..
+./gradlew -PwebappPrebuilt \
+  :core:jvmTest :data:compileKotlinJvm :server:test :server:installDist
+./gradlew testDebugUnitTest assembleDebug :app:lintDebug
+```
+
+## Useful executable references
+
+- Route layering: `RouteLayeringTest`
+- Authentication seam: `ApiSecurityTest`
+- Write-only credentials: `PlaylistUpdateSecurityTest`
+- Provider connection budget: `ProviderConnectionsTest`
+- Playback session lifecycle: `PlaybackSessionRegistryTest`
+- Android player orchestration: `PlayerViewModelTest`
+- Android player policies: `PlayerPolicyTest`
+
+## Invariants
+
+- No Ktor/Android/Room/server DTO types in `:core`.
+- No provider credentials or raw provider URLs in browser contracts.
+- No unmanaged long-lived scopes, processes, or threads.
+- No Room destructive fallback.
+- No hand-maintained OpenAPI file.
+- Do not recreate the deleted server `Routes.kt` or Android player god class.
