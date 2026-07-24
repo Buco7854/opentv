@@ -39,7 +39,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -48,11 +47,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.R
@@ -60,7 +60,7 @@ import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.model.Download
 import com.buco7854.opentv.core.model.DownloadStatus
-import com.buco7854.opentv.core.model.Favorite
+import com.buco7854.opentv.core.repo.FavoriteRef
 import com.buco7854.opentv.core.model.Programme
 import com.buco7854.opentv.core.model.SeriesGroup
 import com.buco7854.opentv.core.model.XtreamSeries
@@ -94,7 +94,7 @@ class FavoritesViewModel(app: Application, private val playlistId: Long) : Andro
 
     private val graph = OpenTvApp.graph
 
-    private val favorites = graph.storage.favorites.observeAll(playlistId)
+    private val favorites = graph.favorites.observeAll(playlistId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private fun channelsOfKind(kind: Int): StateFlow<List<Channel>> =
@@ -172,16 +172,20 @@ class FavoritesViewModel(app: Application, private val playlistId: Long) : Andro
     }
 
     fun remove(key: String) {
-        viewModelScope.launch { graph.storage.favorites.remove(playlistId, key) }
+        viewModelScope.launch { graph.favorites.remove(playlistId, key) }
     }
 
     fun removeMany(favs: List<FavRef>) {
-        viewModelScope.launch { favs.forEach { graph.storage.favorites.remove(playlistId, it.key) } }
+        viewModelScope.launch {
+            graph.favorites.removeAll(playlistId, favs.map { FavoriteRef(it.key, it.kind) })
+        }
     }
 
     /** Re-add favorites (for Undo). */
     fun readd(favs: List<FavRef>) {
-        viewModelScope.launch { favs.forEach { graph.storage.favorites.add(Favorite(playlistId, it.key, it.kind)) } }
+        viewModelScope.launch {
+            graph.favorites.restoreAll(playlistId, favs.map { FavoriteRef(it.key, it.kind) })
+        }
     }
 }
 
@@ -200,16 +204,16 @@ fun FavoritesScreen(
     onOpenXtreamSeries: (seriesId: Long) -> Unit,
 ) {
     val viewModel = playlistViewModel(playlistId, ::FavoritesViewModel)
-    val live by viewModel.live.collectAsState()
-    val movies by viewModel.movies.collectAsState()
-    val m3uSeries by viewModel.m3uSeries.collectAsState()
-    val xtreamSeries by viewModel.xtreamSeries.collectAsState()
-    val gridView by viewModel.gridView.collectAsState()
-    val guideIds by viewModel.guideIds.collectAsState()
-    val downloadsByUrl by viewModel.downloadsByUrl.collectAsState()
-    val nowAiring by viewModel.nowAiring.collectAsState()
-    val message by viewModel.message.collectAsState()
-    val context = LocalContext.current
+    val live by viewModel.live.collectAsStateWithLifecycle()
+    val movies by viewModel.movies.collectAsStateWithLifecycle()
+    val m3uSeries by viewModel.m3uSeries.collectAsStateWithLifecycle()
+    val xtreamSeries by viewModel.xtreamSeries.collectAsStateWithLifecycle()
+    val gridView by viewModel.gridView.collectAsStateWithLifecycle()
+    val guideIds by viewModel.guideIds.collectAsStateWithLifecycle()
+    val downloadsByUrl by viewModel.downloadsByUrl.collectAsStateWithLifecycle()
+    val nowAiring by viewModel.nowAiring.collectAsStateWithLifecycle()
+    val message by viewModel.message.collectAsStateWithLifecycle()
+    val resources = LocalResources.current
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var guideChannel by remember { mutableStateOf<Channel?>(null) }
@@ -561,7 +565,7 @@ fun FavoritesScreen(
                 onPlay(url, title, null, false)
             },
             onUnavailable = {
-                scope.launch { snackbar.showSnackbar(context.getString(R.string.guide_catchup_unavailable)) }
+                scope.launch { snackbar.showSnackbar(resources.getString(R.string.guide_catchup_unavailable)) }
             },
         )
     }

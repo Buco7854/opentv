@@ -9,7 +9,6 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.Serializable
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 
@@ -21,7 +20,6 @@ class XtreamAuthException(message: String) : Exception(message)
 /** The panel answered, but not with the JSON shape the API promises. */
 class XtreamApiException(message: String) : Exception(message)
 
-@Serializable
 class AccountInfo(
     val activeConnections: Int,
     val maxConnections: Int,

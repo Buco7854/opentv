@@ -36,7 +36,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -47,12 +46,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.compose.runtime.LaunchedEffect
 import com.buco7854.opentv.core.log.rethrowCancellation
@@ -62,7 +62,6 @@ import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.model.Download
 import com.buco7854.opentv.core.model.DownloadStatus
-import com.buco7854.opentv.core.model.Favorite
 import com.buco7854.opentv.core.model.GroupHit
 import com.buco7854.opentv.core.model.hasCatchup
 import com.buco7854.opentv.core.model.hasGuide
@@ -164,11 +163,8 @@ class SearchViewModel(app: Application, private val playlistId: Long) : AndroidV
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SearchResults())
 
-    private val graph = OpenTvApp.graph
-
     /** Same favourite affordance as the browse rows. */
-    val favoriteKeys: StateFlow<Set<String>> = graph.storage.favorites.observeAll(playlistId)
-        .map { list -> list.map { it.key }.toSet() }
+    val favoriteKeys: StateFlow<Set<String>> = graph.favorites.observeKeys(playlistId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
 
     val downloadsByUrl: StateFlow<Map<String, Download>> = graph.downloads.downloads
@@ -180,9 +176,7 @@ class SearchViewModel(app: Application, private val playlistId: Long) : AndroidV
 
     fun toggleFavorite(key: String, kind: Int) {
         viewModelScope.launch {
-            val dao = graph.storage.favorites
-            if (dao.get(playlistId, key) != null) dao.remove(playlistId, key)
-            else dao.add(Favorite(playlistId = playlistId, key = key, kind = kind))
+            graph.favorites.toggle(playlistId, key, kind)
         }
     }
 
@@ -205,13 +199,13 @@ fun SearchScreen(
     onOpenXtreamSeries: (seriesId: Long) -> Unit,
 ) {
     val viewModel = playlistViewModel(playlistId, ::SearchViewModel)
-    val query by viewModel.query.collectAsState()
-    val results by viewModel.results.collectAsState()
-    val favoriteKeys by viewModel.favoriteKeys.collectAsState()
-    val downloadsByUrl by viewModel.downloadsByUrl.collectAsState()
-    val guideIds by viewModel.guideIds.collectAsState()
+    val query by viewModel.query.collectAsStateWithLifecycle()
+    val results by viewModel.results.collectAsStateWithLifecycle()
+    val favoriteKeys by viewModel.favoriteKeys.collectAsStateWithLifecycle()
+    val downloadsByUrl by viewModel.downloadsByUrl.collectAsStateWithLifecycle()
+    val guideIds by viewModel.guideIds.collectAsStateWithLifecycle()
     val focusRequester = remember { FocusRequester() }
-    val context = LocalContext.current
+    val resources = LocalResources.current
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var guideChannel by remember { mutableStateOf<Channel?>(null) }
@@ -356,7 +350,7 @@ fun SearchScreen(
                 onPlay(url, title, false)
             },
             onUnavailable = {
-                scope.launch { snackbar.showSnackbar(context.getString(R.string.guide_catchup_unavailable)) }
+                scope.launch { snackbar.showSnackbar(resources.getString(R.string.guide_catchup_unavailable)) }
             },
         )
     }
@@ -384,3 +378,4 @@ private fun SectionHeader(text: String, count: Int, expanded: Boolean, onToggle:
         )
     }
 }
+    private val graph = OpenTvApp.graph

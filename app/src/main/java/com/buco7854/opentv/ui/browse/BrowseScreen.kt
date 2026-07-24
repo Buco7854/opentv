@@ -54,7 +54,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -63,10 +62,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.buco7854.opentv.R
 import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.core.model.ChannelKind
@@ -113,24 +114,24 @@ fun BrowseScreen(
     // Seed the VM once so returning from player/detail keeps position.
     LaunchedEffect(Unit) { viewModel.seedFromRoute(initialTab, initialGroup) }
 
-    val playlist by viewModel.playlist.collectAsState()
-    val tab by viewModel.tab.collectAsState()
-    val group by viewModel.group.collectAsState()
-    val groups by viewModel.groups.collectAsState()
-    val channels by viewModel.channels.collectAsState()
-    val seriesGroups by viewModel.seriesGroups.collectAsState()
-    val nowAiring by viewModel.nowAiring.collectAsState()
-    val guideIds by viewModel.guideIds.collectAsState()
-    val downloadsByUrl by viewModel.downloadsByUrl.collectAsState()
-    val isXtreamNative by viewModel.isXtreamNative.collectAsState()
-    val xtreamSeries by viewModel.xtreamSeries.collectAsState()
-    val gridView by viewModel.gridView.collectAsState()
-    val favoriteKeys by viewModel.favoriteKeys.collectAsState()
-    val account by viewModel.account.collectAsState()
-    val liveCount by viewModel.liveCount.collectAsState()
-    val movieCount by viewModel.movieCount.collectAsState()
-    val seriesCount by viewModel.seriesCount.collectAsState()
-    val message by viewModel.message.collectAsState()
+    val playlist by viewModel.playlist.collectAsStateWithLifecycle()
+    val tab by viewModel.tab.collectAsStateWithLifecycle()
+    val group by viewModel.group.collectAsStateWithLifecycle()
+    val groups by viewModel.groups.collectAsStateWithLifecycle()
+    val channels by viewModel.channels.collectAsStateWithLifecycle()
+    val seriesGroups by viewModel.seriesGroups.collectAsStateWithLifecycle()
+    val nowAiring by viewModel.nowAiring.collectAsStateWithLifecycle()
+    val guideIds by viewModel.guideIds.collectAsStateWithLifecycle()
+    val downloadsByUrl by viewModel.downloadsByUrl.collectAsStateWithLifecycle()
+    val isXtreamNative by viewModel.isXtreamNative.collectAsStateWithLifecycle()
+    val xtreamSeries by viewModel.xtreamSeries.collectAsStateWithLifecycle()
+    val gridView by viewModel.gridView.collectAsStateWithLifecycle()
+    val favoriteKeys by viewModel.favoriteKeys.collectAsStateWithLifecycle()
+    val account by viewModel.account.collectAsStateWithLifecycle()
+    val liveCount by viewModel.liveCount.collectAsStateWithLifecycle()
+    val movieCount by viewModel.movieCount.collectAsStateWithLifecycle()
+    val seriesCount by viewModel.seriesCount.collectAsStateWithLifecycle()
+    val message by viewModel.message.collectAsStateWithLifecycle()
 
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -142,6 +143,7 @@ fun BrowseScreen(
 
     // Download's progress notification needs a runtime grant on Android 13+.
     val context = LocalContext.current
+    val resources = LocalResources.current
     val notificationPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { /* download proceeds either way; notification just hidden if denied */ }
@@ -368,7 +370,7 @@ fun BrowseScreen(
                 onPlay(url, title, null, false)
             },
             onUnavailable = {
-                scope.launch { snackbar.showSnackbar(context.getString(R.string.guide_catchup_unavailable)) }
+                scope.launch { snackbar.showSnackbar(resources.getString(R.string.guide_catchup_unavailable)) }
             },
         )
     }

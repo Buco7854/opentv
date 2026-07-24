@@ -10,7 +10,6 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.ReadOnlyComposable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -23,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.R
 import com.buco7854.opentv.data.prefs.PlayerSettings
@@ -150,7 +150,7 @@ private val OpenTvShapes = Shapes(
 
 @Composable
 fun OpenTvTheme(content: @Composable () -> Unit) {
-    val settings by OpenTvApp.graph.playerPrefs.settings.collectAsState(initial = null)
+    val settings by OpenTvApp.graph.playerPrefs.settings.collectAsStateWithLifecycle(initialValue = null)
     val dark = when (settings?.themeMode ?: PlayerSettings.THEME_SYSTEM) {
         PlayerSettings.THEME_DARK -> true
         PlayerSettings.THEME_LIGHT -> false

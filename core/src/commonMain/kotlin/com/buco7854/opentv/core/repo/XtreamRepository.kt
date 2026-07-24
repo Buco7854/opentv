@@ -18,7 +18,6 @@ import com.buco7854.opentv.core.xtream.XtreamEpgEntry
 import kotlinx.datetime.TimeZone
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.serialization.Serializable
 
 /** seriesKey used for episodes cached from the panel, unique per series. */
 fun xtreamSeriesKey(seriesId: Long) = "xs:$seriesId"
@@ -27,7 +26,6 @@ fun xtreamSeriesKey(seriesId: Long) = "xs:$seriesId"
 fun xtreamFavoriteKey(seriesId: Long) = "x:$seriesId"
 
 /** One guide row, with whether it can be replayed via catch-up. */
-@Serializable
 data class GuideEntry(
     val title: String,
     val description: String?,

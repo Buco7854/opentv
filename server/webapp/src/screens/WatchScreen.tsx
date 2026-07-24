@@ -4,7 +4,7 @@
 import { useNavigate, useParams } from 'react-router-dom';
 import { api, ChannelKind, downloadFileUrl } from '../api';
 import { useAsync } from '../hooks';
-import { PlayerSurface, PlayRequest } from '../player/PlayerProvider';
+import { PlaybackErrorBoundary, PlayerSurface, PlayRequest } from '../player/PlayerProvider';
 
 // Player's own surface while resolving, so it reads as the player loading.
 function WatchLoading() {
@@ -21,11 +21,13 @@ function Stage({ request }: { request: PlayRequest }) {
   const navigate = useNavigate();
   const close = useClose();
   return (
-    <PlayerSurface
-      request={request}
-      onClose={close}
-      onPlayCatchup={(id, startMs, endMs) => navigate(`/watch/catchup/${id}/${startMs}/${endMs}`)}
-    />
+    <PlaybackErrorBoundary>
+      <PlayerSurface
+        request={request}
+        onClose={close}
+        onPlayCatchup={(id, startMs, endMs) => navigate(`/watch/catchup/${id}/${startMs}/${endMs}`)}
+      />
+    </PlaybackErrorBoundary>
   );
 }
 

@@ -101,4 +101,5 @@ dependencies {
     implementation(libs.datastore.preferences)
     implementation(libs.documentfile)
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
 }

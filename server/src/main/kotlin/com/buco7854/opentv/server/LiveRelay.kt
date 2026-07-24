@@ -15,6 +15,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import java.io.InputStream
@@ -36,6 +37,7 @@ class LiveRelay(
     private val connections: ProviderConnections,
     /** Whether ffmpeg is present, so the shared read can transcode audio to AAC for everyone. */
     private val ffmpegAvailable: () -> Boolean,
+    private val processRunner: MediaProcessRunner = JvmMediaProcessRunner,
 ) {
     private enum class Attach { ATTACHED, REFUSED, DEAD }
 
@@ -53,7 +55,7 @@ class LiveRelay(
         // up drops the oldest bytes and resyncs on the next transport-stream keyframe rather than
         // stalling the room. Keying by session id lets the server cut a kicked member's stream.
         private val members = ConcurrentHashMap<String, Channel<ByteArray>>()
-        private val lifecycle = Any()
+        val lifecycle = Any()
         @Volatile private var reader: Job? = null
         @Volatile private var closer: Job? = null
         @Volatile private var upstream: InputStream? = null
@@ -104,7 +106,7 @@ class LiveRelay(
         }
 
         // Always called under [lifecycle].
-        private fun stop() {
+        fun stop() {
             if (dead) return
             dead = true
             reader?.cancel(); reader = null
@@ -164,7 +166,9 @@ class LiveRelay(
                 cmd += listOf("-i", url, "-c:v", "copy", "-c:a", audio)
                 if (audio == "aac") cmd += listOf("-b:a", "192k")
                 cmd += listOf("-f", "mpegts", "-mpegts_flags", "+resend_headers", "-flush_packets", "1", "pipe:1")
-                val process = ProcessBuilder(cmd).redirectError(ProcessBuilder.Redirect.DISCARD).start()
+                val process = processRunner.start(
+                    MediaProcessRequest(cmd, discardStderr = true)
+                )
                 ffmpeg = process
                 return process.inputStream
             }
@@ -189,7 +193,9 @@ class LiveRelay(
             cmd += listOf("-select_streams", "a:0", "-show_entries", "stream=codec_name",
                 "-of", "default=nokey=1:noprint_wrappers=1", url)
             return runCatching {
-                val process = ProcessBuilder(cmd).redirectError(ProcessBuilder.Redirect.DISCARD).start()
+                val process = processRunner.start(
+                    MediaProcessRequest(cmd, discardStderr = true)
+                )
                 val codec = process.inputStream.bufferedReader().use { it.readText() }.trim().lowercase()
                 process.waitFor(15, java.util.concurrent.TimeUnit.SECONDS)
                 if (codec.isNotEmpty() && codec !in BROWSER_AUDIO) "aac" else "copy"
@@ -205,7 +211,10 @@ class LiveRelay(
             val relay = relays.computeIfAbsent(key) { Relay(key, url, group, providerKey, limit) }
             when (relay.attach(sid, member)) {
                 Attach.REFUSED -> {
-                    call.respond(HttpStatusCode.TooManyRequests, MessageDto("Provider connection limit reached"))
+                    call.respond(
+                        HttpStatusCode.TooManyRequests,
+                        ApiErrorDto("provider_capacity", "Provider connection limit reached"),
+                    )
                     return
                 }
                 Attach.DEAD -> continue // retired as we grabbed it; computeIfAbsent makes a fresh one
@@ -231,6 +240,14 @@ class LiveRelay(
      *  its room, so the server enforces the removal instead of trusting the client to disconnect. */
     fun drop(sid: String) {
         relays.values.forEach { it.drop(sid) }
+    }
+
+    /** Stop every relay and cancel the worker scope owned by this service. */
+    fun close() {
+        relays.values.forEach { relay ->
+            synchronized(relay.lifecycle) { relay.stop() }
+        }
+        scope.cancel()
     }
 
     companion object {

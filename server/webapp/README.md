@@ -1,11 +1,11 @@
 # OpenTV web client
 
 React + TypeScript + Vite + Tailwind v4 client for the OpenTV server. It talks
-to the REST API (`/api/*`) and is compiled into `server/src/main/resources/web`,
+to the REST API (`/api/v1/*`) and is compiled into `server/src/main/resources/web`,
 which the server ships as an SPA (any path falls back to `index.html`, so URLs
 like `/browse/3` are real paths).
 
-- `npm run dev` — dev server on :5173, proxying `/api` to a server on :8080.
+- `npm run dev` — dev server on :5173, proxying `/api/v1` to a server on :8080.
 - `npm run build` — typecheck + production build into the server resources.
 - The Gradle `:server` build runs `npm run ci-build` automatically; pass
   `-PwebappPrebuilt` to skip it when the output already exists (Docker/CI).
@@ -50,13 +50,23 @@ component's styles are one labelled block in the same file, paired with one
 React file in `src/components/`. Change the look in the token blocks; change a
 component in its block — nothing is styled inline in screens.
 
-Structure:
+Structure and boundaries:
 
-- `src/api.ts` — typed REST client; `src/hooks.ts` — polling/optimistic-state
-  hooks; `src/lib/format.ts` — formatting helpers.
+- `src/api.ts` is the typed `/api/v1` facade. `src/api/http.ts` owns HTTP,
+  structured errors, same-origin credentials, and the single future bearer
+  token seam. Keep authentication policy there rather than in screens.
+- `src/preferences.ts` is browser-local presentation state. Do not mix it with
+  server-owned settings or API caching.
+- `src/hooks.ts` owns reusable server-state behavior. Downloads use one shared
+  polling store, so screens must use `useDownloads` rather than starting their
+  own timers.
 - `src/components/` — Material.tsx (bars, buttons, dialogs, sheets, fields,
   segmented controls), plus one file per widget (rows, grids, badges, cast,
   guide, download states).
-- `src/screens/` — one file per page; `src/player/PlayerProvider.tsx` — the
-  playback overlay (hls.js / mpegts.js / native).
-- `src/App.tsx` — the route table.
+- `src/screens/` contains route adapters. All screens are lazy route
+  boundaries; keep playback-only dependencies out of the app shell.
+- `src/player/PlayerNavigation.tsx` owns token-free player navigation.
+  `PlayerProvider.tsx` owns playback orchestration, while presentation and
+  deterministic source policy live in `PlaybackSheets.tsx` and
+  `playbackPolicy.ts`.
+- `src/App.tsx` is composition and routing only.

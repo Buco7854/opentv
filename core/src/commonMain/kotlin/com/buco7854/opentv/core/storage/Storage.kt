@@ -25,6 +25,9 @@ interface Storage {
     val resume: ResumeStore
     val metadata: MetadataStore
     val downloads: DownloadStore
+
+    /** Releases platform storage resources. Android keeps this open for its process lifetime. */
+    fun close() = Unit
 }
 
 interface PlaylistStore {
@@ -144,6 +147,23 @@ interface DownloadStore {
     suspend fun findByUrlWithStatus(url: String, statuses: List<Int>): Download?
     suspend fun insert(download: Download): Long
     suspend fun update(download: Download)
-    suspend fun updateProgress(id: Long, downloaded: Long, total: Long, status: Int)
+    /**
+     * Updates progress only while the row is in one of [expectedStatuses].
+     * Returns false when pause/delete/retry won the race.
+     */
+    suspend fun updateProgressIfStatus(
+        id: Long,
+        downloaded: Long,
+        total: Long,
+        expectedStatuses: List<Int>,
+        status: Int,
+    ): Boolean
+    /** Changes state/error only if another actor has not already paused or deleted the row. */
+    suspend fun updateStatusIfStatus(
+        id: Long,
+        expectedStatuses: List<Int>,
+        status: Int,
+        error: String? = null,
+    ): Boolean
     suspend fun delete(id: Long)
 }

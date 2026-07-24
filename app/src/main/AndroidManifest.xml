@@ -26,6 +26,18 @@
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.OpenTV">
 
+        <!-- WorkManager is initialized explicitly after AppGraph so restored
+             workers always receive fully constructed dependencies. -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                tools:node="remove" />
+        </provider>
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

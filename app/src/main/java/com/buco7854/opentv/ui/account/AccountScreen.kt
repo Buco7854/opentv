@@ -29,25 +29,18 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import com.buco7854.opentv.OpenTvApp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.buco7854.opentv.R
-import com.buco7854.opentv.core.model.Playlist
 import com.buco7854.opentv.core.xtream.AccountInfo
 import com.buco7854.opentv.ui.components.EmptyState
 import com.buco7854.opentv.ui.components.OtvProgressBar
 import com.buco7854.opentv.ui.components.Pill
-import kotlinx.coroutines.launch
+import com.buco7854.opentv.ui.components.playlistViewModel
 import java.text.DateFormat
 import java.util.Date
 
@@ -55,37 +48,13 @@ import java.util.Date
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AccountScreen(playlistId: Long, onBack: () -> Unit) {
-    val graph = OpenTvApp.graph
-    var playlist by remember { mutableStateOf<Playlist?>(null) }
-    var loaded by remember { mutableStateOf(false) }
-    var info by remember { mutableStateOf<AccountInfo?>(null) }
-    var updatedAtMs by remember { mutableStateOf<Long?>(null) }
-    var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
-    val context = LocalContext.current
-
-    fun load(force: Boolean) {
-        val target = playlist ?: return
-        scope.launch {
-            busy = true
-            error = null
-            val result = graph.account.accountInfo(target, force)
-            if (result != null) {
-                info = result
-                updatedAtMs = System.currentTimeMillis()
-            } else {
-                error = context.getString(R.string.account_error)
-            }
-            busy = false
-        }
-    }
-
-    LaunchedEffect(playlistId) {
-        playlist = graph.storage.playlists.get(playlistId)
-        loaded = true
-        if (playlist?.xtreamBase != null) load(force = false)
-    }
+    val viewModel = playlistViewModel(playlistId, ::AccountViewModel)
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val playlist = state.playlist
+    val info = state.info
+    val updatedAtMs = state.updatedAtMs
+    val busy = state.refreshing
+    val error = state.error
 
     Scaffold(
         topBar = {
@@ -115,7 +84,7 @@ fun AccountScreen(playlistId: Long, onBack: () -> Unit) {
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                     } else {
-                        IconButton(onClick = { load(force = true) }, enabled = playlist?.xtreamBase != null) {
+                        IconButton(onClick = { viewModel.refresh() }, enabled = playlist?.xtreamBase != null) {
                             Icon(Icons.Outlined.Refresh, contentDescription = stringResource(R.string.account_refresh_info))
                         }
                     }
@@ -126,7 +95,7 @@ fun AccountScreen(playlistId: Long, onBack: () -> Unit) {
         contentWindowInsets = WindowInsets(0.dp),
     ) { padding ->
         when {
-            !loaded -> {}
+            state.loading -> {}
 
             playlist?.xtreamBase == null -> Column(Modifier.padding(padding)) {
                 EmptyState(

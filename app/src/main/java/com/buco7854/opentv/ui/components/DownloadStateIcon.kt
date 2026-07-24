@@ -1,5 +1,6 @@
 package com.buco7854.opentv.ui.components
 
+import android.app.Application
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
@@ -19,28 +20,48 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.R
 import com.buco7854.opentv.core.model.Download
 import com.buco7854.opentv.core.model.DownloadStatus
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.buco7854.opentv.OpenTvApp
 import kotlinx.coroutines.launch
+
+class DownloadActionsViewModel(app: Application) : AndroidViewModel(app) {
+    private val downloads = OpenTvApp.graph.downloads
+
+    fun pause(download: Download) {
+        viewModelScope.launch { downloads.pause(download) }
+    }
+
+    fun resume(download: Download) {
+        viewModelScope.launch { downloads.resume(download) }
+    }
+
+    fun delete(download: Download) {
+        viewModelScope.launch { downloads.delete(download) }
+    }
+}
 
 /**
  * Stateful download control: tap toggles download/pause/resume, long-press deletes.
  */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-fun DownloadStateIcon(state: Download?, onDownload: () -> Unit) {
-    val scope = rememberCoroutineScope()
+fun DownloadStateIcon(
+    state: Download?,
+    onDownload: () -> Unit,
+    viewModel: DownloadActionsViewModel = viewModel(),
+) {
     var confirmDelete by remember { mutableStateOf(false) }
-    val downloads = OpenTvApp.graph.downloads
 
     fun longPress(): (() -> Unit)? = state?.let { { confirmDelete = true } }
 
@@ -50,7 +71,7 @@ fun DownloadStateIcon(state: Download?, onDownload: () -> Unit) {
                 .size(48.dp)
                 .clip(CircleShape)
                 .combinedClickable(
-                    onClick = { scope.launch { downloads.pause(state) } },
+                    onClick = { viewModel.pause(state) },
                     onLongClick = { confirmDelete = true },
                 ),
             contentAlignment = Alignment.Center,
@@ -87,7 +108,7 @@ fun DownloadStateIcon(state: Download?, onDownload: () -> Unit) {
                 .size(48.dp)
                 .clip(CircleShape)
                 .combinedClickable(
-                    onClick = { scope.launch { downloads.resume(state) } },
+                    onClick = { viewModel.resume(state) },
                     onLongClick = { confirmDelete = true },
                 ),
             contentAlignment = Alignment.Center,
@@ -130,7 +151,7 @@ fun DownloadStateIcon(state: Download?, onDownload: () -> Unit) {
             confirmButton = {
                 OtvTextButton(onClick = {
                     confirmDelete = false
-                    scope.launch { downloads.delete(state) }
+                    viewModel.delete(state)
                 }, danger = true) { Text(stringResource(R.string.common_delete)) }
             },
             dismissButton = { OtvTextButton(onClick = { confirmDelete = false }) { Text(stringResource(R.string.common_cancel)) } },

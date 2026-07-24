@@ -30,7 +30,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,6 +41,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.buco7854.opentv.diag.ErrorLog
 import com.buco7854.opentv.ui.components.EmptyState
 import com.buco7854.opentv.ui.components.combinedPadding
@@ -53,7 +53,7 @@ import com.buco7854.opentv.R
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LogScreen(onBack: () -> Unit) {
-    val entries by ErrorLog.entries.collectAsState()
+    val entries by ErrorLog.entries.collectAsStateWithLifecycle()
     val clipboard = LocalClipboardManager.current
     val timeFormat = remember { DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.MEDIUM) }
 

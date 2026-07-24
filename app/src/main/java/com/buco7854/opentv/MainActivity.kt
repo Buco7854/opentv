@@ -14,11 +14,9 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
@@ -28,6 +26,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.ui.account.AccountScreen
 import com.buco7854.opentv.ui.browse.BrowseScreen
@@ -44,11 +44,10 @@ import com.buco7854.opentv.ui.player.PlayerScreen
 import com.buco7854.opentv.ui.search.SearchScreen
 import com.buco7854.opentv.ui.settings.SettingsScreen
 import com.buco7854.opentv.ui.shell.DockSection
+import com.buco7854.opentv.ui.shell.AppShellViewModel
 import com.buco7854.opentv.ui.shell.OpenTvDock
 import com.buco7854.opentv.ui.shell.PlaylistsPanel
 import com.buco7854.opentv.ui.theme.OpenTvTheme
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -98,22 +97,17 @@ object Routes {
 
 /** Dock-first shell mirroring the web client's phone layout. */
 @Composable
-fun AppShell() {
+fun AppShell(
+    viewModel: AppShellViewModel = viewModel(),
+) {
     val nav = rememberNavController()
-    val scope = rememberCoroutineScope()
-    val prefs = OpenTvApp.graph.playerPrefs
-    val settings by prefs.settings.collectAsState(initial = null)
+    val settings by viewModel.settings.collectAsStateWithLifecycle()
     val activePlaylistId = settings?.activePlaylistId ?: -1L
     var panelOpen by remember { mutableStateOf(false) }
 
     val backStack by nav.currentBackStackEntryAsState()
     val route = backStack?.destination?.route
     val dockHidden = route?.startsWith("player") == true
-
-    fun setActive(playlistId: Long) = scope.launch {
-        val current = prefs.settings.first()
-        if (current.activePlaylistId != playlistId) prefs.save(current.copy(activePlaylistId = playlistId))
-    }
 
     // Dock destinations replace the stack like tabs; details push on top.
     fun navigateSection(target: String) = nav.navigate(target) {
@@ -153,7 +147,7 @@ fun AppShell() {
         },
     ) { padding ->
         androidx.compose.foundation.layout.Box(Modifier.padding(padding)) {
-            AppNav(nav, onActivePlaylist = ::setActive)
+            AppNav(nav, onActivePlaylist = viewModel::setActivePlaylist)
         }
     }
 
@@ -163,7 +157,7 @@ fun AppShell() {
             onDismiss = { panelOpen = false },
             onOpenPlaylist = {
                 panelOpen = false
-                setActive(it)
+                viewModel.setActivePlaylist(it)
                 navigateSection(Routes.browse(it))
             },
             onOpenAccount = { panelOpen = false; nav.navigate(Routes.account(it)) },

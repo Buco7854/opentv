@@ -8,11 +8,11 @@ import com.buco7854.opentv.core.log.rethrowCancellation
 import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.R
 import com.buco7854.opentv.core.model.Playlist
+import com.buco7854.opentv.data.prefs.PlayerSettings
 import com.buco7854.opentv.diag.ErrorLog
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 class HomeViewModel(app: Application) : AndroidViewModel(app) {
@@ -28,8 +28,10 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         return stream.bufferedReader().use { block(it.lineSequence()) }
     }
 
-    val playlists: StateFlow<List<Playlist>> = graph.playlists.playlists
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    // Nullable presentation types preserve an explicit loading state before
+    // either cold persistence flow has emitted its first value.
+    val playlists: Flow<List<Playlist>?> = graph.playlists.playlists
+    val settings: Flow<PlayerSettings?> = graph.playerPrefs.settings
 
     private val _busy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = _busy

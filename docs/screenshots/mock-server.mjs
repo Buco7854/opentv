@@ -1,5 +1,5 @@
 // Mock API for the documentation screenshots: fake, illustrative data for every
-// screen, plus placeholder poster/logo/avatar art as SVG for /api/img.
+// screen, plus placeholder poster/logo/avatar art as SVG for /api/v1/img.
 import http from 'node:http';
 
 const PORT = 8080;
@@ -194,7 +194,9 @@ function send(res, body, type = 'application/json') {
 
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
-  const p = u.pathname;
+  // The screenshot fixture models the same v1 API as the bundled client while
+  // keeping the compact route table below readable.
+  const p = u.pathname.replace(/^\/api\/v1(?=\/|$)/, '/api');
   const q = (k) => u.searchParams.get(k);
   const seg = p.split('/').filter(Boolean); // ["api", ...]
 

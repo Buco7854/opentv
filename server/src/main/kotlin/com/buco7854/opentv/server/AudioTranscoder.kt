@@ -10,7 +10,10 @@ import kotlinx.coroutines.withContext
  * Copies video, re-encodes audio to AAC, remuxes to MPEG-TS. Client fallback for
  * AC3/E-AC3/DTS/MP2 tracks that mpegts.js can't decode. One process per viewer.
  */
-class AudioTranscoder(private val http: ServerHttp) {
+class AudioTranscoder(
+    private val http: ServerHttp,
+    private val processRunner: MediaProcessRunner = JvmMediaProcessRunner,
+) {
 
     suspend fun stream(url: String, call: ApplicationCall) {
         val command = mutableListOf(
@@ -27,9 +30,9 @@ class AudioTranscoder(private val http: ServerHttp) {
             "-c:a", "aac", "-ac", "2", "-b:a", "128k",
             "-f", "mpegts", "-",
         )
-        val process = ProcessBuilder(command)
-            .redirectError(ProcessBuilder.Redirect.DISCARD)
-            .start()
+        val process = processRunner.start(
+            MediaProcessRequest(command, discardStderr = true)
+        )
         try {
             call.respondOutputStream(ContentType.parse("video/mp2t")) {
                 withContext(Dispatchers.IO) { process.inputStream.copyTo(this@respondOutputStream) }

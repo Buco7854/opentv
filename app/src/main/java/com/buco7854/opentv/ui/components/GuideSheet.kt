@@ -29,20 +29,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.buco7854.opentv.OpenTvApp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.buco7854.opentv.R
 import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.core.repo.GuideEntry
@@ -54,7 +54,10 @@ import java.util.Locale
 
 /** Fixed 62% screen height so the sheet stays put; the programme list scrolls inside. */
 val guideSheetHeight: Dp
-    @Composable get() = (LocalConfiguration.current.screenHeightDp * 0.62f).dp
+    @Composable get() {
+        val windowHeightPx = LocalWindowInfo.current.containerSize.height
+        return with(LocalDensity.current) { windowHeightPx.toDp() * 0.62f }
+    }
 
 /** Channel guide bottom sheet; loads on demand and replays past programmes via catch-up. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -66,9 +69,9 @@ fun GuideSheet(
     onPlayCatchup: (url: String, title: String) -> Unit,
     onUnavailable: () -> Unit,
 ) {
-    var entries by remember(channel.id) { mutableStateOf<List<GuideEntry>?>(null) }
+    val viewModel = guideViewModel(channel)
+    val entries by viewModel.entries.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
-    LaunchedEffect(channel.id) { entries = OpenTvApp.graph.xtream.guideFor(channel) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -101,7 +104,7 @@ fun GuideSheet(
                 else stringResource(R.string.guide_no_data_epg_hint),
                 onReplay = { entry ->
                     scope.launch {
-                        val url = OpenTvApp.graph.xtream.catchupUrlFor(channel, entry.startMs, entry.endMs)
+                        val url = viewModel.catchupUrlFor(entry)
                         if (url != null) onPlayCatchup(url, "${channel.name} · ${entry.title}")
                         else onUnavailable()
                     }
@@ -144,9 +147,10 @@ fun GuideEntryContent(
                 modifier = Modifier.padding(vertical = 16.dp),
             )
             else -> {
-                val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+                val locale = LocalConfiguration.current.locales[0]
+                val timeFormat = remember(locale) { SimpleDateFormat("HH:mm", locale) }
                 val dayKeyFormat = remember { SimpleDateFormat("yyyyDDD", Locale.US) }
-                val dayFormat = remember { SimpleDateFormat("EEEE d MMMM", Locale.getDefault()) }
+                val dayFormat = remember(locale) { SimpleDateFormat("EEEE d MMMM", locale) }
                 val now = System.currentTimeMillis()
                 val listState = rememberLazyListState()
                 val expandedKeys = remember { mutableStateMapOf<Long, Boolean>() }
@@ -197,7 +201,7 @@ private fun dayLabel(
 private fun DayHeader(label: String) {
     Column(Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 2.dp, start = 8.dp, end = 8.dp)) {
         Text(
-            label.uppercase(Locale.getDefault()),
+            label.uppercase(LocalConfiguration.current.locales[0]),
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

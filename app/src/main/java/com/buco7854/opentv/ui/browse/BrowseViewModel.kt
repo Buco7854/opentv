@@ -10,7 +10,6 @@ import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.model.Download
 import com.buco7854.opentv.core.model.DownloadStatus
-import com.buco7854.opentv.core.model.Favorite
 import com.buco7854.opentv.core.model.GroupCount
 import com.buco7854.opentv.core.model.Playlist
 import com.buco7854.opentv.core.model.Programme
@@ -62,7 +61,7 @@ class BrowseViewModel(app: Application, val playlistId: Long) : AndroidViewModel
         fun xtreamFavKey(seriesId: Long) = xtreamFavoriteKey(seriesId)
     }
 
-    private val favorites = graph.storage.favorites.observeAll(playlistId)
+    private val favorites = graph.favorites.observeAll(playlistId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     /** Stable keys of everything favorited, for heart-icon state. */
@@ -84,9 +83,7 @@ class BrowseViewModel(app: Application, val playlistId: Long) : AndroidViewModel
 
     fun toggleFavorite(key: String, kind: Int) {
         viewModelScope.launch {
-            val dao = graph.storage.favorites
-            if (dao.get(playlistId, key) != null) dao.remove(playlistId, key)
-            else dao.add(Favorite(playlistId = playlistId, key = key, kind = kind))
+            graph.favorites.toggle(playlistId, key, kind)
         }
     }
 

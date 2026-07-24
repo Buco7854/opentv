@@ -1,6 +1,6 @@
 // Add/edit playlist dialog with Xtream detection for get.php M3U links.
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { api, Playlist, PlaylistUpsertRequest } from '../api';
 import { t } from '../i18n';
 import { Dialog, Segmented, snackbar, TextField } from './Primitives';
@@ -22,20 +22,6 @@ export function PlaylistDialog({ editing, onDismiss, onDone }: {
   const [epg, setEpg] = useState('');
   const [file, setFile] = useState<File | null>(null);
 
-  // Listings carry no secrets; fetch credentials on demand to pre-fill.
-  useEffect(() => {
-    if (!editing) return;
-    let live = true;
-    api.playlistCredentials(editing.id).then((c) => {
-      if (!live) return;
-      setServer(c.xtreamBase ?? '');
-      setUsername(c.xtreamUser ?? '');
-      setPassword(c.xtreamPass ?? '');
-      setUrl(c.url ?? '');
-      setEpg(c.epgUrl ?? '');
-    }).catch(() => {});
-    return () => { live = false; };
-  }, [editing]);
   const [busy, setBusy] = useState(false);
   const [suggestion, setSuggestion] = useState<{ base: string; user: string; pass: string } | null>(null);
 
@@ -53,11 +39,17 @@ export function PlaylistDialog({ editing, onDismiss, onDone }: {
 
   async function onConfirm() {
     if (mode === 'xtream') {
-      if (!server.trim() || !username.trim() || !password) return;
-      await submit({ mode, name, server, username, password });
+      if (!isEdit && (!server.trim() || !username.trim() || !password)) return;
+      await submit({
+        mode,
+        name,
+        server: server.trim(),
+        username: username.trim(),
+        password,
+      });
     } else if (mode === 'url') {
       const trimmed = url.trim();
-      if (!trimmed) return;
+      if (!isEdit && !trimmed) return;
       // A get.php URL carries an Xtream login: offer the richer mode.
       const detected = !isEdit && /get\.php\?/.test(trimmed) && /username=/.test(trimmed)
         ? (() => {
@@ -103,6 +95,9 @@ export function PlaylistDialog({ editing, onDismiss, onDone }: {
             />
           )}
           <TextField label={t('playlists.name')} value={name} onChange={setName} />
+          {isEdit && mode !== 'file' && (
+            <p className="hint">{t('playlists.credentialsEditHint')}</p>
+          )}
           {mode === 'xtream' && (
             <>
               <TextField label={t('playlists.server')} value={server} onChange={setServer} />

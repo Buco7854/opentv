@@ -62,6 +62,7 @@ ktor-server-compression = { group = "io.ktor", name = "ktor-server-compression",
 ktor-server-cors = { group = "io.ktor", name = "ktor-server-cors", version.ref = "ktor" }
 ktor-server-status-pages = { group = "io.ktor", name = "ktor-server-status-pages", version.ref = "ktor" }
 ktor-server-partial-content = { group = "io.ktor", name = "ktor-server-partial-content", version.ref = "ktor" }
+ktor-server-test-host = { group = "io.ktor", name = "ktor-server-test-host", version.ref = "ktor" }
 logback-classic = { group = "ch.qos.logback", name = "logback-classic", version.ref = "logback" }
 
 [plugins]

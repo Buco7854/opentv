@@ -8,7 +8,7 @@ import { IconBtn, ScreenHeader } from '../components/Primitives';
 import { useDownloads } from '../hooks';
 import { t } from '../i18n';
 import { formatBytes } from '../lib/format';
-import { usePlayer } from '../player/PlayerProvider';
+import { usePlayer } from '../player/PlayerNavigation';
 
 export function DownloadsScreen() {
   const { playDownload } = usePlayer();

@@ -1,6 +1,5 @@
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
-    alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.android.kotlin.multiplatform.library)
 }
 
@@ -24,9 +23,9 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             api(libs.kotlinx.coroutines.core)
-            // api: domain models are @Serializable (their generated companions
-            // surface serialization types to consumers and their processors).
-            api(libs.kotlinx.serialization.json)
+            // JSON is an implementation detail of the provider/metadata adapters.
+            // Domain models deliberately do not expose serialization types.
+            implementation(libs.kotlinx.serialization.json)
             // api: TimeZone appears in Catchup's public signatures.
             api(libs.kotlinx.datetime)
         }

@@ -18,7 +18,7 @@ import androidx.room.RoomDatabaseConstructor
         ResumePointRow::class,
     ],
     version = 8,
-    exportSchema = false,
+    exportSchema = true,
 )
 @ConstructedBy(OpenTvDatabaseConstructor::class)
 abstract class OpenTvDatabase : RoomDatabase() {

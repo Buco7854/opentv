@@ -1,48 +1,34 @@
 package com.buco7854.opentv.download
 
 import android.content.Context
-import androidx.work.BackoffPolicy
-import androidx.work.Constraints
-import androidx.work.ExistingWorkPolicy
-import androidx.work.NetworkType
-import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkManager
-import androidx.work.workDataOf
 import com.buco7854.opentv.core.model.Channel
+import com.buco7854.opentv.core.download.DownloadFileName
 import com.buco7854.opentv.core.model.Download
 import com.buco7854.opentv.core.model.DownloadStatus
-import com.buco7854.opentv.core.storage.Storage
+import com.buco7854.opentv.core.storage.DownloadStore
 import com.buco7854.opentv.data.prefs.PlayerPrefs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
-import java.util.concurrent.TimeUnit
 import com.buco7854.opentv.R
 
 class DownloadRepository(
     private val context: Context,
-    private val storage: Storage,
+    private val store: DownloadStore,
     private val prefs: PlayerPrefs,
+    private val scheduler: DownloadScheduler,
 ) {
-
-    private val store = storage.downloads
 
     val downloads = store.observeAll()
 
     private suspend fun targetPath(channel: Channel, downloadId: Long): String {
-        // Extension from the last segment only, sanitized, so it can't escape the downloads dir.
-        val lastSegment = channel.url.substringBefore('?').substringBefore('#').substringAfterLast('/')
-        val extension = lastSegment.substringAfterLast('.', "")
-            .filter { it.isLetterOrDigit() }.take(5).ifEmpty { "mp4" }
-        val safeName = channel.name.map { if (it.isLetterOrDigit() || it in " ._-()[]") it else '_' }
-            .joinToString("").trim().take(120).ifEmpty { "video" }
-        // Row id keeps identically-named VODs from sharing a file.
+        val target = DownloadFileName.from(channel.name, channel.url, downloadId)
         return DownloadStorage.createTarget(
             context = context,
             treeUri = prefs.settings.first().downloadDirUri,
-            baseName = "$safeName-$downloadId",
-            extension = extension,
+            baseName = target.baseName,
+            extension = target.extension,
         )
     }
 
@@ -65,25 +51,32 @@ class DownloadRepository(
         store.get(id)?.let {
             store.update(it.copy(filePath = targetPath(channel, id)))
         }
-        enqueueWork(id)
+        scheduler.enqueue(id)
         return null
     }
 
     /** Pause keeps the partial file (resume uses a Range request). Written from a fresh row so progress isn't rolled back. */
     suspend fun pause(item: Download) {
         store.get(item.id)?.let { store.update(it.copy(status = DownloadStatus.PAUSED)) }
-        WorkManager.getInstance(context).cancelUniqueWork(workName(item.id))
+        scheduler.cancel(item.id)
     }
 
     suspend fun resume(item: Download) = retry(item)
 
     suspend fun retry(item: Download) {
-        store.update(item.copy(status = DownloadStatus.QUEUED, error = null))
-        enqueueWork(item.id)
+        val current = store.get(item.id) ?: return
+        if (current.status !in listOf(
+                DownloadStatus.PAUSED,
+                DownloadStatus.FAILED,
+                DownloadStatus.CANCELLED,
+            )
+        ) return
+        store.update(current.copy(status = DownloadStatus.QUEUED, error = null))
+        scheduler.enqueue(item.id)
     }
 
     suspend fun delete(item: Download) {
-        WorkManager.getInstance(context).cancelUniqueWork(workName(item.id))
+        scheduler.cancel(item.id)
         DownloadStorage.delete(context, item.filePath)
         store.delete(item.id)
     }
@@ -122,16 +115,4 @@ class DownloadRepository(
         MoveResult(moved, already, failed)
     }
 
-    /** Unique work keyed by id so a double-tap or retry can't spawn two workers on one file. */
-    private fun enqueueWork(id: Long) {
-        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
-            .setInputData(workDataOf(DownloadWorker.KEY_DOWNLOAD_ID to id))
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
-            .build()
-        WorkManager.getInstance(context)
-            .enqueueUniqueWork(workName(id), ExistingWorkPolicy.KEEP, request)
-    }
-
-    private fun workName(id: Long) = "download-$id"
 }

@@ -319,8 +319,28 @@ interface DownloadDao {
     @Update
     suspend fun update(d: DownloadRow)
 
-    @Query("UPDATE downloads SET downloadedBytes = :downloaded, totalBytes = :total, status = :status WHERE id = :id")
-    suspend fun updateProgress(id: Long, downloaded: Long, total: Long, status: Int)
+    @Query(
+        "UPDATE downloads SET downloadedBytes = :downloaded, totalBytes = :total, status = :status " +
+            "WHERE id = :id AND status IN (:expectedStatuses)"
+    )
+    suspend fun updateProgressIfStatus(
+        id: Long,
+        downloaded: Long,
+        total: Long,
+        expectedStatuses: List<Int>,
+        status: Int,
+    ): Int
+
+    @Query(
+        "UPDATE downloads SET status = :status, error = :error " +
+            "WHERE id = :id AND status IN (:expectedStatuses)"
+    )
+    suspend fun updateStatusIfStatus(
+        id: Long,
+        expectedStatuses: List<Int>,
+        status: Int,
+        error: String?,
+    ): Int
 
     @Query("DELETE FROM downloads WHERE id = :id")
     suspend fun delete(id: Long)

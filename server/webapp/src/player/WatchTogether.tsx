@@ -6,7 +6,9 @@
 // would need its own, playback is blocked with a clear message instead of cutting someone off.
 
 import { MutableRefObject, RefObject, useCallback, useEffect, useRef, useState } from 'react';
-import { api, RoomMember, SessionCommand, SyncState, WatchIntentPeer } from '../api';
+import {
+  api, RoomMember, SessionCommand, SessionCommandInput, SyncState, WatchIntentPeer,
+} from '../api';
 import { Select, Sheet, snackbar } from '../components/Primitives';
 import { t } from '../i18n';
 
@@ -75,7 +77,7 @@ export function useWatchTogether(opts: {
   source: string | null;
   playlistId: number | null;
   /** Sends a frame over the live socket (false when it's down); sync falls back to a POST. */
-  send: MutableRefObject<((command: SessionCommand) => boolean) | null>;
+  send: MutableRefObject<((command: SessionCommandInput) => boolean) | null>;
   /** A controller changed the room's shared audio track: re-request the remux with it. */
   onRoomAudio?: (index: number) => void;
 }): WatchTogether {

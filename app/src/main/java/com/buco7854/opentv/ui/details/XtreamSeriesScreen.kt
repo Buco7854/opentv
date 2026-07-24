@@ -25,25 +25,19 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import com.buco7854.opentv.core.log.rethrowCancellation
-import com.buco7854.opentv.OpenTvApp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.buco7854.opentv.R
 import com.buco7854.opentv.core.model.DownloadStatus
-import com.buco7854.opentv.core.model.XtreamSeries
 import com.buco7854.opentv.core.meta.castFromNames
-import com.buco7854.opentv.core.repo.xtreamFavoriteKey
-import com.buco7854.opentv.core.repo.xtreamSeriesKey
 import com.buco7854.opentv.diag.ErrorLog
 import com.buco7854.opentv.ui.components.CastRow
 import com.buco7854.opentv.ui.components.ExpandableText
@@ -60,35 +54,23 @@ fun XtreamSeriesScreen(
     onBack: () -> Unit,
     onOpenEpisode: (channelId: Long) -> Unit,
 ) {
-    val graph = OpenTvApp.graph
-    var series by remember { mutableStateOf<XtreamSeries?>(null) }
-    var loading by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var isFavorite by remember { mutableStateOf(false) }
-    val episodes by graph.storage.channels
-        .observeEpisodes(playlistId, xtreamSeriesKey(seriesId))
-        .collectAsState(initial = emptyList())
-    val downloads by graph.downloads.downloads.collectAsState(initial = emptyList())
+    val viewModel = detailViewModel("XtreamSeries-$playlistId-$seriesId") {
+        XtreamSeriesViewModel(it, playlistId, seriesId)
+    }
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val episodes by viewModel.episodes.collectAsStateWithLifecycle()
+    val downloads by viewModel.downloads.collectAsStateWithLifecycle()
     val downloadsByUrl = remember(downloads) {
         downloads.filter { it.status != DownloadStatus.CANCELLED && it.status != DownloadStatus.FAILED }
             .associateBy { it.url }
     }
-    val progressByUrl by graph.resume.progressByUrl.collectAsState(initial = emptyMap())
+    val progressByUrl by viewModel.progressByUrl.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    val context = LocalContext.current
-
-    LaunchedEffect(seriesId) {
-        series = graph.xtream.series(playlistId, seriesId)
-        isFavorite = graph.storage.favorites.get(playlistId, xtreamFavoriteKey(seriesId)) != null
-        try {
-            graph.xtream.ensureEpisodes(playlistId, seriesId)
-        } catch (e: Exception) {
-            e.rethrowCancellation()
-            ErrorLog.log("Series episodes", e)
-            error = context.getString(R.string.details_episodes_error, ErrorLog.describe(e))
-        }
-        loading = false
+    val resources = LocalResources.current
+    val series = state.series
+    val error = state.error?.let {
+        resources.getString(R.string.details_episodes_error, ErrorLog.describe(it))
     }
 
     val seasons = remember(episodes) { episodes.mapNotNull { it.season }.distinct().sorted() }
@@ -108,16 +90,10 @@ fun XtreamSeriesScreen(
                     }
                 },
                 actions = {
-                    FavoriteIcon(isFavorite = isFavorite) {
-                        scope.launch {
-                            isFavorite = toggleFavorite(
-                                playlistId,
-                                xtreamFavoriteKey(seriesId),
-                                com.buco7854.opentv.core.model.ChannelKind.SERIES,
-                                isFavorite,
-                            )
-                        }
-                    }
+                    FavoriteIcon(
+                        isFavorite = state.isFavorite,
+                        onToggle = viewModel::toggleFavorite,
+                    )
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
             )
@@ -163,13 +139,13 @@ fun XtreamSeriesScreen(
                 }
                 Spacer(Modifier.height(18.dp))
                 when {
-                    loading && episodes.isEmpty() -> Text(
+                    state.loading && episodes.isEmpty() -> Text(
                         stringResource(R.string.details_loading_episodes),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     error != null && episodes.isEmpty() -> Text(
-                        error!!,
+                        error,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.error,
                     )
@@ -190,8 +166,10 @@ fun XtreamSeriesScreen(
                     onOpen = { onOpenEpisode(episode.id) },
                     onDownload = {
                         scope.launch {
-                            val blocked = graph.downloads.enqueue(episode)
-                            snackbar.showSnackbar(blocked ?: context.getString(R.string.downloads_started, episode.name))
+                            val blocked = viewModel.enqueue(episode)
+                            snackbar.showSnackbar(
+                                blocked ?: resources.getString(R.string.downloads_started, episode.name),
+                            )
                         }
                     },
                     progress = progressByUrl[episode.url],

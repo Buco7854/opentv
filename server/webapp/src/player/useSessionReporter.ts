@@ -3,7 +3,7 @@
 // admin queues. Web sessions only; kept isolated from the playback engine.
 
 import { MutableRefObject, RefObject, useEffect, useRef } from 'react';
-import { api, SessionCommand, SessionHeartbeat } from '../api';
+import { api, SessionCommand, SessionCommandInput, SessionHeartbeat } from '../api';
 import { snackbar } from '../components/Primitives';
 
 /** Live playback facts, read fresh on each heartbeat via a ref. */
@@ -52,7 +52,7 @@ export function useSessionReporter(
   onCommand?: (command: SessionCommand) => void,
   /** Filled with a sender that pushes a frame over the live socket (false if it's down),
    *  so the room layer can send sync in real time instead of POSTing. */
-  wsSend?: MutableRefObject<((command: SessionCommand) => boolean) | null>,
+  wsSend?: MutableRefObject<((command: SessionCommandInput) => boolean) | null>,
 ) {
   const snapRef = useRef(snapshot);
   snapRef.current = snapshot;

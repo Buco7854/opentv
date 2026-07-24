@@ -13,7 +13,7 @@ import { MediaListRow } from '../components/MediaListRow';
 import { Pager, SearchField, ScreenHeader } from '../components/Primitives';
 import { useDownloads, useFavorites, useGuideIds, usePaged } from '../hooks';
 import { t } from '../i18n';
-import { usePlayer } from '../player/PlayerProvider';
+import { usePlayer } from '../player/PlayerNavigation';
 
 export function SearchScreen() {
   const playlistId = Number(useParams().playlistId);

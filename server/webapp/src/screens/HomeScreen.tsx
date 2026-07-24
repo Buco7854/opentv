@@ -2,13 +2,14 @@
 
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api, prefs } from '../api';
+import { api } from '../api';
 import { EmptyState } from '../components/Common';
 import { Icon } from '../components/Icons';
 import { Spinner } from '../components/Primitives';
 import { PlaylistDialog } from '../components/PlaylistDialog';
 import { useAsync } from '../hooks';
 import { t } from '../i18n';
+import { prefs } from '../preferences';
 
 export function HomeScreen() {
   const navigate = useNavigate();

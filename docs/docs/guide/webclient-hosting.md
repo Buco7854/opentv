@@ -71,8 +71,12 @@ tv.example.com {
 | `OPENTV_PAGE_SIZE`         | `50`       | Items per page in the web client's lists                                                                                             |
 | `OPENTV_VIDEO_ENCODER`     | `libx264`  | Encoder for non-H.264 video (HEVC and friends). Set `copy` to turn transcoding off, or a hardware encoder like `h264_qsv` / `h264_nvenc` with a GPU |
 | `OPENTV_X264_PRESET`       | `veryfast` | Software encode speed vs size (`ultrafast` to `slow`); only used by the default `libx264` encoder                                    |
-| `OPENTV_REMUX_CONNECTIONS` | `1`        | How many concurrent provider reads to allow when a panel does not report its own `max_connections`. Playback and downloads share this budget |
+| `OPENTV_PROVIDER_CONNECTIONS` | `1`     | How many concurrent provider reads to allow when a panel does not report its own `max_connections`. Playback and downloads share this budget |
 | `OPENTV_TRUSTED_PROXIES`   | (unset)    | Comma-separated proxy IPs and CIDRs (e.g. `127.0.0.1,10.0.0.0/8`). When a request comes from one of these, the real viewer IP is read from `X-Forwarded-For` for the [Now watching](/guide/webclient-now-watching) page |
+
+Mutable settings are stored atomically in `/data/server-settings.json`. On the
+first start after upgrading, the previous `settings.properties` is imported and
+kept as `settings.properties.bak`; the stream-token key is preserved.
 
 ## What it does
 
@@ -128,10 +132,10 @@ caches for metadata.
 PORT=8080 OPENTV_DATA=./server-data ./server/build/install/server/bin/server
 ```
 
-Requires JDK 17+, Node.js 20+, and `ffmpeg` / `ffprobe` on `PATH` (they power
+Requires JDK 25+, Node.js 20+, and `ffmpeg` / `ffprobe` on `PATH` (they power
 the remux that exposes tracks and transcodes non-browser audio and video; the
 Docker image bundles them). The Gradle build compiles the React client in
 `server/webapp` into the server's resources; the Docker build does this in its
 own stage. For UI work, `cd server/webapp && npm run dev` serves the client on
-:5173 with `/api` proxied to a server on :8080. See `server/webapp/README.md`
+:5173 with `/api/v1` proxied to a server on :8080. See `server/webapp/README.md`
 for the design system.

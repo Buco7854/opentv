@@ -27,6 +27,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -39,8 +40,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,22 +47,19 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
-import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.R
 import com.buco7854.opentv.core.model.Channel
-import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.model.Download
 import com.buco7854.opentv.core.model.DownloadStatus
-import com.buco7854.opentv.core.model.Favorite
 import com.buco7854.opentv.core.model.Metadata
-import com.buco7854.opentv.core.meta.castFromNames
 import com.buco7854.opentv.core.meta.decodeCast
 import com.buco7854.opentv.ui.components.BadgeRow
 import com.buco7854.opentv.ui.components.CastRow
@@ -81,14 +77,6 @@ import kotlinx.coroutines.launch
 
 private val YEAR_TAG = Regex("""\b(19|20)\d{2}\b""")
 private val QUALITY_TAG = Regex("""(?i)\b(4K|UHD|2160p|1080p|FHD|720p|HEVC|HD|SD)\b""")
-
-/** Flips the favorite for [key]; returns the new state. */
-internal suspend fun toggleFavorite(playlistId: Long, key: String, kind: Int, current: Boolean): Boolean {
-    val dao = OpenTvApp.graph.storage.favorites
-    if (current) dao.remove(playlistId, key)
-    else dao.add(Favorite(playlistId = playlistId, key = key, kind = kind))
-    return !current
-}
 
 /** Playlist facts plus any enrichment. */
 private fun metaChips(channel: Channel, meta: Metadata?): List<String> = buildList {
@@ -164,24 +152,17 @@ fun MovieDetailScreen(
     onBack: () -> Unit,
     onPlay: (url: String, title: String) -> Unit,
 ) {
-    var channel by remember { mutableStateOf<Channel?>(null) }
-    var meta by remember { mutableStateOf<Metadata?>(null) }
-    var isFavorite by remember { mutableStateOf(false) }
-    val downloads by OpenTvApp.graph.downloads.downloads.collectAsState(initial = emptyList())
-    val progressByUrl by OpenTvApp.graph.resume.progressByUrl.collectAsState(initial = emptyMap())
+    val viewModel = detailViewModel("MovieDetail-$channelId") {
+        MovieDetailViewModel(it, channelId)
+    }
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val downloads by viewModel.downloads.collectAsStateWithLifecycle()
+    val progressByUrl by viewModel.progressByUrl.collectAsStateWithLifecycle()
+    val channel = state.channel
+    val meta = state.metadata
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    val context = LocalContext.current
-
-    LaunchedEffect(channelId) {
-        channel = OpenTvApp.graph.storage.channels.get(channelId)
-        channel?.let { c ->
-            isFavorite = OpenTvApp.graph.storage.favorites.get(c.playlistId, c.url) != null
-            // Xtream movies have panel details; title lookup is the fallback.
-            meta = c.xtreamStreamId?.let { OpenTvApp.graph.xtream.vodMetadata(c) }
-                ?: OpenTvApp.graph.metadata.forTitle(isSeries = false, rawName = c.name)
-        }
-    }
+    val resources = LocalResources.current
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
@@ -195,11 +176,10 @@ fun MovieDetailScreen(
                 },
                 actions = {
                     channel?.let { c ->
-                        FavoriteIcon(isFavorite = isFavorite) {
-                            scope.launch {
-                                isFavorite = toggleFavorite(c.playlistId, c.url, c.kind, isFavorite)
-                            }
-                        }
+                        FavoriteIcon(
+                            isFavorite = state.isFavorite,
+                            onToggle = viewModel::toggleFavorite,
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
@@ -256,8 +236,10 @@ fun MovieDetailScreen(
                         state = downloadState,
                         onDownload = {
                             scope.launch {
-                                val blocked = OpenTvApp.graph.downloads.enqueue(movie)
-                                snackbar.showSnackbar(blocked ?: context.getString(R.string.downloads_started_generic))
+                                val blocked = viewModel.enqueue(movie)
+                                snackbar.showSnackbar(
+                                    blocked ?: resources.getString(R.string.downloads_started_generic),
+                                )
                             }
                         },
                     )
@@ -290,25 +272,21 @@ fun SeriesDetailScreen(
     onBack: () -> Unit,
     onOpenEpisode: (channelId: Long) -> Unit,
 ) {
-    val episodes by OpenTvApp.graph.storage.channels
-        .observeEpisodes(playlistId, seriesKey)
-        .collectAsState(initial = emptyList())
-    var meta by remember { mutableStateOf<Metadata?>(null) }
-    var isFavorite by remember { mutableStateOf(false) }
-    val downloads by OpenTvApp.graph.downloads.downloads.collectAsState(initial = emptyList())
+    val viewModel = detailViewModel("SeriesDetail-$playlistId-${seriesKey.hashCode()}") {
+        SeriesDetailViewModel(it, playlistId, seriesKey)
+    }
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val episodes by viewModel.episodes.collectAsStateWithLifecycle()
+    val downloads by viewModel.downloads.collectAsStateWithLifecycle()
+    val meta = state.metadata
     val downloadsByUrl = remember(downloads) {
         downloads.filter { it.status != DownloadStatus.CANCELLED && it.status != DownloadStatus.FAILED }
             .associateBy { it.url }
     }
-    val progressByUrl by OpenTvApp.graph.resume.progressByUrl.collectAsState(initial = emptyMap())
+    val progressByUrl by viewModel.progressByUrl.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    val context = LocalContext.current
-
-    LaunchedEffect(seriesKey) {
-        isFavorite = OpenTvApp.graph.storage.favorites.get(playlistId, seriesKey) != null
-        meta = OpenTvApp.graph.metadata.forTitle(isSeries = true, rawName = seriesKey)
-    }
+    val resources = LocalResources.current
 
     val seasons = remember(episodes) { episodes.mapNotNull { it.season }.distinct().sorted() }
     var selectedSeason by remember { mutableStateOf<Int?>(null) } // null = all seasons
@@ -327,12 +305,10 @@ fun SeriesDetailScreen(
                     }
                 },
                 actions = {
-                    FavoriteIcon(isFavorite = isFavorite) {
-                        scope.launch {
-                            isFavorite =
-                                toggleFavorite(playlistId, seriesKey, ChannelKind.SERIES, isFavorite)
-                        }
-                    }
+                    FavoriteIcon(
+                        isFavorite = state.isFavorite,
+                        onToggle = viewModel::toggleFavorite,
+                    )
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
             )
@@ -381,8 +357,10 @@ fun SeriesDetailScreen(
                     onOpen = { onOpenEpisode(episode.id) },
                     onDownload = {
                         scope.launch {
-                            val blocked = OpenTvApp.graph.downloads.enqueue(episode)
-                            snackbar.showSnackbar(blocked ?: context.getString(R.string.downloads_started, episode.name))
+                            val blocked = viewModel.enqueue(episode)
+                            snackbar.showSnackbar(
+                                blocked ?: resources.getString(R.string.downloads_started, episode.name),
+                            )
                         }
                     },
                     progress = progressByUrl[episode.url],
@@ -403,7 +381,9 @@ internal fun SeasonPicker(seasons: List<Int>, selected: Int?, onSelect: (Int?) -
             readOnly = true,
             label = { Text(stringResource(R.string.details_season)) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier.menuAnchor().fillMaxWidth(),
+            modifier = Modifier
+                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                .fillMaxWidth(),
         )
         ExposedDropdownMenu(
             expanded = expanded,
@@ -531,38 +511,19 @@ fun EpisodeDetailScreen(
     onBack: () -> Unit,
     onPlay: (url: String, title: String) -> Unit,
 ) {
-    val graph = OpenTvApp.graph
-    var episode by remember { mutableStateOf<Channel?>(null) }
-    var seriesTitle by remember { mutableStateOf<String?>(null) }
-    var info by remember { mutableStateOf<Metadata?>(null) }
-    var seriesCast by remember { mutableStateOf<List<com.buco7854.opentv.core.meta.CastMember>>(emptyList()) }
-    val downloads by graph.downloads.downloads.collectAsState(initial = emptyList())
-    val progressByUrl by graph.resume.progressByUrl.collectAsState(initial = emptyMap())
+    val viewModel = detailViewModel("EpisodeDetail-$channelId") {
+        EpisodeDetailViewModel(it, channelId)
+    }
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val downloads by viewModel.downloads.collectAsStateWithLifecycle()
+    val progressByUrl by viewModel.progressByUrl.collectAsStateWithLifecycle()
+    val episode = state.episode
+    val seriesTitle = state.seriesTitle
+    val info = state.metadata
+    val seriesCast = state.seriesCast
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    val context = LocalContext.current
-
-    LaunchedEffect(channelId) {
-        val ep = graph.storage.channels.get(channelId) ?: return@LaunchedEffect
-        episode = ep
-        // Xtream episodes key by series id ("xs:"); M3U episodes key by series title.
-        val key = ep.seriesKey
-        if (key != null && key.startsWith("xs:")) {
-            val xtreamSeries = key.removePrefix("xs:").toLongOrNull()
-                ?.let { graph.storage.xtreamSeries.get(ep.playlistId, it) }
-            seriesTitle = xtreamSeries?.name
-            seriesCast = castFromNames(xtreamSeries?.castNames)
-        } else {
-            seriesTitle = key
-            // Cached series lookup - no extra network beyond the series page.
-            seriesCast = key?.let { decodeCast(graph.metadata.forTitle(true, it)?.castJson) }.orEmpty()
-        }
-        val season = ep.season
-        val episodeNum = ep.episode
-        if (ep.description == null && season != null && episodeNum != null && seriesTitle != null) {
-            info = graph.metadata.episodeInfo(seriesTitle!!, season, episodeNum)
-        }
-    }
+    val resources = LocalResources.current
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
@@ -677,8 +638,10 @@ fun EpisodeDetailScreen(
                         state = downloadState,
                         onDownload = {
                             scope.launch {
-                                val blocked = graph.downloads.enqueue(ep)
-                                snackbar.showSnackbar(blocked ?: context.getString(R.string.downloads_started_generic))
+                                val blocked = viewModel.enqueue(ep)
+                                snackbar.showSnackbar(
+                                    blocked ?: resources.getString(R.string.downloads_started_generic),
+                                )
                             }
                         },
                     )

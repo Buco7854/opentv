@@ -1,9 +1,7 @@
 package com.buco7854.opentv.core.model
 
 import com.buco7854.opentv.core.util.nowMs
-import kotlinx.serialization.Serializable
-
-// Domain models: storage- and framework-agnostic. @Serializable is only for the server's JSON transport.
+// Domain models are storage- and transport-agnostic. Server JSON uses server-owned DTOs.
 
 object DownloadStatus {
     const val QUEUED = 0
@@ -14,7 +12,6 @@ object DownloadStatus {
     const val PAUSED = 5
 }
 
-@Serializable
 data class Playlist(
     val id: Long = 0,
     val name: String,
@@ -35,7 +32,6 @@ data class Playlist(
     val channelCount: Int = 0,
 )
 
-@Serializable
 data class Channel(
     val id: Long = 0,
     val playlistId: Long,
@@ -75,7 +71,6 @@ fun Channel.hasGuide(guideIds: Set<String>): Boolean =
  * cached as [Channel] rows (seriesKey = "xs:{seriesId}"), so refresh never
  * costs one request per show.
  */
-@Serializable
 data class XtreamSeries(
     val playlistId: Long,
     val seriesId: Long,
@@ -89,7 +84,6 @@ data class XtreamSeries(
     val episodesFetchedAtMs: Long = 0,
 )
 
-@Serializable
 data class Programme(
     val id: Long = 0,
     val playlistId: Long,
@@ -101,7 +95,6 @@ data class Programme(
 )
 
 /** User correction for a misclassified M3U category, reapplied every refresh to override the heuristics. */
-@Serializable
 data class GroupOverride(
     val playlistId: Long,
     val groupTitle: String,
@@ -113,7 +106,6 @@ data class GroupOverride(
  * channel rows). Key = stream url for live/movies, seriesKey for M3U series,
  * "x:{seriesId}" for Xtream catalog series.
  */
-@Serializable
 data class Favorite(
     val playlistId: Long,
     val key: String,
@@ -122,7 +114,6 @@ data class Favorite(
 )
 
 /** Saved VOD playback position, keyed by stream URL; live streams are never stored. */
-@Serializable
 data class ResumePoint(
     val url: String,
     val positionMs: Long,
@@ -134,7 +125,6 @@ data class ResumePoint(
  * Cached enrichment (synopsis, rating, cast) for a cleaned title. Negative
  * lookups are cached too (all-null fields) so unmatchable titles don't re-fetch.
  */
-@Serializable
 data class Metadata(
     val cacheKey: String,
     val title: String? = null,
@@ -152,7 +142,6 @@ data class Metadata(
     val fetchedAtMs: Long,
 )
 
-@Serializable
 data class Download(
     val id: Long = 0,
     val title: String,
@@ -167,11 +156,8 @@ data class Download(
 
 // Query projections shared by both UIs.
 
-@Serializable
 data class GroupCount(val groupTitle: String, val count: Int)
 
-@Serializable
 data class SeriesGroup(val seriesKey: String, val count: Int, val logo: String?, val groupTitle: String)
 
-@Serializable
 data class GroupHit(val groupTitle: String, val kind: Int, val count: Int)

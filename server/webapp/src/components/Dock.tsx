@@ -3,9 +3,10 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { api, DownloadStatus, Playlist, prefs } from '../api';
+import { api, DownloadStatus, Playlist } from '../api';
 import { useDownloads } from '../hooks';
 import { getLocale, t } from '../i18n';
+import { prefs } from '../preferences';
 import { Icon } from './Icons';
 import { ConfirmDialog, IconBtn, Menu, MenuOption, snackbar } from './Primitives';
 import { PlaylistDialog } from './PlaylistDialog';

@@ -4,8 +4,6 @@ import com.buco7854.opentv.core.model.ResumePoint
 import com.buco7854.opentv.core.storage.ResumeStore
 import com.buco7854.opentv.core.util.nowMs
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -14,7 +12,11 @@ import kotlinx.coroutines.launch
  * Persists VOD playback positions. Saves are fire-and-forget on an internal
  * scope so they complete even while the player screen is being disposed.
  */
-class ResumeRepository(private val store: ResumeStore) {
+class ResumeRepository(
+    private val store: ResumeStore,
+    private val scope: CoroutineScope,
+    private val clock: () -> Long = ::nowMs,
+) {
 
     companion object {
         /** Don't store trivially-short progress, or resume right before the end. */
@@ -22,8 +24,6 @@ class ResumeRepository(private val store: ResumeStore) {
         const val END_GUARD_MS = 15_000L
         private const val MAX_AGE_MS = 90L * 24 * 60 * 60 * 1000
     }
-
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     /** Fraction watched (0..1) keyed by stream URL, for progress bars; finished items are pruned on save. */
     val progressByUrl: Flow<Map<String, Float>> = store.observeAll().map { points ->
@@ -49,7 +49,7 @@ class ResumeRepository(private val store: ResumeStore) {
             ) {
                 store.delete(url)
             } else {
-                store.upsert(ResumePoint(url, positionMs, durationMs, nowMs()))
+                store.upsert(ResumePoint(url, positionMs, durationMs, clock()))
             }
         }
     }
@@ -62,6 +62,6 @@ class ResumeRepository(private val store: ResumeStore) {
     suspend fun clearForPlaylist(playlistId: Long) = store.deleteForPlaylist(playlistId)
 
     fun pruneOld() {
-        scope.launch { store.prune(nowMs() - MAX_AGE_MS) }
+        scope.launch { store.prune(clock() - MAX_AGE_MS) }
     }
 }

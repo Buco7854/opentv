@@ -2,10 +2,11 @@
 // on the server. Mirrors SettingsScreen.kt.
 
 import { useEffect, useRef, useState } from 'react';
-import { api, applyTheme, prefs, Settings, Theme } from '../api';
+import { api, Settings } from '../api';
 import { Icon } from '../components/Icons';
 import { Segmented, snackbar, Spinner, TextField, ScreenHeader } from '../components/Primitives';
 import { Language, languageSetting, MessageKey, t } from '../i18n';
+import { applyTheme, prefs, Theme } from '../preferences';
 
 const USER_AGENT_PRESETS: [string, string][] = [
   ['', ''],

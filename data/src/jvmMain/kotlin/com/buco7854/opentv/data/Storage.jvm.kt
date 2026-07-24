@@ -10,7 +10,6 @@ fun createRoomStorage(dbPath: String): Storage {
     val db = Room.databaseBuilder<OpenTvDatabase>(dbPath)
         .setDriver(BundledSQLiteDriver())
         .setQueryCoroutineContext(Dispatchers.IO)
-        .fallbackToDestructiveMigration(dropAllTables = true)
         .build()
     return RoomStorage(db)
 }

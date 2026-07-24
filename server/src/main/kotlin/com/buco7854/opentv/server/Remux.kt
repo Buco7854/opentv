@@ -8,7 +8,12 @@ import io.ktor.server.response.header
 import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondText
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import kotlinx.serialization.json.Json
@@ -36,15 +41,19 @@ import kotlin.math.ceil
  * concurrent reads per provider capped at its max_connections (LRU-evicted past that),
  * and an idle session's ffmpeg reaped quickly.
  */
-class RemuxService(private val http: ServerHttp, private val connections: ProviderConnections) {
+class RemuxService(
+    private val http: ServerHttp,
+    private val connections: ProviderConnections,
+    private val videoEncoder: String = "libx264",
+    private val x264Preset: String = "veryfast",
+    private val processRunner: MediaProcessRunner = JvmMediaProcessRunner,
+) {
 
     private val log = LoggerFactory.getLogger("opentv")
 
     // Encoder for non-browser-playable video (HEVC...). Software libx264 by default;
     // OPENTV_VIDEO_ENCODER selects a hardware encoder, or "copy"/none/off to never
     // transcode. OPENTV_X264_PRESET trades software speed against size.
-    private val videoEncoder = System.getenv("OPENTV_VIDEO_ENCODER")?.takeIf { it.isNotBlank() } ?: "libx264"
-    private val x264Preset = System.getenv("OPENTV_X264_PRESET")?.takeIf { it.isNotBlank() } ?: "veryfast"
     private val videoTranscodeOff = videoEncoder.lowercase() in setOf("copy", "none", "off", "disabled")
 
     /** The file has one audio track and no text subtitles: nothing to expose. */
@@ -89,8 +98,8 @@ class RemuxService(private val http: ServerHttp, private val connections: Provid
         val timeshift: Boolean,
         val transcodeVideo: Boolean,
         val videoCodec: String,
-        val audio: ProbedStream,
-        val subs: List<ProbedStream>,
+        val audio: MediaStreamInfo,
+        val subs: List<MediaStreamInfo>,
         val audioLabels: List<String>,
         val subLabels: List<String>,
         val nativeVideoCopy: Boolean,
@@ -112,6 +121,7 @@ class RemuxService(private val http: ServerHttp, private val connections: Provid
     // live in a grow-only store keyed by source URL, shared across a URL's sessions.
     private val subStore: Path = Files.createDirectories(root.resolve("subs"))
     private val subStoreLocks = ConcurrentHashMap<String, Any>()
+    private val mediaProbe = MediaProbe(http, processRunner, root)
 
     companion object {
         private const val IDLE_TIMEOUT_MS = 30_000L
@@ -146,10 +156,13 @@ class RemuxService(private val http: ServerHttp, private val connections: Provid
                 if (ok || System.currentTimeMillis() - atMs < 60_000) return ok
             }
             fun runs(binary: String) = runCatching {
-                val process = ProcessBuilder(binary, "-version")
-                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                    .redirectError(ProcessBuilder.Redirect.DISCARD)
-                    .start()
+                val process = processRunner.start(
+                    MediaProcessRequest(
+                        listOf(binary, "-version"),
+                        discardStdout = true,
+                        discardStderr = true,
+                    )
+                )
                 process.waitFor(10, TimeUnit.SECONDS) && process.exitValue() == 0
             }.onFailure { log.warn("Could not run {}: {}", binary, it.message) }.getOrDefault(false)
             val ok = runs("ffmpeg") && runs("ffprobe")
@@ -161,7 +174,12 @@ class RemuxService(private val http: ServerHttp, private val connections: Provid
      *  ffmpeg they're an unknown-option error, so gate them by version. */
     private val readrateArgs: List<String> by lazy {
         val version = runCatching {
-            val process = ProcessBuilder("ffmpeg", "-version").redirectErrorStream(true).start()
+            val process = processRunner.start(
+                MediaProcessRequest(
+                    listOf("ffmpeg", "-version"),
+                    mergeErrorIntoStdout = true,
+                )
+            )
             val text = process.inputStream.bufferedReader().readText()
             process.waitFor(10, TimeUnit.SECONDS)
             Regex("""version n?(\d+)\.(\d+)""").find(text)?.destructured?.let { (a, b) -> a.toInt() to b.toInt() }
@@ -174,24 +192,30 @@ class RemuxService(private val http: ServerHttp, private val connections: Provid
         }
     }
 
-    init {
-        Runtime.getRuntime().addShutdownHook(Thread {
-            sessions.values.forEach { runCatching { it.process?.destroyForcibly() } }
-            sessions.values.forEach { runCatching { deleteTree(it.dir) } }
-        })
-        Thread {
-            while (true) {
-                runCatching { Thread.sleep(5_000) }
-                val now = System.currentTimeMillis()
-                sessions.values.forEach { session ->
-                    // Free the provider connection once the player stops asking for segments.
-                    if (session.process != null && now - session.lastAccessMs > IDLE_TIMEOUT_MS) {
-                        stopReading(session)
-                    }
-                    if (now - session.lastAccessMs > EVICT_TIMEOUT_MS) evict(session)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    @Volatile private var running = true
+    private val reaper = scope.launch {
+        while (isActive) {
+            delay(5_000)
+            val now = System.currentTimeMillis()
+            sessions.values.forEach { session ->
+                // Free the provider connection once the player stops asking for segments.
+                if (session.process != null && now - session.lastAccessMs > IDLE_TIMEOUT_MS) {
+                    stopReading(session)
                 }
+                if (now - session.lastAccessMs > EVICT_TIMEOUT_MS) evict(session)
             }
-        }.apply { isDaemon = true }.start()
+        }
+    }
+
+    /** Stop all processes and remove the temporary artifact tree. */
+    fun close() {
+        if (!running) return
+        running = false
+        reaper.cancel()
+        scope.cancel()
+        sessions.values.toList().forEach(::evict)
+        runCatching { deleteTree(root) }
     }
 
     private fun deleteTree(dir: Path) =
@@ -277,121 +301,6 @@ class RemuxService(private val http: ServerHttp, private val connections: Provid
         MessageDigest.getInstance("SHA-1").digest("$url@${if (clientHevc) "n" else "s"}@$audioIndex@$group".toByteArray())
             .joinToString("") { "%02x".format(it) }.take(16)
 
-    // ---- probe ----
-
-    private class ProbedStream(
-        val index: Int,
-        val type: String,
-        val codec: String,
-        val language: String?,
-        val title: String?,
-        val channels: Int?,
-        val forced: Boolean,
-    )
-
-    private class ProbeResult(val streams: List<ProbedStream>, val durationSec: Double?)
-
-    private val probeCache = ConcurrentHashMap<String, Pair<ProbeResult, Long>>()
-
-    /** Layout doesn't change, so probe each URL once per hour (also keeps the provider
-     *  from being opened again on an audio switch or a fresh session for the same file). */
-    private fun probeCached(url: String): ProbeResult {
-        probeCache[url]?.let { (result, atMs) ->
-            if (System.currentTimeMillis() - atMs < PROBE_TTL_MS) return result
-            probeCache.remove(url)
-        }
-        val result = probe(url)
-        if (probeCache.size > 128) probeCache.clear()
-        probeCache[url] = result to System.currentTimeMillis()
-        return result
-    }
-
-    private fun probe(url: String): ProbeResult {
-        // stdout to a file: reading the pipe can block past the timeout if a provider stalls.
-        val outFile = Files.createTempFile(root, "probe", ".json")
-        val cmd = mutableListOf("ffprobe", "-v", "error")
-        if (url.startsWith("http")) cmd += listOf("-user_agent", http.userAgent)
-        cmd += listOf("-print_format", "json", "-show_streams", "-show_format", url)
-        val output = try {
-            val process = ProcessBuilder(cmd)
-                .redirectOutput(outFile.toFile()).redirectError(ProcessBuilder.Redirect.DISCARD).start()
-            if (!process.waitFor(45, TimeUnit.SECONDS)) {
-                process.destroyForcibly()
-                throw IllegalStateException("ffprobe timed out reading the stream")
-            }
-            if (process.exitValue() != 0) throw IllegalStateException("ffprobe could not read the stream")
-            Files.readString(outFile)
-        } finally {
-            Files.deleteIfExists(outFile)
-        }
-        val json = Json.parseToJsonElement(output) as? JsonObject
-            ?: throw IllegalStateException("ffprobe returned no stream info")
-        val streams = (json["streams"] as? JsonArray ?: JsonArray(emptyList())).mapNotNull { element ->
-            val stream = element as? JsonObject ?: return@mapNotNull null
-            fun text(key: String) = (stream[key] as? JsonPrimitive)?.content
-            val tags = stream["tags"] as? JsonObject
-            fun tag(key: String) = (tags?.get(key) as? JsonPrimitive)?.content
-            val disposition = stream["disposition"] as? JsonObject
-            ProbedStream(
-                index = text("index")?.toIntOrNull() ?: return@mapNotNull null,
-                type = text("codec_type") ?: return@mapNotNull null,
-                codec = text("codec_name") ?: "",
-                language = tag("language")?.takeIf { it.isNotBlank() && it != "und" },
-                title = tag("title")?.takeIf { it.isNotBlank() },
-                channels = text("channels")?.toIntOrNull(),
-                forced = (disposition?.get("forced") as? JsonPrimitive)?.content == "1",
-            )
-        }
-        val duration = ((json["format"] as? JsonObject)?.get("duration") as? JsonPrimitive)
-            ?.content?.toDoubleOrNull()
-        return ProbeResult(streams, duration)
-    }
-
-    private val keyframeCache = ConcurrentHashMap<String, List<Double>>()
-
-    /** All video keyframe timestamps (relative to the first), or null if they can't be read
-     *  in time. Copied video can only be cut on these, so knowing them lets the playlist
-     *  list each segment's true length instead of a uniform guess. Cached per URL. */
-    private fun keyframes(url: String): List<Double>? {
-        keyframeCache[url]?.let { return it.ifEmpty { null } }
-        val outFile = Files.createTempFile(root, "kf", ".csv")
-        val cmd = mutableListOf("ffprobe", "-v", "error")
-        if (url.startsWith("http")) cmd += listOf("-user_agent", http.userAgent)
-        cmd += listOf("-select_streams", "v:0", "-show_entries", "packet=pts_time,flags", "-of", "csv=p=0", url)
-        val result = try {
-            val process = ProcessBuilder(cmd)
-                .redirectOutput(outFile.toFile()).redirectError(ProcessBuilder.Redirect.DISCARD).start()
-            if (!process.waitFor(30, TimeUnit.SECONDS)) { process.destroyForcibly(); null }
-            else {
-                val times = Files.readString(outFile).lineSequence().mapNotNull { line ->
-                    val parts = line.split(',')
-                    if (parts.size >= 2 && parts[1].contains('K')) parts[0].toDoubleOrNull() else null
-                }.filter { it.isFinite() }.sorted().toList()
-                times.takeIf { it.size >= 2 }?.let { kf -> kf.map { it - kf.first() } }
-            }
-        } catch (e: Exception) {
-            null
-        } finally {
-            Files.deleteIfExists(outFile)
-        }
-        if (keyframeCache.size > 64) keyframeCache.clear()
-        keyframeCache[url] = result ?: emptyList()
-        return result
-    }
-
-    /** Segment start times: for copied video, the keyframe at/after each target boundary
-     *  (matching ffmpeg's own cutting); uniform when keyframes are unknown or transcoding. */
-    private fun segmentStarts(keyframes: List<Double>?, targetLen: Double, duration: Double): List<Double> {
-        if (keyframes == null) return generateSequence(0.0) { it + targetLen }.takeWhile { it < duration - 0.1 }.toList()
-        // Match ffmpeg's hls cutting: split at the first keyframe past each n*targetLen mark.
-        val starts = mutableListOf(0.0)
-        var target = targetLen
-        for (kf in keyframes) {
-            if (kf >= target && kf < duration - 0.1) { starts.add(kf); target += targetLen }
-        }
-        return starts
-    }
-
     // ---- track labels ----
 
     private val languageNames = mapOf(
@@ -436,7 +345,7 @@ class RemuxService(private val http: ServerHttp, private val connections: Provid
     }
 
     /** Display labels: language/title plus codec and layout, skipping what the title already says. */
-    private fun audioLabels(streams: List<ProbedStream>): List<String> =
+    private fun audioLabels(streams: List<MediaStreamInfo>): List<String> =
         unique(streams.mapIndexed { i, stream ->
             val language = languageNames[stream.language?.lowercase()] ?: stream.language
             val base = stream.title ?: language ?: "Track ${i + 1}"
@@ -454,7 +363,7 @@ class RemuxService(private val http: ServerHttp, private val connections: Provid
             parts.joinToString(" · ")
         })
 
-    private fun subtitleLabels(streams: List<ProbedStream>): List<String> =
+    private fun subtitleLabels(streams: List<MediaStreamInfo>): List<String> =
         unique(streams.mapIndexed { i, stream ->
             val language = languageNames[stream.language?.lowercase()] ?: stream.language
             val base = stream.title ?: language ?: "Track ${i + 1}"
@@ -478,7 +387,7 @@ class RemuxService(private val http: ServerHttp, private val connections: Provid
 
     // ---- start / playlist ----
 
-    private fun transcodeVideo(video: ProbedStream?, clientHevc: Boolean): Boolean {
+    private fun transcodeVideo(video: MediaStreamInfo?, clientHevc: Boolean): Boolean {
         val decodable = video?.codec?.lowercase()?.let { it in BROWSER_VIDEO } ?: true
         val nativeCapable = video?.codec?.lowercase() == "hevc" && clientHevc
         return video != null && !decodable && !videoTranscodeOff && !nativeCapable
@@ -513,7 +422,7 @@ class RemuxService(private val http: ServerHttp, private val connections: Provid
             throw ConnectionLimitException(connectionLimit)
         }
 
-        val probed = probeCached(url)
+        val probed = mediaProbe.inspect(url)
         val audios = probed.streams.filter { it.type == "audio" }
         val subs = probed.streams.filter { it.type == "subtitle" && it.codec.lowercase() in TEXT_SUB_CODECS }
         val video = probed.streams.firstOrNull { it.type == "video" }
@@ -536,7 +445,11 @@ class RemuxService(private val http: ServerHttp, private val connections: Provid
         // its own timestamps, so the small drift from real keyframe cuts is invisible.
         val segLen = if (transcode) TRANSCODE_SEGMENT_SEC.toDouble() else COPY_SEGMENT_SEC.toDouble()
         val useKeyframes = !transcode && !url.startsWith("http")
-        val starts = segmentStarts(if (useKeyframes) keyframes(url) else null, segLen, duration)
+        val starts = mediaProbe.segmentStarts(
+            if (useKeyframes) mediaProbe.keyframes(url) else null,
+            segLen,
+            duration,
+        )
         val audio = audios.getOrElse(audioIndex) { audios.first() }
         val dir = Files.createDirectories(root.resolve(id))
 
@@ -556,7 +469,7 @@ class RemuxService(private val http: ServerHttp, private val connections: Provid
 
     // Subtitles live in a master playlist as WebVTT renditions; without them the media playlist serves directly.
     private fun playlistUrl(id: String, hasSubs: Boolean) =
-        "/api/remux/$id/${if (hasSubs) "master.m3u8" else "main.m3u8"}"
+        "/api/v1/remux/$id/${if (hasSubs) "master.m3u8" else "main.m3u8"}"
 
     private fun segFile(session: Session, n: Int): Path = session.dir.resolve("main$n.m4s")
 
@@ -660,11 +573,14 @@ class RemuxService(private val http: ServerHttp, private val connections: Provid
         // it, evicting background downloads if need be); the callback stops this session if
         // we're ever bumped.
         connections.openStream(session.id, session.providerKey, session.shareKey, session.connectionLimit) { stopReading(session) }
-        val process = ProcessBuilder(command(session, startNumber))
-            // Run in the session dir so ffmpeg's bare fMP4 init filename lands here on every OS.
-            .directory(session.dir.toFile())
-            .redirectError(ProcessBuilder.Redirect.appendTo(session.dir.resolve("ffmpeg.log").toFile()))
-            .start()
+        val process = processRunner.start(
+            MediaProcessRequest(
+                command = command(session, startNumber),
+                // Bare fMP4 init filenames land in the session directory on every OS.
+                workingDirectory = session.dir,
+                appendStderrFile = session.dir.resolve("ffmpeg.log"),
+            )
+        )
         session.process = process
         session.startNumber = startNumber
         session.writtenHead = startNumber - 1

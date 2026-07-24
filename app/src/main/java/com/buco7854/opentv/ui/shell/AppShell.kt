@@ -47,7 +47,6 @@ import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -60,6 +59,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.buco7854.opentv.R
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.model.Playlist
@@ -203,8 +203,8 @@ fun PlaylistsPanel(
     onOpenLog: () -> Unit,
     viewModel: HomeViewModel = viewModel(),
 ) {
-    val playlists by viewModel.playlists.collectAsState()
-    val busy by viewModel.busy.collectAsState()
+    val playlists by viewModel.playlists.collectAsStateWithLifecycle(initialValue = null)
+    val busy by viewModel.busy.collectAsStateWithLifecycle()
     var showAdd by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Playlist?>(null) }
     var pendingDelete by remember { mutableStateOf<Playlist?>(null) }
@@ -226,7 +226,7 @@ fun PlaylistsPanel(
         }
         if (busy) OtvProgressBar(Modifier.fillMaxWidth().padding(horizontal = 20.dp))
         LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
-            items(playlists, key = { it.id }) { playlist ->
+            items(playlists.orEmpty(), key = { it.id }) { playlist ->
                 PanelPlaylistRow(
                     playlist = playlist,
                     selected = playlist.id == activePlaylistId,

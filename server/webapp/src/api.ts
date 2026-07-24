@@ -1,4 +1,10 @@
-// Typed client for the OpenTV server API. Types mirror core/model/Models.kt and server/Routes.kt.
+// Typed facade for the OpenTV server API. Types mirror the server-owned Kotlin DTOs.
+// HTTP/authentication policy lives in api/http.ts; browser preferences do not
+// belong to this server-data boundary.
+
+import { API_PREFIX, browserApiHttp, post, put } from './api/http';
+
+export { ApiError } from './api/http';
 
 export const ChannelKind = { LIVE: 0, MOVIE: 1, SERIES: 2 } as const;
 
@@ -8,7 +14,7 @@ export const DownloadStatus = {
 
 export type PlaylistMode = 'xtream' | 'url' | 'file';
 
-/** Credential-free playlist listing; secrets come only from api.playlistCredentials(). */
+/** Credential-free playlist listing. Stored provider details never return to the browser. */
 export interface Playlist {
   id: number;
   name: string;
@@ -16,15 +22,6 @@ export interface Playlist {
   hasXtreamPanel: boolean;
   lastRefreshedMs: number;
   channelCount: number;
-}
-
-export interface PlaylistCredentials {
-  mode: PlaylistMode;
-  url: string | null;
-  epgUrl: string | null;
-  xtreamBase: string | null;
-  xtreamUser: string | null;
-  xtreamPass: string | null;
 }
 
 export interface Channel {
@@ -39,6 +36,7 @@ export interface Channel {
   seriesKey: string | null;
   season: number | null;
   episode: number | null;
+  position: number;
   xtreamStreamId: number | null;
   catchupDays: number;
   catchupSource: string | null;
@@ -66,9 +64,18 @@ export interface XtreamSeries {
   castNames: string | null;
   genre: string | null;
   rating: number | null;
+  episodesFetchedAtMs: number;
 }
 
-export interface Programme { tvgId: string; title: string; description: string | null; startMs: number; endMs: number }
+export interface Programme {
+  id: number;
+  playlistId: number;
+  tvgId: string;
+  title: string;
+  description: string | null;
+  startMs: number;
+  endMs: number;
+}
 export interface GuideEntry { title: string; description: string | null; startMs: number; endMs: number; replayable: boolean }
 
 export interface AccountInfo {
@@ -79,9 +86,11 @@ export interface AccountInfo {
   username: string | null;
   isTrial: boolean;
   createdAtMs: number | null;
+  timezone: string | null;
 }
 
 export interface Metadata {
+  cacheKey: string;
   title: string | null;
   year: string | null;
   overview: string | null;
@@ -90,10 +99,12 @@ export interface Metadata {
   castJson: string | null;
   posterUrl: string | null;
   infoLine: string | null;
+  sourceId: number | null;
+  fetchedAtMs: number;
 }
 
-export interface Favorite { playlistId: number; key: string; kind: number }
-export interface ResumePoint { url: string; positionMs: number; durationMs: number }
+export interface Favorite { playlistId: number; key: string; kind: number; addedMs: number }
+export interface ResumePoint { url: string; positionMs: number; durationMs: number; updatedMs: number }
 
 export interface SeriesHit {
   seriesKey: string;
@@ -161,14 +172,32 @@ export interface SessionHeartbeat {
 
 /** Driver playback state mirrored to a watch-together room's other members.
  *  `seek` marks a deliberate jump (apply exactly) vs. a periodic anchor (only fix big drift). */
-export interface SyncState { positionMs: number; paused: boolean; rate: number; seek?: boolean }
+export interface SyncState { positionMs: number; paused: boolean; rate: number; seek: boolean }
 
 /** One viewer in a watch-together room. */
 export interface RoomMember { id: string; name: string; host: boolean; controller: boolean }
 
+export type SessionCommandType =
+  | 'pause' | 'play' | 'message' | 'join-request' | 'join-response'
+  | 'control-request' | 'control-response' | 'sync' | 'room-state'
+  | 'room-ended' | 'room-audio' | 'room-go';
+
+/** Complete server-to-client command shape; Kotlin serialization emits every defaulted field. */
 export interface SessionCommand {
-  type: 'pause' | 'play' | 'message' | 'join-request' | 'join-response'
-    | 'control-request' | 'control-response' | 'sync' | 'room-state' | 'room-ended' | 'room-audio' | 'room-go';
+  type: SessionCommandType;
+  text: string | null;
+  peerId: string | null;
+  peerName: string | null;
+  accepted: boolean | null;
+  quiet: boolean;
+  sync: SyncState | null;
+  members: RoomMember[] | null;
+  audioIndex: number | null;
+}
+
+/** Sparse client-to-server command; omitted fields use the Kotlin DTO defaults. */
+export interface SessionCommandInput {
+  type: SessionCommandType;
   text?: string;
   peerId?: string;
   peerName?: string;
@@ -235,186 +264,128 @@ export interface XtreamSeriesDetail { series: XtreamSeries; episodes: Channel[];
 export interface FavoritesResolved { live: Channel[]; movies: Channel[]; series: SeriesHit[] }
 export interface Settings { userAgent: string; downloadLimit: number; pageSize: number }
 
-/** An Error from a failed API call, carrying the HTTP status so callers can branch on it. */
-export class ApiError extends Error {
-  constructor(message: string, readonly status: number) { super(message); }
-}
-
-async function j<T>(url: string, opts?: RequestInit): Promise<T> {
-  const r = await fetch(url, opts);
-  if (!r.ok) {
-    let message = `HTTP ${r.status}`;
-    try { message = ((await r.json()) as { message?: string }).message || message; } catch { /* not json */ }
-    throw new ApiError(message, r.status);
-  }
-  return (r.status === 204 ? null : r.json()) as Promise<T>;
-}
-
-const put = (body: unknown): RequestInit =>
-  ({ method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-const post = (body: unknown): RequestInit =>
-  ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+const j = <T>(path: string, options?: RequestInit) =>
+  browserApiHttp.json<T>(path, options);
+const apiFetch = (path: string, options?: RequestInit) =>
+  browserApiHttp.raw(path, options);
 
 export const api = {
-  playlists: () => j<Playlist[]>('/api/playlists'),
-  addPlaylist: (req: PlaylistUpsertRequest) => j<Playlist>('/api/playlists', post(req)),
-  updatePlaylist: (id: number, req: PlaylistUpsertRequest) => j<Playlist>(`/api/playlists/${id}`, put(req)),
-  deletePlaylist: (id: number) => j<null>(`/api/playlists/${id}`, { method: 'DELETE' }),
-  refreshPlaylist: (id: number, force: boolean) => j<Playlist>(`/api/playlists/${id}/refresh?force=${force}`, { method: 'POST' }),
-  clearProgress: (id: number) => j<null>(`/api/playlists/${id}/clear-progress`, { method: 'POST' }),
-  playlistDetail: (id: number) => j<PlaylistDetail>(`/api/playlists/${id}`),
-  playlistCredentials: (id: number) => j<PlaylistCredentials>(`/api/playlists/${id}/credentials`),
-  groups: (id: number, kind: number) => j<GroupCount[]>(`/api/playlists/${id}/groups?kind=${kind}`),
+  playlists: () => j<Playlist[]>('/playlists'),
+  addPlaylist: (req: PlaylistUpsertRequest) => j<Playlist>('/playlists', post(req)),
+  updatePlaylist: (id: number, req: PlaylistUpsertRequest) => j<Playlist>(`/playlists/${id}`, put(req)),
+  deletePlaylist: (id: number) => j<null>(`/playlists/${id}`, { method: 'DELETE' }),
+  refreshPlaylist: (id: number, force: boolean) => j<Playlist>(`/playlists/${id}/refresh?force=${force}`, { method: 'POST' }),
+  clearProgress: (id: number) => j<null>(`/playlists/${id}/clear-progress`, { method: 'POST' }),
+  playlistDetail: (id: number) => j<PlaylistDetail>(`/playlists/${id}`),
+  groups: (id: number, kind: number) => j<GroupCount[]>(`/playlists/${id}/groups?kind=${kind}`),
   channels: (id: number, kind: number, group: string) =>
-    j<Channel[]>(`/api/playlists/${id}/channels?kind=${kind}&group=${encodeURIComponent(group)}`),
+    j<Channel[]>(`/playlists/${id}/channels?kind=${kind}&group=${encodeURIComponent(group)}`),
   seriesGroups: (id: number, group: string) =>
-    j<SeriesGroup[]>(`/api/playlists/${id}/series-groups?group=${encodeURIComponent(group)}`),
+    j<SeriesGroup[]>(`/playlists/${id}/series-groups?group=${encodeURIComponent(group)}`),
   xtreamSeries: (id: number, category: string) =>
-    j<XtreamSeries[]>(`/api/playlists/${id}/xtream-series?category=${encodeURIComponent(category)}`),
-  nowAiring: (id: number) => j<Record<string, Programme>>(`/api/playlists/${id}/now-airing`),
-  guideIds: (id: number) => j<string[]>(`/api/playlists/${id}/guide-ids`),
-  search: (id: number, q: string) => j<SearchResults>(`/api/playlists/${id}/search?q=${encodeURIComponent(q)}`),
-  account: (id: number, force: boolean) => j<AccountInfo>(`/api/playlists/${id}/account?force=${force}`),
+    j<XtreamSeries[]>(`/playlists/${id}/xtream-series?category=${encodeURIComponent(category)}`),
+  nowAiring: (id: number) => j<Record<string, Programme>>(`/playlists/${id}/now-airing`),
+  guideIds: (id: number) => j<string[]>(`/playlists/${id}/guide-ids`),
+  search: (id: number, q: string) => j<SearchResults>(`/playlists/${id}/search?q=${encodeURIComponent(q)}`),
+  account: (id: number, force: boolean) => j<AccountInfo>(`/playlists/${id}/account?force=${force}`),
   setGroupKind: (id: number, groupTitle: string, kind: number | null) =>
-    j<null>(`/api/playlists/${id}/group-kind`, put({ groupTitle, kind })),
-  favorites: (id: number) => j<Favorite[]>(`/api/playlists/${id}/favorites`),
+    j<null>(`/playlists/${id}/group-kind`, put({ groupTitle, kind })),
+  favorites: (id: number) => j<Favorite[]>(`/playlists/${id}/favorites`),
   addFavorite: (id: number, key: string, kind: number) =>
-    j<null>(`/api/playlists/${id}/favorites`, put({ playlistId: id, key, kind })),
+    j<null>(`/playlists/${id}/favorites`, put({ key, kind })),
   removeFavorite: (id: number, key: string) =>
-    j<null>(`/api/playlists/${id}/favorites?key=${encodeURIComponent(key)}`, { method: 'DELETE' }),
-  favoritesResolved: (id: number) => j<FavoritesResolved>(`/api/playlists/${id}/favorites/resolved`),
+    j<null>(`/playlists/${id}/favorites?key=${encodeURIComponent(key)}`, { method: 'DELETE' }),
+  favoritesResolved: (id: number) => j<FavoritesResolved>(`/playlists/${id}/favorites/resolved`),
   episodes: (id: number, seriesKey: string) =>
-    j<Channel[]>(`/api/playlists/${id}/series/${encodeURIComponent(seriesKey)}/episodes`),
-  xseries: (id: number, seriesId: number) => j<XtreamSeriesDetail>(`/api/playlists/${id}/xseries/${seriesId}`),
-  channel: (id: number) => j<Channel>(`/api/channels/${id}`),
-  guide: (id: number) => j<GuideEntry[]>(`/api/channels/${id}/guide`),
+    j<Channel[]>(`/playlists/${id}/series/${encodeURIComponent(seriesKey)}/episodes`),
+  xseries: (id: number, seriesId: number) => j<XtreamSeriesDetail>(`/playlists/${id}/xseries/${seriesId}`),
+  channel: (id: number) => j<Channel>(`/channels/${id}`),
+  guide: (id: number) => j<GuideEntry[]>(`/channels/${id}/guide`),
   catchupUrl: (id: number, start: number, end: number) =>
-    j<{ url: string | null }>(`/api/channels/${id}/catchup-url?start=${start}&end=${end}`),
-  vodInfo: (id: number) => j<Metadata>(`/api/channels/${id}/vod-info`),
+    j<{ url: string | null }>(`/channels/${id}/catchup-url?start=${start}&end=${end}`),
+  vodInfo: (id: number) => j<Metadata>(`/channels/${id}/vod-info`),
   meta: (type: 'movie' | 'series', title: string) =>
-    j<Metadata>(`/api/meta?type=${type}&title=${encodeURIComponent(title)}`),
+    j<Metadata>(`/meta?type=${type}&title=${encodeURIComponent(title)}`),
   metaEpisode: (series: string, season: number, episode: number) =>
-    j<Metadata>(`/api/meta/episode?series=${encodeURIComponent(series)}&season=${season}&episode=${episode}`),
-  remuxAvailable: () => j<{ available: boolean }>('/api/remux/available'),
+    j<Metadata>(`/meta/episode?series=${encodeURIComponent(series)}&season=${season}&episode=${episode}`),
+  remuxAvailable: () => j<{ available: boolean }>('/remux/available'),
   /** Prepare an HLS session for a file; returns its VOD playlist URL and track lists. [sid]
    *  groups the provider read: alone it's this tab's, in a watch-together room it's the room's. */
   remuxStart: (u: string, audio = 0, force = false, hevc = false, sid = '') =>
     j<{ id: string; playlistUrl: string; duration: number | null; audioTracks: string[]; subtitleTracks: string[]; nativeVideoCopy: boolean; audio: number }>(
-      `/api/remux/start?u=${encodeURIComponent(u)}&audio=${audio}${force ? '&force=1' : ''}${hevc ? '&hevc=1' : ''}${sid ? `&sid=${encodeURIComponent(sid)}` : ''}`,
+      `/remux/start?u=${encodeURIComponent(u)}&audio=${audio}${force ? '&force=1' : ''}${hevc ? '&hevc=1' : ''}${sid ? `&sid=${encodeURIComponent(sid)}` : ''}`,
     ),
   /** Release a remux session (and its provider connection) when playback ends. */
-  remuxStop: (id: string) => fetch(`/api/remux/${id}`, { method: 'DELETE', keepalive: true }).catch(() => {}),
-  sessions: () => j<Session[]>('/api/sessions'),
+  remuxStop: (id: string) => apiFetch(`/remux/${id}`, { method: 'DELETE', keepalive: true }).catch(() => {}),
+  sessions: () => j<Session[]>('/sessions'),
   sessionSocketUrl: (id: string) =>
-    `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/sessions/${encodeURIComponent(id)}/ws`,
+    browserApiHttp.socketUrl(`/sessions/${encodeURIComponent(id)}/ws`),
   /** keepalive so a heartbeat still fires from the player's unmount/unload. */
   sessionHeartbeat: (body: SessionHeartbeat) =>
-    fetch('/api/sessions/heartbeat', { ...post(body), keepalive: true })
+    apiFetch('/sessions/heartbeat', { ...post(body), keepalive: true })
       .then((r) => (r.ok ? (r.json() as Promise<{ commands: SessionCommand[] }>) : { commands: [] }))
       .catch(() => ({ commands: [] as SessionCommand[] })),
-  sessionCommand: (id: string, command: SessionCommand) =>
-    j<null>(`/api/sessions/${encodeURIComponent(id)}/command`, post(command)),
+  sessionCommand: (id: string, command: SessionCommandInput) =>
+    j<null>(`/sessions/${encodeURIComponent(id)}/command`, post(command)),
   sessionEnd: (id: string) =>
-    fetch(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE', keepalive: true }).catch(() => {}),
+    apiFetch(`/sessions/${encodeURIComponent(id)}`, { method: 'DELETE', keepalive: true }).catch(() => {}),
   /** Who else is watching this content, and whether the provider is at its limit. */
   watchIntent: (selfId: string, contentKey: string, source: string | null, playlistId: number | null) =>
-    j<WatchIntent>('/api/sessions/intent', post({ selfId, contentKey, source, playlistId })),
+    j<WatchIntent>('/sessions/intent', post({ selfId, contentKey, source, playlistId })),
   /** Ask [hostId]'s viewer to admit us into a watch-together room. */
   joinRequest: (hostId: string, peerId: string, peerName: string, contentKey: string) =>
-    j<null>(`/api/sessions/${encodeURIComponent(hostId)}/join-request`, post({ peerId, peerName, contentKey })),
+    j<null>(`/sessions/${encodeURIComponent(hostId)}/join-request`, post({ peerId, peerName, contentKey })),
   /** The host's answer to a pending join request. */
   joinAnswer: (hostId: string, peerId: string, hostName: string, contentKey: string, accept: boolean) =>
-    j<null>(`/api/sessions/${encodeURIComponent(hostId)}/join-answer`, post({ peerId, hostName, contentKey, accept })),
+    j<null>(`/sessions/${encodeURIComponent(hostId)}/join-answer`, post({ peerId, hostName, contentKey, accept })),
   /** Host pushes its playback state to the room. keepalive so a final pause still lands. */
   sessionSync: (id: string, state: SyncState) =>
-    fetch(`/api/sessions/${encodeURIComponent(id)}/sync`, { ...post(state), keepalive: true }).catch(() => {}),
+    apiFetch(`/sessions/${encodeURIComponent(id)}/sync`, { ...post(state), keepalive: true }).catch(() => {}),
   /** A guest asks the room's host to let it control playback too. */
   requestControl: (id: string, peerName: string) =>
-    j<null>(`/api/sessions/${encodeURIComponent(id)}/request-control`, post({ peerName })),
+    j<null>(`/sessions/${encodeURIComponent(id)}/request-control`, post({ peerName })),
   /** Host grants or refuses a guest's control request. */
   grantControl: (hostId: string, peerId: string, grant: boolean) =>
-    j<null>(`/api/sessions/${encodeURIComponent(hostId)}/grant-control`, post({ peerId, grant })),
+    j<null>(`/sessions/${encodeURIComponent(hostId)}/grant-control`, post({ peerId, grant })),
   /** Host hands a member control (or takes it back) directly, no request needed. */
   setControl: (hostId: string, targetId: string, grant: boolean) =>
-    j<null>(`/api/sessions/${encodeURIComponent(hostId)}/set-control`, post({ targetId, grant })),
+    j<null>(`/sessions/${encodeURIComponent(hostId)}/set-control`, post({ targetId, grant })),
   /** A controller sets the room's shared audio track; every member re-requests the remux with it. */
   roomAudio: (id: string, audioIndex: number) =>
-    j<null>(`/api/sessions/${encodeURIComponent(id)}/room-audio`, post({ audioIndex })),
+    j<null>(`/sessions/${encodeURIComponent(id)}/room-audio`, post({ audioIndex })),
   /** A member reports it finished reloading after a track change; the room resumes once all have. */
   sessionReady: (id: string) =>
-    fetch(`/api/sessions/${encodeURIComponent(id)}/ready`, { method: 'POST', keepalive: true }).catch(() => {}),
+    apiFetch(`/sessions/${encodeURIComponent(id)}/ready`, { method: 'POST', keepalive: true }).catch(() => {}),
   /** Host removes a member from the room. */
   kick: (hostId: string, targetId: string) =>
-    j<null>(`/api/sessions/${encodeURIComponent(hostId)}/kick`, post({ targetId })),
+    j<null>(`/sessions/${encodeURIComponent(hostId)}/kick`, post({ targetId })),
   sessionLeave: (id: string) =>
-    fetch(`/api/sessions/${encodeURIComponent(id)}/leave`, { method: 'POST', keepalive: true }).catch(() => {}),
-  resumeAll: () => j<ResumePoint[]>('/api/resume'),
+    apiFetch(`/sessions/${encodeURIComponent(id)}/leave`, { method: 'POST', keepalive: true }).catch(() => {}),
+  resumeAll: () => j<ResumePoint[]>('/resume'),
   saveResume: (url: string, positionMs: number, durationMs: number) =>
-    j<null>('/api/resume', put({ url, positionMs, durationMs, updatedMs: Date.now() })),
-  settings: () => j<Settings>('/api/settings'),
-  saveSettings: (s: Settings) => j<null>('/api/settings', put(s)),
-  downloads: () => j<Download[]>('/api/downloads'),
-  enqueueDownload: (channelId: number) => j<{ message: string }>('/api/downloads', post({ channelId })),
-  pauseDownload: (id: number) => j<null>(`/api/downloads/${id}/pause`, { method: 'POST' }),
-  resumeDownload: (id: number) => j<null>(`/api/downloads/${id}/resume`, { method: 'POST' }),
-  retryDownload: (id: number) => j<null>(`/api/downloads/${id}/retry`, { method: 'POST' }),
-  deleteDownload: (id: number) => j<null>(`/api/downloads/${id}`, { method: 'DELETE' }),
+    j<null>('/resume', put({ url, positionMs, durationMs, updatedMs: Date.now() })),
+  settings: () => j<Settings>('/settings'),
+  saveSettings: (s: Settings) => j<null>('/settings', put(s)),
+  downloads: () => j<Download[]>('/downloads'),
+  enqueueDownload: (channelId: number) => j<{ message: string }>('/downloads', post({ channelId })),
+  pauseDownload: (id: number) => j<null>(`/downloads/${id}/pause`, { method: 'POST' }),
+  resumeDownload: (id: number) => j<null>(`/downloads/${id}/resume`, { method: 'POST' }),
+  retryDownload: (id: number) => j<null>(`/downloads/${id}/retry`, { method: 'POST' }),
+  deleteDownload: (id: number) => j<null>(`/downloads/${id}`, { method: 'DELETE' }),
 };
 
 /** Proxy every provider URL (CORS, mixed content). `u` is an opaque token, never a raw URL;
  *  `hls` requests the HLS variant of an Xtream live `.ts` source. `sid` (the player's session)
  *  lets the server count this stream against the provider's concurrent-connection cap. */
 export const streamUrl = (u: string, hls = false, sid?: string) =>
-  `/api/stream?u=${encodeURIComponent(u)}${hls ? '&hls=1' : ''}${sid ? `&sid=${encodeURIComponent(sid)}` : ''}`;
+  `${API_PREFIX}/stream?u=${encodeURIComponent(u)}${hls ? '&hls=1' : ''}${sid ? `&sid=${encodeURIComponent(sid)}` : ''}`;
 /** Audio re-encoded to AAC (video copied); live-playback fallback when the browser can't decode the codec. */
 export const transcodeUrl = (u: string, sid?: string) =>
-  `/api/transcode?u=${encodeURIComponent(u)}${sid ? `&sid=${encodeURIComponent(sid)}` : ''}`;
+  `${API_PREFIX}/transcode?u=${encodeURIComponent(u)}${sid ? `&sid=${encodeURIComponent(sid)}` : ''}`;
 /** Watch-together live: the room's shared upstream (one provider connection), keyed by the
  *  viewer's session so the server groups the whole room onto a single read. */
 export const relayUrl = (u: string, sid: string) =>
-  `/api/relay?u=${encodeURIComponent(u)}&sid=${encodeURIComponent(sid)}`;
-export const imgUrl = (u: string) => `/api/img?u=${encodeURIComponent(u)}`;
-export const downloadFileUrl = (id: number, save = false) => `/api/downloads/${id}/file${save ? '?save=1' : ''}`;
-
-export type Theme = 'light' | 'dark' | 'system';
-
-/** Local (per-browser) UI preferences; shared data lives on the server. */
-export const prefs = {
-  get gridBrowse() { return localStorage.getItem('gridBrowse') !== '0'; },
-  set gridBrowse(v: boolean) { localStorage.setItem('gridBrowse', v ? '1' : '0'); },
-  get seekSeconds() { return Number(localStorage.getItem('seekSeconds')) || 10; },
-  set seekSeconds(v: number) { localStorage.setItem('seekSeconds', String(v)); },
-  get resizeMode() { return localStorage.getItem('resizeMode') ?? 'fit'; },
-  set resizeMode(v: string) { localStorage.setItem('resizeMode', v); },
-  get volume() { const v = Number(localStorage.getItem('volume')); return isFinite(v) && v > 0 ? Math.min(1, v) : 1; },
-  set volume(v: number) { localStorage.setItem('volume', String(v)); },
-  get muted() { return localStorage.getItem('muted') === '1'; },
-  set muted(v: boolean) { localStorage.setItem('muted', v ? '1' : '0'); },
-  /** Subtitle text size multiplier (0.5 .. 2). */
-  get subScale() { const v = Number(localStorage.getItem('subScale')); return isFinite(v) && v > 0 ? Math.min(2, Math.max(0.5, v)) : 1; },
-  set subScale(v: number) { localStorage.setItem('subScale', String(v)); },
-  /** 'outline' = shadowed text; 'background' = translucent box. */
-  get subStyle() { return localStorage.getItem('subStyle') === 'background' ? 'background' : 'outline'; },
-  set subStyle(v: string) { localStorage.setItem('subStyle', v); },
-  get subBold() { return localStorage.getItem('subBold') === '1'; },
-  set subBold(v: boolean) { localStorage.setItem('subBold', v ? '1' : '0'); },
-  get theme(): Theme {
-    const t = localStorage.getItem('theme');
-    return t === 'light' || t === 'dark' ? t : 'system';
-  },
-  set theme(v: Theme) { localStorage.setItem('theme', v); },
-  /** Playlist the dock's Live/Movies/Series/Favorites/Search act on. */
-  get activePlaylist(): number | null {
-    const n = Number(localStorage.getItem('activePlaylist'));
-    return Number.isFinite(n) && n > 0 ? n : null;
-  },
-  set activePlaylist(v: number | null) {
-    if (v == null) localStorage.removeItem('activePlaylist');
-    else localStorage.setItem('activePlaylist', String(v));
-  },
-};
-
-/** data-theme drives the CSS tokens. */
-export function applyTheme(theme = prefs.theme) {
-  document.documentElement.setAttribute('data-theme', theme);
-}
+  `${API_PREFIX}/relay?u=${encodeURIComponent(u)}&sid=${encodeURIComponent(sid)}`;
+export const imgUrl = (u: string) => `${API_PREFIX}/img?u=${encodeURIComponent(u)}`;
+export const downloadFileUrl = (id: number, save = false) =>
+  `${API_PREFIX}/downloads/${id}/file${save ? '?save=1' : ''}`;

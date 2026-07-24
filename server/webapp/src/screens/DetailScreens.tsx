@@ -13,7 +13,7 @@ import { WatchProgressBar } from '../components/WatchProgress';
 import { useAsync, useDownloads, useFavorites, usePaged, useWatchProgress } from '../hooks';
 import { t } from '../i18n';
 import { episodeTag, fmtDuration, starRating } from '../lib/format';
-import { usePlayer } from '../player/PlayerProvider';
+import { usePlayer } from '../player/PlayerNavigation';
 
 const YEAR_TAG = /\b(19|20)\d{2}\b/;
 

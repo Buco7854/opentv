@@ -22,7 +22,6 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,7 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.buco7854.opentv.OpenTvApp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.buco7854.opentv.R
 import com.buco7854.opentv.ui.components.PlaylistDialog
 
@@ -42,10 +41,9 @@ fun HomeScreen(
     onOpenPlaylist: (Long) -> Unit,
     viewModel: HomeViewModel = viewModel(),
 ) {
-    val graph = OpenTvApp.graph
-    val playlists by graph.playlists.playlists.collectAsState(initial = null)
-    val settings by graph.playerPrefs.settings.collectAsState(initial = null)
-    val message by viewModel.message.collectAsState()
+    val playlists by viewModel.playlists.collectAsStateWithLifecycle(initialValue = null)
+    val settings by viewModel.settings.collectAsStateWithLifecycle(initialValue = null)
+    val message by viewModel.message.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     var showAdd by remember { mutableStateOf(false) }
 

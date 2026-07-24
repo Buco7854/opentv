@@ -30,7 +30,7 @@ class StreamProxy(
     // URIs go back as tokens so a rewritten playlist never exposes provider URLs; the stream
     // id rides along so a segment fetch counts against the same connection as its playlist.
     private fun proxied(absoluteUrl: String, sid: String?): String {
-        val base = "/api/stream?u=${java.net.URLEncoder.encode(cipher.encrypt(absoluteUrl), Charsets.UTF_8)}"
+        val base = "/api/v1/stream?u=${java.net.URLEncoder.encode(cipher.encrypt(absoluteUrl), Charsets.UTF_8)}"
         return if (sid == null) base else "$base&sid=${java.net.URLEncoder.encode(sid, Charsets.UTF_8)}"
     }
 
@@ -70,7 +70,7 @@ class StreamProxy(
             null
         }
         if (uri == null || uri.scheme !in listOf("http", "https")) {
-            call.respond(HttpStatusCode.BadRequest, MessageDto("Invalid or missing target url"))
+            call.respond(HttpStatusCode.BadRequest, ApiErrorDto("invalid_target", "Invalid or missing target url"))
             return
         }
 
@@ -79,7 +79,10 @@ class StreamProxy(
         if (!cache && sid != null) {
             val streamUrl = uri.toString()
             if (!gate.admit(sid, providerKeyOf(streamUrl), connectionLimit(streamUrl))) {
-                call.respond(HttpStatusCode.TooManyRequests, MessageDto("Provider connection limit reached"))
+                call.respond(
+                    HttpStatusCode.TooManyRequests,
+                    ApiErrorDto("provider_capacity", "Provider connection limit reached"),
+                )
                 return
             }
         }
@@ -94,7 +97,10 @@ class StreamProxy(
                 http.client.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream())
             }
         } catch (e: Exception) {
-            call.respond(HttpStatusCode.BadGateway, MessageDto("Upstream request failed: ${e.message}"))
+            call.respond(
+                HttpStatusCode.BadGateway,
+                ApiErrorDto("upstream_failure", "Upstream request failed: ${e.message}"),
+            )
             return
         }
 
@@ -104,7 +110,10 @@ class StreamProxy(
 
         if (upstream.statusCode() !in 200..299) {
             upstream.body().close()
-            call.respond(HttpStatusCode.BadGateway, MessageDto("Upstream returned HTTP ${upstream.statusCode()}"))
+            call.respond(
+                HttpStatusCode.BadGateway,
+                ApiErrorDto("upstream_failure", "Upstream returned HTTP ${upstream.statusCode()}"),
+            )
             return
         }
 

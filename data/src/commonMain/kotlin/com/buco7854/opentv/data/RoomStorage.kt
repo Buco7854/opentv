@@ -29,6 +29,8 @@ import kotlinx.coroutines.flow.map
 /** Room implementation of the core storage ports. */
 class RoomStorage(private val db: OpenTvDatabase) : Storage {
 
+    override fun close() = db.close()
+
     override val playlists = object : PlaylistStore {
         override fun observeAll(): Flow<List<Playlist>> =
             db.playlistDao().observeAll().map { rows -> rows.map { it.toModel() } }
@@ -220,8 +222,24 @@ class RoomStorage(private val db: OpenTvDatabase) : Storage {
         override suspend fun insert(download: Download): Long = db.downloadDao().insert(download.toRow())
         override suspend fun update(download: Download) = db.downloadDao().update(download.toRow())
 
-        override suspend fun updateProgress(id: Long, downloaded: Long, total: Long, status: Int) =
-            db.downloadDao().updateProgress(id, downloaded, total, status)
+        override suspend fun updateProgressIfStatus(
+            id: Long,
+            downloaded: Long,
+            total: Long,
+            expectedStatuses: List<Int>,
+            status: Int,
+        ): Boolean = db.downloadDao().updateProgressIfStatus(
+            id, downloaded, total, expectedStatuses, status
+        ) > 0
+
+        override suspend fun updateStatusIfStatus(
+            id: Long,
+            expectedStatuses: List<Int>,
+            status: Int,
+            error: String?,
+        ): Boolean = db.downloadDao().updateStatusIfStatus(
+            id, expectedStatuses, status, error
+        ) > 0
 
         override suspend fun delete(id: Long) = db.downloadDao().delete(id)
     }

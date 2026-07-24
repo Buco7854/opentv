@@ -20,7 +20,9 @@ fun providerKeyOf(url: String): String =
  * A download only takes a free slot and never evicts. Evictions run outside the lock so an
  * evicted holder can take its own locks without deadlocking.
  */
-class ProviderConnections {
+class ProviderConnections(
+    private val clock: ServerClock = ServerClock.SYSTEM,
+) {
 
     enum class Kind { STREAM, DOWNLOAD }
 
@@ -57,7 +59,7 @@ class ProviderConnections {
             val lru = current.filter { it.kind == Kind.DOWNLOAD }.minByOrNull { it.lastMs } ?: break
             holders.remove(lru.id); victims.add(lru)
         }
-        holders[id] = Holder(id, key, shareKey, kind, System.currentTimeMillis(), evict)
+        holders[id] = Holder(id, key, shareKey, kind, clock.nowMs(), evict)
         return victims
     }
 
@@ -93,7 +95,7 @@ class ProviderConnections {
         synchronized(lock) {
             val distinct = holders.values.filter { it.key == key }.map { it.shareKey }.distinct()
             if (shareKey in distinct || distinct.size < limit.coerceAtLeast(1)) {
-                holders[id] = Holder(id, key, shareKey, Kind.DOWNLOAD, System.currentTimeMillis(), evict)
+                holders[id] = Holder(id, key, shareKey, Kind.DOWNLOAD, clock.nowMs(), evict)
                 true
             } else false
         }
@@ -105,7 +107,7 @@ class ProviderConnections {
     }
 
     /** Keep a live connection from looking idle to the LRU eviction / stream reaper. */
-    fun touch(id: String) { holders[id]?.lastMs = System.currentTimeMillis() }
+    fun touch(id: String) { holders[id]?.lastMs = clock.nowMs() }
 
     /** True while [id] holds a live slot (used to tell an active stream from a prepared-but-idle one). */
     fun isOpen(id: String): Boolean = holders.containsKey(id)
@@ -114,5 +116,13 @@ class ProviderConnections {
     fun close(id: String) {
         val freed = synchronized(lock) { holders.remove(id) != null }
         if (freed) onFreed.forEach { runCatching { it() } }
+    }
+
+    /** Release all reservations and ask their owners to stop. */
+    fun closeAll() {
+        val closing = synchronized(lock) {
+            holders.values.toList().also { holders.clear() }
+        }
+        closing.forEach { runCatching { it.evict() } }
     }
 }

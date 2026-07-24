@@ -24,6 +24,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -40,21 +41,22 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.buco7854.opentv.OpenTvApp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.buco7854.opentv.R
 import com.buco7854.opentv.data.net.Http
 import com.buco7854.opentv.data.prefs.PlayerSettings
@@ -62,7 +64,6 @@ import com.buco7854.opentv.download.DownloadStorage
 import com.buco7854.opentv.ui.components.OtvMenuDefaults
 import com.buco7854.opentv.ui.components.OtvTextButton
 import com.buco7854.opentv.ui.components.SubtitleStyleControls
-import kotlinx.coroutines.launch
 import java.util.Locale
 
 private val LANGUAGE_CODES =
@@ -71,17 +72,37 @@ private val LANGUAGE_CODES =
 @Composable
 private fun languageLabel(code: String): String =
     if (code.isEmpty()) stringResource(R.string.settings_auto)
-    else Locale(code).getDisplayLanguage(Locale.getDefault()).replaceFirstChar { it.uppercase() }
+    else Locale.forLanguageTag(code)
+        .getDisplayLanguage(LocalConfiguration.current.locales[0])
+        .replaceFirstChar { it.uppercase() }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(onBack: () -> Unit) {
-    val prefs = OpenTvApp.graph.playerPrefs
-    val settings by prefs.settings.collectAsState(initial = null)
-    val scope = rememberCoroutineScope()
+fun SettingsScreen(
+    onBack: () -> Unit,
+    viewModel: SettingsViewModel = viewModel(),
+) {
+    val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val moveDownloads by viewModel.moveDownloads.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val current = settings ?: return
-    val update: (PlayerSettings) -> Unit = { scope.launch { prefs.save(it) } }
+    val resources = LocalResources.current
+    val update: (PlayerSettings) -> Unit = viewModel::save
+
+    LaunchedEffect(current.downloadDirUri) {
+        viewModel.refreshMoveCount()
+    }
+    LaunchedEffect(moveDownloads.result) {
+        val result = moveDownloads.result ?: return@LaunchedEffect
+        snackbar.showSnackbar(
+            if (result.failed > 0) {
+                resources.getString(R.string.settings_move_result_failed, result.moved, result.failed)
+            } else {
+                resources.getString(R.string.settings_move_result, result.moved)
+            },
+        )
+        viewModel.consumeMoveResult()
+    }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
@@ -188,7 +209,10 @@ fun SettingsScreen(onBack: () -> Unit) {
                 SettingDivider()
                 DownloadLocationSetting(current = current, update = update)
                 SettingDivider()
-                MoveDownloadsSetting(snackbar = snackbar)
+                MoveDownloadsSetting(
+                    state = moveDownloads,
+                    onMove = viewModel::moveDownloads,
+                )
             }
 
             SectionCard(stringResource(R.string.settings_network)) {
@@ -319,29 +343,28 @@ private fun DownloadLocationSetting(current: PlayerSettings, update: (PlayerSett
 }
 
 @Composable
-private fun MoveDownloadsSetting(snackbar: SnackbarHostState) {
-    val scope = rememberCoroutineScope()
-    val context = LocalContext.current
-    val downloads = OpenTvApp.graph.downloads
-    var pending by remember { mutableStateOf(0) }
-    var moving by remember { mutableStateOf(false) }
-    // Recount when the screen (re)composes, e.g. after changing the folder.
-    LaunchedEffect(Unit) { pending = downloads.completedElsewhereCount() }
-
+private fun MoveDownloadsSetting(
+    state: MoveDownloadsState,
+    onMove: () -> Unit,
+) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f).padding(end = 12.dp)) {
             Text(stringResource(R.string.settings_move_downloads), style = MaterialTheme.typography.titleSmall)
             Text(
                 when {
-                    moving -> stringResource(R.string.settings_moving_files)
-                    pending == 0 -> stringResource(R.string.settings_all_in_folder)
-                    else -> pluralStringResource(R.plurals.settings_files_elsewhere, pending, pending)
+                    state.moving -> stringResource(R.string.settings_moving_files)
+                    state.pending == 0 -> stringResource(R.string.settings_all_in_folder)
+                    else -> pluralStringResource(
+                        R.plurals.settings_files_elsewhere,
+                        state.pending,
+                        state.pending,
+                    )
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (moving) {
+        if (state.moving) {
             CircularProgressIndicator(
                 Modifier.size(22.dp),
                 strokeWidth = 2.5.dp,
@@ -349,22 +372,8 @@ private fun MoveDownloadsSetting(snackbar: SnackbarHostState) {
             )
         } else {
             OtvTextButton(
-                enabled = pending > 0,
-                onClick = {
-                    scope.launch {
-                        moving = true
-                        val r = downloads.moveCompletedToCurrentFolder()
-                        pending = downloads.completedElsewhereCount()
-                        moving = false
-                        snackbar.showSnackbar(
-                            if (r.failed > 0) {
-                                context.getString(R.string.settings_move_result_failed, r.moved, r.failed)
-                            } else {
-                                context.getString(R.string.settings_move_result, r.moved)
-                            }
-                        )
-                    }
-                },
+                enabled = state.pending > 0,
+                onClick = onMove,
             ) { Text(stringResource(R.string.settings_move)) }
         }
     }
@@ -425,7 +434,9 @@ private fun LanguagePicker(label: String, value: String, onSelect: (String) -> U
             readOnly = true,
             label = { Text(label) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier.menuAnchor().fillMaxWidth(),
+            modifier = Modifier
+                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                .fillMaxWidth(),
         )
         ExposedDropdownMenu(
             expanded = expanded,

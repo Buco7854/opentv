@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
-  api, canShowGuide, Channel, ChannelKind, GroupCount, hasCatchup, prefs,
+  api, canShowGuide, Channel, ChannelKind, GroupCount, hasCatchup,
   Programme, SeriesGroup, XtreamSeries,
 } from '../api';
 import { mediaTags } from '../components/Badges';
@@ -21,7 +21,8 @@ import { PosterGrid } from '../components/PosterGrid';
 import { useAsync, useDownloads, useFavorites, useGuideIds, usePaged } from '../hooks';
 import { t } from '../i18n';
 import { starRating } from '../lib/format';
-import { usePlayer } from '../player/PlayerProvider';
+import { prefs } from '../preferences';
+import { usePlayer } from '../player/PlayerNavigation';
 
 export function BrowseScreen() {
   const playlistId = Number(useParams().playlistId);

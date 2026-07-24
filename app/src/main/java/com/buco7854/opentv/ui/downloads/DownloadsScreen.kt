@@ -31,7 +31,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,6 +38,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.buco7854.opentv.OpenTvApp
@@ -79,7 +79,7 @@ fun DownloadsScreen(
     onPlay: (url: String, title: String) -> Unit,
     viewModel: DownloadsViewModel = viewModel(),
 ) {
-    val downloads by viewModel.downloads.collectAsState()
+    val downloads by viewModel.downloads.collectAsStateWithLifecycle()
 
     Scaffold(
         topBar = {

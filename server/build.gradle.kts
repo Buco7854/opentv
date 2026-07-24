@@ -25,6 +25,7 @@ kotlin {
 val buildWebapp = tasks.register<Exec>("buildWebapp") {
     workingDir = file("webapp")
     commandLine("npm", "run", "ci-build")
+    environment("npm_config_cache", layout.buildDirectory.dir("npm-cache").get().asFile.absolutePath)
     inputs.dir(file("webapp/src"))
     inputs.files(file("webapp/package.json"), file("webapp/package-lock.json"), file("webapp/index.html"))
     outputs.dir(file("src/main/resources/web"))
@@ -48,4 +49,6 @@ dependencies {
     implementation(libs.ktor.server.websockets)
     implementation(libs.logback.classic)
     testImplementation(libs.kotlin.test)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.ktor.server.test.host)
 }

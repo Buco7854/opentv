@@ -5,17 +5,22 @@
 import Hls from 'hls.js';
 import mpegts from 'mpegts.js';
 import {
-  createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState,
+  ReactNode, useCallback, useEffect, useMemo, useRef, useState,
 } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { api, ApiError, Channel, GuideEntry, prefs, relayUrl, ResumePoint, SessionCommand, streamUrl, transcodeUrl } from '../api';
+import {
+  api, ApiError, Channel, GuideEntry, relayUrl, ResumePoint,
+  SessionCommandInput, streamUrl, transcodeUrl,
+} from '../api';
 import { GuideSheet } from '../components/GuideSheet';
 import { Icon } from '../components/Icons';
-import { IconBtn, Segmented, Sheet, snackbar } from '../components/Primitives';
+import { IconBtn, snackbar } from '../components/Primitives';
 import { tabSessionId, useSessionReporter } from './useSessionReporter';
 import { useWatchTogether, WatchTogetherSheet } from './WatchTogether';
 import { deviceLabel } from '../lib/format';
 import { t } from '../i18n';
+import { prefs } from '../preferences';
+import { MenuSheet, SubtitleStyleSheet } from './PlaybackSheets';
+import { formatPlaybackTime, streamKind, supportsHevc } from './playbackPolicy';
 
 export interface PlayRequest {
   url: string;
@@ -33,20 +38,8 @@ export interface PlayRequest {
   logo?: string | null;
 }
 
-/** Player is a route (`/watch/...`); helpers navigate by id to keep tokens/urls out of the URL bar. */
-export interface PlayerNav {
-  playChannel: (channelId: number) => void;
-  playCatchup: (channelId: number, startMs: number, endMs: number) => void;
-  playDownload: (downloadId: number) => void;
-}
-
-const PlayerContext = createContext<PlayerNav>({
-  playChannel: () => {}, playCatchup: () => {}, playDownload: () => {},
-});
-export const usePlayer = () => useContext(PlayerContext);
-
-export function PlayerProvider({ children }: { children: ReactNode }) {
-  const navigate = useNavigate();
+/** Isolates a known mpegts.js teardown race while the player feature is mounted. */
+export function PlaybackErrorBoundary({ children }: { children: ReactNode }) {
   // Swallow the benign mpegts.js teardown race: destroying a player mid-stream
   // lets queued demux callbacks emit on a now-null emitter (TypeError naming null+emit).
   useEffect(() => {
@@ -59,105 +52,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     window.addEventListener('unhandledrejection', swallow);
     return () => window.removeEventListener('unhandledrejection', swallow);
   }, []);
-  const nav = useMemo<PlayerNav>(() => ({
-    playChannel: (id) => navigate(`/watch/${id}`),
-    playCatchup: (id, startMs, endMs) => navigate(`/watch/catchup/${id}/${startMs}/${endMs}`),
-    playDownload: (id) => navigate(`/watch/download/${id}`),
-  }), [navigate]);
-  return <PlayerContext.Provider value={nav}>{children}</PlayerContext.Provider>;
-}
-
-/** Engine hint. Provider tokens carry a leading format tag (h/l/t/d); the server's own
- *  URLs (remux output, downloads) aren't tokens and fall back to extension sniffing. */
-function streamKind(u: string): 'hls' | 'livets' | 'ts' | 'direct' {
-  const tag = /^([hltd])\./.exec(u)?.[1];
-  if (tag) return ({ h: 'hls', l: 'livets', t: 'ts', d: 'direct' } as const)[tag as 'h' | 'l' | 't' | 'd'];
-  const path = u.split('?')[0].toLowerCase();
-  if (path.endsWith('.m3u8') || path.endsWith('.m3u')) return 'hls';
-  if (path.endsWith('.ts')) return /\/live\//.test(path) ? 'livets' : 'ts';
-  return 'direct';
+  return <>{children}</>;
 }
 
 // Browser can decode HEVC in fMP4 via MediaSource -> server copies instead of
 // transcoding to H.264. Probed once.
-const hevcCapable = typeof MediaSource !== 'undefined'
-  && ['hvc1.1.6.L120.90', 'hvc1.1.6.L93.90', 'hev1.1.6.L93.90']
-    .some((c) => MediaSource.isTypeSupported(`video/mp4; codecs="${c}"`));
-
-const fmtClock = (s: number) => {
-  if (!isFinite(s)) return '–:––';
-  s = Math.max(0, Math.floor(s));
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-  return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
-};
-
-function MenuSheet({ title, options, selected, onPick, onDismiss, container, emptyText, headerAction }: {
-  title: string;
-  options: string[];
-  selected: number;
-  onPick: (index: number) => void;
-  onDismiss: () => void;
-  container?: Element | null;
-  emptyText?: string;
-  headerAction?: ReactNode;
-}) {
-  return (
-    <Sheet onDismiss={onDismiss} container={container}
-           header={<><h3 className="sheet-title">{title}</h3>{headerAction}</>}>
-      {options.length === 0 && (
-        <p className="py-3 type-body-medium text-on-surface-variant">
-          {emptyText ?? t('player.noTracks')}
-        </p>
-      )}
-      {options.map((label, i) => (
-        <button key={label + i} className={`menu-option${i === selected ? ' selected' : ''}`}
-                onClick={() => { onDismiss(); onPick(i); }}>
-          <span className="min-w-0 flex-1 truncate">{label}</span>
-          {i === selected && <Icon name="check" className="ml-2 size-5 shrink-0" />}
-        </button>
-      ))}
-    </Sheet>
-  );
-}
-
-type SubStyle = { scale: number; style: string; bold: boolean };
-
-/** Subtitle appearance controls: preview, size, outline/background, bold. */
-function SubtitleStyleSheet({ value, onChange, onDismiss, container }: {
-  value: SubStyle;
-  onChange: (next: SubStyle) => void;
-  onDismiss: () => void;
-  container?: Element | null;
-}) {
-  return (
-    <Sheet onDismiss={onDismiss} container={container}
-           header={<h3 className="sheet-title">{t('player.subtitleStyle')}</h3>}>
-      <div className="sub-preview">
-        <span className={`cue cue-${value.style}${value.bold ? ' bold' : ''}`}
-              style={{ fontSize: `${value.scale * 22}px` }}>
-          <span className="cue-line">{t('player.subtitlePreview')}</span>
-        </span>
-      </div>
-
-      <div className="sub-row-label">{t('player.subtitleSize', { pct: Math.round(value.scale * 100) })}</div>
-      <input className="seek sub-slider" type="range" min={50} max={200} step={10}
-             value={Math.round(value.scale * 100)}
-             onChange={(e) => onChange({ ...value, scale: Number(e.target.value) / 100 })} />
-
-      <div className="sub-row-label">{t('player.subtitleStyle')}</div>
-      <Segmented
-        options={[['outline', t('player.subtitleOutline')], ['background', t('player.subtitleBackground')]]}
-        selected={value.style}
-        onSelect={(v) => onChange({ ...value, style: String(v) })} />
-
-      <div className="sub-row-label">{t('player.subtitleBold')}</div>
-      <Segmented
-        options={[['off', t('player.off')], ['on', t('player.on')]]}
-        selected={value.bold ? 'on' : 'off'}
-        onSelect={(v) => onChange({ ...value, bold: v === 'on' })} />
-    </Sheet>
-  );
-}
+const hevcCapable = supportsHevc(typeof MediaSource === 'undefined' ? undefined : MediaSource);
 
 type TrackKind = { audio: { names: string[]; current: number }; subs: { names: string[]; current: number } };
 
@@ -253,7 +153,7 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
   const deviceName = useMemo(() => deviceLabel(navigator.userAgent) || t('watch.someone'), []);
   // Filled by useSessionReporter with a sender over its live socket, so watch-together sync
   // rides that socket in real time (with a POST fallback) instead of a request per event.
-  const wsSend = useRef<((command: SessionCommand) => boolean) | null>(null);
+  const wsSend = useRef<((command: SessionCommandInput) => boolean) | null>(null);
   const wt = useWatchTogether({
     selfId: tabSessionId(),
     deviceName,
@@ -1133,7 +1033,7 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
             {showSeek && (
               <div className="seek-row">
                 <span className="time-label">
-                  {fmtClock(scrub != null && isFinite(fullDuration)
+                  {formatPlaybackTime(scrub != null && isFinite(fullDuration)
                     ? (scrub / 1000) * fullDuration
                     : barPosition)}
                 </span>
@@ -1152,7 +1052,7 @@ export function PlayerSurface({ request, onClose, onPlayCatchup }: {
                     setScrub(null);
                   }}
                 />
-                <span className="time-label">{fmtClock(fullDuration)}</span>
+                <span className="time-label">{formatPlaybackTime(fullDuration)}</span>
               </div>
             )}
             <div className="controls">

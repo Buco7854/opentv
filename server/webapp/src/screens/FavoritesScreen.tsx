@@ -12,7 +12,7 @@ import { MediaListRow } from '../components/MediaListRow';
 import { ConfirmDialog, IconBtn, Pager, Spinner, ScreenHeader, snackbar } from '../components/Primitives';
 import { useAsync, useDownloads, useGuideIds, usePaged } from '../hooks';
 import { t } from '../i18n';
-import { usePlayer } from '../player/PlayerProvider';
+import { usePlayer } from '../player/PlayerNavigation';
 
 /** Stable selection key for any favorite. */
 const favKey = (kind: 'live' | 'movie' | 'series', id: string) => `${kind}:${id}`;

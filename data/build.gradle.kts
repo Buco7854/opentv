@@ -36,3 +36,7 @@ dependencies {
     add("kspAndroid", libs.room.compiler)
     add("kspJvm", libs.room.compiler)
 }
+
+ksp {
+    arg("room.schemaLocation", project.layout.projectDirectory.dir("schemas").asFile.absolutePath)
+}

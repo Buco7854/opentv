@@ -50,8 +50,8 @@ jobs:
       - name: Set up Gradle (with caching)
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Run shared-module tests and build the server
-        run: ./gradlew :core:jvmTest :data:compileKotlinJvm :server:installDist
+      - name: Run shared/server tests and build the server
+        run: ./gradlew :core:jvmTest :data:compileKotlinJvm :server:test :server:installDist
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'

@@ -1,6 +1,7 @@
 package com.buco7854.opentv.server
 
 import com.buco7854.opentv.core.model.Channel
+import com.buco7854.opentv.core.download.DownloadFileName
 import com.buco7854.opentv.core.model.Download
 import com.buco7854.opentv.core.model.DownloadStatus
 import com.buco7854.opentv.core.storage.Storage
@@ -10,6 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -44,6 +46,12 @@ class DownloadManager(
     private val jobs = ConcurrentHashMap<Long, Job>()
     private val pumpMutex = Mutex()
 
+    /** Cancel every owned transfer; safe to call more than once during server shutdown. */
+    fun close() {
+        scope.cancel()
+        jobs.clear()
+    }
+
     /** Re-queue transfers interrupted by a restart and resume the queue. */
     fun start() {
         // A freed provider slot (a stream ending, or another download finishing) may let a
@@ -58,14 +66,15 @@ class DownloadManager(
     }
 
     private fun targetPath(channel: Channel, downloadId: Long): String {
-        // Extension from the last path segment only, so "host/vod/123" yields no slashes.
-        val lastSegment = channel.url.substringBefore('?').substringBefore('#').substringAfterLast('/')
-        val extension = lastSegment.substringAfterLast('.', "")
-            .filter { it.isLetterOrDigit() }.take(5).ifEmpty { "mp4" }
-        val safeName = channel.name.map { if (it.isLetterOrDigit() || it in " ._-()[]") it else '_' }
-            .joinToString("").trim().take(120).ifEmpty { "video" }
-        // Row id keeps identically-named VODs in separate files.
-        return dir.resolve("$safeName-$downloadId.$extension").toString()
+        return dir.resolve(DownloadFileName.from(channel.name, channel.url, downloadId).fileName).toString()
+    }
+
+    /** Only paths created below this server's download root may be served or deleted. */
+    private fun safePath(raw: String): Path? {
+        if (raw.isBlank()) return null
+        val root = dir.toAbsolutePath().normalize()
+        val path = runCatching { Path.of(raw).toAbsolutePath().normalize() }.getOrNull() ?: return null
+        return path.takeIf { it.startsWith(root) }
     }
 
     /**
@@ -123,7 +132,7 @@ class DownloadManager(
     suspend fun delete(id: Long) {
         jobs.remove(id)?.cancel()
         storage.downloads.get(id)?.let { item ->
-            if (item.filePath.isNotEmpty()) runCatching { Files.deleteIfExists(Path.of(item.filePath)) }
+            safePath(item.filePath)?.let { path -> runCatching { Files.deleteIfExists(path) } }
         }
         storage.downloads.delete(id)
     }
@@ -131,8 +140,8 @@ class DownloadManager(
     /** The finished file for serving/playback, or null when not ready. */
     suspend fun fileFor(id: Long): Pair<Download, Path>? {
         val item = storage.downloads.get(id) ?: return null
-        if (item.status != DownloadStatus.DONE || item.filePath.isEmpty()) return null
-        val path = Path.of(item.filePath)
+        if (item.status != DownloadStatus.DONE) return null
+        val path = safePath(item.filePath) ?: return null
         return if (Files.exists(path)) item to path else null
     }
 
@@ -239,7 +248,14 @@ class DownloadManager(
         } else contentLength ?: 0
 
         var downloaded = from
-        storage.downloads.updateProgress(id, downloaded, total, DownloadStatus.RUNNING)
+        if (!storage.downloads.updateProgressIfStatus(
+                id,
+                downloaded,
+                total,
+                listOf(DownloadStatus.QUEUED, DownloadStatus.RUNNING),
+                DownloadStatus.RUNNING,
+            )
+        ) throw CancellationException("Download is no longer running")
         response.body().use { input ->
             FileOutputStream(target.toFile(), resumed).use { out ->
                 val buffer = ByteArray(256 * 1024)
@@ -254,11 +270,25 @@ class DownloadManager(
                     if (now - lastWrite > 500) {
                         lastWrite = now
                         connections.touch("dl:$id")
-                        storage.downloads.updateProgress(id, downloaded, total, DownloadStatus.RUNNING)
+                        if (!storage.downloads.updateProgressIfStatus(
+                                id,
+                                downloaded,
+                                total,
+                                listOf(DownloadStatus.RUNNING),
+                                DownloadStatus.RUNNING,
+                            )
+                        ) throw CancellationException("Download is no longer running")
                     }
                 }
             }
         }
-        storage.downloads.updateProgress(id, downloaded, if (total > 0) total else downloaded, DownloadStatus.DONE)
+        if (!storage.downloads.updateProgressIfStatus(
+                id,
+                downloaded,
+                if (total > 0) total else downloaded,
+                listOf(DownloadStatus.RUNNING),
+                DownloadStatus.DONE,
+            )
+        ) throw CancellationException("Download is no longer running")
     }
 }
