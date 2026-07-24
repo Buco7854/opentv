@@ -12,7 +12,7 @@ import kotlin.test.assertTrue
 
 class WebAuthnServiceTest {
     @Test
-    fun registrationPinsServerPropertiesAndConsumesMalformedResponsesOnce() = runTest {
+    fun registrationPinsServerPropertiesAndRateLimitsMalformedResponses() = runTest {
         val dir = Files.createTempDirectory("opentv-webauthn-test")
         val db = createServerUserDatabase(dir.resolve("server-users.db").toString())
         try {
@@ -49,7 +49,12 @@ class WebAuthnServiceTest {
             assertFailsWith<InvalidCredentialsException> {
                 webAuthn.completeRegistration(invalid, "127.0.0.1")
             }
-            assertFailsWith<InvalidChallengeException> {
+            repeat(4) {
+                assertFailsWith<InvalidCredentialsException> {
+                    webAuthn.completeRegistration(invalid, "127.0.0.1")
+                }
+            }
+            assertFailsWith<AuthRateLimitedException> {
                 webAuthn.completeRegistration(invalid, "127.0.0.1")
             }
         } finally {

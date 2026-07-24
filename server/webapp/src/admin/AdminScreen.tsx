@@ -274,6 +274,20 @@ function UserDialog({ user, playlists, onDismiss, onChanged, onDeleted }: {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [resetToken, setResetToken] = useState<string | null>(null);
 
+  // Administrative operations can change status, effective role, and grants
+  // while the dialog remains open. Replace the form snapshot with the
+  // authoritative response so a later save cannot restore stale values.
+  useEffect(() => {
+    setUsername(user.username);
+    setDisplayName(user.displayName);
+    setRole(user.manualRole);
+    setStatus(user.status);
+    setGrants(user.playlistIds);
+  }, [
+    user.id, user.username, user.displayName, user.manualRole,
+    user.status, user.playlistIds,
+  ]);
+
   useEffect(() => {
     if (section === 'sessions' && sessions === null) {
       adminApi.sessions(user.id).then(setSessions).catch((error) => snackbar(errorMessage(error)));

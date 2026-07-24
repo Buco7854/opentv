@@ -27,6 +27,7 @@ class PlaybackMediaGrants(
 
     private val grants = ConcurrentHashMap<String, Grant>()
     private val resources = ConcurrentHashMap<String, MutableSet<String>>()
+    private val resourceLock = Any()
 
     fun issue(actor: Actor, leaseId: String): IssuedMediaGrant {
         sessions.owned(actor, leaseId)
@@ -59,7 +60,9 @@ class PlaybackMediaGrants(
 
     fun bindResource(actor: Actor, leaseId: String, resourceId: String) {
         sessions.owned(actor, leaseId)
-        resources.computeIfAbsent(resourceId) { ConcurrentHashMap.newKeySet() }.add(leaseId)
+        synchronized(resourceLock) {
+            resources.computeIfAbsent(resourceId) { ConcurrentHashMap.newKeySet() }.add(leaseId)
+        }
     }
 
     fun validateResource(actor: Actor, leaseId: String?, rawGrant: String?, resourceId: String) {
@@ -79,30 +82,36 @@ class PlaybackMediaGrants(
         resourceId: String,
     ): Boolean {
         validateResource(actor, leaseId, rawGrant, resourceId)
-        var finalAttachment = false
-        resources.computeIfPresent(resourceId) { _, leases ->
-            leases.remove(requireNotNull(leaseId))
-            if (leases.isEmpty()) {
-                finalAttachment = true
-                null
-            } else {
-                leases
+        return synchronized(resourceLock) {
+            var finalAttachment = false
+            resources.computeIfPresent(resourceId) { _, leases ->
+                leases.remove(requireNotNull(leaseId))
+                if (leases.isEmpty()) {
+                    finalAttachment = true
+                    null
+                } else {
+                    leases
+                }
             }
+            finalAttachment
         }
-        return finalAttachment
     }
 
     fun hasAttachments(resourceId: String): Boolean = resources[resourceId]?.isNotEmpty() == true
 
-    fun revokeLease(leaseId: String) {
+    fun revokeLease(leaseId: String): Set<String> {
         grants.entries.removeIf { it.value.leaseId == leaseId }
-        detachResources(leaseId)
+        return detachResources(leaseId)
     }
 
-    fun detachResources(leaseId: String) {
-        resources.entries.removeIf { (_, leases) ->
-            leases.remove(leaseId)
-            leases.isEmpty()
+    fun detachResources(leaseId: String): Set<String> {
+        return synchronized(resourceLock) {
+            val finalResources = mutableSetOf<String>()
+            resources.entries.removeIf { (resourceId, leases) ->
+                leases.remove(leaseId)
+                leases.isEmpty().also { empty -> if (empty) finalResources += resourceId }
+            }
+            finalResources
         }
     }
 

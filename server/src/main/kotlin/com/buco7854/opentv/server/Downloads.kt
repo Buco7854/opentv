@@ -45,6 +45,7 @@ class DownloadManager(
     private val dir = dataDir.resolve("user-downloads")
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val jobs = ConcurrentHashMap<String, Job>()
+    private val blobLocks = ConcurrentHashMap<String, Mutex>()
     private val pumpMutex = Mutex()
 
     fun close() {
@@ -87,12 +88,17 @@ class DownloadManager(
             )
             db.downloads().upsertBlob(blob)
         }
-        val existing = db.downloads().forUser(userId).firstOrNull { it.blobId == blob.id }
-        val association = existing?.copy(active = true, suspended = false, updatedAtMs = now)
-            ?: UserDownloadRow(UUID.randomUUID().toString(), userId, blob.id, true, false, now, now)
-        db.downloads().upsertUserDownload(association)
-        if (blob.status == DownloadBlobStatus.PAUSED || blob.status == DownloadBlobStatus.FAILED) {
-            db.downloads().upsertBlob(blob.copy(status = DownloadBlobStatus.QUEUED, error = null, updatedAtMs = now))
+        val (association, existing) = withBlobLock(blob.id) {
+            val prior = db.downloads().forUser(userId).firstOrNull { it.blobId == blob.id }
+            val linked = prior?.copy(active = true, suspended = false, updatedAtMs = now)
+                ?: UserDownloadRow(UUID.randomUUID().toString(), userId, blob.id, true, false, now, now)
+            db.downloads().upsertUserDownload(linked)
+            if (blob.status == DownloadBlobStatus.PAUSED || blob.status == DownloadBlobStatus.FAILED) {
+                db.downloads().upsertBlob(
+                    blob.copy(status = DownloadBlobStatus.QUEUED, error = null, updatedAtMs = now)
+                )
+            }
+            linked to prior
         }
         val waiting = channel.url.startsWith("http") &&
             !connections.downloadFits(providerKeyOf(channel.url), connectionLimit(channel.url))
@@ -128,39 +134,50 @@ class DownloadManager(
     }
 
     suspend fun pause(userId: String, userDownloadId: String) {
-        val row = owned(userId, userDownloadId)
-        db.downloads().upsertUserDownload(row.copy(active = false, updatedAtMs = clock()))
-        if (db.downloads().activeReferenceCount(row.blobId) == 0) {
-            db.downloads().blob(row.blobId)?.let {
-                if (it.status == DownloadBlobStatus.QUEUED || it.status == DownloadBlobStatus.RUNNING) {
-                    db.downloads().upsertBlob(it.copy(status = DownloadBlobStatus.PAUSED, updatedAtMs = clock()))
-                    jobs.remove(it.id)?.cancel()
+        val blobId = owned(userId, userDownloadId).blobId
+        withBlobLock(blobId) {
+            val row = owned(userId, userDownloadId)
+            db.downloads().upsertUserDownload(row.copy(active = false, updatedAtMs = clock()))
+            if (db.downloads().activeReferenceCount(row.blobId) == 0) {
+                db.downloads().blob(row.blobId)?.let {
+                    if (it.status == DownloadBlobStatus.QUEUED || it.status == DownloadBlobStatus.RUNNING) {
+                        db.downloads().upsertBlob(it.copy(status = DownloadBlobStatus.PAUSED, updatedAtMs = clock()))
+                        jobs.remove(it.id)?.cancel()
+                    }
                 }
             }
         }
     }
 
     suspend fun resume(userId: String, userDownloadId: String) {
-        val row = owned(userId, userDownloadId)
-        db.downloads().upsertUserDownload(
-            row.copy(active = true, suspended = false, updatedAtMs = clock())
-        )
-        db.downloads().blob(row.blobId)?.let {
-            if (it.status in setOf(DownloadBlobStatus.PAUSED, DownloadBlobStatus.FAILED, DownloadBlobStatus.CANCELLED)) {
-                db.downloads().upsertBlob(it.copy(status = DownloadBlobStatus.QUEUED, error = null, updatedAtMs = clock()))
+        val blobId = owned(userId, userDownloadId).blobId
+        withBlobLock(blobId) {
+            val row = owned(userId, userDownloadId)
+            db.downloads().upsertUserDownload(
+                row.copy(active = true, suspended = false, updatedAtMs = clock())
+            )
+            db.downloads().blob(row.blobId)?.let {
+                if (it.status in setOf(DownloadBlobStatus.PAUSED, DownloadBlobStatus.FAILED, DownloadBlobStatus.CANCELLED)) {
+                    db.downloads().upsertBlob(
+                        it.copy(status = DownloadBlobStatus.QUEUED, error = null, updatedAtMs = clock())
+                    )
+                }
             }
         }
         pump()
     }
 
     suspend fun delete(userId: String, userDownloadId: String) {
-        val row = owned(userId, userDownloadId)
-        db.downloads().deleteUserDownload(row.id)
-        if (db.downloads().referenceCount(row.blobId) == 0) deleteBlob(row.blobId)
-        else if (db.downloads().activeReferenceCount(row.blobId) == 0) {
-            db.downloads().blob(row.blobId)?.let {
-                db.downloads().upsertBlob(it.copy(status = DownloadBlobStatus.PAUSED, updatedAtMs = clock()))
-                jobs.remove(it.id)?.cancel()
+        val blobId = owned(userId, userDownloadId).blobId
+        withBlobLock(blobId) {
+            val row = owned(userId, userDownloadId)
+            db.downloads().deleteUserDownload(row.id)
+            if (db.downloads().referenceCount(row.blobId) == 0) deleteBlobUnlocked(row.blobId)
+            else if (db.downloads().activeReferenceCount(row.blobId) == 0) {
+                db.downloads().blob(row.blobId)?.let {
+                    db.downloads().upsertBlob(it.copy(status = DownloadBlobStatus.PAUSED, updatedAtMs = clock()))
+                    jobs.remove(it.id)?.cancel()
+                }
             }
         }
     }
@@ -194,13 +211,16 @@ class DownloadManager(
     fun scheduleGrantRevocation(playlistId: Long) {
         scope.launch {
             db.downloads().blobsForPlaylist(playlistId).forEach { blob ->
-                if (db.downloads().activeReferenceCount(blob.id) == 0 &&
-                    blob.status in setOf(DownloadBlobStatus.QUEUED, DownloadBlobStatus.RUNNING)
-                ) {
-                    db.downloads().upsertBlob(
-                        blob.copy(status = DownloadBlobStatus.PAUSED, updatedAtMs = clock()),
-                    )
-                    jobs.remove(blob.id)?.cancel()
+                withBlobLock(blob.id) {
+                    val current = db.downloads().blob(blob.id) ?: return@withBlobLock
+                    if (db.downloads().activeReferenceCount(blob.id) == 0 &&
+                        current.status in setOf(DownloadBlobStatus.QUEUED, DownloadBlobStatus.RUNNING)
+                    ) {
+                        db.downloads().upsertBlob(
+                            current.copy(status = DownloadBlobStatus.PAUSED, updatedAtMs = clock()),
+                        )
+                        jobs.remove(blob.id)?.cancel()
+                    }
                 }
             }
         }
@@ -210,7 +230,14 @@ class DownloadManager(
         db.downloads().userDownload(id)?.takeIf { it.userId == userId }
             ?: throw ResourceNotFound("download")
 
+    private suspend fun <T> withBlobLock(blobId: String, block: suspend () -> T): T =
+        blobLocks.computeIfAbsent(blobId) { Mutex() }.withLock { block() }
+
     private suspend fun deleteBlob(id: String) {
+        withBlobLock(id) { deleteBlobUnlocked(id) }
+    }
+
+    private suspend fun deleteBlobUnlocked(id: String) {
         jobs.remove(id)?.cancel()
         db.downloads().blob(id)?.let { safePath(it.filePath)?.let { path -> Files.deleteIfExists(path) } }
         db.downloads().deleteBlob(id)
@@ -241,6 +268,7 @@ class DownloadManager(
     private class HttpStatusException(code: Int) : IOException("HTTP $code")
 
     private suspend fun run(id: String) {
+        val ownerJob = requireNotNull(coroutineContext[Job])
         val blob = db.downloads().blob(id) ?: return
         if (blob.status != DownloadBlobStatus.QUEUED) return
         val slot = "dl:$id"
@@ -250,7 +278,7 @@ class DownloadManager(
                     id, DownloadBlobStatus.QUEUED, null, clock(), listOf(DownloadBlobStatus.RUNNING),
                 )
             }
-            jobs[id]?.cancel()
+            if (jobs.remove(id, ownerJob)) ownerJob.cancel()
             Unit
         }
         if (!connections.tryOpenDownload(
@@ -258,14 +286,19 @@ class DownloadManager(
                 connectionLimit(blob.sourceUrl), evict,
             )
         ) {
-            jobs.remove(id)
+            jobs.remove(id, ownerJob)
             return
         }
-        db.downloads().updateBlobStatus(
-            id, DownloadBlobStatus.RUNNING, null, clock(), listOf(DownloadBlobStatus.QUEUED),
-        )
-        val target = Path.of(blob.filePath)
         try {
+            if (db.downloads().updateBlobStatus(
+                    id,
+                    DownloadBlobStatus.RUNNING,
+                    null,
+                    clock(),
+                    listOf(DownloadBlobStatus.QUEUED),
+                ) != 1
+            ) return
+            val target = Path.of(blob.filePath)
             Files.createDirectories(target.parent)
             var stalled = 0
             while (true) {
@@ -296,7 +329,7 @@ class DownloadManager(
             )
         } finally {
             connections.close(slot)
-            jobs.remove(id)
+            jobs.remove(id, ownerJob)
             pump()
         }
     }

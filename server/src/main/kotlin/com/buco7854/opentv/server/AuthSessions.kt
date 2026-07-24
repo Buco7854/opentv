@@ -17,6 +17,12 @@ internal class PersistentSessionService(
     private val clock: () -> Long,
 ) {
     suspend fun issue(user: UserRow, method: String, mfa: Boolean): IssuedSession {
+        val issued = prepare(user, method, mfa)
+        db.sessions().insert(issued.row)
+        return issued
+    }
+
+    suspend fun prepare(user: UserRow, method: String, mfa: Boolean): IssuedSession {
         val now = clock()
         val token = AuthCrypto.token()
         val row = AuthSessionRow(
@@ -37,7 +43,6 @@ internal class PersistentSessionService(
             absoluteExpiresAtMs = now + config.sessionAbsoluteMs,
             revokedAtMs = null,
         )
-        db.sessions().insert(row)
         return IssuedSession(token, row, user)
     }
 
@@ -90,6 +95,26 @@ internal class PersistentSessionService(
                     mfaAt != null &&
                     clock() - mfaAt <= 5 * 60_000L
             } ?: throw ForbiddenApiException()
+
+    suspend fun requireActive(actor: Actor) {
+        val now = clock()
+        val session = db.sessions().get(actor.authSessionId)
+            ?.takeIf {
+                it.userId == actor.userId &&
+                    it.revokedAtMs == null &&
+                    it.idleExpiresAtMs > now &&
+                    it.absoluteExpiresAtMs > now
+            } ?: throw UnauthenticatedApiException()
+        val user = db.users().get(actor.userId)
+            ?.takeIf { it.status == UserStatus.ACTIVE }
+            ?: throw UnauthenticatedApiException()
+        if (session.authMethod == AuthMethod.PASSWORD &&
+            session.mfaSatisfiedAtMs == null &&
+            effectiveRole(user) in config.mfaRequiredRoles
+        ) {
+            throw UnauthenticatedApiException()
+        }
+    }
 
     suspend fun revokeUser(userId: String, atMs: Long) {
         db.sessions().revokeUser(userId, atMs)

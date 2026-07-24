@@ -155,38 +155,55 @@ data class AccountInfoDto(
     val timezone: String?,
 )
 
-internal fun Channel.toDto(cipher: StreamCipher, contentId: String) = ChannelDto(
-    contentId, id, playlistId, name, cipher.encryptOrNull(logo), groupTitle,
+internal fun Channel.toDto(cipher: StreamCipher, contentId: String, imageUserId: String) = ChannelDto(
+    contentId, id, playlistId, name, cipher.encryptOrNull(logo, imageUserId, playlistId), groupTitle,
     tvgId, kind, seriesKey, season, episode, position, xtreamStreamId, catchupDays,
     catchupSource, description, durationSecs, airDate,
 )
 
-internal fun Metadata?.toDto(cipher: StreamCipher) = (this ?: Metadata(cacheKey = "", fetchedAtMs = 0)).let {
-    MetadataDto(
-        it.cacheKey,
-        it.title,
-        it.year,
-        it.overview,
-        it.rating,
-        it.castNames,
-        it.castJson?.let { json ->
-            encodeCast(decodeCast(json).map { member ->
-                member.copy(photo = cipher.encryptOrNull(member.photo))
-            })
-        },
-        cipher.encryptOrNull(it.posterUrl),
-        it.infoLine,
-        it.sourceId,
-        it.fetchedAtMs,
-    )
-}
+internal fun Metadata?.toDto(
+    cipher: StreamCipher,
+    imageUserId: String,
+    playlistId: Long? = null,
+) =
+    (this ?: Metadata(cacheKey = "", fetchedAtMs = 0)).let {
+        MetadataDto(
+            it.cacheKey,
+            it.title,
+            it.year,
+            it.overview,
+            it.rating,
+            it.castNames,
+            it.castJson?.let { json ->
+                encodeCast(decodeCast(json).map { member ->
+                    member.copy(photo = cipher.encryptOrNull(member.photo, imageUserId, playlistId))
+                })
+            },
+            cipher.encryptOrNull(it.posterUrl, imageUserId, playlistId),
+            it.infoLine,
+            it.sourceId,
+            it.fetchedAtMs,
+        )
+    }
 
 internal fun GroupCount.toDto() = GroupCountDto(groupTitle, count)
-internal fun SeriesGroup.toDto(cipher: StreamCipher, contentId: String) =
-    SeriesGroupDto(contentId, seriesKey, count, cipher.encryptOrNull(logo), groupTitle)
+internal fun SeriesGroup.toDto(
+    cipher: StreamCipher,
+    contentId: String,
+    imageUserId: String,
+    playlistId: Long,
+) = SeriesGroupDto(
+    contentId,
+    seriesKey,
+    count,
+    cipher.encryptOrNull(logo, imageUserId, playlistId),
+    groupTitle,
+)
 
-internal fun XtreamSeries.toDto(cipher: StreamCipher, contentId: String) = XtreamSeriesDto(
-    contentId, playlistId, seriesId, name, categoryName, cipher.encryptOrNull(cover), plot,
+internal fun XtreamSeries.toDto(cipher: StreamCipher, contentId: String, imageUserId: String) =
+    XtreamSeriesDto(
+    contentId, playlistId, seriesId, name, categoryName,
+    cipher.encryptOrNull(cover, imageUserId, playlistId), plot,
     castNames, genre, rating, episodesFetchedAtMs,
 )
 

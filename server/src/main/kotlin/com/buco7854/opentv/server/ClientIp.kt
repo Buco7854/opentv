@@ -20,8 +20,13 @@ class TrustedProxies(private val ranges: List<IpRange>) {
         val peer = call.request.origin.remoteAddress
         if (!isTrusted(peer)) return peer
         val forwarded = call.request.headers["X-Forwarded-For"]
-            ?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }
-            ?: return call.request.headers["X-Real-IP"]?.trim()?.takeIf { it.isNotEmpty() } ?: peer
+            ?.split(',')
+            ?.map(String::trim)
+            ?.filter { parseIpLiteral(it) != null }
+            ?: return call.request.headers["X-Real-IP"]
+                ?.trim()
+                ?.takeIf { parseIpLiteral(it) != null }
+                ?: peer
         // Walk right-to-left past our own trusted proxies to the first untrusted hop.
         return forwarded.lastOrNull { !isTrusted(it) } ?: forwarded.firstOrNull() ?: peer
     }
@@ -38,8 +43,7 @@ class TrustedProxies(private val ranges: List<IpRange>) {
         fun fromSpec(spec: String): TrustedProxies =
             TrustedProxies(spec.split(',').mapNotNull { IpRange.parse(it.trim()) })
 
-        private fun parse(ip: String): ByteArray? =
-            runCatching { InetAddress.getByName(ip.substringBefore('%')).address }.getOrNull()
+        private fun parse(ip: String): ByteArray? = parseIpLiteral(ip)
     }
 }
 
@@ -63,10 +67,27 @@ class IpRange private constructor(private val network: ByteArray, private val pr
             if (entry.isEmpty()) return null
             val slash = entry.indexOf('/')
             val host = if (slash >= 0) entry.substring(0, slash) else entry
-            val addr = runCatching { InetAddress.getByName(host).address }.getOrNull() ?: return null
+            val addr = parseIpLiteral(host) ?: return null
             val prefix = if (slash >= 0) entry.substring(slash + 1).toIntOrNull() ?: return null else addr.size * 8
             if (prefix < 0 || prefix > addr.size * 8) return null
             return IpRange(addr, prefix)
         }
     }
+}
+
+internal fun parseIpLiteral(value: String): ByteArray? {
+    val literal = value.substringBefore('%')
+    if (literal.isEmpty()) return null
+    val ipv4 = literal.split('.').takeIf { it.size == 4 }?.map { part ->
+        part.takeIf { it.isNotEmpty() && it.length <= 3 && it.all(Char::isDigit) }
+            ?.toIntOrNull()
+            ?.takeIf { it in 0..255 }
+    }
+    if (ipv4 != null && ipv4.all { it != null }) {
+        return ipv4.map { requireNotNull(it).toByte() }.toByteArray()
+    }
+    if (':' !in literal || !literal.matches(Regex("[0-9A-Fa-f:.]+"))) return null
+    return runCatching { InetAddress.getByName(literal).address }
+        .getOrNull()
+        ?.takeIf { it.size == 16 }
 }

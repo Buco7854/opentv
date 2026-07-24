@@ -21,7 +21,7 @@ class LibraryApplicationService(
 ) {
     suspend fun channel(actor: Actor, id: Long): ChannelDto {
         val channel = channelModel(actor, id)
-        return channel.toDto(cipher, content.channel(channel).contentId)
+        return channel.toDto(cipher, content.channel(channel).contentId, actor.userId)
     }
 
     suspend fun guide(actor: Actor, id: Long): List<GuideEntryDto> =
@@ -31,19 +31,24 @@ class LibraryApplicationService(
         val channel = channelModel(actor, id)
         val result = channel.xtreamStreamId?.let { xtream.vodMetadata(channel) }
             ?: metadata.forTitle(isSeries = false, rawName = channel.name)
-        return result.toDto(cipher)
+        return result.toDto(cipher, actor.userId, channel.playlistId)
     }
 
-    suspend fun metadata(type: String, title: String): MetadataDto =
-        metadata.forTitle(isSeries = type == "series", rawName = title).toDto(cipher)
+    suspend fun metadata(actor: Actor, type: String, title: String): MetadataDto =
+        metadata.forTitle(isSeries = type == "series", rawName = title).toDto(cipher, actor.userId)
 
-    suspend fun episodeMetadata(series: String, season: Int?, episode: Int?): MetadataDto {
+    suspend fun episodeMetadata(
+        actor: Actor,
+        series: String,
+        season: Int?,
+        episode: Int?,
+    ): MetadataDto {
         val result = if (season == null || episode == null) {
             null
         } else {
             metadata.episodeInfo(series, season, episode)
         }
-        return result.toDto(cipher)
+        return result.toDto(cipher, actor.userId)
     }
 
     suspend fun resumePoints(actor: Actor): List<ResumePointDto> = activity.resume(actor)

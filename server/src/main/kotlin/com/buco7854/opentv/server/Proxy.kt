@@ -6,6 +6,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.response.header
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondOutputStream
 import io.ktor.server.response.respondText
 import kotlinx.coroutines.Dispatchers
@@ -39,6 +40,10 @@ class StreamProxy(
     }
 
     private val hlsContentTypes = listOf("mpegurl", "m3u8")
+    private val allowedImageTypes = setOf(
+        "image/avif", "image/bmp", "image/gif", "image/jpeg", "image/png",
+        "image/webp", "image/x-icon", "image/vnd.microsoft.icon",
+    )
 
     private fun looksLikeHls(url: String, contentType: String?): Boolean {
         val path = url.substringBefore('?')
@@ -58,6 +63,64 @@ class StreamProxy(
                 }
                 else -> proxied(baseUri.resolve(trimmed).toString(), sid, mediaGrant)
             }
+        }
+    }
+
+    suspend fun image(call: ApplicationCall, target: String) {
+        val uri = runCatching { URI(target) }.getOrNull()
+        if (uri == null || uri.scheme !in listOf("http", "https")) {
+            call.respond(HttpStatusCode.BadRequest, ApiErrorDto("invalid_target", "Invalid image target"))
+            return
+        }
+        val request = HttpRequest.newBuilder(uri)
+            .timeout(java.time.Duration.ofSeconds(30))
+            .header("User-Agent", http.userAgent)
+            .build()
+        val upstream = try {
+            withContext(Dispatchers.IO) {
+                http.client.send(request, HttpResponse.BodyHandlers.ofInputStream())
+            }
+        } catch (_: Exception) {
+            call.respond(HttpStatusCode.BadGateway, ApiErrorDto("upstream_failure", "Image request failed"))
+            return
+        }
+        upstream.body().use { input ->
+            if (upstream.statusCode() !in 200..299) {
+                call.respond(HttpStatusCode.BadGateway, ApiErrorDto("upstream_failure", "Image request failed"))
+                return
+            }
+            val type = upstream.headers().firstValue("Content-Type").orElse("")
+                .substringBefore(';').trim().lowercase()
+            if (type !in allowedImageTypes) {
+                call.respond(HttpStatusCode.UnsupportedMediaType, ApiErrorDto("invalid_image", "Unsupported image type"))
+                return
+            }
+            val declared = upstream.headers().firstValue("Content-Length").orElse(null)?.toLongOrNull()
+            if (declared != null && declared > MAX_IMAGE_BYTES) {
+                call.respond(HttpStatusCode.PayloadTooLarge, ApiErrorDto("image_too_large", "Image is too large"))
+                return
+            }
+            val bytes = try {
+                withContext(Dispatchers.IO) {
+                    val output = java.io.ByteArrayOutputStream()
+                    val buffer = ByteArray(32 * 1024)
+                    var total = 0
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        total += count
+                        if (total > MAX_IMAGE_BYTES) throw ImageTooLargeException()
+                        output.write(buffer, 0, count)
+                    }
+                    output.toByteArray()
+                }
+            } catch (_: ImageTooLargeException) {
+                call.respond(HttpStatusCode.PayloadTooLarge, ApiErrorDto("image_too_large", "Image is too large"))
+                return
+            }
+            call.response.header(HttpHeaders.CacheControl, "private, max-age=86400")
+            call.response.header("X-Content-Type-Options", "nosniff")
+            call.respondBytes(bytes, ContentType.parse(type))
         }
     }
 
@@ -193,5 +256,11 @@ class StreamProxy(
 
     fun drop(sid: String) {
         activeBodies.remove(sid)?.forEach { runCatching { it.close() } }
+    }
+
+    private class ImageTooLargeException : RuntimeException()
+
+    private companion object {
+        const val MAX_IMAGE_BYTES = 10 * 1024 * 1024
     }
 }

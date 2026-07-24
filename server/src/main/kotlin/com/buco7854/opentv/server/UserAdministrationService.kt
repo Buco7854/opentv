@@ -5,13 +5,18 @@ import com.buco7854.opentv.serverdata.UserRole
 import com.buco7854.opentv.serverdata.UserStatus
 import com.buco7854.opentv.serverdata.db.OidcIdentityRow
 import com.buco7854.opentv.serverdata.db.ServerUserDatabase
+import com.buco7854.opentv.serverdata.db.UserRow
 import com.buco7854.opentv.serverdata.db.replaceUserPlaylistGrants
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 
 /** Administrative user, identity, session, and playlist-entitlement use cases. */
 internal class UserAdministrationService(
     private val db: ServerUserDatabase,
-    private val auth: AuthService,
+    private val accounts: AuthAccountService,
+    private val sessions: PersistentSessionService,
+    private val mutation: Mutex,
     private val cleanup: UserStateCleanupCoordinator,
     private val clock: () -> Long,
 ) {
@@ -28,15 +33,15 @@ internal class UserAdministrationService(
     }
 
     suspend fun approveOidc(actor: Actor, request: ApproveOidcRequestDto): AdminUserDto =
-        auth.mutate {
+        mutation.withLock {
             requireAdmin(actor)
             val pending = db.oidc().pending(request.issuer, request.subject)
                 ?: throw ResourceNotFound("oidc identity")
             val now = clock()
             val target = request.userId?.let {
                 db.users().get(it) ?: throw ResourceNotFound("user")
-            } ?: auth.createUser(
-                auth.availableOidcUsername(
+            } ?: accounts.createUser(
+                accounts.availableOidcUsername(
                     pending.usernameClaim ?: "oidc-user",
                     request.issuer,
                     request.subject,
@@ -45,7 +50,7 @@ internal class UserAdministrationService(
                 UserStatus.ACTIVE,
                 UserRole.USER,
                 now,
-            ).also { auth.copyDefaultGrants(it.id, now) }
+            ).also { accounts.copyDefaultGrants(it.id, now) }
             db.oidc().upsert(
                 OidcIdentityRow(
                     request.issuer, request.subject, target.id,
@@ -59,12 +64,12 @@ internal class UserAdministrationService(
             )
             db.users().update(updated)
             db.oidc().deletePending(request.issuer, request.subject)
-            auth.adminUserDto(updated)
+            accounts.adminUserDto(updated)
         }
 
     suspend fun users(actor: Actor): List<AdminUserDto> {
         requireAdmin(actor)
-        return db.users().all().map { auth.adminUserDto(it) }
+        return db.users().all().map { accounts.adminUserDto(it) }
     }
 
     suspend fun resume(actor: Actor, userId: String): List<ResumePointDto> {
@@ -84,23 +89,23 @@ internal class UserAdministrationService(
         actor: Actor,
         request: CreateUserRequestDto,
         clientIp: String,
-    ): CreatedUserDto = auth.mutate {
+    ): CreatedUserDto = mutation.withLock {
         requireAdmin(actor)
         val role = request.role.uppercase()
         require(role == UserRole.USER || role == UserRole.ADMIN) { "Unknown role" }
         val now = clock()
-        val user = auth.createUser(
+        val user = accounts.createUser(
             request.username,
             request.displayName.ifBlank { request.username },
             UserStatus.INVITED,
             role,
             now,
         )
-        val challenge = auth.issueChallenge(
+        val challenge = accounts.issueChallenge(
             user.id, ChallengeKind.ACTIVATION, "", 24 * 60 * 60_000L,
         )
-        auth.event(actor.userId, user.id, "user_created", clientIp)
-        CreatedUserDto(auth.adminUserDto(user), challenge.first)
+        accounts.event(actor.userId, user.id, "user_created", clientIp)
+        CreatedUserDto(accounts.adminUserDto(user), challenge.first)
     }
 
     suspend fun update(
@@ -108,7 +113,7 @@ internal class UserAdministrationService(
         userId: String,
         request: UpdateUserRequestDto,
         clientIp: String,
-    ): AdminUserDto = auth.mutate {
+    ): AdminUserDto = mutation.withLock {
         requireAdmin(actor)
         val current = db.users().get(userId) ?: throw ResourceNotFound("user")
         val role = request.role?.uppercase() ?: current.manualRole
@@ -122,13 +127,8 @@ internal class UserAdministrationService(
                 UserStatus.DISABLED,
             )
         ) { "Unknown user status" }
-        if (current.manualRole == UserRole.ADMIN && current.status == UserStatus.ACTIVE &&
-            (role != UserRole.ADMIN || status != UserStatus.ACTIVE) &&
-            db.users().activeManualAdminCount() <= 1
-        ) {
-            throw IllegalArgumentException(
-                "Cannot disable or demote the final manually managed administrator"
-            )
+        if (role != UserRole.ADMIN || status != UserStatus.ACTIVE) {
+            ensureNotFinalManualAdmin(current, "disable or demote")
         }
         val username = request.username?.trim() ?: current.username
         val normalized = AuthCrypto.normalizeUsername(username)
@@ -149,50 +149,45 @@ internal class UserAdministrationService(
         )
         db.users().update(updated)
         if (current.status != status || current.manualRole != role) {
-            auth.revokeUserSessions(userId, clock())
+            sessions.revokeUser(userId, clock())
         }
-        auth.event(actor.userId, userId, "user_updated", clientIp)
-        auth.adminUserDto(updated)
+        accounts.event(actor.userId, userId, "user_updated", clientIp)
+        accounts.adminUserDto(updated)
     }
 
-    suspend fun delete(actor: Actor, userId: String, clientIp: String) = auth.mutate {
+    suspend fun delete(actor: Actor, userId: String, clientIp: String) = mutation.withLock {
         requireAdmin(actor)
         val user = db.users().get(userId) ?: throw ResourceNotFound("user")
-        if (user.manualRole == UserRole.ADMIN && user.status == UserStatus.ACTIVE &&
-            db.users().activeManualAdminCount() <= 1
-        ) {
-            throw IllegalArgumentException(
-                "Cannot delete the final manually managed administrator"
-            )
-        }
-        auth.revokeUserSessions(userId, clock())
+        ensureNotFinalManualAdmin(user, "delete")
+        sessions.revokeUser(userId, clock())
         db.securityEvents().deleteForUser(userId)
         db.users().delete(userId)
         cleanup.userDeleted(userId)
     }
 
     suspend fun reset(actor: Actor, userId: String, clientIp: String): ResetUserDto =
-        auth.mutate {
+        mutation.withLock {
             requireAdmin(actor)
             val user = db.users().get(userId) ?: throw ResourceNotFound("user")
-            auth.revokeUserSessions(userId, clock())
+            ensureNotFinalManualAdmin(user, "reset")
+            sessions.revokeUser(userId, clock())
             db.credentials().deletePassword(userId)
             db.credentials().clearMfa(userId)
             db.users().update(user.copy(status = UserStatus.INVITED, updatedAtMs = clock()))
-            val challenge = auth.issueChallenge(
+            val challenge = accounts.issueChallenge(
                 userId, ChallengeKind.PASSWORD_RESET, "", 24 * 60 * 60_000L,
             )
-            auth.event(actor.userId, userId, "credentials_reset", clientIp)
+            accounts.event(actor.userId, userId, "credentials_reset", clientIp)
             ResetUserDto(challenge.first)
         }
 
     suspend fun revokeSession(actor: Actor, userId: String, sessionId: String?) {
         requireAdmin(actor)
-        if (sessionId == null) auth.revokeUserSessions(userId, clock())
+        if (sessionId == null) sessions.revokeUser(userId, clock())
         else {
             val row = db.sessions().get(sessionId) ?: throw ResourceNotFound("session")
             if (row.userId != userId) throw ResourceNotFound("session")
-            auth.revokeSessionInternal(userId, sessionId, clock())
+            sessions.revoke(userId, sessionId, clock())
         }
     }
 
@@ -214,16 +209,16 @@ internal class UserAdministrationService(
 
     suspend fun setDefaultPlaylists(actor: Actor, ids: List<Long>) {
         requireAdmin(actor)
-        db.grants().replaceDefaults(auth.validatePlaylistIds(ids))
+        db.grants().replaceDefaults(accounts.validatePlaylistIds(ids))
     }
 
     suspend fun setUserPlaylists(actor: Actor, userId: String, ids: List<Long>) =
-        auth.mutate {
+        mutation.withLock {
             requireAdmin(actor)
             db.users().get(userId) ?: throw ResourceNotFound("user")
             val replacement = db.replaceUserPlaylistGrants(
                 userId,
-                auth.validatePlaylistIds(ids),
+                accounts.validatePlaylistIds(ids),
                 clock(),
             )
             replacement.removed.forEach { cleanup.playlistGrantRevoked(userId, it) }
@@ -231,5 +226,15 @@ internal class UserAdministrationService(
 
     private fun requireAdmin(actor: Actor) {
         if (!actor.isAdmin) throw ForbiddenApiException()
+    }
+
+    private suspend fun ensureNotFinalManualAdmin(user: UserRow, action: String) {
+        if (user.manualRole == UserRole.ADMIN && user.status == UserStatus.ACTIVE &&
+            db.users().activeManualAdminCount() <= 1
+        ) {
+            throw IllegalArgumentException(
+                "Cannot $action the final manually managed administrator"
+            )
+        }
     }
 }

@@ -19,8 +19,18 @@ class SessionApplicationService(
     private val mediaGrants: PlaybackMediaGrants,
     private val xtream: XtreamRepository,
     private val downloads: DownloadManager,
+    private val cleanup: UserStateCleanupCoordinator = NoopUserStateCleanupCoordinator,
 ) {
     suspend fun create(
+        actor: Actor,
+        client: PlaybackClient,
+        request: PlaybackCreateRequest,
+    ): PlaybackLeaseDto = cleanup.admitPlayback {
+        auth.requireActiveActor(actor)
+        createAdmitted(actor, client, request)
+    }
+
+    private suspend fun createAdmitted(
         actor: Actor,
         client: PlaybackClient,
         request: PlaybackCreateRequest,
@@ -78,8 +88,10 @@ class SessionApplicationService(
         )
     }
 
-    fun refreshMediaGrant(actor: Actor, id: String): IssuedMediaGrant =
-        mediaGrants.issue(actor, id)
+    suspend fun refreshMediaGrant(actor: Actor, id: String): IssuedMediaGrant {
+        validateLeaseActor(actor, id)
+        return mediaGrants.issue(actor, id)
+    }
 
     suspend fun active(actor: Actor): List<SessionDto> {
         requireAdmin(actor)
@@ -117,12 +129,13 @@ class SessionApplicationService(
         }
     }
 
-    fun heartbeat(
+    suspend fun heartbeat(
         actor: Actor,
         client: PlaybackClient,
         request: SessionHeartbeatDto,
     ): HeartbeatResponseDto {
         validateHeartbeat(client, request)
+        validateLeaseActor(actor, request.id)
         return HeartbeatResponseDto(
             sessions.heartbeat(actor, client.ip, client.userAgent, request),
         )
@@ -142,14 +155,14 @@ class SessionApplicationService(
 
     fun requestJoin(actor: Actor, id: String, request: JoinRequestBody) {
         val peer = sessions.owned(actor, id)
-        if (!sessions.requestJoin(request.peerId, id, actor.displayName, peer.contentId)) {
+        if (sessions.requestJoin(request.peerId, id, actor.displayName, peer.contentId) == null) {
             throw ResourceNotFound("playback")
         }
     }
 
     fun answerJoin(actor: Actor, id: String, request: JoinAnswerBody) {
-        val host = sessions.owned(actor, id)
-        if (!sessions.answerJoin(id, request.peerId, actor.displayName, host.contentId, request.accept)) {
+        sessions.owned(actor, id)
+        if (!sessions.answerJoin(id, request.requestId, request.accept)) {
             throw ResourceNotFound("playback")
         }
     }
@@ -229,8 +242,11 @@ class SessionApplicationService(
         }
     }
 
-    fun update(actor: Actor, client: PlaybackClient, heartbeat: SessionHeartbeatDto) =
+    suspend fun update(actor: Actor, client: PlaybackClient, heartbeat: SessionHeartbeatDto) {
+        validateHeartbeat(client, heartbeat)
+        validateLeaseActor(actor, heartbeat.id)
         sessions.update(actor, client.ip, client.userAgent, heartbeat)
+    }
 
     fun remove(actor: Actor, id: String) {
         sessions.owned(actor, id)
@@ -244,5 +260,19 @@ class SessionApplicationService(
 
     private fun requireAdmin(actor: Actor) {
         if (!actor.isAdmin) throw ForbiddenApiException()
+    }
+
+    private suspend fun validateLeaseActor(actor: Actor, leaseId: String) {
+        val lease = sessions.owned(actor, leaseId)
+        try {
+            auth.requireActiveActor(actor)
+            if (!auth.hasPlaylistAccess(actor, lease.playlistId)) throw ForbiddenApiException()
+        } catch (error: UnauthenticatedApiException) {
+            sessions.remove(leaseId)
+            throw error
+        } catch (error: ForbiddenApiException) {
+            sessions.remove(leaseId)
+            throw error
+        }
     }
 }

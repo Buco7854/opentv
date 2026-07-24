@@ -206,6 +206,12 @@ interface ChallengeDao {
     @Query("UPDATE auth_challenges SET consumedAtMs = :atMs WHERE id = :id AND consumedAtMs IS NULL")
     suspend fun consume(id: String, atMs: Long): Int
 
+    @Query("""
+        SELECT COUNT(*) FROM auth_challenges
+        WHERE kind = :kind AND consumedAtMs IS NULL AND expiresAtMs > :nowMs
+    """)
+    suspend fun activeCount(kind: String, nowMs: Long): Int
+
     @Query("DELETE FROM auth_challenges WHERE expiresAtMs < :beforeMs OR (consumedAtMs IS NOT NULL AND consumedAtMs < :beforeMs)")
     suspend fun prune(beforeMs: Long): Int
 }
@@ -450,6 +456,9 @@ interface SecurityEventDao {
 
 @Dao
 interface MaintenanceDao {
+    @Query("SELECT EXISTS(SELECT 1 FROM playlist_deletions WHERE playlistId = :playlistId)")
+    suspend fun isPlaylistDeleting(playlistId: Long): Boolean
+
     @Query("SELECT * FROM playlist_deletions ORDER BY requestedAtMs")
     suspend fun pendingPlaylistDeletions(): List<PlaylistDeletionRow>
 

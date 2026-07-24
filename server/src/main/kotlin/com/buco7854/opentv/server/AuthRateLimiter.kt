@@ -6,7 +6,9 @@ internal class AuthRateLimiter(
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private data class Bucket(var failures: Int, var blockedUntilMs: Long, var lastMs: Long)
+    private data class Window(val attempts: ArrayDeque<Long> = ArrayDeque())
     private val buckets = ConcurrentHashMap<String, Bucket>()
+    private val windows = ConcurrentHashMap<String, Window>()
 
     @Synchronized
     fun check(vararg keys: String) {
@@ -36,6 +38,25 @@ internal class AuthRateLimiter(
 
     @Synchronized
     fun success(vararg keys: String) = keys.forEach(buckets::remove)
+
+    @Synchronized
+    fun consume(key: String, limit: Int, windowMs: Long) {
+        require(limit > 0 && windowMs > 0)
+        val now = clock()
+        val attempts = windows.getOrPut(key, ::Window).attempts
+        while (attempts.firstOrNull()?.let { now - it >= windowMs } == true) {
+            attempts.removeFirst()
+        }
+        if (attempts.size >= limit) {
+            throw AuthRateLimitedException(attempts.first() + windowMs)
+        }
+        attempts.addLast(now)
+        if (windows.size >= 1_024) {
+            windows.entries.removeIf { (_, window) ->
+                window.attempts.lastOrNull()?.let { now - it >= windowMs } != false
+            }
+        }
+    }
 
     private fun prune(now: Long) {
         if (buckets.size < 1_024) return

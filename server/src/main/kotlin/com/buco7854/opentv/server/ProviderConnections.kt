@@ -63,17 +63,6 @@ class ProviderConnections(
         return victims
     }
 
-    /**
-     * Reserve a slot for an interactive stream [id] of content [shareKey] on provider [key],
-     * evicting downloads to fit. Re-registering the same id just refreshes it. A stream never
-     * evicts another stream, so this always succeeds - the caller [distinctStreams]-checks first
-     * when it must refuse (VOD remux); live uses [tryOpenStream] to refuse instead.
-     */
-    fun openStream(id: String, key: String, shareKey: String, limit: Int, evict: () -> Unit) {
-        val victims = synchronized(lock) { reserve(id, key, shareKey, limit.coerceAtLeast(1), Kind.STREAM, evict) }
-        victims.forEach { runCatching { it.evict() } }
-    }
-
     /** Reserve a stream slot, but refuse (false) when the provider's distinct streams already
      *  fill [limit] and this content isn't one of them - so a live stream can't cut a viewer. */
     fun tryOpenStream(id: String, key: String, shareKey: String, limit: Int, evict: () -> Unit): Boolean {

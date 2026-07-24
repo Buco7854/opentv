@@ -24,6 +24,7 @@ import java.util.UUID
 class PlaybackSessionRegistry(
     private val clock: ServerClock = ServerClock.SYSTEM,
     private val staleMs: Long = DEFAULT_STALE_MS,
+    private val cleanup: PlaybackLeaseCleanup = NoopPlaybackLeaseCleanup,
 ) : AutoCloseable {
     private val reaperScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -73,14 +74,17 @@ class PlaybackSessionRegistry(
     private val tombstones = ConcurrentHashMap<String, Long>()
     private val rooms = ConcurrentHashMap<String, Room>()
     private val memberRoom = ConcurrentHashMap<String, String>()
-    // Notified when a viewer leaves or is kicked from a room, so a shared live connection it was
-    // riding can be cut server-side rather than trusting the client to disconnect itself.
-    private val leaveListeners = java.util.concurrent.CopyOnWriteArrayList<(String) -> Unit>()
-    private val terminateListeners =
-        java.util.concurrent.CopyOnWriteArrayList<(leaseId: String, unusedShareGroup: String?) -> Unit>()
     // A host that declined a peer for some content isn't pestered with a modal again for it.
     private val declined = ConcurrentHashMap<String, MutableSet<String>>()
     private fun declineKey(peerId: String, contentKey: String) = "$peerId@$contentKey"
+    private data class PendingJoin(
+        val id: String,
+        val requesterId: String,
+        val targetId: String,
+        val contentId: String,
+        val expiresAtMs: Long,
+    )
+    private val pendingJoins = ConcurrentHashMap<String, PendingJoin>()
     // Signals a session's WebSocket to drain immediately; heartbeat draining is the fallback.
     private val wakes = ConcurrentHashMap<String, Channel<Unit>>()
     private fun wake(id: String) = wakes.computeIfAbsent(id) { Channel(Channel.CONFLATED) }
@@ -160,36 +164,81 @@ class PlaybackSessionRegistry(
     }
 
     /** Ask [hostId] to admit [peerId] into a watch-together room; false when the host is gone. */
-    fun requestJoin(hostId: String, peerId: String, peerName: String, contentKey: String): Boolean {
-        if (hostId == peerId || sessions[hostId]?.contentId != contentKey) return false
-        val quiet = declined[hostId]?.contains(declineKey(peerId, contentKey)) == true
-        return enqueue(hostId, SessionCommandDto(
-            type = "join-request", peerId = peerId, peerName = peerName, quiet = quiet,
-        ))
+    @Synchronized
+    fun requestJoin(targetId: String, requesterId: String, peerName: String, contentKey: String): String? {
+        val target = sessions[targetId] ?: return null
+        val requester = sessions[requesterId] ?: return null
+        if (targetId == requesterId || target.contentId != contentKey ||
+            requester.contentId != contentKey
+        ) return null
+        val targetRoom = roomFor(targetId)
+        if (targetRoom != null && targetRoom.hostId != targetId) return null
+        val requesterRoom = roomFor(requesterId)
+        if (requesterRoom != null && requesterRoom.id == targetRoom?.id) return null
+        val now = clock.nowMs()
+        pendingJoins.entries.removeIf {
+            it.value.expiresAtMs <= now ||
+                (it.value.requesterId == requesterId && it.value.targetId == targetId)
+        }
+        val request = PendingJoin(
+            UUID.randomUUID().toString(), requesterId, targetId, contentKey, now + JOIN_REQUEST_TTL_MS,
+        )
+        pendingJoins[request.id] = request
+        val quiet = declined[targetId]?.contains(declineKey(requesterId, contentKey)) == true
+        if (!enqueue(targetId, SessionCommandDto(
+                type = "join-request",
+                peerId = requesterId,
+                peerName = peerName,
+                requestId = request.id,
+                quiet = quiet,
+            ))
+        ) {
+            pendingJoins.remove(request.id)
+            return null
+        }
+        return request.id
     }
 
     /** The host's answer to a join request. On accept both share a room; on decline it's
      *  remembered so the same peer can't pop another modal for the same content. */
     @Synchronized
-    fun answerJoin(hostId: String, peerId: String, hostName: String, contentKey: String, accept: Boolean): Boolean {
-        if (sessions[hostId]?.contentId != contentKey ||
-            sessions[peerId]?.contentId != contentKey
-        ) return false
+    fun answerJoin(targetId: String, requestId: String, accept: Boolean): Boolean {
+        val request = pendingJoins[requestId] ?: return false
+        if (request.targetId != targetId || request.expiresAtMs <= clock.nowMs()) {
+            if (request.expiresAtMs <= clock.nowMs()) pendingJoins.remove(requestId)
+            return false
+        }
+        pendingJoins.remove(requestId)
+        val target = sessions[targetId] ?: return false
+        val requester = sessions[request.requesterId] ?: return false
+        if (target.contentId != request.contentId || requester.contentId != request.contentId) return false
         if (!accept) {
-            declined.computeIfAbsent(hostId) { java.util.concurrent.ConcurrentHashMap.newKeySet() }
-                .add(declineKey(peerId, contentKey))
-            return enqueue(peerId, SessionCommandDto(type = "join-response", accepted = false))
+            declined.computeIfAbsent(targetId) { java.util.concurrent.ConcurrentHashMap.newKeySet() }
+                .add(declineKey(request.requesterId, request.contentId))
+            return enqueue(
+                request.requesterId,
+                SessionCommandDto(type = "join-response", accepted = false, requestId = requestId),
+            )
         }
-        declined[hostId]?.remove(declineKey(peerId, contentKey))
-        val room = roomFor(hostId) ?: Room("r-$hostId", hostId).also {
-            it.members.add(hostId)
-            it.controllers.add(hostId)
+        val targetRoom = roomFor(targetId)
+        if (targetRoom != null && targetRoom.hostId != targetId) return false
+        roomFor(request.requesterId)?.let { previous ->
+            if (previous.id == targetRoom?.id) return false
+            removeFromRoom(previous, request.requesterId)
+        }
+        declined[targetId]?.remove(declineKey(request.requesterId, request.contentId))
+        val room = targetRoom ?: Room("r-$targetId", targetId).also {
+            it.members.add(targetId)
+            it.controllers.add(targetId)
             rooms[it.id] = it
-            memberRoom[hostId] = it.id
+            memberRoom[targetId] = it.id
         }
-        room.members.add(peerId)
-        memberRoom[peerId] = room.id
-        enqueue(peerId, SessionCommandDto(type = "join-response", accepted = true))
+        room.members.add(request.requesterId)
+        memberRoom[request.requesterId] = room.id
+        enqueue(
+            request.requesterId,
+            SessionCommandDto(type = "join-response", accepted = true, requestId = requestId),
+        )
         pushRoomState(room)
         return true
     }
@@ -353,19 +402,13 @@ class PlaybackSessionRegistry(
         room.ready.remove(id)
         room.noHevc.remove(id)
         // Cut any shared live connection this viewer was riding, now that it's no longer a member.
-        leaveListeners.forEach { runCatching { it(id) } }
+        runCatching { cleanup.memberLeaving(id) }
         if (room.members.isEmpty()) { rooms.remove(room.id); return }
         if (room.hostId == id) {
             room.hostId = room.members.first()
             room.controllers.add(room.hostId)
         }
         pushRoomState(room)
-    }
-
-    /** Register to be told when [onMemberLeave]'s id leaves or is kicked from a room. */
-    fun onMemberLeave(listener: (String) -> Unit) { leaveListeners.add(listener) }
-    fun onTerminate(listener: (leaseId: String, unusedShareGroup: String?) -> Unit) {
-        terminateListeners.add(listener)
     }
 
     /** Fires whenever a command is queued for [id]; the WebSocket drains on each signal. */
@@ -383,6 +426,9 @@ class PlaybackSessionRegistry(
         val priorRoom = memberRoom[id]
         leaveRoom(id)
         declined.remove(id)
+        pendingJoins.entries.removeIf {
+            it.value.requesterId == id || it.value.targetId == id
+        }
         if (sessions.remove(id) != null) {
             tombstones[id] = clock.nowMs() + TOMBSTONE_MS
             val unusedGroup = when {
@@ -390,7 +436,7 @@ class PlaybackSessionRegistry(
                 rooms.containsKey(priorRoom) -> null
                 else -> priorRoom
             }
-            terminateListeners.forEach { runCatching { it(id, unusedGroup) } }
+            runCatching { cleanup.leaseTerminated(id, unusedGroup) }
         }
         wakes.remove(id)?.close()
     }
@@ -425,6 +471,7 @@ class PlaybackSessionRegistry(
         private const val DEFAULT_STALE_MS = 12_000L
         // Must outlive every media grant so stale lease-scoped URLs consistently return 410.
         private const val TOMBSTONE_MS = 30 * 60_000L
+        private const val JOIN_REQUEST_TTL_MS = 60_000L
     }
 
     override fun close() {

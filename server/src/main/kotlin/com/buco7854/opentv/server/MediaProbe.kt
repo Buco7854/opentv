@@ -34,12 +34,20 @@ internal class MediaProbe(
     private val probes = ConcurrentHashMap<String, Pair<MediaProbeResult, Long>>()
     private val keyframes = ConcurrentHashMap<String, List<Double>>()
 
-    fun inspect(url: String): MediaProbeResult {
+    fun inspect(
+        url: String,
+        acquireUpstream: () -> AutoCloseable? = { null },
+    ): MediaProbeResult {
         probes[url]?.let { (result, timestamp) ->
             if (clock.nowMs() - timestamp < PROBE_TTL_MS) return result
             probes.remove(url)
         }
-        val result = runProbe(url)
+        val reservation = acquireUpstream()
+        val result = try {
+            runProbe(url)
+        } finally {
+            reservation?.close()
+        }
         if (probes.size > MAX_PROBES) probes.clear()
         probes[url] = result to clock.nowMs()
         return result

@@ -22,9 +22,12 @@ import io.ktor.server.application.install
 import io.ktor.server.http.content.singlePageApplication
 import io.ktor.server.plugins.compression.Compression
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.server.plugins.PayloadTooLargeException
+import io.ktor.server.plugins.bodylimit.RequestBodyLimit
 import io.ktor.server.plugins.partialcontent.PartialContent
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.response.respond
+import io.ktor.server.request.path
 import io.ktor.server.routing.get
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.routing
@@ -118,27 +121,14 @@ object ServerBootstrap {
             x264Preset = config.x264Preset,
             processRunner = processRunner,
         )
-        val sessions = PlaybackSessionRegistry()
+        val playbackCleanup = RuntimePlaybackLeaseCleanup()
+        val sessions = PlaybackSessionRegistry(cleanup = playbackCleanup)
         val mediaGrants = PlaybackMediaGrants(sessions)
         val liveRelay = LiveRelay(http, connections, { remux.available }, processRunner)
         val proxy = StreamProxy(http, cipher, streamGate, connectionLimit)
         val transcoder = AudioTranscoder(http, processRunner)
         cleanup.bind(sessions, downloads)
-        sessions.onMemberLeave { id ->
-            mediaGrants.detachResources(id)
-            proxy.drop(id)
-            liveRelay.drop(id)
-            transcoder.drop(id)
-            streamGate.release(id)
-        }
-        sessions.onTerminate { id, unusedGroup ->
-            mediaGrants.revokeLease(id)
-            proxy.drop(id)
-            liveRelay.drop(id)
-            transcoder.drop(id)
-            streamGate.release(id)
-            unusedGroup?.let(remux::stopGroup)
-        }
+        playbackCleanup.bind(mediaGrants, proxy, liveRelay, transcoder, streamGate, remux)
         val xtream = XtreamRepository(storage, xtreamApi, epg, account, coreLog)
         val metadata = MetadataRepository(storage.metadata, http.fetcher, coreLog)
         val apiServices = ApiServices(
@@ -180,6 +170,7 @@ object ServerBootstrap {
                 mediaGrants,
                 xtream,
                 downloads,
+                cleanup,
             ),
         )
         val mediaApi = MediaRouteDependencies(
@@ -193,6 +184,7 @@ object ServerBootstrap {
             remux,
             mediaGrants,
             connectionLimit,
+            auth,
         )
         val graph = ServerGraph(
             apiServices = apiServices,
@@ -252,6 +244,7 @@ fun Application.openTvModule(
             encodeDefaults = true
         })
     }
+    installOpenTvRequestBodyLimit()
     install(Compression)
     install(PartialContent)
     install(WebSockets)
@@ -306,6 +299,12 @@ fun Application.openTvModule(
                 ApiErrorDto("playback_revoked", "Playback lease or media grant has expired"),
             )
         }
+        exception<PayloadTooLargeException> { call, _ ->
+            call.respond(
+                HttpStatusCode.PayloadTooLarge,
+                ApiErrorDto("request_too_large", "Request body exceeds the allowed size"),
+            )
+        }
         exception<IllegalArgumentException> { call, cause ->
             call.respond(
                 HttpStatusCode.BadRequest,
@@ -345,6 +344,14 @@ fun Application.openTvModule(
             filesPath = "web"
             defaultPage = "index.html"
         }
+    }
+}
+
+internal const val MAX_REQUEST_BODY_BYTES = 1_048_576L
+
+internal fun Application.installOpenTvRequestBodyLimit() {
+    install(RequestBodyLimit) {
+        bodyLimit { call -> requestBodyLimit(call.request.path()) }
     }
 }
 

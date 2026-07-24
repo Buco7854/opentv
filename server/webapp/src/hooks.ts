@@ -71,6 +71,9 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[]): {
   const [tick, setTick] = useState(0);
   useEffect(() => {
     let cancelled = false;
+    // Route parameters identify the result. Never render a previous route's
+    // data while its replacement is loading (especially for playback routes).
+    setData(null);
     setLoading(true);
     setError(null);
     fn().then(
@@ -193,14 +196,21 @@ export function useDownloads(enabled = true): {
 }
 
 /** Stable content ids favorited by the current user in one playlist. */
-export function useFavorites(playlistId: number) {
+export function useFavorites(playlistId: number | null) {
   const [contentIds, setContentIds] = useState<Set<string>>(new Set());
   useEffect(() => {
+    let active = true;
+    setContentIds(new Set());
+    if (playlistId == null) return () => { active = false; };
     api.favorites(playlistId)
-      .then((f) => setContentIds(new Set(f.map((x) => x.contentId))))
+      .then((f) => {
+        if (active) setContentIds(new Set(f.map((x) => x.contentId)));
+      })
       .catch(() => {});
+    return () => { active = false; };
   }, [playlistId]);
   const toggle = useCallback((contentId: string) => {
+    if (playlistId == null) return;
     setContentIds((old) => {
       const next = new Set(old);
       if (next.has(contentId)) {

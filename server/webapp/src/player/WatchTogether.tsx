@@ -26,6 +26,7 @@ const SETTLE_MS = 4000;
 const SETTLE_TOL_MS = 1500;
 
 type Peer = { peerId: string; peerName: string };
+type JoinPeer = Peer & { requestId: string };
 
 export interface WatchTogether {
   selfId: string;
@@ -39,7 +40,7 @@ export interface WatchTogether {
   canControl: boolean;
   /** Viewers on this content we could join (when not yet in a room). */
   peers: WatchIntentPeer[];
-  joinRequests: Peer[];
+  joinRequests: JoinPeer[];
   controlRequests: Peer[];
   /** Provider check in flight - hold playback so we never open a doomed connection. */
   checking: boolean;
@@ -49,16 +50,18 @@ export interface WatchTogether {
   choosing: boolean;
   /** The room is reloading a changed track: lock controls and show loading until all are back. */
   loading: boolean;
+  /** A membership transition is in flight; do not open a solo provider connection yet. */
+  transitioning: boolean;
   /** Viewer chose to watch alone: release the hold and play (may then hit the provider limit). */
   watchAlone: () => void;
   ask: (peerId: string) => void;
-  answerJoin: (peerId: string, accept: boolean) => void;
-  requestControl: () => void;
-  answerControl: (peerId: string, grant: boolean) => void;
+  answerJoin: (requestId: string, accept: boolean) => Promise<void>;
+  requestControl: () => Promise<void>;
+  answerControl: (peerId: string, grant: boolean) => Promise<void>;
   /** Host hands a member control (or takes it back) directly. */
-  setControl: (id: string, grant: boolean) => void;
-  kick: (id: string) => void;
-  leave: () => void;
+  setControl: (id: string, grant: boolean) => Promise<void>;
+  kick: (id: string) => Promise<void>;
+  leave: () => Promise<void>;
   /** Pass to useSessionReporter so room commands reach this hook. */
   onCommand: (command: SessionCommand) => void;
 }
@@ -85,7 +88,7 @@ export function useWatchTogether(opts: {
   const [members, setMembers] = useState<RoomMember[]>([]);
   const [inRoom, setInRoom] = useState(false);
   const [peers, setPeers] = useState<WatchIntentPeer[]>([]);
-  const [joinRequests, setJoinRequests] = useState<Peer[]>([]);
+  const [joinRequests, setJoinRequests] = useState<JoinPeer[]>([]);
   const [controlRequests, setControlRequests] = useState<Peer[]>([]);
   const [checking, setChecking] = useState(true);
   const [blocked, setBlocked] = useState(false);
@@ -95,6 +98,7 @@ export function useWatchTogether(opts: {
   // True while the room reloads a changed track: everyone holds, controls lock, and playback only
   // resumes once every member has reloaded (or a safety timeout fires), so no one runs ahead.
   const [loading, setLoading] = useState(false);
+  const [transitioning, setTransitioning] = useState(false);
   const loadingRef = useRef(false);
 
   const self = members.find((m) => m.id === selfId);
@@ -139,9 +143,17 @@ export function useWatchTogether(opts: {
     setControlRequests([]);
   }, []);
 
-  const leave = useCallback(() => {
-    api.sessionLeave(selfId);
-    resetRoom();
+  const leave = useCallback(async () => {
+    setTransitioning(true);
+    try {
+      await api.sessionLeave(selfId);
+      resetRoom();
+    } catch {
+      snackbar(t('watch.leaveFailed'));
+      throw new Error(t('watch.leaveFailed'));
+    } finally {
+      setTransitioning(false);
+    }
   }, [selfId, resetRoom]);
 
   // Ask a specific viewer to watch together (there can be several on the same content).
@@ -151,25 +163,47 @@ export function useWatchTogether(opts: {
       .catch(() => snackbar(t('watch.requestFailed')));
   }, [selfId]);
 
-  const answerJoin = useCallback((peerId: string, accept: boolean) => {
-    api.joinAnswer(selfId, peerId, accept).catch(() => {});
-    setJoinRequests((list) => list.filter((r) => r.peerId !== peerId));
+  const answerJoin = useCallback(async (requestId: string, accept: boolean) => {
+    try {
+      await api.joinAnswer(selfId, requestId, accept);
+      setJoinRequests((list) => list.filter((r) => r.requestId !== requestId));
+    } catch {
+      snackbar(t('watch.actionFailed'));
+    }
   }, [selfId]);
 
-  const requestControl = useCallback(() => {
-    snackbar(t('watch.controlAsked'));
-    api.requestControl(selfId, true).catch(() => {});
+  const requestControl = useCallback(async () => {
+    try {
+      await api.requestControl(selfId, true);
+      snackbar(t('watch.controlAsked'));
+    } catch {
+      snackbar(t('watch.actionFailed'));
+    }
   }, [selfId]);
 
-  const answerControl = useCallback((peerId: string, grant: boolean) => {
-    api.grantControl(selfId, peerId, grant).catch(() => {});
-    setControlRequests((list) => list.filter((r) => r.peerId !== peerId));
+  const answerControl = useCallback(async (peerId: string, grant: boolean) => {
+    try {
+      await api.grantControl(selfId, peerId, grant);
+      setControlRequests((list) => list.filter((r) => r.peerId !== peerId));
+    } catch {
+      snackbar(t('watch.actionFailed'));
+    }
   }, [selfId]);
 
-  const kick = useCallback((id: string) => { api.kick(selfId, id).catch(() => {}); }, [selfId]);
+  const kick = useCallback(async (id: string) => {
+    try {
+      await api.kick(selfId, id);
+    } catch {
+      snackbar(t('watch.actionFailed'));
+    }
+  }, [selfId]);
 
-  const setControl = useCallback((id: string, grant: boolean) => {
-    api.setControl(selfId, id, grant).catch(() => {});
+  const setControl = useCallback(async (id: string, grant: boolean) => {
+    try {
+      await api.setControl(selfId, id, grant);
+    } catch {
+      snackbar(t('watch.actionFailed'));
+    }
   }, [selfId]);
 
   const applySync = useCallback((sync: NonNullable<SessionCommand['sync']>) => {
@@ -218,9 +252,14 @@ export function useWatchTogether(opts: {
   }, [selfId, video, send, settling]);
 
   const onCommand = useCallback((command: SessionCommand) => {
-    if (command.type === 'join-request' && command.peerId) {
-      const peer = { peerId: command.peerId, peerName: command.peerName || t('watch.someone') };
-      setJoinRequests((list) => (list.some((r) => r.peerId === peer.peerId) ? list : [...list, peer]));
+    if (command.type === 'join-request' && command.peerId && command.requestId) {
+      const peer = {
+        requestId: command.requestId,
+        peerId: command.peerId,
+        peerName: command.peerName || t('watch.someone'),
+      };
+      setJoinRequests((list) =>
+        (list.some((r) => r.requestId === peer.requestId) ? list : [...list, peer]));
       if (!command.quiet) snackbar(t('watch.wantsToJoin', { name: peer.peerName }));
     } else if (command.type === 'control-request' && command.peerId) {
       const peer = { peerId: command.peerId, peerName: command.peerName || t('watch.someone') };
@@ -269,7 +308,9 @@ export function useWatchTogether(opts: {
     setChoice('decided');
     loadingRef.current = false;
     setLoading(false);
-    if (roomContent.current && roomContent.current !== contentId) leave();
+    if (roomContent.current && roomContent.current !== contentId) {
+      void leave().catch(() => {});
+    }
   }, [contentId, leave]);
 
   const watchAlone = useCallback(() => setChoice('decided'), []);
@@ -345,7 +386,7 @@ export function useWatchTogether(opts: {
     available: inRoom || peers.length > 0 || joinRequests.length > 0,
     hasPending: joinRequests.length > 0 || controlRequests.length > 0,
     inRoom, members, isHost, canControl, peers, joinRequests, controlRequests, checking, blocked,
-    choosing: choice === 'pending', loading, watchAlone,
+    choosing: choice === 'pending', loading, transitioning, watchAlone,
     ask, answerJoin, requestControl, answerControl, setControl, kick, leave, onCommand,
   };
 }
@@ -372,7 +413,10 @@ export function WatchTogetherSheet({ wt, onDismiss, container }: {
             ariaLabel={m.name}
             selected={m.controller ? 'control' : 'viewer'}
             options={[['viewer', t('watch.roleViewer')], ['control', t('watch.roleController')], ['remove', t('watch.kick')]]}
-            onSelect={(v) => { if (v === 'remove') wt.kick(m.id); else wt.setControl(m.id, v === 'control'); }}
+            onSelect={(v) => {
+              if (v === 'remove') void wt.kick(m.id);
+              else void wt.setControl(m.id, v === 'control');
+            }}
           />
         ) : (
           <span className="watch-chip">{role}</span>
@@ -382,18 +426,18 @@ export function WatchTogetherSheet({ wt, onDismiss, container }: {
   });
 
   wt.joinRequests.forEach((r) => rows.push(
-    <div className="watch-row" key={`j-${r.peerId}`}>
+    <div className="watch-row" key={`j-${r.requestId}`}>
       <span className="min-w-0 flex-1 truncate">{t('watch.wantsToJoinShort', { name: r.peerName })}</span>
-      <button className="btn text watch-act" onClick={() => wt.answerJoin(r.peerId, false)}>{t('watch.decline')}</button>
-      <button className="btn text watch-act" onClick={() => wt.answerJoin(r.peerId, true)}>{t('watch.accept')}</button>
+      <button className="btn text watch-act" onClick={() => void wt.answerJoin(r.requestId, false)}>{t('watch.decline')}</button>
+      <button className="btn text watch-act" onClick={() => void wt.answerJoin(r.requestId, true)}>{t('watch.accept')}</button>
     </div>,
   ));
 
   wt.controlRequests.forEach((r) => rows.push(
     <div className="watch-row" key={`c-${r.peerId}`}>
       <span className="min-w-0 flex-1 truncate">{t('watch.wantsControlShort', { name: r.peerName })}</span>
-      <button className="btn text watch-act" onClick={() => wt.answerControl(r.peerId, false)}>{t('watch.decline')}</button>
-      <button className="btn text watch-act" onClick={() => wt.answerControl(r.peerId, true)}>{t('watch.allow')}</button>
+      <button className="btn text watch-act" onClick={() => void wt.answerControl(r.peerId, false)}>{t('watch.decline')}</button>
+      <button className="btn text watch-act" onClick={() => void wt.answerControl(r.peerId, true)}>{t('watch.allow')}</button>
     </div>,
   ));
 
@@ -416,10 +460,11 @@ export function WatchTogetherSheet({ wt, onDismiss, container }: {
       {rows}
       <div className="watch-actions">
         {wt.inRoom && !wt.canControl && (
-          <button className="btn tonal" onClick={() => { wt.requestControl(); onDismiss(); }}>{t('watch.requestControl')}</button>
+          <button className="btn tonal" onClick={() => { void wt.requestControl(); onDismiss(); }}>{t('watch.requestControl')}</button>
         )}
         {wt.inRoom && (
-          <button className="btn text" onClick={() => { wt.leave(); onDismiss(); }}>{t('watch.leave')}</button>
+          <button className="btn text" disabled={wt.transitioning}
+                  onClick={() => { void wt.leave().then(onDismiss).catch(() => {}); }}>{t('watch.leave')}</button>
         )}
       </div>
     </Sheet>

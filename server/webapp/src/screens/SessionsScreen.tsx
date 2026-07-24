@@ -72,6 +72,7 @@ export function SessionsScreen() {
   const [sessions, setSessions] = useState<Session[] | null>(null);
   const [messaging, setMessaging] = useState<Session | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>();
+  const schedulePoll = useRef<(delay: number) => void>(() => {});
   // The viewer applies a pause/play over its socket and heartbeats the new state
   // right away, so a confirming poll is usually a second out. Hold the optimistic
   // `paused` until a poll agrees, or a short safety window elapses if the viewer
@@ -92,20 +93,43 @@ export function SessionsScreen() {
     });
   };
 
-  const tick = async () => {
-    clearTimeout(timer.current);
-    try { setSessions(reconcile(await api.adminPlayback())); } catch { /* keep last */ }
-    timer.current = setTimeout(tick, POLL_MS);
-  };
-  useEffect(() => { tick(); return () => clearTimeout(timer.current); }, []);
+  useEffect(() => {
+    let active = true;
+    const tick = async () => {
+      clearTimeout(timer.current);
+      try {
+        const next = await api.adminPlayback();
+        if (active) setSessions(reconcile(next));
+      } catch { /* keep last */ }
+      if (active) timer.current = setTimeout(tick, POLL_MS);
+    };
+    schedulePoll.current = (delay) => {
+      if (!active) return;
+      clearTimeout(timer.current);
+      timer.current = setTimeout(tick, delay);
+    };
+    void tick();
+    return () => {
+      active = false;
+      schedulePoll.current = () => {};
+      clearTimeout(timer.current);
+    };
+  }, []);
 
   const command = async (session: Session, type: 'pause' | 'play') => {
     const paused = type === 'pause';
     pendingPaused.current.set(session.id, { paused, until: Date.now() + 4000 });
     setSessions((list) => list?.map((s) => (s.id === session.id ? { ...s, paused } : s)) ?? list);
-    await api.adminPlaybackCommand(session.id, { type }).catch(() => { pendingPaused.current.delete(session.id); });
+    try {
+      await api.adminPlaybackCommand(session.id, { type });
+    } catch {
+      pendingPaused.current.delete(session.id);
+      setSessions((list) => list?.map((item) =>
+        (item.id === session.id ? { ...item, paused: session.paused } : item)) ?? list);
+      snackbar(t('sessions.commandFailed'));
+    }
     // The viewer confirms over its socket within a round-trip; poll shortly to pick it up.
-    setTimeout(tick, 700);
+    schedulePoll.current(700);
   };
 
   return (
@@ -130,8 +154,12 @@ export function SessionsScreen() {
               onToggle={() => command(s, s.paused ? 'play' : 'pause')}
               onMessage={() => setMessaging(s)}
               onStop={async () => {
-                await api.adminPlaybackEnd(s.id);
-                setSessions((current) => current?.filter((item) => item.id !== s.id) ?? current);
+                try {
+                  await api.adminPlaybackEnd(s.id);
+                  setSessions((current) => current?.filter((item) => item.id !== s.id) ?? current);
+                } catch {
+                  snackbar(t('sessions.commandFailed'));
+                }
               }}
             />
           ))}
@@ -279,9 +307,13 @@ function MessageDialog({ session, onDismiss }: { session: Session; onDismiss: ()
   const send = async () => {
     const message = text.trim();
     if (!message) return;
-    onDismiss();
-    await api.adminPlaybackCommand(session.id, { type: 'message', text: message }).catch(() => {});
-    snackbar(t('sessions.messageSent'));
+    try {
+      await api.adminPlaybackCommand(session.id, { type: 'message', text: message });
+      onDismiss();
+      snackbar(t('sessions.messageSent'));
+    } catch {
+      snackbar(t('sessions.commandFailed'));
+    }
   };
   return (
     <Dialog

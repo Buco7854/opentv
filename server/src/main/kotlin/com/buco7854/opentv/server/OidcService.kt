@@ -58,7 +58,7 @@ class OidcService(
         if (config.oidc != null) metadata()
     }
 
-    internal suspend fun start(): OidcStartResult {
+    internal suspend fun start(clientIp: String): OidcStartResult {
         val metadata = metadata()
         val verifier = CodeVerifier()
         val nonce = Nonce()
@@ -71,6 +71,7 @@ class OidcService(
                     AuthCrypto.hashToken(transaction).toHex(),
                 )
             ),
+            clientIp,
         )
         val request = AuthenticationRequest.Builder(
             ResponseType.CODE,

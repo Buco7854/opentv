@@ -39,6 +39,7 @@ export function SettingsScreen() {
   const [language, setLanguage] = useState<Language>(languageSetting.get());
   const [current, setCurrent] = useState<SectionId>('appearance');
   const saveTimer = useRef<ReturnType<typeof setTimeout>>();
+  const pendingSettings = useRef<Settings | null>(null);
 
   useEffect(() => {
     if (admin) api.settings().then(setServer).catch(() => snackbar(t('settings.loadFailed')));
@@ -47,14 +48,21 @@ export function SettingsScreen() {
 
   useEffect(() => () => {
     clearTimeout(saveTimer.current);
+    const pending = pendingSettings.current;
+    pendingSettings.current = null;
+    if (pending) void api.saveSettings(pending, true).catch(() => {});
   }, []);
 
   // Debounced persist so typing a custom User-Agent doesn't spam the server.
   const saveServer = (next: Settings, immediate = false) => {
     setServer(next);
     clearTimeout(saveTimer.current);
-    const run = () => api.saveSettings(next).catch((e: Error) => snackbar(e.message));
-    if (immediate) run(); else saveTimer.current = setTimeout(run, 500);
+    pendingSettings.current = next;
+    const run = () => {
+      pendingSettings.current = null;
+      return api.saveSettings(next).catch((e: Error) => snackbar(e.message));
+    };
+    if (immediate) void run(); else saveTimer.current = setTimeout(() => void run(), 500);
   };
 
   const visibleSections = admin

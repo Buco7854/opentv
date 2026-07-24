@@ -7,6 +7,7 @@ import {
   api, ApiError, SessionCommand, SessionCommandInput, SessionHeartbeat,
 } from '../api';
 import { snackbar } from '../components/Primitives';
+import { isTerminalPlaybackStatus } from './mediaGrant';
 
 /** Live playback facts, read fresh on each heartbeat via a ref. */
 export interface PlaybackSnapshot {
@@ -97,7 +98,7 @@ export function useSessionReporter(
         const el = video.current;
         if (el) commands.forEach((c) => handle(c, el));
       } catch (cause) {
-        if (cause instanceof ApiError && (cause.status === 401 || cause.status === 410)) {
+        if (cause instanceof ApiError && isTerminalPlaybackStatus(cause.status)) {
           stopped = true;
           revokedRef.current?.();
         }

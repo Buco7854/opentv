@@ -21,6 +21,13 @@ import { t } from '../i18n';
 import { prefs } from '../preferences';
 import { MenuSheet, SubtitleStyleSheet } from './PlaybackSheets';
 import { formatPlaybackTime, streamKind, supportsHevc } from './playbackPolicy';
+import {
+  captureMediaPosition,
+  isTerminalPlaybackStatus,
+  mediaSourceIdentity,
+  replaceMediaGrant,
+  restoreMediaPosition,
+} from './mediaGrant';
 
 export interface PlayRequest {
   contentId: string;
@@ -60,20 +67,6 @@ const hevcCapable = supportsHevc(typeof MediaSource === 'undefined' ? undefined 
 
 type TrackKind = { audio: { names: string[]; current: number }; subs: { names: string[]; current: number } };
 
-function replaceGrant(url: string | null, grant: string): string | null {
-  if (!url) return null;
-  const next = new URL(url, window.location.origin);
-  next.searchParams.set('g', grant);
-  return `${next.pathname}${next.search}${next.hash}`;
-}
-
-function mediaSourceKey(url: string | null): string {
-  if (!url) return '';
-  const next = new URL(url, window.location.origin);
-  next.searchParams.delete('g');
-  return `${next.pathname}${next.search}${next.hash}`;
-}
-
 function sourceKind(url: string | null) {
   if (!url) return 'direct' as const;
   const parsed = new URL(url, window.location.origin);
@@ -107,7 +100,7 @@ export function PlayerSurface(props: {
     }).catch((cause: unknown) => {
       if (cancelled) return;
       const error = cause as ApiError;
-      if (error.status === 401 || error.status === 410) onClose();
+      if (isTerminalPlaybackStatus(error.status)) onClose();
       else setLeaseError(error.message);
     });
     return () => {
@@ -128,14 +121,14 @@ export function PlayerSurface(props: {
           ...current,
           mediaGrant: issued.token,
           mediaGrantExpiresAtMs: issued.expiresAtMs,
-          streamUrl: replaceGrant(current.streamUrl, issued.token),
-          relayUrl: replaceGrant(current.relayUrl, issued.token),
-          transcodeUrl: replaceGrant(current.transcodeUrl, issued.token),
-          remuxStartUrl: replaceGrant(current.remuxStartUrl, issued.token)!,
+          streamUrl: replaceMediaGrant(current.streamUrl, issued.token),
+          relayUrl: replaceMediaGrant(current.relayUrl, issued.token),
+          transcodeUrl: replaceMediaGrant(current.transcodeUrl, issued.token),
+          remuxStartUrl: replaceMediaGrant(current.remuxStartUrl, issued.token)!,
         } : current);
       }).catch((cause: unknown) => {
         const error = cause as ApiError;
-        if (error.status === 401 || error.status === 410) onClose();
+        if (isTerminalPlaybackStatus(error.status)) onClose();
         else setLeaseError(error.message);
       });
     }, delay);
@@ -169,7 +162,11 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
   const catchup = request.mode === 'catchup';
   const direct = request.mode === 'download';
   const url = lease.streamUrl ?? lease.remuxStartUrl;
-  const sourceKey = mediaSourceKey(url);
+  const sourceKey = mediaSourceIdentity(url);
+  const leaseRef = useRef(lease);
+  leaseRef.current = lease;
+  const latestGrant = useRef(lease.mediaGrant);
+  latestGrant.current = lease.mediaGrant;
   // Server remux override: the file re-served as a VOD HLS playlist (all tracks exposed,
   // seeking handled by hls.js). `startAt` is the resume/switch position; `audio` is the
   // muxed-in track (switching re-requests).
@@ -187,34 +184,22 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
   useEffect(() => {
     // Switching files: release the old session (frees its provider connection).
     const prev = remuxRef.current;
-    if (prev) api.remuxStop(prev.id, lease.id, lease.mediaGrant);
+    if (prev) api.remuxStop(prev.id, lease.id, latestGrant.current);
     setRemux(null); setRemuxState('idle'); forceTranscode.current = false;
     setError(null);
   }, [sourceKey, lease.id]);
   useEffect(() => {
     api.remuxAvailable().then((r) => setRemuxAvailable(r.available)).catch(() => setRemuxAvailable(false));
   }, []);
-  const activeUrl = remux?.playlistUrl ?? lease.streamUrl ?? '';
+  const activeUrl = remux
+    ? replaceMediaGrant(remux.playlistUrl, lease.mediaGrant) ?? ''
+    : lease.streamUrl ?? '';
+  const activeSourceKey = mediaSourceIdentity(activeUrl);
   const activeDirect = remux ? true : !!direct;
   const rootRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const mpegtsRef = useRef<mpegts.Player | null>(null);
-
-  // Renewing a media grant changes only authorization, not playback identity. Refresh
-  // remux child URLs and restart HLS at the current VOD position without releasing the
-  // shared physical remux attachment.
-  const previousGrant = useRef(lease.mediaGrant);
-  useEffect(() => {
-    if (previousGrant.current === lease.mediaGrant) return;
-    previousGrant.current = lease.mediaGrant;
-    const at = videoRef.current?.currentTime ?? 0;
-    setRemux((current) => current ? {
-      ...current,
-      playlistUrl: replaceGrant(current.playlistUrl, lease.mediaGrant)!,
-      startAt: at,
-    } : current);
-  }, [lease.mediaGrant]);
 
   const [error, setError] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
@@ -230,7 +215,7 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
   const [scrub, setScrub] = useState<number | null>(null);
   /* Full-file target of an in-flight seek; the bar shows this until playback reaches it. */
   const [pendingSeek, setPendingSeek] = useState<number | null>(null);
-  useEffect(() => { setPendingSeek(null); }, [url]);
+  useEffect(() => { setPendingSeek(null); }, [sourceKey]);
   // Held-seek target for the seek closures, so a relative nudge starts from where
   // the bar is heading, not stale media time.
   const pendingSeekRef = useRef(pendingSeek);
@@ -259,6 +244,44 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
     },
     [],
   );
+
+  // Grant rotation changes authorization only. Keep the current engine and remux
+  // attachment, reload the HLS manifest in place, and restore the exact VOD
+  // position. Continuous MPEG-TS responses keep using their open transport; any
+  // later engine reconstruction reads the fresh URLs from leaseRef.
+  const previousGrant = useRef(lease.mediaGrant);
+  useEffect(() => {
+    if (previousGrant.current === lease.mediaGrant) return;
+    previousGrant.current = lease.mediaGrant;
+    const video = videoRef.current;
+    if (!video) return;
+    const currentRemux = remuxRef.current;
+    const target = currentRemux
+      ? replaceMediaGrant(currentRemux.playlistUrl, lease.mediaGrant)
+      : lease.streamUrl;
+    if (!target) return;
+    const snapshot = captureMediaPosition(video);
+    const hls = hlsRef.current;
+    if (hls) {
+      const restore = () => {
+        restoreMediaPosition(video, snapshot, live);
+        hls.off(Hls.Events.MANIFEST_PARSED, restore);
+      };
+      hls.on(Hls.Events.MANIFEST_PARSED, restore);
+      const hlsVariant = !currentRemux && sourceKind(lease.streamUrl) === 'livets';
+      hls.loadSource(src(target, hlsVariant));
+      hls.startLoad(live ? -1 : snapshot.position);
+      return () => hls.off(Hls.Events.MANIFEST_PARSED, restore);
+    }
+    if (!mpegtsRef.current && video.currentSrc) {
+      const restore = () => {
+        restoreMediaPosition(video, snapshot, live);
+      };
+      video.addEventListener('loadedmetadata', restore, { once: true });
+      video.src = src(target);
+      return () => video.removeEventListener('loadedmetadata', restore);
+    }
+  }, [lease.mediaGrant, lease.streamUrl, live, src]);
 
   // Non-live files (VOD, downloads, raw-TS VOD) and catch-up go through the remux:
   // it exposes tracks, normalizes audio the browser can't decode (E-AC3/AC3), and
@@ -299,7 +322,7 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
   // provider only blocks provider-backed streams.
   const holdForChoice = wt.checking || wt.choosing;
   const holdForConnection = holdForChoice || (providerBacked && wt.blocked);
-  const holdEngine = holdForConnection || (remuxEligible && !remux &&
+  const holdEngine = wt.transitioning || holdForConnection || (remuxEligible && !remux &&
     (remuxAvailable == null ||
       (remuxAvailable && (remuxState === 'idle' || remuxState === 'loading'))));
   useEffect(() => {
@@ -328,7 +351,7 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
     try {
       const r = await fetch(src(url), { headers: { Range: 'bytes=0-0' } });
       if (!r.ok) {
-        if (r.status === 401 || r.status === 403 || r.status === 410) {
+        if (isTerminalPlaybackStatus(r.status)) {
           terminatePlayback(r.status);
           return;
         }
@@ -358,7 +381,7 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
       video.playbackRate = 1;
     }
 
-    const kind = remux ? streamKind(activeUrl) : sourceKind(lease.streamUrl);
+    const kind = remux ? streamKind(activeUrl) : sourceKind(leaseRef.current.streamUrl);
 
     const stopEngines = () => {
       hlsRef.current?.destroy(); hlsRef.current = null;
@@ -382,9 +405,10 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
         setError(t('player.mpegtsUnsupported'));
         return;
       }
+      const currentLease = leaseRef.current;
       const mediaUrl = relay
-        ? lease.relayUrl
-        : transcoded ? lease.transcodeUrl : lease.streamUrl;
+        ? currentLease.relayUrl
+        : transcoded ? currentLease.transcodeUrl : currentLease.streamUrl;
       if (!mediaUrl) {
         setError(t('player.decodeFailed'));
         return;
@@ -426,7 +450,7 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
           statusCode?: number;
         } | null;
         const status = Number(response?.code ?? response?.status ?? response?.statusCode);
-        if (status === 401 || status === 403 || status === 410) {
+        if (isTerminalPlaybackStatus(status)) {
           terminatePlayback(status);
           return;
         }
@@ -482,7 +506,7 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
       hls.attachMedia(video);
       hls.on(Hls.Events.ERROR, (_e, data) => {
         const status = data.response?.code;
-        if (status === 401 || status === 403 || status === 410) {
+        if (isTerminalPlaybackStatus(status)) {
           terminatePlayback(status);
           return;
         }
@@ -607,14 +631,12 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
       video.load();
     };
   }, [
-    url, activeUrl, live, remux, src, holdEngine, roomLive, lease,
+    sourceKey, activeSourceKey, live, remux?.id, remux?.startAt, src, holdEngine, roomLive,
     request.contentId, catchup, terminatePlayback,
   ]);
 
   // PiP/fullscreen end when the player closes, not on engine swaps. Closing also
   // releases the remux session so nothing keeps reading the provider.
-  const latestGrant = useRef(lease.mediaGrant);
-  latestGrant.current = lease.mediaGrant;
   useEffect(() => () => {
     if (document.pictureInPictureElement) document.exitPictureInPicture().catch(() => {});
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
@@ -910,11 +932,12 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
       const hevc = hevcCapable && !forceTranscode.current;
       // The tab id lets the server group this read: alone it's ours, in a room it's shared, and
       // there the room's audio track overrides what we asked - result.audio is what it used.
-      const result = await api.remuxStart(lease.remuxStartUrl, audioIdx, !!catchup, hevc);
+      const currentLease = leaseRef.current;
+      const result = await api.remuxStart(currentLease.remuxStartUrl, audioIdx, !!catchup, hevc);
       // Switching audio or share group makes a new session; release the old one so this viewer
       // never holds two of the provider's connections at once.
       if (prevId && prevId !== result.id) {
-        api.remuxStop(prevId, lease.id, lease.mediaGrant);
+        api.remuxStop(prevId, currentLease.id, currentLease.mediaGrant);
       }
       chosenTracks.current.audio = result.audio;
       setRemux({
@@ -927,6 +950,10 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
         subs: { names: result.subtitleTracks ?? [], current: chosenTracks.current.subs ?? -1 },
       });
     } catch (e) {
+      if (e instanceof ApiError && isTerminalPlaybackStatus(e.status)) {
+        terminatePlayback(e.status);
+        return;
+      }
       // Provider connection limit reached: surface it as a player error like the
       // decode failure, not a passing snackbar.
       if ((e as ApiError).status === 429) {
@@ -941,7 +968,7 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
       setRemux(null);
       if (!noTracks) snackbar((e as Error).message);
     }
-  }, [lease, catchup]);
+  }, [catchup, terminatePlayback]);
   startRemuxRef.current = startRemux;
 
   // Prepare the remux when the file opens, opening at the saved resume position so
@@ -960,7 +987,7 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
     })();
     return () => { cancelled = true; };
   }, [
-    remuxEligible, remuxAvailable, remux, remuxState, url, catchup,
+    remuxEligible, remuxAvailable, remux, remuxState, sourceKey, catchup,
     startRemux, wt.checking, wt.blocked, request.contentId,
   ]);
 
@@ -996,7 +1023,7 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
   // provider where the first ffprobe still holds the connection; the probe is then cached,
   // so retries (with backoff) generally get in.
   const remuxRetries = useRef(0);
-  useEffect(() => { remuxRetries.current = 0; }, [url]);
+  useEffect(() => { remuxRetries.current = 0; }, [sourceKey]);
   useEffect(() => {
     if (remuxState !== 'failed' || !remuxEligible || remuxAvailable !== true) return;
     if (remuxRetries.current >= 3) return;

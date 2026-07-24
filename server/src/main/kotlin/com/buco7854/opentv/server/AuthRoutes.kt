@@ -74,7 +74,7 @@ internal fun Route.publicAuthRoutes(
             call.respondAuth(webAuthn.completeAuthentication(call.receive(), clientIp(call)), config)
         }
         get("/oidc/start") {
-            val start = oidc.start()
+            val start = oidc.start(clientIp(call))
             call.response.cookies.append(oidcTransactionCookie(start.transactionToken, config))
             call.respondRedirect(start.authorizationUrl)
         }
@@ -103,6 +103,29 @@ internal fun Route.publicAuthRoutes(
         }
     }
 }
+
+internal const val MAX_PUBLIC_AUTH_REQUEST_BODY_BYTES = 65_536L
+
+private val PUBLIC_AUTH_BODY_PATHS = setOf(
+    "/api/v1/auth/bootstrap",
+    "/api/v1/auth/password",
+    "/api/v1/auth/activate",
+    "/api/v1/auth/totp/enroll/start",
+    "/api/v1/auth/totp/enroll/complete",
+    "/api/v1/auth/totp",
+    "/api/v1/auth/recovery",
+    "/api/v1/auth/webauthn/register/options",
+    "/api/v1/auth/webauthn/register/complete",
+    "/api/v1/auth/webauthn/authenticate/options",
+    "/api/v1/auth/webauthn/authenticate/complete",
+)
+
+internal fun requestBodyLimit(path: String): Long =
+    if (path in PUBLIC_AUTH_BODY_PATHS) {
+        MAX_PUBLIC_AUTH_REQUEST_BODY_BYTES
+    } else {
+        MAX_REQUEST_BODY_BYTES
+    }
 
 private fun ApplicationCall.requireAuthOrigin(config: AuthConfig) {
     val expected = "${config.publicUrl.scheme}://${config.publicUrl.rawAuthority}"

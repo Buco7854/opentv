@@ -21,12 +21,13 @@ class AuthServiceTest {
         var now = 1_700_000_000_000L
         var revokedSession: String? = null
         val cleanup = object : UserStateCleanupCoordinator {
-            override fun sessionRevoked(userId: String, authSessionId: String?) {
+            override suspend fun sessionRevoked(userId: String, authSessionId: String?) {
                 revokedSession = authSessionId
             }
-            override fun playlistGrantRevoked(userId: String, playlistId: Long) = Unit
-            override fun userDeleted(userId: String) = Unit
-            override fun playlistDeleting(playlistId: Long) = Unit
+            override suspend fun playlistGrantRevoked(userId: String, playlistId: Long) = Unit
+            override suspend fun userDeleted(userId: String) = Unit
+            override suspend fun playlistDeleting(playlistId: Long) = Unit
+            override suspend fun <T> admitPlayback(block: suspend () -> T): T = block()
         }
         val service = AuthService(db, authConfig(), dir, { now }, cleanup = cleanup)
         try {
@@ -73,6 +74,13 @@ class AuthServiceTest {
                     "127.0.0.1",
                 )
             }
+            assertFailsWith<IllegalArgumentException> {
+                service.adminResetUser(
+                    requireNotNull(authenticated).first,
+                    authenticated.first.userId,
+                    "127.0.0.1",
+                )
+            }
             service.logout(requireNotNull(authenticated).first, all = false)
             assertEquals(authenticated.first.authSessionId, revokedSession)
             assertNull(service.authenticate(completed.sessionToken))
@@ -89,6 +97,32 @@ class AuthServiceTest {
                 )
             }
             now += 30_000
+        } finally {
+            db.close()
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun invalidMfaChallengesContributeToTheIpRateLimit() = runTest {
+        val dir = Files.createTempDirectory("opentv-auth-limit-test")
+        val db = createServerUserDatabase(dir.resolve("server-users.db").toString())
+        val service = AuthService(db, authConfig(), dir)
+        try {
+            repeat(5) {
+                assertFailsWith<InvalidChallengeException> {
+                    service.completeTotp(
+                        TotpCompleteRequestDto("not-a-real-challenge-$it", "000000"),
+                        "203.0.113.10",
+                    )
+                }
+            }
+            assertFailsWith<AuthRateLimitedException> {
+                service.completeRecovery(
+                    RecoveryCompleteRequestDto("another-invalid-challenge", "INVALID"),
+                    "203.0.113.10",
+                )
+            }
         } finally {
             db.close()
             dir.toFile().deleteRecursively()

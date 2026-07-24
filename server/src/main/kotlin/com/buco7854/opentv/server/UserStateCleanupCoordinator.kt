@@ -1,5 +1,8 @@
 package com.buco7854.opentv.server
 
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
 /**
  * Coordinates runtime cleanup caused by persistent authentication and entitlement changes.
  *
@@ -7,20 +10,23 @@ package com.buco7854.opentv.server
  * prevents feature services from accumulating best-effort callback lists.
  */
 interface UserStateCleanupCoordinator {
-    fun sessionRevoked(userId: String, authSessionId: String?)
-    fun playlistGrantRevoked(userId: String, playlistId: Long)
-    fun userDeleted(userId: String)
-    fun playlistDeleting(playlistId: Long)
+    suspend fun sessionRevoked(userId: String, authSessionId: String?)
+    suspend fun playlistGrantRevoked(userId: String, playlistId: Long)
+    suspend fun userDeleted(userId: String)
+    suspend fun playlistDeleting(playlistId: Long)
+    suspend fun <T> admitPlayback(block: suspend () -> T): T
 }
 
 object NoopUserStateCleanupCoordinator : UserStateCleanupCoordinator {
-    override fun sessionRevoked(userId: String, authSessionId: String?) = Unit
-    override fun playlistGrantRevoked(userId: String, playlistId: Long) = Unit
-    override fun userDeleted(userId: String) = Unit
-    override fun playlistDeleting(playlistId: Long) = Unit
+    override suspend fun sessionRevoked(userId: String, authSessionId: String?) = Unit
+    override suspend fun playlistGrantRevoked(userId: String, playlistId: Long) = Unit
+    override suspend fun userDeleted(userId: String) = Unit
+    override suspend fun playlistDeleting(playlistId: Long) = Unit
+    override suspend fun <T> admitPlayback(block: suspend () -> T): T = block()
 }
 
 class RuntimeUserStateCleanupCoordinator : UserStateCleanupCoordinator {
+    private val admission = Mutex()
     @Volatile
     private var runtime: RuntimeCleanup? = null
 
@@ -29,28 +35,33 @@ class RuntimeUserStateCleanupCoordinator : UserStateCleanupCoordinator {
         runtime = RuntimeCleanup(sessions, downloads)
     }
 
-    override fun sessionRevoked(userId: String, authSessionId: String?) {
-        val current = requireNotNull(runtime) { "Runtime cleanup has not been bound" }
-        if (authSessionId == null) current.sessions.terminateUser(userId)
-        else current.sessions.terminateSession(authSessionId)
-    }
+    override suspend fun sessionRevoked(userId: String, authSessionId: String?) =
+        admission.withLock {
+            val current = requireNotNull(runtime) { "Runtime cleanup has not been bound" }
+            if (authSessionId == null) current.sessions.terminateUser(userId)
+            else current.sessions.terminateSession(authSessionId)
+        }
 
-    override fun playlistGrantRevoked(userId: String, playlistId: Long) {
-        val current = requireNotNull(runtime) { "Runtime cleanup has not been bound" }
-        current.sessions.terminatePlaylist(userId, playlistId)
-        current.downloads.scheduleGrantRevocation(playlistId)
-    }
+    override suspend fun playlistGrantRevoked(userId: String, playlistId: Long) =
+        admission.withLock {
+            val current = requireNotNull(runtime) { "Runtime cleanup has not been bound" }
+            current.sessions.terminatePlaylist(userId, playlistId)
+            current.downloads.scheduleGrantRevocation(playlistId)
+        }
 
-    override fun userDeleted(userId: String) {
+    override suspend fun userDeleted(userId: String) = admission.withLock {
         val current = requireNotNull(runtime) { "Runtime cleanup has not been bound" }
         current.sessions.terminateUser(userId)
         current.downloads.scheduleOrphanCleanup()
     }
 
-    override fun playlistDeleting(playlistId: Long) {
+    override suspend fun playlistDeleting(playlistId: Long) = admission.withLock {
         val current = requireNotNull(runtime) { "Runtime cleanup has not been bound" }
         current.sessions.terminatePlaylist(playlistId)
     }
+
+    override suspend fun <T> admitPlayback(block: suspend () -> T): T =
+        admission.withLock { block() }
 
     private data class RuntimeCleanup(
         val sessions: PlaybackSessionRegistry,

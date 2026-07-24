@@ -3,6 +3,8 @@
 
 import { useNavigate, useParams } from 'react-router-dom';
 import { api, ChannelKind } from '../api';
+import { EmptyState } from '../components/Common';
+import { t } from '../i18n';
 import { useAsync } from '../hooks';
 import { PlaybackErrorBoundary, PlayerSurface, PlayRequest } from '../player/PlayerProvider';
 
@@ -77,11 +79,21 @@ export function WatchCatchupScreen() {
 
 export function WatchDownloadScreen() {
   const downloadId = useParams().downloadId ?? '';
-  const { data: item } = useAsync(
+  const { data: item, loading, error } = useAsync(
     async () => (await api.downloads()).find((d) => d.id === downloadId) ?? null,
     [downloadId],
   );
-  if (item === null) return <WatchLoading />;
+  if (loading) return <WatchLoading />;
+  if (error || item === null) {
+    return (
+      <div className="player-frame">
+        <EmptyState
+          title={t('downloads.unavailableTitle')}
+          subtitle={error ?? t('downloads.unavailableSub')}
+        />
+      </div>
+    );
+  }
   const request: PlayRequest = {
     contentId: item.contentId,
     title: item.title,

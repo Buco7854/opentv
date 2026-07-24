@@ -146,41 +146,48 @@ class WebAuthnService(
         }
         auth.checkFlowLimit(clientIp, "webauthn-register", request.challenge)
         return try {
-        val challenge = auth.consumeWebAuthnChallenge(
-            ChallengeKind.WEBAUTHN_REGISTER, request.challenge,
-        )
-        val payload = Json.decodeFromString<WebAuthnChallengePayload>(challenge.payloadJson)
-        val data = runCatching {
-            manager.verifyRegistrationResponseJSON(
-                request.credential,
-                RegistrationParameters(
-                    webAuthnServerProperty(config, payload.browserChallenge),
-                    emptyList(),
-                    false,
-                    true,
-                ),
+            val challenge = auth.webAuthnChallenge(
+                ChallengeKind.WEBAUTHN_REGISTER, request.challenge,
             )
-        }.getOrElse { throw InvalidCredentialsException() }
-        val authenticatorData = data.attestationObject?.authenticatorData
-            ?: throw InvalidCredentialsException()
-        val attested = authenticatorData.attestedCredentialData ?: throw InvalidCredentialsException()
-        if (db.credentials().webAuthnById(attested.credentialId) != null) {
-            throw InvalidCredentialsException()
-        }
-        val userId = challenge.userId ?: throw InvalidChallengeException()
-        val row = WebAuthnCredentialRow(
-            credentialId = attested.credentialId,
-            userId = userId,
-            publicKeyCose = converter.cborMapper.writeValueAsBytes(attested.coseKey),
-            signCount = authenticatorData.signCount,
-            transportsJson = Json.encodeToString(data.transports.orEmpty().map { it.value }),
-            backupEligible = authenticatorData.isFlagBE,
-            backedUp = authenticatorData.isFlagBS,
-            label = request.label.trim().ifBlank { "Security key" },
-            createdAtMs = clock(),
-            lastUsedAtMs = null,
-        )
-            auth.finishWebAuthn(payload.parentId, row, enrollment = true, clientIp).also {
+            val payload = Json.decodeFromString<WebAuthnChallengePayload>(challenge.payloadJson)
+            val data = runCatching {
+                manager.verifyRegistrationResponseJSON(
+                    request.credential,
+                    RegistrationParameters(
+                        webAuthnServerProperty(config, payload.browserChallenge),
+                        emptyList(),
+                        false,
+                        true,
+                    ),
+                )
+            }.getOrElse { throw InvalidCredentialsException() }
+            val authenticatorData = data.attestationObject?.authenticatorData
+                ?: throw InvalidCredentialsException()
+            val attested = authenticatorData.attestedCredentialData
+                ?: throw InvalidCredentialsException()
+            if (db.credentials().webAuthnById(attested.credentialId) != null) {
+                throw InvalidCredentialsException()
+            }
+            val userId = challenge.userId ?: throw InvalidChallengeException()
+            val row = WebAuthnCredentialRow(
+                credentialId = attested.credentialId,
+                userId = userId,
+                publicKeyCose = converter.cborMapper.writeValueAsBytes(attested.coseKey),
+                signCount = authenticatorData.signCount,
+                transportsJson = Json.encodeToString(data.transports.orEmpty().map { it.value }),
+                backupEligible = authenticatorData.isFlagBE,
+                backedUp = authenticatorData.isFlagBS,
+                label = request.label.trim().ifBlank { "Security key" },
+                createdAtMs = clock(),
+                lastUsedAtMs = null,
+            )
+            auth.finishWebAuthn(
+                challenge.id,
+                payload.parentId,
+                row,
+                enrollment = true,
+                clientIp,
+            ).also {
                 auth.clearFlowLimit(clientIp, "webauthn-register", request.challenge)
             }
         } catch (error: Exception) {
@@ -197,40 +204,45 @@ class WebAuthnService(
         require(request.credential.length <= 65_536) { "WebAuthn response is too large" }
         auth.checkFlowLimit(clientIp, "webauthn-authenticate", request.challenge)
         return try {
-        val challenge = auth.consumeWebAuthnChallenge(
-            ChallengeKind.WEBAUTHN_AUTHENTICATE, request.challenge,
-        )
-        val payload = Json.decodeFromString<WebAuthnChallengePayload>(challenge.payloadJson)
-        val parsed = runCatching { manager.parseAuthenticationResponseJSON(request.credential) }
-            .getOrElse { throw InvalidCredentialsException() }
-        val row = db.credentials().webAuthnById(parsed.credentialId) ?: throw InvalidCredentialsException()
-        if (row.userId != challenge.userId) throw InvalidCredentialsException()
-        val record = credentialRecord(row)
-        val verified = runCatching {
-            manager.verify(
-                parsed,
-                AuthenticationParameters(
-                    webAuthnServerProperty(config, payload.browserChallenge),
-                    record,
-                    listOf(row.credentialId),
-                    false,
-                    true,
-                ),
+            val challenge = auth.webAuthnChallenge(
+                ChallengeKind.WEBAUTHN_AUTHENTICATE, request.challenge,
             )
-        }.getOrElse { throw InvalidCredentialsException() }
-        val verifiedAuthenticator = verified.authenticatorData ?: throw InvalidCredentialsException()
-        val nextCounter = verifiedAuthenticator.signCount
-        if (row.signCount > 0 && nextCounter <= row.signCount) throw InvalidCredentialsException()
+            val payload = Json.decodeFromString<WebAuthnChallengePayload>(challenge.payloadJson)
+            val parsed = runCatching { manager.parseAuthenticationResponseJSON(request.credential) }
+                .getOrElse { throw InvalidCredentialsException() }
+            val row = db.credentials().webAuthnById(parsed.credentialId)
+                ?: throw InvalidCredentialsException()
+            if (row.userId != challenge.userId) throw InvalidCredentialsException()
+            val record = credentialRecord(row)
+            val verified = runCatching {
+                manager.verify(
+                    parsed,
+                    AuthenticationParameters(
+                        webAuthnServerProperty(config, payload.browserChallenge),
+                        record,
+                        listOf(row.credentialId),
+                        false,
+                        true,
+                    ),
+                )
+            }.getOrElse { throw InvalidCredentialsException() }
+            val verifiedAuthenticator = verified.authenticatorData
+                ?: throw InvalidCredentialsException()
+            val nextCounter = verifiedAuthenticator.signCount
+            if (row.signCount > 0 && nextCounter <= row.signCount) {
+                throw InvalidCredentialsException()
+            }
             auth.finishWebAuthn(
-            payload.parentId,
-            row.copy(
-                signCount = nextCounter,
-                backupEligible = verifiedAuthenticator.isFlagBE,
-                backedUp = verifiedAuthenticator.isFlagBS,
-                lastUsedAtMs = clock(),
-            ),
-            enrollment = false,
-            clientIp,
+                challenge.id,
+                payload.parentId,
+                row.copy(
+                    signCount = nextCounter,
+                    backupEligible = verifiedAuthenticator.isFlagBE,
+                    backedUp = verifiedAuthenticator.isFlagBS,
+                    lastUsedAtMs = clock(),
+                ),
+                enrollment = false,
+                clientIp,
             ).also {
                 auth.clearFlowLimit(clientIp, "webauthn-authenticate", request.challenge)
             }

@@ -1,14 +1,19 @@
 package com.buco7854.opentv.serverdata
 
 import com.buco7854.opentv.serverdata.db.ContentIdentityRow
+import com.buco7854.opentv.serverdata.db.AuthChallengeRow
+import com.buco7854.opentv.serverdata.db.AuthSessionRow
 import com.buco7854.opentv.serverdata.db.DownloadBlobRow
+import com.buco7854.opentv.serverdata.db.MfaCompletionWrite
 import com.buco7854.opentv.serverdata.db.OidcIdentityRow
+import com.buco7854.opentv.serverdata.db.RecoveryCodeRow
 import com.buco7854.opentv.serverdata.db.UserFavoriteRow
 import com.buco7854.opentv.serverdata.db.UserDownloadRow
 import com.buco7854.opentv.serverdata.db.UserPlaylistGrantRow
 import com.buco7854.opentv.serverdata.db.UserResumeRow
 import com.buco7854.opentv.serverdata.db.UserRow
 import com.buco7854.opentv.serverdata.db.replaceUserPlaylistGrants
+import com.buco7854.opentv.serverdata.db.completeMfa
 import kotlinx.coroutines.test.runTest
 import java.nio.file.Files
 import kotlin.test.Test
@@ -117,6 +122,44 @@ class ServerUserDatabaseTest {
         }
     }
 
+    @Test
+    fun mfaCompletionRollsBackEveryConsumptionOnConflict() = runTest {
+        withDatabase { db ->
+            db.users().insert(user())
+            db.challenges().insert(challenge("child", byteArrayOf(1)))
+            db.challenges().insert(challenge("parent", byteArrayOf(2)))
+            val session = session()
+
+            val completed = db.completeMfa(
+                challengeId = "child",
+                parentChallengeId = "parent",
+                recoveryCodeId = "missing",
+                write = MfaCompletionWrite(session, loginAtMs = 10),
+            )
+
+            assertTrue(!completed)
+            assertEquals(null, db.challenges().get("child")?.consumedAtMs)
+            assertEquals(null, db.challenges().get("parent")?.consumedAtMs)
+            assertEquals(null, db.sessions().get(session.id))
+
+            db.credentials().insertRecoveryCodes(
+                listOf(RecoveryCodeRow("recovery", "u1", byteArrayOf(3), 1, null)),
+            )
+            assertTrue(
+                db.completeMfa(
+                    challengeId = "child",
+                    parentChallengeId = "parent",
+                    recoveryCodeId = "recovery",
+                    write = MfaCompletionWrite(session, loginAtMs = 10),
+                ),
+            )
+            assertEquals(10, db.challenges().get("child")?.consumedAtMs)
+            assertEquals(10, db.challenges().get("parent")?.consumedAtMs)
+            assertTrue(db.credentials().unusedRecoveryCodes("u1").isEmpty())
+            assertNotNull(db.sessions().get(session.id))
+        }
+    }
+
     private suspend fun withDatabase(
         block: suspend (com.buco7854.opentv.serverdata.db.ServerUserDatabase) -> Unit,
     ) {
@@ -138,5 +181,28 @@ class ServerUserDatabaseTest {
     private fun blob() = DownloadBlobRow(
         "b1", "c1", "Title", "https://provider.invalid/media", "/tmp/file",
         DownloadBlobStatus.QUEUED, 0, 0, null, 1, 1,
+    )
+
+    private fun challenge(id: String, tokenHash: ByteArray) = AuthChallengeRow(
+        id, "u1", ChallengeKind.MFA, tokenHash, "", 0, 1, 100, null,
+    )
+
+    private fun session() = AuthSessionRow(
+        id = "session",
+        userId = "u1",
+        tokenHash = byteArrayOf(4),
+        csrfToken = "csrf",
+        authMethod = AuthMethod.PASSWORD,
+        clientKind = ClientKind.BROWSER,
+        tokenFamilyId = "family",
+        credentialVersion = 1,
+        deviceId = null,
+        deviceName = null,
+        mfaSatisfiedAtMs = 10,
+        createdAtMs = 10,
+        lastSeenAtMs = 10,
+        idleExpiresAtMs = 20,
+        absoluteExpiresAtMs = 30,
+        revokedAtMs = null,
     )
 }

@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 
@@ -6,6 +6,9 @@ import tailwindcss from '@tailwindcss/vite';
 // runs `npm run ci-build` automatically (see server/build.gradle.kts).
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  test: {
+    environment: 'jsdom',
+  },
   build: {
     outDir: process.env.WEBAPP_OUT ?? '../src/main/resources/web',
     emptyOutDir: true,

@@ -5,6 +5,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.response.header
+import io.ktor.server.response.respond
 import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondText
 import kotlinx.coroutines.Dispatchers
@@ -403,6 +404,7 @@ class RemuxService(
      * playlist. ffmpeg is not started until the first segment is fetched. [connectionLimit]
      * is how many concurrent reads the provider permits (its max_connections).
      */
+    @Synchronized
     fun start(url: String, audioIndex: Int, clientHevc: Boolean, force: Boolean, connectionLimit: Int,
               group: String, supersede: Set<String>): StartResult {
         val id = sessionId(url, clientHevc, audioIndex, group)
@@ -410,7 +412,6 @@ class RemuxService(
         // the group's stale one (a different track/file, or the room's previous audio), and - when
         // forming a room - every member's solo session. Dropping them frees the provider slot so a
         // room collapses to one read no matter which member re-keys first, and no one holds two.
-        sessions.values.filter { it.id != id && it.shareKey in supersede }.forEach { evict(it) }
         sessions[id]?.let {
             it.lastAccessMs = System.currentTimeMillis()
             return StartResult(id, playlistUrl(id, it.subLabels.isNotEmpty()), it.durationSec.takeIf { d -> d > 0 },
@@ -427,7 +428,24 @@ class RemuxService(
             throw ConnectionLimitException(connectionLimit)
         }
 
-        val probed = mediaProbe.inspect(url)
+        val probed = mediaProbe.inspect(url) {
+            if (!url.startsWith("http")) {
+                null
+            } else {
+                val probeId = "probe:$id"
+                if (!connections.tryOpenStream(
+                        probeId,
+                        providerKey,
+                        probeId,
+                        connectionLimit,
+                        {},
+                    )
+                ) {
+                    throw ConnectionLimitException(connectionLimit)
+                }
+                AutoCloseable { connections.close(probeId) }
+            }
+        }
         val audios = probed.streams.filter { it.type == "audio" }
         val subs = probed.streams.filter { it.type == "subtitle" && it.codec.lowercase() in TEXT_SUB_CODECS }
         val video = probed.streams.firstOrNull { it.type == "video" }
@@ -464,7 +482,10 @@ class RemuxService(
             audioLabels(audios), subtitleLabels(subs), nativeVideoCopy, System.currentTimeMillis(),
         )
         Files.writeString(dir.resolve("main.m3u8"), buildPlaylist(session))
+        // Publish the viable replacement before retiring old reads. Preparation failures leave
+        // existing viewers untouched.
         sessions[id] = session
+        sessions.values.filter { it.id != id && it.shareKey in supersede }.forEach { evict(it) }
         log.debug("remux {}: prepared ({}s, {} segs, video {} [{}], {} audio, {} subs)",
             id, duration, starts.size, video.codec,
             if (transcode) "->h264/$videoEncoder" else "copy", audios.size, subs.size)
@@ -577,7 +598,16 @@ class RemuxService(
         // Reserve the provider slot (this file's connection, shared with any other viewer of
         // it, evicting background downloads if need be); the callback stops this session if
         // we're ever bumped.
-        connections.openStream(session.id, session.providerKey, session.shareKey, session.connectionLimit) { stopReading(session) }
+        if (!connections.tryOpenStream(
+                session.id,
+                session.providerKey,
+                session.shareKey,
+                session.connectionLimit,
+                { stopReading(session) },
+            )
+        ) {
+            throw ConnectionLimitException(session.connectionLimit)
+        }
         val process = processRunner.start(
             MediaProcessRequest(
                 command = command(session, startNumber),
@@ -651,7 +681,15 @@ class RemuxService(
         // not init's mere existence, or hls.js gets a 0-byte init and can't decode.
         if (!Files.exists(init) || Files.size(init) == 0L) {
             val start = session.startNumber.coerceAtLeast(0)
-            produce(session, start, segFile(session, start))
+            try {
+                produce(session, start, segFile(session, start))
+            } catch (error: ConnectionLimitException) {
+                call.respond(
+                    HttpStatusCode.TooManyRequests,
+                    ApiErrorDto("provider_capacity", error.message ?: "Provider connection limit reached"),
+                )
+                return
+            }
         }
         if (!Files.exists(init) || Files.size(init) == 0L) return failed(session, call)
         respondFile(call, init, ContentType.parse("video/mp4"))
@@ -662,7 +700,17 @@ class RemuxService(
         session.lastAccessMs = System.currentTimeMillis()
         connections.touch(id)
         val seg = segFile(session, n)
-        if (!Files.exists(seg)) produce(session, n, seg)
+        if (!Files.exists(seg)) {
+            try {
+                produce(session, n, seg)
+            } catch (error: ConnectionLimitException) {
+                call.respond(
+                    HttpStatusCode.TooManyRequests,
+                    ApiErrorDto("provider_capacity", error.message ?: "Provider connection limit reached"),
+                )
+                return
+            }
+        }
         if (!Files.exists(seg)) return failed(session, call)
         pruneBehind(session, n)
         respondFile(call, seg, ContentType.parse("video/iso.segment"))

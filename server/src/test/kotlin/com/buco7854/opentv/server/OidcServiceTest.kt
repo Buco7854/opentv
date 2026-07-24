@@ -87,7 +87,7 @@ class OidcServiceTest {
             auth.initialize()
             val oidc = OidcService(auth, config)
 
-            val rejected = oidc.start()
+            val rejected = oidc.start("127.0.0.1")
             val rejectedQuery = query(rejected.authorizationUrl)
             assertFailsWith<InvalidChallengeException> {
                 oidc.callback(
@@ -99,7 +99,7 @@ class OidcServiceTest {
                 )
             }
 
-            val start = oidc.start()
+            val start = oidc.start("127.0.0.1")
             val query = query(start.authorizationUrl)
             nonce = query.getValue("nonce")
             assertEquals("S256", query["code_challenge_method"])
@@ -134,7 +134,7 @@ class OidcServiceTest {
                 TokenMode.EXPIRED,
                 TokenMode.BAD_SIGNATURE,
             )) {
-                val invalidStart = oidc.start()
+                val invalidStart = oidc.start("127.0.0.1")
                 val invalidQuery = query(invalidStart.authorizationUrl)
                 nonce = invalidQuery.getValue("nonce")
                 tokenMode = invalidMode
@@ -147,6 +147,10 @@ class OidcServiceTest {
                         clientIp = "127.0.0.1",
                     )
                 }
+            }
+            repeat(4) { oidc.start("127.0.0.1") }
+            assertFailsWith<AuthRateLimitedException> {
+                oidc.start("127.0.0.1")
             }
         } finally {
             db.close()

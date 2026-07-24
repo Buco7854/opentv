@@ -21,13 +21,14 @@ internal fun Route.libraryRoutes(service: LibraryApplicationService) {
         val type = call.request.queryParameters["type"] ?: "movie"
         val title = call.request.queryParameters["title"]
             ?: throw IllegalArgumentException("Missing title")
-        call.respond(service.metadata(type, title))
+        call.respond(service.metadata(call.actor, type, title))
     }
     get("/meta/episode") {
         val series = call.request.queryParameters["series"]
             ?: throw IllegalArgumentException("Missing series")
         call.respond(
             service.episodeMetadata(
+                call.actor,
                 series,
                 call.request.queryParameters["season"]?.toIntOrNull(),
                 call.request.queryParameters["episode"]?.toIntOrNull(),

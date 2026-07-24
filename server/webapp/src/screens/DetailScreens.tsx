@@ -111,7 +111,7 @@ export function MovieDetailScreen() {
     [channelId, movie != null],
   );
   const progress = useWatchProgress();
-  const { favoriteContentIds, toggleFavorite } = useFavorites(movie?.playlistId ?? 0);
+  const { favoriteContentIds, toggleFavorite } = useFavorites(movie?.playlistId ?? null);
 
   if (error) return <DetailShell onBack={() => navigate(-1)}><EmptyState title={t('detail.notFound')} subtitle={error} /></DetailShell>;
   if (!movie) return <DetailShell onBack={() => navigate(-1)}><Spinner /></DetailShell>;

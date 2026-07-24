@@ -27,7 +27,7 @@ data class JoinRequestBody(val peerId: String)
 
 @Serializable
 data class JoinAnswerBody(
-    val peerId: String,
+    val requestId: String,
     val accept: Boolean,
 )
 

@@ -1,6 +1,16 @@
 package com.buco7854.opentv.server
 
 import io.ktor.http.CookieEncoding
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.content.OutgoingContent
+import io.ktor.server.request.receiveText
+import io.ktor.server.response.respondText
+import io.ktor.server.routing.post
+import io.ktor.server.routing.routing
+import io.ktor.server.testing.testApplication
+import io.ktor.utils.io.ByteReadChannel
 import com.webauthn4j.data.client.Origin
 import com.webauthn4j.data.client.challenge.DefaultChallenge
 import java.net.URI
@@ -40,6 +50,75 @@ class AuthBoundaryTest {
 
         now += 2_000L
         limiter.check("ip:203.0.113.5", "account:alice")
+    }
+
+    @Test
+    fun fixedWindowLimiterBoundsSuccessfulRequests() {
+        var now = 1_000L
+        val limiter = AuthRateLimiter { now }
+
+        repeat(3) { limiter.consume("oidc-start:ip:test", 3, 60_000) }
+        assertFailsWith<AuthRateLimitedException> {
+            limiter.consume("oidc-start:ip:test", 3, 60_000)
+        }
+        now += 60_000
+        limiter.consume("oidc-start:ip:test", 3, 60_000)
+    }
+
+    @Test
+    fun oversizedRequestBodiesAreRejected() = testApplication {
+        application {
+            installOpenTvRequestBodyLimit()
+            routing {
+                post("/body") {
+                    call.respondText(call.receiveText())
+                }
+            }
+        }
+
+        val response = client.post("/body") {
+            setBody("x".repeat((MAX_REQUEST_BODY_BYTES + 1).toInt()))
+        }
+        assertEquals(HttpStatusCode.PayloadTooLarge, response.status)
+
+        val chunked = client.post("/body") {
+            setBody(object : OutgoingContent.ReadChannelContent() {
+                override fun readFrom() =
+                    ByteReadChannel("x".repeat((MAX_REQUEST_BODY_BYTES + 1).toInt()))
+            })
+        }
+        assertEquals(HttpStatusCode.PayloadTooLarge, chunked.status)
+    }
+
+    @Test
+    fun publicAuthBodiesUseTheSmallerRouteLimit() = testApplication {
+        application {
+            installOpenTvRequestBodyLimit()
+            routing {
+                post("/api/v1/auth/password") {
+                    call.respondText(call.receiveText())
+                }
+                post("/regular") {
+                    call.respondText(call.receiveText())
+                }
+            }
+        }
+        val body = "x".repeat((MAX_PUBLIC_AUTH_REQUEST_BODY_BYTES + 1).toInt())
+
+        assertEquals(
+            HttpStatusCode.PayloadTooLarge,
+            client.post("/api/v1/auth/password") { setBody(body) }.status,
+        )
+        assertEquals(HttpStatusCode.OK, client.post("/regular") { setBody(body) }.status)
+    }
+
+    @Test
+    fun forwardedAddressParsingAcceptsOnlyIpLiterals() {
+        assertContentEquals(byteArrayOf(127, 0, 0, 1), parseIpLiteral("127.0.0.1"))
+        assertEquals(16, parseIpLiteral("2001:db8::1")?.size)
+        assertEquals(null, parseIpLiteral("localhost"))
+        assertEquals(null, parseIpLiteral("attacker.example"))
+        assertEquals(null, IpRange.parse("localhost"))
     }
 
     @Test

@@ -7,16 +7,13 @@ import com.buco7854.opentv.serverdata.UserRole
 import com.buco7854.opentv.serverdata.UserStatus
 import com.buco7854.opentv.serverdata.db.AuthChallengeRow
 import com.buco7854.opentv.serverdata.db.AuthSessionRow
-import com.buco7854.opentv.serverdata.db.PasswordCredentialRow
 import com.buco7854.opentv.serverdata.db.OidcIdentityRow
 import com.buco7854.opentv.serverdata.db.PendingOidcIdentityRow
-import com.buco7854.opentv.serverdata.db.RecoveryCodeRow
-import com.buco7854.opentv.serverdata.db.SecurityEventRow
 import com.buco7854.opentv.serverdata.db.ServerUserDatabase
-import com.buco7854.opentv.serverdata.db.TotpCredentialRow
-import com.buco7854.opentv.serverdata.db.UserPlaylistGrantRow
 import com.buco7854.opentv.serverdata.db.UserRow
 import com.buco7854.opentv.serverdata.db.WebAuthnCredentialRow
+import com.buco7854.opentv.serverdata.db.MfaCompletionWrite
+import com.buco7854.opentv.serverdata.db.completeMfa
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.nio.file.Files
@@ -25,7 +22,6 @@ import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.PosixFilePermission
 import java.nio.file.attribute.PosixFilePermissions
 import java.security.MessageDigest
-import java.util.UUID
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
@@ -63,24 +59,31 @@ class AuthService(
 ) {
     private val limiter = AuthRateLimiter(clock)
     private val mutation = Mutex()
-    private val dummySalt = AuthCrypto.sha256("opentv-dummy-salt".toByteArray()).copyOf(16)
-    private val dummyHash by lazy {
-        AuthCrypto.passwordHash(
-            "not-a-real-password",
-            dummySalt,
-            AuthCrypto.ARGON_MEMORY_KB,
-            AuthCrypto.ARGON_ITERATIONS,
-            AuthCrypto.ARGON_PARALLELISM,
-        ).first
-    }
     private val bootstrapFile = dataDir.resolve("bootstrap.token")
     private val log = LoggerFactory.getLogger("opentv.auth")
     private val sessionService = PersistentSessionService(db, config, cleanup, clock)
+    private val accounts = AuthAccountService(db, clock, playlistExists)
+    private val credentials = AuthCredentialService(db, config, clock)
     internal val requestAuthenticator = RequestAuthenticator(sessionService)
-    internal val flows = AuthFlowService(this)
-    private val userAdministration by lazy {
-        UserAdministrationService(db, this, cleanup, clock)
-    }
+    internal val flows = AuthFlowService(
+        db,
+        config,
+        bootstrapFile,
+        clock,
+        mutation,
+        limiter,
+        accounts,
+        credentials,
+        sessionService,
+    )
+    private val userAdministration = UserAdministrationService(
+        db,
+        accounts,
+        sessionService,
+        mutation,
+        cleanup,
+        clock,
+    )
     suspend fun initialize() = mutation.withLock {
         val now = clock()
         db.sessions().prune(now - 24 * 60 * 60_000L)
@@ -113,28 +116,30 @@ class AuthService(
         }
     }
 
-    suspend fun capabilities(): AuthCapabilitiesDto = AuthCapabilitiesDto(
-        passwordEnabled = config.passwordEnabled,
-        oidcEnabled = config.oidc != null,
-        bootstrapRequired = db.users().activeAdminCount() == 0 &&
-            config.passwordEnabled && Files.exists(bootstrapFile),
-        webAuthnRpId = config.webAuthnRpId,
-        oidcStartUrl = config.oidc?.let { "/api/v1/auth/oidc/start" },
-    )
+    suspend fun capabilities(): AuthCapabilitiesDto = flows.capabilities()
 
-    internal suspend fun issueOidcState(payload: String): Pair<String, Long> =
-        issueChallenge(null, ChallengeKind.OIDC, payload, 5 * 60_000L)
+    internal suspend fun issueOidcState(payload: String, clientIp: String): Pair<String, Long> =
+        mutation.withLock {
+            val now = clock()
+            limiter.consume("oidc-start:global", limit = 200, windowMs = 60_000)
+            limiter.consume("oidc-start:ip:$clientIp", limit = 10, windowMs = 60_000)
+            db.challenges().prune(now)
+            if (db.challenges().activeCount(ChallengeKind.OIDC, now) >= MAX_ACTIVE_OIDC_STATES) {
+                throw AuthRateLimitedException(now + 60_000)
+            }
+            issueChallenge(null, ChallengeKind.OIDC, payload, 5 * 60_000L)
+        }
 
     internal suspend fun consumeOidcState(state: String): String {
         return mutation.withLock {
-            val row = challenge(ChallengeKind.OIDC, state)
+            val row = accounts.challenge(ChallengeKind.OIDC, state)
             if (db.challenges().consume(row.id, clock()) != 1) throw InvalidChallengeException()
             row.payloadJson
         }
     }
 
     internal suspend fun mfaChallenge(raw: String): AuthChallengeRow =
-        challenge(ChallengeKind.MFA, raw)
+        accounts.challenge(ChallengeKind.MFA, raw)
 
     internal suspend fun recentMfaChallenge(actor: Actor): String {
         val session = recentMfaSession(actor)
@@ -152,13 +157,8 @@ class AuthService(
         payload: String,
     ): Pair<String, Long> = issueChallenge(userId, kind, payload, 5 * 60_000L)
 
-    internal suspend fun consumeWebAuthnChallenge(kind: String, raw: String): AuthChallengeRow {
-        return mutation.withLock {
-            val row = challenge(kind, raw)
-            if (db.challenges().consume(row.id, clock()) != 1) throw InvalidChallengeException()
-            row
-        }
-    }
+    internal suspend fun webAuthnChallenge(kind: String, raw: String): AuthChallengeRow =
+        accounts.challenge(kind, raw)
 
     internal fun checkFlowLimit(clientIp: String, flow: String, challenge: String) =
         limiter.check("ip:$clientIp", "$flow:${challenge.take(16)}")
@@ -170,6 +170,7 @@ class AuthService(
         limiter.success("ip:$clientIp", "$flow:${challenge.take(16)}")
 
     internal suspend fun finishWebAuthn(
+        webAuthnChallengeId: String,
         parentChallengeId: String,
         credential: WebAuthnCredentialRow,
         enrollment: Boolean,
@@ -181,22 +182,32 @@ class AuthService(
             ?: throw InvalidChallengeException()
         require(parent.userId == credential.userId) { "Credential owner mismatch" }
         val user = activeUser(credential.userId)
-        if (db.challenges().consume(parent.id, now) != 1) throw InvalidChallengeException()
-        db.credentials().upsertWebAuthn(credential)
         val replacedSession = parent.payloadJson.removePrefix("reauth:")
             .takeIf { parent.payloadJson.startsWith("reauth:") }
             ?.let { db.sessions().get(it) }
             ?.takeIf { it.userId == credential.userId }
-        replacedSession?.let { revokeSessionInternal(credential.userId, it.id, now) }
-        val recovery = if (enrollment) replaceRecoveryCodes(credential.userId) else emptyList()
-        val session = issueSession(
+        val recovery = if (enrollment) credentials.newRecoveryCodes(credential.userId) else null
+        val session = prepareSession(
             user,
             replacedSession?.authMethod ?: AuthMethod.PASSWORD,
             mfa = true,
         )
-        db.users().markLogin(user.id, now)
+        if (!db.completeMfa(
+                challengeId = webAuthnChallengeId,
+                parentChallengeId = parent.id,
+                write = MfaCompletionWrite(
+                    session = session.row,
+                    loginAtMs = now,
+                    webAuthnCredential = credential,
+                    replacementRecoveryCodes = recovery?.second,
+                ),
+            )
+        ) {
+            throw InvalidChallengeException()
+        }
+        replacedSession?.let { revokeSessionInternal(credential.userId, it.id, now) }
         event(user.id, user.id, if (enrollment) "webauthn_enrolled" else "webauthn_login", clientIp)
-        AuthResult(sessionFlow(session, recovery), session.token)
+        AuthResult(sessionFlow(session, recovery?.first.orEmpty()), session.token)
     }
 
     internal suspend fun completeOidc(
@@ -269,253 +280,47 @@ class AuthService(
     internal suspend fun activate(
         request: ActivationRequestDto,
         clientIp: String,
-    ): AuthResult = mutation.withLock {
-        require(config.passwordEnabled) { "Password authentication is disabled" }
-        val keys = arrayOf("ip:$clientIp", "activation:${request.token.take(16)}")
-        limiter.check(*keys)
-        val challenge = runCatching { challenge(ChallengeKind.ACTIVATION, request.token) }
-            .recoverCatching { challenge(ChallengeKind.PASSWORD_RESET, request.token) }
-            .getOrElse {
-                limiter.fail(*keys)
-                throw InvalidChallengeException()
-            }
-        val user = challenge.userId?.let { db.users().get(it) } ?: run {
-            limiter.fail(*keys)
-            throw InvalidChallengeException()
-        }
-        AuthCrypto.validatePassword(request.password)
-        if (db.challenges().consume(challenge.id, clock()) != 1) {
-            limiter.fail(*keys)
-            throw InvalidChallengeException()
-        }
-        setPassword(user.id, request.password, clock())
-        db.credentials().clearMfa(user.id)
-        val activated = user.copy(
-            status = UserStatus.ACTIVE,
-            updatedAtMs = clock(),
-        )
-        db.users().update(activated)
-        if (challenge.kind == ChallengeKind.ACTIVATION) copyDefaultGrants(activated.id, clock())
-        limiter.success(*keys)
-        event(activated.id, activated.id, "account_activated", clientIp)
-        beginPostPassword(activated, clock())
-    }
+    ): AuthResult = flows.activate(request, clientIp)
 
     internal suspend fun bootstrap(request: BootstrapRequestDto, clientIp: String): AuthResult =
-        mutation.withLock {
-            require(config.passwordEnabled) { "Password authentication is disabled" }
-            val normalized = runCatching { AuthCrypto.normalizeUsername(request.username) }
-                .getOrDefault("__invalid__")
-            val keys = arrayOf("ip:$clientIp", "bootstrap", "user:$normalized")
-            limiter.check(*keys)
-            val expected = runCatching { Files.readString(bootstrapFile).trim() }.getOrNull()
-            if (expected == null || !constantEquals(expected, request.token) ||
-                db.users().activeAdminCount() > 0
-            ) {
-                limiter.fail(*keys)
-                throw InvalidCredentialsException()
-            }
-            val now = clock()
-            val user = createUser(
-                username = request.username,
-                displayName = request.displayName.ifBlank { request.username },
-                status = UserStatus.ACTIVE,
-                role = UserRole.ADMIN,
-                now = now,
-            )
-            setPassword(user.id, request.password, now)
-            copyDefaultGrants(user.id, now)
-            Files.deleteIfExists(bootstrapFile)
-            event(null, user.id, "bootstrap_admin_created", clientIp)
-            limiter.success(*keys)
-            beginPostPassword(user, now)
-        }
+        flows.bootstrap(request, clientIp)
 
-    internal suspend fun passwordLogin(request: PasswordLoginRequestDto, clientIp: String): AuthResult {
-        require(config.passwordEnabled) { "Password authentication is disabled" }
-        val normalized = runCatching { AuthCrypto.normalizeUsername(request.username) }.getOrNull()
-            ?: "__invalid__"
-        val keys = arrayOf("ip:$clientIp", "user:$normalized")
-        limiter.check(*keys)
-        val user = db.users().byNormalizedUsername(normalized)
-        val credential = user?.let { db.credentials().password(it.id) }
-        val verified = if (credential != null) {
-            AuthCrypto.verifyPassword(
-                request.password,
-                credential.hash,
-                credential.salt,
-                credential.memoryKb,
-                credential.iterations,
-                credential.parallelism,
-            )
-        } else {
-            AuthCrypto.verifyPassword(
-                request.password.ifBlank { "invalid-password" },
-                dummyHash,
-                dummySalt,
-                AuthCrypto.ARGON_MEMORY_KB,
-                AuthCrypto.ARGON_ITERATIONS,
-                AuthCrypto.ARGON_PARALLELISM,
-            )
-            false
-        }
-        if (!verified || user == null || user.status != UserStatus.ACTIVE) {
-            limiter.fail(*keys)
-            event(user?.id, user?.id, "password_login_failed", clientIp)
-            throw InvalidCredentialsException()
-        }
-        limiter.success(*keys)
-        maybeRehash(user.id, request.password, requireNotNull(credential))
-        event(user.id, user.id, "password_verified", clientIp)
-        return beginPostPassword(user, clock())
-    }
+    internal suspend fun passwordLogin(
+        request: PasswordLoginRequestDto,
+        clientIp: String,
+    ): AuthResult = flows.password(request, clientIp)
 
     suspend fun startTotpEnrollment(
         rawChallenge: String,
         clientIp: String,
-    ): TotpEnrollmentDto = mutation.withLock {
-        val keys = arrayOf("ip:$clientIp", "totp-enroll:${rawChallenge.take(16)}")
-        limiter.check(*keys)
-        val parent = runCatching { challenge(ChallengeKind.MFA, rawChallenge) }
-            .getOrElse {
-                limiter.fail(*keys)
-                throw it
-            }
-        val user = parent.userId?.let { activeUser(it) } ?: throw InvalidChallengeException()
-        if (parent.payloadJson.isBlank() &&
-            (db.credentials().confirmedTotp(user.id).isNotEmpty() ||
-                db.credentials().webAuthn(user.id).isNotEmpty())
-        ) {
-            throw ForbiddenApiException()
-        }
-        if (db.credentials().confirmedTotp(user.id).isNotEmpty()) throw ForbiddenApiException()
-        db.credentials().deleteUnconfirmedTotp(user.id)
-        val secret = AuthCrypto.randomBytes(20)
-        val id = UUID.randomUUID().toString()
-        val now = clock()
-        db.credentials().upsertTotp(
-            TotpCredentialRow(
-                id = id,
-                userId = user.id,
-                encryptedSecret = AuthCrypto.encrypt(
-                    requireNotNull(config.encryptionKey),
-                    "totp:${user.id}:$id",
-                    secret,
-                ),
-                label = "Authenticator",
-                confirmed = false,
-                lastAcceptedStep = null,
-                createdAtMs = now,
-            )
-        )
-        val enroll = issueChallenge(
-            user.id,
-            ChallengeKind.TOTP_ENROLL,
-            payload = "$id|${parent.id}",
-            ttlMs = 5 * 60_000L,
-        )
-        TotpEnrollmentDto(
-            challenge = enroll.first,
-            secret = AuthCrypto.base32(secret),
-            uri = AuthCrypto.totpUri(secret, user.username),
-            expiresAtMs = enroll.second,
-        ).also { limiter.success(*keys) }
-    }
+    ): TotpEnrollmentDto = flows.startTotpEnrollment(rawChallenge, clientIp)
 
     internal suspend fun completeTotpEnrollment(
         request: TotpCompleteRequestDto,
         clientIp: String,
-    ): AuthResult = mutation.withLock {
-        val keys = arrayOf("ip:$clientIp", "challenge:${request.challenge.take(16)}")
-        limiter.check(*keys)
-        val challenge = challenge(ChallengeKind.TOTP_ENROLL, request.challenge)
-        val credentialId = challenge.payloadJson.substringBefore('|')
-        val parentId = challenge.payloadJson.substringAfter('|', "")
-        val credential = db.credentials().totp(credentialId)
-            ?: throw InvalidChallengeException()
-        val now = clock()
-        val parent = db.challenges().get(parentId)
-            ?.takeIf {
-                it.kind == ChallengeKind.MFA &&
-                    it.userId == credential.userId &&
-                    it.consumedAtMs == null &&
-                    it.expiresAtMs > now
-            } ?: throw InvalidChallengeException()
-        val user = activeUser(credential.userId)
-        val step = verifyTotp(credential, request.code) ?: run {
-            limiter.fail(*keys)
-            throw InvalidCredentialsException()
-        }
-        if (db.challenges().consume(challenge.id, now) != 1 ||
-            db.challenges().consume(parent.id, now) != 1
-        ) {
-            throw InvalidChallengeException()
-        }
-        db.credentials().upsertTotp(credential.copy(confirmed = true, lastAcceptedStep = step))
-        val codes = replaceRecoveryCodes(credential.userId)
-        val session = issueSession(user, AuthMethod.PASSWORD, mfa = true)
-        db.users().markLogin(user.id, now)
-        limiter.success(*keys)
-        event(user.id, user.id, "totp_enrolled", clientIp)
-        AuthResult(sessionFlow(session, codes), session.token)
-    }
+    ): AuthResult = flows.completeTotpEnrollment(request, clientIp)
 
     internal suspend fun completeTotp(
         request: TotpCompleteRequestDto,
         clientIp: String,
-    ): AuthResult = mutation.withLock {
-        val keys = arrayOf("ip:$clientIp", "challenge:${request.challenge.take(12)}")
-        limiter.check(*keys)
-        val challenge = challenge(ChallengeKind.MFA, request.challenge)
-        val userId = challenge.userId ?: throw InvalidChallengeException()
-        val user = activeUser(userId)
-        val matched = db.credentials().confirmedTotp(userId).firstNotNullOfOrNull { credential ->
-            verifyTotp(credential, request.code)?.let { credential to it }
-        }
-        if (matched == null) {
-            limiter.fail(*keys)
-            event(userId, userId, "totp_login_failed", clientIp)
-            throw InvalidCredentialsException()
-        }
-        db.credentials().upsertTotp(matched.first.copy(lastAcceptedStep = matched.second))
-        if (db.challenges().consume(challenge.id, clock()) != 1) throw InvalidChallengeException()
-        limiter.success(*keys)
-        val session = issueSession(user, AuthMethod.PASSWORD, mfa = true)
-        db.users().markLogin(user.id, clock())
-        event(user.id, user.id, "login_succeeded", clientIp)
-        AuthResult(sessionFlow(session), session.token)
-    }
+    ): AuthResult = flows.completeTotp(request, clientIp)
 
     internal suspend fun completeRecovery(
         request: RecoveryCompleteRequestDto,
         clientIp: String,
-    ): AuthResult = mutation.withLock {
-        val keys = arrayOf("ip:$clientIp", "challenge:${request.challenge.take(12)}")
-        limiter.check(*keys)
-        val challenge = challenge(ChallengeKind.MFA, request.challenge)
-        val userId = challenge.userId ?: throw InvalidChallengeException()
-        val user = activeUser(userId)
-        val hash = AuthCrypto.hashToken(request.code.trim().uppercase())
-        val row = db.credentials().unusedRecoveryCodes(userId)
-            .firstOrNull { MessageDigest.isEqual(it.codeHash, hash) }
-        if (row == null || db.credentials().consumeRecoveryCode(row.id, clock()) != 1) {
-            limiter.fail(*keys)
-            throw InvalidCredentialsException()
-        }
-        if (db.challenges().consume(challenge.id, clock()) != 1) throw InvalidChallengeException()
-        limiter.success(*keys)
-        val session = issueSession(user, AuthMethod.PASSWORD, mfa = true)
-        db.users().markLogin(user.id, clock())
-        event(user.id, user.id, "recovery_code_used", clientIp)
-        AuthResult(sessionFlow(session), session.token)
-    }
+    ): AuthResult = flows.completeRecovery(request, clientIp)
 
     suspend fun authenticate(rawToken: String?): Pair<Actor, AuthSessionRow>? =
         sessionService.authenticate(rawToken)
 
     suspend fun current(actor: Actor): CurrentUserDto {
         val user = db.users().get(actor.userId) ?: throw UnauthenticatedApiException()
-        return userDto(user, actor.authMethod, actor.clientKind, csrfToken(actor))
+        return accounts.currentUserDto(
+            user,
+            actor.authMethod,
+            actor.clientKind,
+            csrfToken(actor),
+        )
     }
 
     suspend fun logout(actor: Actor, all: Boolean) {
@@ -588,7 +393,7 @@ class AuthService(
 
     internal suspend fun regenerateRecoveryCodes(actor: Actor): AuthResult = mutation.withLock {
         recentMfaSession(actor)
-        val codes = replaceRecoveryCodes(actor.userId)
+        val codes = credentials.replaceRecoveryCodes(actor.userId)
         val user = db.users().get(actor.userId) ?: throw UnauthenticatedApiException()
         revokeSessionInternal(actor.userId, actor.authSessionId, clock())
         val session = issueSession(user, actor.authMethod, mfa = true)
@@ -602,59 +407,30 @@ class AuthService(
         require(config.passwordEnabled) { "Password authentication is disabled" }
         recentMfaSession(actor)
         db.credentials().password(actor.userId) ?: throw ForbiddenApiException()
-        setPassword(actor.userId, request.password, clock())
+        credentials.setPassword(actor.userId, request.password, clock())
         revokeSessionInternal(actor.userId, actor.authSessionId, clock())
         val user = db.users().get(actor.userId) ?: throw UnauthenticatedApiException()
         val session = issueSession(user, AuthMethod.PASSWORD, mfa = true)
         AuthResult(sessionFlow(session), session.token)
     }
     suspend fun hasPlaylistAccess(actor: Actor, playlistId: Long): Boolean =
-        actor.isAdmin || playlistId in db.grants().forUser(actor.userId)
+        !db.maintenance().isPlaylistDeleting(playlistId) &&
+            (actor.isAdmin || playlistId in db.grants().forUser(actor.userId))
 
-    internal suspend fun validatePlaylistIds(ids: List<Long>): List<Long> {
-        require(ids.size <= 1_000) { "Too many playlist assignments" }
-        val distinct = ids.distinct()
-        distinct.forEach { require(playlistExists(it)) { "Unknown playlist: $it" } }
-        return distinct
-    }
-
-    private suspend fun beginPostPassword(user: UserRow, now: Long): AuthResult {
-        val methods = buildList {
-            if (db.credentials().confirmedTotp(user.id).isNotEmpty()) add("totp")
-            if (db.credentials().webAuthn(user.id).isNotEmpty()) add("webauthn")
-            if (db.credentials().unusedRecoveryCodes(user.id).isNotEmpty()) add("recovery")
-        }
-        val role = effectiveRole(user)
-        if (role in config.mfaRequiredRoles) {
-            val issued = issueChallenge(user.id, ChallengeKind.MFA, "", 5 * 60_000L)
-            return AuthResult(
-                AuthFlowDto(
-                    status = if (methods.any { it == "totp" || it == "webauthn" }) {
-                        "MFA_REQUIRED"
-                    } else {
-                        "ENROLLMENT_REQUIRED"
-                    },
-                    code = "challenge_required",
-                    challenge = issued.first,
-                    methods = methods.ifEmpty { listOf("totp", "webauthn") },
-                    expiresAtMs = issued.second,
-                )
-            )
-        }
-        val session = issueSession(user, AuthMethod.PASSWORD, mfa = false)
-        db.users().markLogin(user.id, now)
-        return AuthResult(sessionFlow(session), session.token)
-    }
+    internal suspend fun requireActiveActor(actor: Actor) = sessionService.requireActive(actor)
 
     private suspend fun issueSession(user: UserRow, method: String, mfa: Boolean): IssuedSession =
         sessionService.issue(user, method, mfa)
+
+    private suspend fun prepareSession(user: UserRow, method: String, mfa: Boolean): IssuedSession =
+        sessionService.prepare(user, method, mfa)
 
     private suspend fun sessionFlow(
         session: IssuedSession,
         recoveryCodes: List<String> = emptyList(),
     ) = AuthFlowDto(
         status = "AUTHENTICATED",
-        user = userDto(
+        user = accounts.currentUserDto(
             session.user,
             session.row.authMethod,
             session.row.clientKind,
@@ -664,28 +440,9 @@ class AuthService(
         recoveryCodes = recoveryCodes,
     )
 
-    private suspend fun userDto(
-        user: UserRow,
-        method: String,
-        clientKind: String,
-        csrfToken: String,
-    ) = CurrentUserDto(
-        id = user.id,
-        username = user.username,
-        displayName = user.displayName,
-        role = effectiveRole(user),
-        authMethod = method,
-        clientKind = clientKind,
-        playlistIds = db.grants().forUser(user.id),
-        csrfToken = csrfToken,
-    )
-
-    private fun effectiveRole(user: UserRow) =
-        if (user.manualRole == UserRole.ADMIN || user.oidcAdmin) UserRole.ADMIN else UserRole.USER
-
     private suspend fun createSeedAdmin(seed: InitialAdminConfig, now: Long) {
         val user = createUser(seed.username, seed.username, UserStatus.ACTIVE, UserRole.ADMIN, now)
-        setPassword(user.id, seed.password, now)
+        credentials.setPassword(user.id, seed.password, now)
         copyDefaultGrants(user.id, now)
         event(null, user.id, "initial_admin_seeded", null)
     }
@@ -696,159 +453,20 @@ class AuthService(
         status: String,
         role: String,
         now: Long,
-    ): UserRow {
-        val normalized = AuthCrypto.normalizeUsername(username)
-        require(db.users().byNormalizedUsername(normalized) == null) { "Username is already in use" }
-        val cleanDisplayName = displayName.trim().ifBlank { username.trim() }
-        require(cleanDisplayName.codePointCount(0, cleanDisplayName.length) <= 128) {
-            "Display name must be at most 128 characters"
-        }
-        return UserRow(
-            id = UUID.randomUUID().toString(),
-            username = username.trim(),
-            normalizedUsername = normalized,
-            displayName = cleanDisplayName,
-            status = status,
-            manualRole = role,
-            oidcAdmin = false,
-            createdAtMs = now,
-            updatedAtMs = now,
-            lastLoginAtMs = null,
-        ).also { db.users().insert(it) }
-    }
+    ): UserRow = accounts.createUser(username, displayName, status, role, now)
 
-    internal suspend fun availableOidcUsername(base: String, issuer: String, subject: String): String {
-        val cleanBase = base.trim().ifBlank { "oidc-user" }
-        if (db.users().byNormalizedUsername(AuthCrypto.normalizeUsername(cleanBase)) == null) {
-            return cleanBase
-        }
-        val suffix = AuthCrypto.sha256("$issuer\u0000$subject".toByteArray())
-            .take(4).joinToString("") { "%02x".format(it) }
-        return "$cleanBase-$suffix"
-    }
-
-    private suspend fun setPassword(userId: String, password: String, now: Long) {
-        val (hash, salt) = AuthCrypto.passwordHash(password)
-        db.credentials().upsertPassword(
-            PasswordCredentialRow(
-                userId = userId,
-                hash = hash,
-                salt = salt,
-                memoryKb = AuthCrypto.ARGON_MEMORY_KB,
-                iterations = AuthCrypto.ARGON_ITERATIONS,
-                parallelism = AuthCrypto.ARGON_PARALLELISM,
-                version = AuthCrypto.ARGON_VERSION,
-                changedAtMs = now,
-            )
-        )
-    }
-
-    private suspend fun maybeRehash(userId: String, password: String, row: PasswordCredentialRow) {
-        if (row.version == AuthCrypto.ARGON_VERSION &&
-            row.memoryKb == AuthCrypto.ARGON_MEMORY_KB &&
-            row.iterations == AuthCrypto.ARGON_ITERATIONS &&
-            row.parallelism == AuthCrypto.ARGON_PARALLELISM
-        ) return
-        setPassword(userId, password, clock())
-    }
+    internal suspend fun availableOidcUsername(base: String, issuer: String, subject: String): String =
+        accounts.availableOidcUsername(base, issuer, subject)
 
     internal suspend fun issueChallenge(
         userId: String?,
         kind: String,
         payload: String,
         ttlMs: Long,
-    ): Pair<String, Long> {
-        val raw = AuthCrypto.token()
-        val now = clock()
-        val expires = now + ttlMs
-        db.challenges().insert(
-            AuthChallengeRow(
-                id = UUID.randomUUID().toString(),
-                userId = userId,
-                kind = kind,
-                tokenHash = AuthCrypto.hashToken(raw),
-                payloadJson = payload,
-                attempts = 0,
-                createdAtMs = now,
-                expiresAtMs = expires,
-                consumedAtMs = null,
-            )
-        )
-        return raw to expires
-    }
+    ): Pair<String, Long> = accounts.issueChallenge(userId, kind, payload, ttlMs)
 
-    private suspend fun challenge(kind: String, raw: String): AuthChallengeRow {
-        if (raw.isBlank() || raw.length > 512) throw InvalidChallengeException()
-        val now = clock()
-        return db.challenges().byToken(kind, AuthCrypto.hashToken(raw))
-            ?.takeIf { it.consumedAtMs == null && it.expiresAtMs > now }
-            ?: throw InvalidChallengeException()
-    }
-
-    private fun verifyTotp(row: TotpCredentialRow, code: String): Long? {
-        if (!code.matches(Regex("\\d{6}"))) return null
-        val secret = AuthCrypto.decrypt(
-            requireNotNull(config.encryptionKey),
-            "totp:${row.userId}:${row.id}",
-            row.encryptedSecret,
-        )
-        val current = clock() / 30_000L
-        return (current - 1..current + 1).firstOrNull { step ->
-            step > (row.lastAcceptedStep ?: Long.MIN_VALUE) &&
-                constantEquals(AuthCrypto.totp(secret, step), code)
-        }
-    }
-
-    private suspend fun replaceRecoveryCodes(userId: String): List<String> {
-        val now = clock()
-        val raw = List(10) {
-            AuthCrypto.token(9).uppercase().chunked(4).joinToString("-")
-        }
-        db.credentials().replaceRecoveryCodes(
-            userId,
-            raw.map {
-                RecoveryCodeRow(
-                    id = UUID.randomUUID().toString(),
-                    userId = userId,
-                    codeHash = AuthCrypto.hashToken(it),
-                    createdAtMs = now,
-                    usedAtMs = null,
-                )
-            },
-        )
-        return raw
-    }
-
-    internal suspend fun copyDefaultGrants(userId: String, now: Long) {
-        db.grants().defaults().forEach {
-            db.grants().grant(UserPlaylistGrantRow(userId, it, now))
-        }
-    }
-
-    internal suspend fun adminUserDto(user: UserRow): AdminUserDto {
-        val methods = buildList {
-            if (db.credentials().password(user.id) != null) add("password")
-            if (db.credentials().confirmedTotp(user.id).isNotEmpty()) add("totp")
-            if (db.credentials().webAuthn(user.id).isNotEmpty()) add("webauthn")
-            if (db.oidc().forUser(user.id).isNotEmpty()) add("oidc")
-        }
-        return AdminUserDto(
-            id = user.id,
-            username = user.username,
-            displayName = user.displayName,
-            status = user.status,
-            manualRole = user.manualRole,
-            effectiveRole = effectiveRole(user),
-            authMethods = methods,
-            playlistIds = db.grants().forUser(user.id),
-            createdAtMs = user.createdAtMs,
-            lastLoginAtMs = user.lastLoginAtMs,
-        )
-    }
-
-    private fun requireAdmin(actor: Actor) {
-        if (!actor.isAdmin) throw ForbiddenApiException()
-    }
+    internal suspend fun copyDefaultGrants(userId: String, now: Long) =
+        accounts.copyDefaultGrants(userId, now)
 
     private suspend fun activeUser(userId: String): UserRow =
         db.users().get(userId)?.takeIf { it.status == UserStatus.ACTIVE }
@@ -899,24 +517,14 @@ class AuthService(
         subjectUserId: String?,
         type: String,
         clientIp: String?,
-    ) {
-        db.securityEvents().insert(
-            SecurityEventRow(
-                id = UUID.randomUUID().toString(),
-                actorUserId = actorUserId,
-                subjectUserId = subjectUserId,
-                type = type,
-                detail = "",
-                clientIp = clientIp,
-                createdAtMs = clock(),
-            )
-        )
-    }
+    ) = accounts.event(actorUserId, subjectUserId, type, clientIp)
 
     private fun constantEquals(left: String, right: String): Boolean =
         MessageDigest.isEqual(left.toByteArray(Charsets.UTF_8), right.toByteArray(Charsets.UTF_8))
 
-    internal suspend fun <T> mutate(block: suspend () -> T): T = mutation.withLock { block() }
+    private companion object {
+        const val MAX_ACTIVE_OIDC_STATES = 4_096
+    }
 }
 
 private fun UserRow.toRecord() = UserRecord(

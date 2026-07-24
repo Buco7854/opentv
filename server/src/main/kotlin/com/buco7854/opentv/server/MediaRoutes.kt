@@ -32,7 +32,18 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
             },
         )
     }
-    get("/img") { media.proxy.handle(call, cache = true) }
+    get("/img") {
+        val capability = call.request.queryParameters["u"]
+            ?.let(media.cipher::tryDecryptImage)
+            ?: throw IllegalArgumentException("Invalid or missing image capability")
+        if (capability.userId != call.actor.userId) throw ForbiddenApiException()
+        if (capability.playlistId != null &&
+            !media.auth.hasPlaylistAccess(call.actor, capability.playlistId)
+        ) {
+            throw ForbiddenApiException()
+        }
+        media.proxy.image(call, capability.url)
+    }
 
     get("/relay") {
         val url = call.request.queryParameters["u"]?.let { media.cipher.tryDecrypt(it) }

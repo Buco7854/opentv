@@ -43,6 +43,7 @@ data class SessionCommandDto(
     val text: String? = null,
     val peerId: String? = null,
     val peerName: String? = null,
+    val requestId: String? = null,
     val accepted: Boolean? = null,
     val quiet: Boolean = false,
     val sync: SyncStateDto? = null,

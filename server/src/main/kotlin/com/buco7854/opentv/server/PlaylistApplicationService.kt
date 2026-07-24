@@ -115,7 +115,7 @@ class PlaylistApplicationService(
 
     suspend fun channels(actor: Actor, id: Long, kind: Int, group: String): List<ChannelDto> {
         requireAccess(actor, id)
-        return channelDtos(storage.channels.observeInGroup(id, kind, group).first())
+        return channelDtos(actor, storage.channels.observeInGroup(id, kind, group).first())
     }
 
     suspend fun seriesGroups(actor: Actor, id: Long, group: String?): List<SeriesGroupDto> {
@@ -123,7 +123,7 @@ class PlaylistApplicationService(
         val groups = if (group != null) storage.channels.observeSeriesInGroup(id, group).first()
         else storage.channels.observeAllSeries(id).first()
         return groups.filterNot { it.seriesKey.startsWith("xs:") }.map {
-            it.toDto(cipher, content.m3uSeries(id, it).contentId)
+            it.toDto(cipher, content.m3uSeries(id, it).contentId, actor.userId, id)
         }
     }
 
@@ -131,7 +131,7 @@ class PlaylistApplicationService(
         requireAccess(actor, id)
         val series = if (category != null) storage.xtreamSeries.observeInCategory(id, category).first()
         else storage.xtreamSeries.observeAll(id).first()
-        return series.map { it.toDto(cipher, content.xtreamSeries(it).contentId) }
+        return series.map { it.toDto(cipher, content.xtreamSeries(it).contentId, actor.userId) }
     }
 
     suspend fun nowAiring(actor: Actor, id: Long): Map<String, ProgrammeDto> {
@@ -163,7 +163,7 @@ class PlaylistApplicationService(
                     content.m3uSeries(id, group).contentId,
                     key,
                     episodes.size,
-                    cipher.encryptOrNull(group.logo),
+                    cipher.encryptOrNull(group.logo, actor.userId, id),
                     group.groupTitle,
                 )
             }
@@ -172,14 +172,14 @@ class PlaylistApplicationService(
                 content.xtreamSeries(it).contentId,
                 it.name,
                 0,
-                cipher.encryptOrNull(it.cover),
+                cipher.encryptOrNull(it.cover, actor.userId, id),
                 it.categoryName,
                 it.seriesId,
             )
         }
         return SearchResultsDto(
-            live = channelDtos(rows.filter { it.kind == ChannelKind.LIVE }),
-            movies = channelDtos(rows.filter { it.kind == ChannelKind.MOVIE }),
+            live = channelDtos(actor, rows.filter { it.kind == ChannelKind.LIVE }),
+            movies = channelDtos(actor, rows.filter { it.kind == ChannelKind.MOVIE }),
             series = panelSeries + m3uSeries,
         )
     }
@@ -222,14 +222,15 @@ class PlaylistApplicationService(
             channel?.takeIf { identity.playlistId == id }?.let { contentId to it }
         }
         val live = resolved.filter { it.second.kind == ChannelKind.LIVE }
-            .map { (contentId, channel) -> channel.toDto(cipher, contentId) }
+            .map { (contentId, channel) -> channel.toDto(cipher, contentId, actor.userId) }
         val movies = resolved.filter { it.second.kind == ChannelKind.MOVIE }
-            .map { (contentId, channel) -> channel.toDto(cipher, contentId) }
+            .map { (contentId, channel) -> channel.toDto(cipher, contentId, actor.userId) }
         val series = mutableListOf<SeriesHitDto>()
         storage.xtreamSeries.observeAll(id).first().forEach {
             val contentId = content.xtreamSeries(it).contentId
             if (contentId in ids) series += SeriesHitDto(
-                contentId, it.name, 0, cipher.encryptOrNull(it.cover), it.categoryName, it.seriesId,
+                contentId, it.name, 0, cipher.encryptOrNull(it.cover, actor.userId, id),
+                it.categoryName, it.seriesId,
             )
         }
         storage.channels.observeAllSeries(id).first()
@@ -237,7 +238,8 @@ class PlaylistApplicationService(
             .forEach {
                 val contentId = content.m3uSeries(id, it).contentId
                 if (contentId in ids) series += SeriesHitDto(
-                    contentId, it.seriesKey, it.count, cipher.encryptOrNull(it.logo), it.groupTitle,
+                    contentId, it.seriesKey, it.count,
+                    cipher.encryptOrNull(it.logo, actor.userId, id), it.groupTitle,
                 )
             }
         return FavoritesResolvedDto(live, movies, series.sortedBy { it.seriesKey.lowercase() })
@@ -245,7 +247,7 @@ class PlaylistApplicationService(
 
     suspend fun episodes(actor: Actor, id: Long, seriesKey: String): List<ChannelDto> {
         requireAccess(actor, id)
-        return channelDtos(storage.channels.observeEpisodes(id, seriesKey).first())
+        return channelDtos(actor, storage.channels.observeEpisodes(id, seriesKey).first())
     }
 
     suspend fun xtreamSeriesDetail(actor: Actor, id: Long, seriesId: Long): XtreamSeriesDetailDto {
@@ -255,15 +257,20 @@ class PlaylistApplicationService(
         val episodes = storage.channels.observeEpisodes(id, xtreamSeriesKey(seriesId)).first()
         episodes.forEach { content.channel(it) }
         return XtreamSeriesDetailDto(
-            series.toDto(cipher, content.xtreamSeries(series).contentId),
-            channelDtos(episodes),
+            series.toDto(cipher, content.xtreamSeries(series).contentId, actor.userId),
+            channelDtos(actor, episodes),
             failure?.let { "Couldn't load episodes: ${it.message}" }?.takeIf { episodes.isEmpty() },
         )
     }
 
-    private suspend fun channelDtos(rows: List<com.buco7854.opentv.core.model.Channel>): List<ChannelDto> {
+    private suspend fun channelDtos(
+        actor: Actor,
+        rows: List<com.buco7854.opentv.core.model.Channel>,
+    ): List<ChannelDto> {
         val identities = content.channels(rows)
-        return rows.map { it.toDto(cipher, requireNotNull(identities[it.id]).contentId) }
+        return rows.map {
+            it.toDto(cipher, requireNotNull(identities[it.id]).contentId, actor.userId)
+        }
     }
 
     private suspend fun requireAccess(actor: Actor, id: Long) {

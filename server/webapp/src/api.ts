@@ -244,6 +244,7 @@ export interface SessionCommand {
   text: string | null;
   peerId: string | null;
   peerName: string | null;
+  requestId: string | null;
   accepted: boolean | null;
   quiet: boolean;
   sync: SyncState | null;
@@ -397,8 +398,8 @@ export const api = {
   joinRequest: (id: string, peerId: string) =>
     j<null>(`/playback/${encodeURIComponent(id)}/join-request`, post({ peerId })),
   /** The host's answer to a pending join request. */
-  joinAnswer: (id: string, peerId: string, accept: boolean) =>
-    j<null>(`/playback/${encodeURIComponent(id)}/join-answer`, post({ peerId, accept })),
+  joinAnswer: (id: string, requestId: string, accept: boolean) =>
+    j<null>(`/playback/${encodeURIComponent(id)}/join-answer`, post({ requestId, accept })),
   /** Host pushes its playback state to the room. keepalive so a final pause still lands. */
   sessionSync: (id: string, state: SyncState) =>
     apiFetch(`/playback/${encodeURIComponent(id)}/sync`, { ...post(state), keepalive: true }).catch(() => {}),
@@ -421,19 +422,20 @@ export const api = {
   kick: (hostId: string, targetId: string) =>
     j<null>(`/playback/${encodeURIComponent(hostId)}/kick`, post({ targetId })),
   sessionLeave: (id: string) =>
-    apiFetch(`/playback/${encodeURIComponent(id)}/leave`, { method: 'POST', keepalive: true }).catch(() => {}),
+    j<null>(`/playback/${encodeURIComponent(id)}/leave`, { method: 'POST', keepalive: true }),
   adminPlayback: () => j<Session[]>('/admin/playback'),
   adminPlaybackCommand: (id: string, command: SessionCommandInput) =>
     j<null>(`/admin/playback/${encodeURIComponent(id)}/command`, post(command)),
   adminPlaybackEnd: (id: string) =>
-    apiFetch(`/admin/playback/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {}),
+    j<null>(`/admin/playback/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   resumeAll: () => j<ResumePoint[]>('/resume'),
   saveResume: (contentId: string, positionMs: number, durationMs: number) =>
     j<null>('/resume', put({ contentId, positionMs, durationMs, updatedMs: Date.now() })),
   deleteResume: (contentId: string) =>
     j<null>(`/resume?contentId=${encodeURIComponent(contentId)}`, { method: 'DELETE' }),
   settings: () => j<Settings>('/settings'),
-  saveSettings: (s: Settings) => j<null>('/settings', put(s)),
+  saveSettings: (s: Settings, keepalive = false) =>
+    j<null>('/settings', { ...put(s), keepalive }),
   downloads: () => j<Download[]>('/downloads'),
   enqueueDownload: (contentId: string) => j<{ message: string }>('/downloads', post({ contentId })),
   pauseDownload: (id: string) => j<null>(`/downloads/${encodeURIComponent(id)}/pause`, { method: 'POST' }),

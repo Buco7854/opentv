@@ -17,13 +17,18 @@ class PlaybackSessionRegistryTest {
     private fun create(sessions: PlaybackSessionRegistry, id: String) =
         sessions.create(actor(id), 1, "same", "https://example.test/stream", "", "").id
 
+    private fun join(sessions: PlaybackSessionRegistry, host: String, guest: String): Boolean {
+        val requestId = sessions.requestJoin(host, guest, "Guest", "same") ?: return false
+        return sessions.answerJoin(host, requestId, true)
+    }
+
     @Test
     fun acceptedJoinCreatesSharedRoomAndPromotesRemainingHost() {
         val sessions = PlaybackSessionRegistry()
         val host = create(sessions, "host")
         val guest = create(sessions, "guest")
 
-        assertTrue(sessions.answerJoin(host, guest, "Host", "same", true))
+        assertTrue(join(sessions, host, guest))
         assertEquals("r-$host", sessions.shareGroup(guest))
         assertEquals(setOf(host, guest), sessions.roomMembers(host))
 
@@ -38,7 +43,7 @@ class PlaybackSessionRegistryTest {
         val sessions = PlaybackSessionRegistry()
         val host = create(sessions, "host")
         val guest = create(sessions, "guest")
-        sessions.answerJoin(host, guest, "Host", "same", true)
+        join(sessions, host, guest)
 
         assertFalse(sessions.setRoomAudio(guest, 1))
         assertTrue(sessions.setRoomAudio(host, 1))
@@ -87,7 +92,7 @@ class PlaybackSessionRegistryTest {
         val guest = sessions.create(
             guestActor, 1, "same", "https://example.test/stream", "", "",
         )
-        assertTrue(sessions.answerJoin(host.id, guest.id, "Host", "same", true))
+        assertTrue(join(sessions, host.id, guest.id))
 
         assertTrue(sessions.kick(host.id, guest.id))
 
@@ -121,6 +126,38 @@ class PlaybackSessionRegistryTest {
             grants.releaseResource(secondActor, second.id, secondGrant.token, "shared-remux")
         )
         assertFalse(grants.hasAttachments("shared-remux"))
+        sessions.close()
+    }
+
+    @Test
+    fun joinAnswerRequiresPendingRequestAndMovesPeerAtomicallyBetweenRooms() {
+        val sessions = PlaybackSessionRegistry()
+        val firstHost = create(sessions, "first-host")
+        val secondHost = create(sessions, "second-host")
+        val guest = create(sessions, "guest")
+
+        assertFalse(sessions.answerJoin(firstHost, "invented", true))
+        assertTrue(join(sessions, firstHost, guest))
+        assertTrue(join(sessions, secondHost, guest))
+        assertEquals("r-$secondHost", sessions.shareGroup(guest))
+        assertEquals(setOf(firstHost), sessions.roomMembers(firstHost))
+        assertEquals(setOf(secondHost, guest), sessions.roomMembers(secondHost))
+        sessions.close()
+    }
+
+    @Test
+    fun joinRequestExpiresAndCanOnlyBeConsumedOnce() {
+        val clock = MutableClock()
+        val sessions = PlaybackSessionRegistry(clock)
+        val host = create(sessions, "host")
+        val guest = create(sessions, "guest")
+        val expired = assertNotNull(sessions.requestJoin(host, guest, "Guest", "same"))
+        clock.value = 60_001
+        assertFalse(sessions.answerJoin(host, expired, true))
+
+        val current = assertNotNull(sessions.requestJoin(host, guest, "Guest", "same"))
+        assertTrue(sessions.answerJoin(host, current, true))
+        assertFalse(sessions.answerJoin(host, current, true))
         sessions.close()
     }
 }
