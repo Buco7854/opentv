@@ -8,6 +8,9 @@ plugins {
 
 application {
     mainClass = "com.buco7854.opentv.server.MainKt"
+    // Room's bundled SQLite driver loads a native library. JDK 25 warns unless
+    // the unnamed application modules are explicitly allowed to do so.
+    applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
 }
 
 java {
@@ -33,6 +36,10 @@ val buildWebapp = tasks.register<Exec>("buildWebapp") {
 }
 
 tasks.processResources { dependsOn(buildWebapp) }
+
+tasks.withType<Test>().configureEach {
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+}
 
 dependencies {
     implementation(project(":core"))

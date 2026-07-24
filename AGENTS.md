@@ -51,6 +51,7 @@ adapter. Existing local M3U/Xtream behavior must remain independent.
 - Composition/routes: `server/webapp/src/App.tsx`
 - Typed API facade and TS contracts: `src/api.ts`
 - HTTP/errors/auth transport: `src/api/http.ts`
+- Shared playlist catalog and playlist-route guard: `src/library.tsx`
 - Browser-only preferences: `src/preferences.ts`
 - Shared async/download state: `src/hooks.ts`
 - Lightweight player navigation: `src/player/PlayerNavigation.tsx`
@@ -93,6 +94,8 @@ absent from the initial bundle.
 - `api/http.ts` already supports same-origin cookies and has one future bearer
   token provider seam.
 - Browser preferences and server settings are intentionally separate.
+- Playlist-dependent web routes are guarded by `LibraryProvider`; keep empty,
+  missing, and failed-library states out of feature-screen loading spinners.
 - The web client has no test runner; `npm run build` is its typecheck/bundle
   validation.
 

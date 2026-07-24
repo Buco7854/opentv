@@ -1,7 +1,13 @@
-import { lazy, Suspense, useSyncExternalStore } from 'react';
-import { BrowserRouter, Route, Routes } from 'react-router-dom';
+import { lazy, ReactNode, Suspense, useSyncExternalStore } from 'react';
+import {
+  BrowserRouter, Route, Routes, useNavigate, useParams,
+} from 'react-router-dom';
+import { EmptyState } from './components/Common';
 import { Dock } from './components/Dock';
-import { localeStore } from './i18n';
+import { Icon } from './components/Icons';
+import { Spinner } from './components/Primitives';
+import { localeStore, t } from './i18n';
+import { LibraryProvider, useLibrary } from './library';
 import { PlayerNavigationProvider } from './player/PlayerNavigation';
 
 // Screens are feature boundaries. In particular, the watch route owns hls.js,
@@ -28,36 +34,97 @@ function RouteFallback() {
   return <div className="spinner" role="status" aria-label="Loading" />;
 }
 
+/**
+ * Playlist-owned routes must not mount feature loaders until their playlist is
+ * known. This also turns stale bookmarks and fresh installs into actionable
+ * states instead of leaving individual screens on permanent spinners.
+ */
+function PlaylistRoute({ children }: { children: ReactNode }) {
+  const requestedId = Number(useParams().playlistId);
+  const navigate = useNavigate();
+  const {
+    playlists, loading, error, reload, setPlaylistPanelOpen,
+  } = useLibrary();
+
+  if (playlists === null && loading) return <Spinner />;
+  if (playlists === null) {
+    return (
+      <EmptyState
+        title={t('playlists.loadFailedTitle')}
+        subtitle={t('playlists.loadFailedSub', { message: error ?? '' })}
+        action={
+          <button className="btn tonal" onClick={() => void reload()}>
+            <Icon name="refresh" />{t('common.retry')}
+          </button>
+        }
+      />
+    );
+  }
+  if (playlists.length === 0) {
+    return (
+      <EmptyState
+        title={t('playlists.requiredTitle')}
+        subtitle={t('playlists.requiredSub')}
+        action={
+          <button className="btn" onClick={() => setPlaylistPanelOpen(true)}>
+            <Icon name="add" />{t('playlists.add')}
+          </button>
+        }
+      >
+        <div className="empty-home-art"><Icon name="playlist" /></div>
+      </EmptyState>
+    );
+  }
+  if (!Number.isSafeInteger(requestedId) || !playlists.some((playlist) => playlist.id === requestedId)) {
+    return (
+      <EmptyState
+        title={t('playlists.notFoundTitle')}
+        subtitle={t('playlists.notFoundSub')}
+        action={
+          <button className="btn tonal" onClick={() => navigate(`/browse/${playlists[0].id}`, { replace: true })}>
+            <Icon name="playlist" />{t('playlists.openAvailable')}
+          </button>
+        }
+      />
+    );
+  }
+  return children;
+}
+
+const forPlaylist = (screen: ReactNode) => <PlaylistRoute>{screen}</PlaylistRoute>;
+
 export function App() {
   // Remount on language change so plain t() calls re-render.
   const locale = useSyncExternalStore(localeStore.subscribe, localeStore.get);
   return (
     <BrowserRouter key={locale}>
-      <PlayerNavigationProvider>
-        <main className="shell-content">
-          <Suspense fallback={<RouteFallback />}>
-            <Routes>
-              <Route path="/" element={<HomeScreen />} />
-              <Route path="/browse/:playlistId" element={<BrowseScreen />} />
-              <Route path="/search/:playlistId" element={<SearchScreen />} />
-              <Route path="/favorites/:playlistId" element={<FavoritesScreen />} />
-              <Route path="/movie/:channelId" element={<MovieDetailScreen />} />
-              <Route path="/episode/:channelId" element={<EpisodeDetailScreen />} />
-              <Route path="/series/:playlistId/:seriesKey" element={<SeriesDetailScreen />} />
-              <Route path="/xseries/:playlistId/:seriesId" element={<XtreamSeriesScreen />} />
-              <Route path="/downloads" element={<DownloadsScreen />} />
-              <Route path="/sessions" element={<SessionsScreen />} />
-              <Route path="/watch/:channelId" element={<WatchChannelScreen />} />
-              <Route path="/watch/catchup/:channelId/:startMs/:endMs" element={<WatchCatchupScreen />} />
-              <Route path="/watch/download/:downloadId" element={<WatchDownloadScreen />} />
-              <Route path="/settings" element={<SettingsScreen />} />
-              <Route path="/account/:playlistId" element={<AccountScreen />} />
-              <Route path="*" element={<HomeScreen />} />
-            </Routes>
-          </Suspense>
-        </main>
-        <Dock />
-      </PlayerNavigationProvider>
+      <LibraryProvider>
+        <PlayerNavigationProvider>
+          <main className="shell-content">
+            <Suspense fallback={<RouteFallback />}>
+              <Routes>
+                <Route path="/" element={<HomeScreen />} />
+                <Route path="/browse/:playlistId" element={forPlaylist(<BrowseScreen />)} />
+                <Route path="/search/:playlistId" element={forPlaylist(<SearchScreen />)} />
+                <Route path="/favorites/:playlistId" element={forPlaylist(<FavoritesScreen />)} />
+                <Route path="/movie/:channelId" element={<MovieDetailScreen />} />
+                <Route path="/episode/:channelId" element={<EpisodeDetailScreen />} />
+                <Route path="/series/:playlistId/:seriesKey" element={forPlaylist(<SeriesDetailScreen />)} />
+                <Route path="/xseries/:playlistId/:seriesId" element={forPlaylist(<XtreamSeriesScreen />)} />
+                <Route path="/downloads" element={<DownloadsScreen />} />
+                <Route path="/sessions" element={<SessionsScreen />} />
+                <Route path="/watch/:channelId" element={<WatchChannelScreen />} />
+                <Route path="/watch/catchup/:channelId/:startMs/:endMs" element={<WatchCatchupScreen />} />
+                <Route path="/watch/download/:downloadId" element={<WatchDownloadScreen />} />
+                <Route path="/settings" element={<SettingsScreen />} />
+                <Route path="/account/:playlistId" element={forPlaylist(<AccountScreen />)} />
+                <Route path="*" element={<HomeScreen />} />
+              </Routes>
+            </Suspense>
+          </main>
+          <Dock />
+        </PlayerNavigationProvider>
+      </LibraryProvider>
     </BrowserRouter>
   );
 }

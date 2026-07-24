@@ -17,12 +17,18 @@ export function ChannelLogo({ url, kind }: { url: string | null; kind: number })
   );
 }
 
-export function EmptyState({ title, subtitle, children }: { title: string; subtitle: string; children?: ReactNode }) {
+export function EmptyState({ title, subtitle, children, action }: {
+  title: string;
+  subtitle: string;
+  children?: ReactNode;
+  action?: ReactNode;
+}) {
   return (
     <div className="empty">
       {children}
       <h3>{title}</h3>
       <p>{subtitle}</p>
+      {action}
     </div>
   );
 }

@@ -21,6 +21,11 @@ export class ApiError extends Error {
 
 export type AccessTokenProvider = () => string | null | Promise<string | null>;
 
+// Calling a browser's native fetch as an object method can give it the wrong
+// receiver and cause "Illegal invocation". The wrapper keeps injection easy
+// for tests while always invoking the platform function through globalThis.
+const browserFetch: typeof fetch = (input, init) => globalThis.fetch(input, init);
+
 /**
  * HTTP transport for the executable API.
  *
@@ -30,7 +35,7 @@ export type AccessTokenProvider = () => string | null | Promise<string | null>;
  */
 export class ApiHttpClient {
   constructor(
-    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly fetchImpl: typeof fetch = browserFetch,
     private readonly accessToken?: AccessTokenProvider,
   ) {}
 

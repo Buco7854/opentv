@@ -6,6 +6,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { api, DownloadStatus, Playlist } from '../api';
 import { useDownloads } from '../hooks';
 import { getLocale, t } from '../i18n';
+import { useLibrary } from '../library';
 import { prefs } from '../preferences';
 import { Icon } from './Icons';
 import { ConfirmDialog, IconBtn, Menu, MenuOption, snackbar } from './Primitives';
@@ -36,22 +37,25 @@ function DockButton({ icon, label, active, disabled, dot, onClick }: {
 export function Dock() {
   const navigate = useNavigate();
   const { pathname, search } = useLocation();
-  const [panelOpen, setPanelOpen] = useState(false);
+  const {
+    playlists, playlistPanelOpen: panelOpen, setPlaylistPanelOpen: setPanelOpen,
+  } = useLibrary();
   // The fullscreen player covers the dock; don't keep polling downloads underneath it.
   const downloads = useDownloads(!pathname.startsWith('/watch'));
   const downloading = downloads.list.some(
     (d) => d.status === DownloadStatus.QUEUED || d.status === DownloadStatus.RUNNING,
   );
 
-  // Active playlist: URL, else last-used, else first on the server.
+  // Active playlist: a valid URL id, else a valid last-used id, else first.
   const urlId = pathname.match(/^\/(?:browse|search|favorites|account|series|xseries)\/(\d+)/)?.[1];
-  const [fallback, setFallback] = useState<number | null>(null);
-  const active = urlId ? Number(urlId) : prefs.activePlaylist ?? fallback;
-  useEffect(() => { if (urlId) prefs.activePlaylist = Number(urlId); }, [urlId]);
+  const requestedId = urlId ? Number(urlId) : null;
+  const active = playlists?.find((playlist) => playlist.id === requestedId)?.id
+    ?? playlists?.find((playlist) => playlist.id === prefs.activePlaylist)?.id
+    ?? playlists?.[0]?.id
+    ?? null;
   useEffect(() => {
-    if (urlId || prefs.activePlaylist != null) return;
-    api.playlists().then((all) => setFallback(all[0]?.id ?? null)).catch(() => {});
-  }, [urlId]);
+    if (playlists !== null && prefs.activePlaylist !== active) prefs.activePlaylist = active;
+  }, [active, playlists]);
 
   const tab = new URLSearchParams(search).get('t') ?? '0';
   const inBrowse = pathname.startsWith('/browse/');
@@ -94,16 +98,15 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
   onClose: () => void;
 }) {
   const navigate = useNavigate();
-  const [playlists, setPlaylists] = useState<Playlist[] | null>(null);
+  const {
+    playlists, loading, error, reload, rememberPlaylist, forgetPlaylist,
+  } = useLibrary();
   const [dialog, setDialog] = useState<'add' | Playlist | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Playlist | null>(null);
   const [pendingClearProgress, setPendingClearProgress] = useState<Playlist | null>(null);
   // Playlist whose actions menu is open, plus its anchor button.
   const [actionsFor, setActionsFor] = useState<{ playlist: Playlist; anchor: HTMLElement } | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-
-  const reload = () => api.playlists().then(setPlaylists).catch(() => setPlaylists([]));
-  useEffect(() => { reload(); }, []);
 
   // Escape closes.
   useEffect(() => {
@@ -126,8 +129,16 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
           <IconBtn name="add" label={t('playlists.add')} onClick={() => setDialog('add')} />
         </div>
         <div className="panel-body">
-          {playlists === null && <div className="spinner" />}
-          {playlists?.length === 0 && (
+          {playlists === null && loading && <div className="spinner" />}
+          {error && (
+            <div className="px-3 py-5 text-center">
+              <p className="type-body-medium text-error">{t('playlists.loadFailedTitle')}</p>
+              <button className="btn text mt-2 w-auto" onClick={() => void reload()}>
+                <Icon name="refresh" />{t('common.retry')}
+              </button>
+            </div>
+          )}
+          {playlists?.length === 0 && !error && (
             <p className="px-3 py-6 text-center type-body-medium text-on-surface-variant">
               {t('playlists.none')}
             </p>
@@ -191,7 +202,7 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
             try {
               await api.refreshPlaylist(p.id, true);
               snackbar(t('playlists.refreshed'));
-              reload();
+              void reload();
             } catch (e) { snackbar(t('playlists.refreshFailed', { message: (e as Error).message })); }
           } });
         }
@@ -209,7 +220,8 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
           onDismiss={() => setDialog(null)}
           onDone={(saved) => {
             setDialog(null);
-            reload();
+            rememberPlaylist(saved);
+            void reload();
             if (dialog === 'add') open(saved);
           }}
         />
@@ -220,9 +232,14 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
           message={t('playlists.removeMessage', { name: pendingDelete.name })}
           confirmLabel={t('common.remove')}
           onConfirm={async () => {
-            await api.deletePlaylist(pendingDelete.id).catch(() => {});
-            if (prefs.activePlaylist === pendingDelete.id) prefs.activePlaylist = null;
-            reload();
+            try {
+              await api.deletePlaylist(pendingDelete.id);
+              if (prefs.activePlaylist === pendingDelete.id) prefs.activePlaylist = null;
+              forgetPlaylist(pendingDelete.id);
+              void reload();
+            } catch (cause) {
+              snackbar(cause instanceof Error ? cause.message : String(cause));
+            }
           }}
           onDismiss={() => setPendingDelete(null)}
         />

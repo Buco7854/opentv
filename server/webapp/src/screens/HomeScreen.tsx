@@ -2,18 +2,19 @@
 
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api } from '../api';
 import { EmptyState } from '../components/Common';
 import { Icon } from '../components/Icons';
 import { Spinner } from '../components/Primitives';
 import { PlaylistDialog } from '../components/PlaylistDialog';
-import { useAsync } from '../hooks';
 import { t } from '../i18n';
+import { useLibrary } from '../library';
 import { prefs } from '../preferences';
 
 export function HomeScreen() {
   const navigate = useNavigate();
-  const { data: playlists, reload } = useAsync(() => api.playlists(), []);
+  const {
+    playlists, loading, error, reload, rememberPlaylist,
+  } = useLibrary();
   const [adding, setAdding] = useState(false);
 
   useEffect(() => {
@@ -23,7 +24,20 @@ export function HomeScreen() {
     navigate(`/browse/${active.id}`, { replace: true });
   }, [playlists, navigate]);
 
-  if (playlists === null) return <Spinner />;
+  if (playlists === null && loading) return <Spinner />;
+  if (playlists === null) {
+    return (
+      <EmptyState
+        title={t('playlists.loadFailedTitle')}
+        subtitle={t('playlists.loadFailedSub', { message: error ?? '' })}
+        action={
+          <button className="btn tonal" onClick={() => void reload()}>
+            <Icon name="refresh" />{t('common.retry')}
+          </button>
+        }
+      />
+    );
+  }
   if (playlists.length > 0) return null; // redirecting
 
   return (
@@ -43,7 +57,8 @@ export function HomeScreen() {
           onDone={(saved) => {
             setAdding(false);
             prefs.activePlaylist = saved.id;
-            reload();
+            rememberPlaylist(saved);
+            void reload();
             navigate(`/browse/${saved.id}`);
           }}
         />
