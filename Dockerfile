@@ -1,9 +1,9 @@
 # OpenTV web server: same domain layer as the Android app (:core + :data),
 # plus REST API, stream proxy and the web client.
 #
-# WARNING: the server has NO authentication. Anyone who can reach it can use
-# your playlists (and your provider credentials embedded in stream URLs).
-# Run it behind an authenticating reverse proxy; never expose it directly.
+# Authentication is built in. Password authentication requires a persistent
+# OPENTV_AUTH_ENCRYPTION_KEY at runtime; internet-facing deployments also
+# require an HTTPS OPENTV_PUBLIC_URL or a correctly configured TLS proxy.
 
 FROM node:22-slim AS webapp
 WORKDIR /webapp

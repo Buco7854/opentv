@@ -7,6 +7,5 @@ docs
 local.properties
 *.jks
 *.keystore
-server-data
 server/webapp/node_modules
 server/src/main/resources/web

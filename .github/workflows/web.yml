@@ -8,9 +8,11 @@ on:
     tags: ["v*"]
     paths:
       - "server/**"
+      - "server-data/**"
       - "core/**"
       - "data/**"
       - "Dockerfile"
+      - ".dockerignore"
       - "build.gradle.kts"
       - "settings.gradle.kts"
       - "gradle.properties"
@@ -20,9 +22,11 @@ on:
     branches: [main]
     paths:
       - "server/**"
+      - "server-data/**"
       - "core/**"
       - "data/**"
       - "Dockerfile"
+      - ".dockerignore"
       - "build.gradle.kts"
       - "settings.gradle.kts"
       - "gradle.properties"
@@ -51,7 +55,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Run shared/server tests and build the server
-        run: ./gradlew :core:jvmTest :data:compileKotlinJvm :server:test :server:installDist
+        run: ./gradlew :server-data:jvmTest :core:jvmTest :data:compileKotlinJvm :server:test :server:installDist
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
