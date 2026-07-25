@@ -32,6 +32,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -112,7 +113,9 @@ fun XtreamSeriesScreen(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     series?.categoryName?.let { Pill(it) }
                     series?.rating?.let { Pill("★ %.1f".format(it)) }
-                    if (episodes.isNotEmpty()) Pill("${episodes.size} episodes")
+                    if (episodes.isNotEmpty()) {
+                        Pill(pluralStringResource(R.plurals.details_episode_count, episodes.size, episodes.size))
+                    }
                 }
                 series?.genre?.let {
                     Spacer(Modifier.height(8.dp))

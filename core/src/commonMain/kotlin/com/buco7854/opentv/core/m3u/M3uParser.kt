@@ -20,7 +20,6 @@ class M3uHeader(val epgUrl: String?)
 
 /** Single-pass streaming parser: emits entries via callback so large playlists stay off-heap. */
 object M3uParser {
-
     private val ATTR = Regex("""([\w-]+)="([^"]*)"""")
 
     suspend fun parse(
@@ -46,13 +45,10 @@ object M3uParser {
                     onHeader(M3uHeader(attrs["url-tvg"] ?: attrs["x-tvg-url"]))
                 }
                 trimmed.startsWith("#EXTINF", ignoreCase = true) -> {
-                    val matches = ATTR.findAll(trimmed).toList()
-                    val attrs = matches.associate {
-                        it.groupValues[1].lowercase() to it.groupValues[2]
-                    }
-                    // Name starts at the first comma after the attributes, not the last (commas in titles).
-                    val searchFrom = (matches.lastOrNull()?.range?.last ?: trimmed.indexOf(':')) + 1
-                    val comma = trimmed.indexOf(',', startIndex = searchFrom.coerceIn(0, trimmed.length))
+                    val comma = titleSeparator(trimmed)
+                    val attrs = parseAttrs(
+                        if (comma >= 0) trimmed.substring(0, comma) else trimmed
+                    )
                     name = if (comma >= 0) trimmed.substring(comma + 1).trim() else ""
                     if (name.isEmpty()) name = attrs["tvg-name"] ?: "Unknown"
                     logo = attrs["tvg-logo"]?.takeIf { it.isNotBlank() }
@@ -80,6 +76,17 @@ object M3uParser {
                 }
             }
         }
+    }
+
+    private fun titleSeparator(line: String): Int {
+        var quoted = false
+        for (i in line.indices) {
+            when (line[i]) {
+                '"' -> quoted = !quoted
+                ',' -> if (!quoted) return i
+            }
+        }
+        return -1
     }
 
     private fun parseAttrs(line: String): Map<String, String> =

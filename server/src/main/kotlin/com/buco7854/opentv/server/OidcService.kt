@@ -92,7 +92,6 @@ class OidcService(
         state: String?,
         providerError: String?,
         transactionToken: String?,
-        clientIp: String,
     ): AuthResult {
         if (providerError != null || code.isNullOrBlank() || state.isNullOrBlank()) {
             throw InvalidCredentialsException()
@@ -149,7 +148,6 @@ class OidcService(
             displayNameClaim = (values[oidc.displayNameClaim] as? String)?.boundedClaim("display name"),
             groups = groups,
             adminMapped = groups.any(oidc.adminGroups::contains),
-            clientIp = clientIp,
         )
     }
 

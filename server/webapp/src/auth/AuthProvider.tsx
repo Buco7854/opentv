@@ -11,6 +11,8 @@ import { authText as tx } from './copy';
 
 type AuthPhase = 'loading' | 'authenticated' | 'unauthenticated' | 'error';
 
+const AUTHORITY_REFRESH_INTERVAL_MS = 5000;
+
 interface AuthContextValue {
   phase: AuthPhase;
   capabilities: AuthCapabilities | null;
@@ -60,10 +62,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [clearSession, installUser]);
 
+  const inFlight = useRef<Promise<void> | null>(null);
+  const refreshedAtMs = useRef(0);
+  const refreshAuthority = useCallback(() => {
+    if (inFlight.current) return;
+    if (Date.now() - refreshedAtMs.current < AUTHORITY_REFRESH_INTERVAL_MS) return;
+    inFlight.current = refresh().finally(() => {
+      refreshedAtMs.current = Date.now();
+      inFlight.current = null;
+    });
+  }, [refresh]);
+
   useEffect(() => {
     browserApiHttp.setCsrfTokenProvider(() => csrf.current);
     const unsubscribe = browserApiHttp.onUnauthorized(clearSession);
-    const unsubscribeForbidden = browserApiHttp.onForbidden(() => { void refresh(); });
+    const unsubscribeForbidden = browserApiHttp.onForbidden(refreshAuthority);
     let active = true;
     void (async () => {
       try {
@@ -83,7 +96,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       unsubscribeForbidden();
       browserApiHttp.setCsrfTokenProvider(undefined);
     };
-  }, [clearSession, refresh]);
+  }, [clearSession, refresh, refreshAuthority]);
 
   const acceptFlow = useCallback((flow: AuthFlow) => {
     if (flow.status !== 'AUTHENTICATED' || !flow.user) {

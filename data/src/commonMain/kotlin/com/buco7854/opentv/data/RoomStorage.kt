@@ -28,7 +28,6 @@ import kotlinx.coroutines.flow.map
 
 /** Room implementation of the core storage ports. */
 class RoomStorage(private val db: OpenTvDatabase) : Storage {
-
     override fun close() = db.close()
 
     override val playlists = object : PlaylistStore {
@@ -96,8 +95,11 @@ class RoomStorage(private val db: OpenTvDatabase) : Storage {
         override suspend fun retagGroup(playlistId: Long, groupTitle: String, kind: Int) =
             db.channelDao().retagGroup(playlistId, groupTitle, kind)
 
-        override suspend fun retagGroupAsSeries(playlistId: Long, groupTitle: String) =
-            db.channelDao().retagGroupAsSeries(playlistId, groupTitle)
+        override suspend fun inGroup(playlistId: Long, groupTitle: String): List<Channel> =
+            db.channelDao().inGroup(playlistId, groupTitle).map { it.toModel() }
+
+        override suspend fun updateAll(channels: List<Channel>) =
+            db.channelDao().updateAll(channels.map { it.toRow() })
 
         override suspend fun deleteEpisodes(playlistId: Long, seriesKey: String) =
             db.channelDao().deleteEpisodes(playlistId, seriesKey)

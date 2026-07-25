@@ -25,6 +25,19 @@ Generate the value with `openssl rand -base64 32`, then open
 between `localhost` and `127.0.0.1`. For a different host port, publish that
 port and set the same origin explicitly, for example
 `-p 127.0.0.1:9090:8080 -e OPENTV_PUBLIC_URL=http://localhost:9090`.
+:::note Bind mounts
+
+The container runs as an unprivileged user (uid `10001`). A named volume inherits the
+right ownership automatically, but a **bind mount** of a host directory does not: if the
+directory is owned by root the server cannot create its databases and the container exits
+immediately. Give it to the right user first:
+
+```bash
+mkdir -p ./opentv-data && sudo chown 10001:10001 ./opentv-data
+```
+
+:::
+
 Playlists and guide data use the catalog database;
 users, grants, favorites, resume points, and downloads use
 `/data/server-users.db`.
@@ -46,7 +59,7 @@ services:
   caddy:
     image: caddy:2
     restart: unless-stopped
-    ports: ["443:443"]
+    ports: ["80:80", "443:443"]
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
       - caddy-data:/data
@@ -67,8 +80,8 @@ tv.example.com {
 | Environment variable       | Default    | Meaning                                                                                                                              |
 | -------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | `PORT`                     | `8080`     | HTTP port the server listens on                                                                                                      |
-| `OPENTV_DATA`              | `/data`    | Directory for the SQLite database                                                                                                    |
-| `OPENTV_PAGE_SIZE`         | `50`       | Items per page in the web client's lists                                                                                             |
+| `OPENTV_DATA`              | `./data`   | Directory for the SQLite databases. The Docker image sets it to `/data`; running the tarball without it writes into the current working directory |
+| `OPENTV_PAGE_SIZE`         | `50`       | Items per page in the web client's lists (10-1000; outside that range the server refuses to start)                                    |
 | `OPENTV_VIDEO_ENCODER`     | `libx264`  | Encoder for non-H.264 video (HEVC and friends). Set `copy` to turn transcoding off, or a hardware encoder like `h264_qsv` / `h264_nvenc` with a GPU |
 | `OPENTV_X264_PRESET`       | `veryfast` | Software encode speed vs size (`ultrafast` to `slow`); only used by the default `libx264` encoder                                    |
 | `OPENTV_PROVIDER_CONNECTIONS` | `1`     | How many concurrent provider reads to allow when a panel does not report its own `max_connections`. Playback and downloads share this budget |

@@ -7,11 +7,12 @@ import { Icon, kindIconName } from './Icons';
 
 // Kind icon shown when the logo is missing or fails to load.
 export function ChannelLogo({ url, kind }: { url: string | null; kind: number }) {
-  const [failed, setFailed] = useState(false);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const failed = failedSrc !== null && failedSrc === url;
   return (
     <div className="logo-box">
       {url && !failed
-        ? <img loading="lazy" src={imgUrl(url)} alt="" onError={() => setFailed(true)} />
+        ? <img loading="lazy" src={imgUrl(url)} data-src={url} alt="" onError={(e) => setFailedSrc(e.currentTarget.getAttribute("data-src"))} />
         : <Icon name={kindIconName(kind)} />}
     </div>
   );

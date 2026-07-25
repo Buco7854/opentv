@@ -1,6 +1,7 @@
 // Player as a real route: each screen resolves content by id and renders the
 // shared PlayerSurface, keeping tokens and provider URLs out of the address bar.
 
+import { useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { api, ChannelKind } from '../api';
 import { EmptyState } from '../components/Common';
@@ -16,7 +17,10 @@ function WatchLoading() {
 // Close returns back, falling back to home for deep-links.
 function useClose() {
   const navigate = useNavigate();
-  return () => (window.history.length > 1 ? navigate(-1) : navigate('/'));
+  return useCallback(
+    () => (window.history.length > 1 ? navigate(-1) : navigate('/')),
+    [navigate],
+  );
 }
 
 function Stage({ request }: { request: PlayRequest }) {

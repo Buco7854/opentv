@@ -22,9 +22,13 @@ class MetadataRepository(
     http: HttpFetcher,
     private val log: CoreLog,
 ) {
-
     companion object {
         const val CACHE_MS = 30L * 24 * 60 * 60 * 1000
+    }
+
+    private fun isUseful(metadata: Metadata): Boolean = with(metadata) {
+        overview != null || castNames != null || posterUrl != null ||
+            rating != null || infoLine != null || sourceId != null
     }
 
     private val tvMaze = TvMazeApi(http)
@@ -44,7 +48,7 @@ class MetadataRepository(
             val now = nowMs()
             store.get(cacheKey)
                 ?.takeIf { now - it.fetchedAtMs < CACHE_MS }
-                ?.let { return it.takeIf { m -> m.overview != null || m.castNames != null } }
+                ?.let { return it.takeIf(::isUseful) }
 
             return try {
                 val info = if (isSeries) tvMaze.fetch(title) else iTunes.fetch(title, year)
@@ -62,12 +66,11 @@ class MetadataRepository(
                     fetchedAtMs = now,
                 )
                 store.upsert(entity)
-                entity.takeIf { info != null }
+                entity.takeIf(::isUseful)
             } catch (e: Exception) {
                 e.rethrowCancellation()
                 log.log("Metadata lookup", e)
-                store.get(cacheKey)
-                    ?.takeIf { it.overview != null || it.castNames != null }
+                store.get(cacheKey)?.takeIf(::isUseful)
             }
         }
     }
@@ -81,7 +84,7 @@ class MetadataRepository(
             val now = nowMs()
             store.get(cacheKey)
                 ?.takeIf { now - it.fetchedAtMs < CACHE_MS }
-                ?.let { return it.takeIf { m -> m.overview != null || m.posterUrl != null } }
+                ?.let { return it.takeIf(::isUseful) }
             return try {
                 val info = tvMaze.episode(showId, season, episode)
                 val entity = Metadata(
@@ -95,7 +98,7 @@ class MetadataRepository(
                     fetchedAtMs = now,
                 )
                 store.upsert(entity)
-                entity.takeIf { info != null }
+                entity.takeIf(::isUseful)
             } catch (e: Exception) {
                 e.rethrowCancellation()
                 log.log("Episode details", e)

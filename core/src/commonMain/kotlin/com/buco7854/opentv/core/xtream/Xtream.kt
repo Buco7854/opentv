@@ -102,7 +102,6 @@ private fun JsonObject.array(key: String): JsonArray? = this[key] as? JsonArray
 
 /** Pure URL construction and detection for Xtream-codes panels. */
 object Xtream {
-
     /** "host:port" or a full URL -> normalized "scheme://host:port", or null if unusable. */
     fun normalizeServer(input: String): String? {
         var server = input.trim().trimEnd('/')
@@ -133,7 +132,8 @@ object Xtream {
         "${c.base}/series/${c.user}/${c.pass}/$episodeId.${extension.ifBlank { "mp4" }}"
 
     fun xmltvUrl(c: XtreamCredentials) =
-        "${c.base}/xmltv.php?username=${c.user}&password=${c.pass}"
+        "${c.base}/xmltv.php?username=${Urls.percentEncode(c.user)}" +
+            "&password=${Urls.percentEncode(c.pass)}"
 
     /** Catch-up (timeshift) stream for a past programme. [tz] must be the panel's timezone. */
     fun catchupUrl(
@@ -166,7 +166,6 @@ object Xtream {
  * series episodes and VOD details are fetched lazily per opened item and cached.
  */
 class XtreamApi(private val http: HttpFetcher) {
-
     private suspend fun api(creds: XtreamCredentials, action: String?, vararg params: Pair<String, String>): String =
         http.getText(Xtream.apiUrl(creds, action, *params))
 
@@ -194,12 +193,18 @@ class XtreamApi(private val http: HttpFetcher) {
     @OptIn(ExperimentalEncodingApi::class)
     private fun decodeMaybeBase64(value: String): String {
         if (value.isBlank()) return value
-        return try {
-            Base64.decode(value).decodeToString()
+        val bytes = try {
+            Base64.decode(value)
         } catch (_: IllegalArgumentException) {
-            value // not base64 (some panels send plain text)
+            return value // not base64 at all (plain text with spaces, accents, punctuation)
         }
+        if (Base64.encode(bytes) != value) return value
+        val decoded = bytes.decodeToString()
+        return if (decoded.isNotEmpty() && decoded.all(::isReadable)) decoded else value
     }
+
+    private fun isReadable(character: Char): Boolean =
+        character != '�' && (character == '\n' || character == '\t' || !character.isISOControl())
 
     /**
      * Per-channel EPG (get_simple_data_table). Includes past programmes and a

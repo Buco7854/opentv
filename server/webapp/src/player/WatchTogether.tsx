@@ -91,6 +91,7 @@ export function useWatchTogether(opts: {
   const [joinRequests, setJoinRequests] = useState<JoinPeer[]>([]);
   const [controlRequests, setControlRequests] = useState<Peer[]>([]);
   const [checking, setChecking] = useState(true);
+  const [recheckNonce, setRecheckNonce] = useState(0);
   const [blocked, setBlocked] = useState(false);
   // 'pending' while someone is already on this content and the viewer hasn't said whether to watch
   // alone or together - playback is held until they choose, so a seat is never taken by surprise.
@@ -137,6 +138,7 @@ export function useWatchTogether(opts: {
     // gets the limit error instead of quietly holding a seat it no longer shares.
     checked.current = null;
     setChecking(true);
+    setRecheckNonce((n) => n + 1);
     setInRoom(false);
     setMembers([]);
     setJoinRequests([]);
@@ -336,7 +338,7 @@ export function useWatchTogether(opts: {
       if (intent.sameContent.length > 0) setChoice('pending');
     }).catch(() => { if (!cancelled) { clearTimeout(failOpen); setChecking(false); } });
     return () => { cancelled = true; clearTimeout(failOpen); };
-  }, [active, contentId, inRoom, selfId]);
+  }, [active, contentId, inRoom, selfId, recheckNonce]);
 
   // The host anchors the shared timeline: a snap whenever the roster grows (so a fresh joiner
   // jumps to where everyone else is) plus a gentle tick that only fixes a real desync.

@@ -69,9 +69,11 @@ fun GuideSheet(
     onPlayCatchup: (url: String, title: String) -> Unit,
     onUnavailable: () -> Unit,
 ) {
-    val viewModel = guideViewModel(channel)
+    val viewModel = guideViewModel()
     val entries by viewModel.entries.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
+
+    LaunchedEffect(channel.id) { viewModel.show(channel) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,

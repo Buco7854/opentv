@@ -16,12 +16,13 @@ export interface PosterItem {
 }
 
 export function PosterCard({ item, kind, onClick }: { item: PosterItem; kind: number; onClick: () => void }) {
-  const [failed, setFailed] = useState(false);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const failed = failedSrc !== null && failedSrc === item.image;
   return (
     <button className="card poster-card" onClick={onClick}>
       <div className="img">
         {item.image && !failed
-          ? <img loading="lazy" src={imgUrl(item.image)} alt="" onError={() => setFailed(true)} />
+          ? <img loading="lazy" src={imgUrl(item.image)} data-src={item.image} alt="" onError={(e) => setFailedSrc(e.currentTarget.getAttribute("data-src"))} />
           : <Icon name={kindIconName(kind)} />}
         {item.tag && <QualityBadge tag={item.tag} />}
       </div>

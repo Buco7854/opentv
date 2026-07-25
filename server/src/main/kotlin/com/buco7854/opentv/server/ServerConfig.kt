@@ -86,7 +86,7 @@ data class AuthConfig(
             }
             val allowInsecure = env.boolean("OPENTV_ALLOW_INSECURE_HTTP", false)
             val loopback = uri.host.equals("localhost", true) ||
-                uri.host == "127.0.0.1" || uri.host == "::1"
+                uri.host == "127.0.0.1" || uri.host == "[::1]"
             require(uri.scheme == "https" || (uri.scheme == "http" && (loopback || allowInsecure))) {
                 "OPENTV_PUBLIC_URL must use HTTPS (or explicitly allow insecure development HTTP)"
             }

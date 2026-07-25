@@ -51,6 +51,7 @@ android {
             // worse than a larger one. This is still a proper release build
             // (not debuggable), just not minified.
             isMinifyEnabled = false
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             isShrinkResources = false
             // Stable key when available; debug key otherwise so the release
             // variant still assembles in CI / locally.

@@ -17,25 +17,29 @@ import kotlinx.coroutines.launch
 
 internal class GuideViewModel(
     private val graph: AppGraph,
-    private val channel: Channel,
 ) : ViewModel() {
     private val _entries = MutableStateFlow<List<GuideEntry>?>(null)
     val entries: StateFlow<List<GuideEntry>?> = _entries.asStateFlow()
 
-    init {
+    private var channel: Channel? = null
+
+    fun show(target: Channel) {
+        channel = target
+        _entries.value = null
         viewModelScope.launch {
-            _entries.value = graph.xtream.guideFor(channel)
+            val loaded = graph.xtream.guideFor(target)
+            if (channel?.id == target.id) _entries.value = loaded
         }
     }
 
     suspend fun catchupUrlFor(entry: GuideEntry): String? =
-        graph.xtream.catchupUrlFor(channel, entry.startMs, entry.endMs)
+        channel?.let { graph.xtream.catchupUrlFor(it, entry.startMs, entry.endMs) }
 }
 
 @Composable
-internal fun guideViewModel(channel: Channel): GuideViewModel = viewModel(
-    key = "Guide-${channel.playlistId}-${channel.id}-${channel.url.hashCode()}",
+internal fun guideViewModel(): GuideViewModel = viewModel(
+    key = "Guide",
     factory = viewModelFactory {
-        initializer { GuideViewModel(OpenTvApp.graph, channel) }
+        initializer { GuideViewModel(OpenTvApp.graph) }
     },
 )

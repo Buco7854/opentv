@@ -71,8 +71,11 @@ class PlaybackSessionRegistryTest {
         val grant = grants.issue(owner, lease.id)
 
         grants.validateSource(owner, lease.id, grant.token, "https://example.test/stream")
-        assertFailsWith<ResourceNotFound> {
+        assertFailsWith<PlaybackRevokedException> {
             grants.validate(actor("attacker"), lease.id, grant.token)
+        }
+        assertFailsWith<PlaybackRevokedException> {
+            sessions.owned(owner, "never-issued")
         }
         sessions.remove(lease.id)
         assertFailsWith<PlaybackRevokedException> {

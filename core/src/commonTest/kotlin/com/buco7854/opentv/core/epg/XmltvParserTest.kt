@@ -6,7 +6,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 class XmltvParserTest {
-
     private fun textSource(content: String): TextSource {
         var i = 0
         return TextSource { if (i < content.length) content[i++].code else -1 }
@@ -97,5 +96,38 @@ class XmltvParserTest {
         assertEquals(1_699_995_600_000, XmltvParser.parseTime("20231114210000"))
         assertEquals(1_699_992_000_000, XmltvParser.parseTime("20231114210000 +01:00"))
         assertEquals(1_699_999_200_000, XmltvParser.parseTime("20231114210000 -0100"))
+    }
+
+    @Test
+    fun a_multilingual_programme_keeps_one_title_not_every_translation() {
+        val xml = """
+            <tv>
+              <programme channel="c1" start="20240101120000 +0000" stop="20240101130000 +0000">
+                <title lang="en">News</title>
+                <title lang="fr">Journal</title>
+                <desc lang="en">Evening bulletin</desc>
+                <desc lang="fr">Bulletin du soir</desc>
+              </programme>
+            </tv>
+        """.trimIndent()
+
+        val programme = parse(xml, setOf("c1")).single()
+
+        assertEquals("News", programme.title)
+        assertEquals("Evening bulletin", programme.description)
+    }
+
+    @Test
+    fun an_empty_first_title_falls_through_to_the_next_one() {
+        val xml = """
+            <tv>
+              <programme channel="c1" start="20240101120000 +0000" stop="20240101130000 +0000">
+                <title lang="en"></title>
+                <title lang="fr">Journal</title>
+              </programme>
+            </tv>
+        """.trimIndent()
+
+        assertEquals("Journal", parse(xml, setOf("c1")).single().title)
     }
 }

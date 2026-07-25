@@ -14,7 +14,6 @@ class AccountRepository(
     private val xtreamApi: XtreamApi,
     private val log: CoreLog,
 ) {
-
     companion object {
         const val CACHE_MS = 60_000L
     }
@@ -23,6 +22,10 @@ class AccountRepository(
 
     private val cache = HashMap<Long, CachedInfo>()
     private val mutex = Mutex()
+
+    suspend fun invalidate(playlistId: Long) {
+        mutex.withLock { cache.remove(playlistId) }
+    }
 
     suspend fun accountInfo(playlist: Playlist, force: Boolean = false): AccountInfo? {
         val creds = playlist.credentials() ?: return null

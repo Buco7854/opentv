@@ -49,7 +49,6 @@ class RemuxService(
     private val x264Preset: String = "veryfast",
     private val processRunner: MediaProcessRunner = JvmMediaProcessRunner,
 ) {
-
     private val log = LoggerFactory.getLogger("opentv")
 
     // Encoder for non-browser-playable video (HEVC...). Software libx264 by default;
@@ -137,6 +136,7 @@ class RemuxService(
         private const val FORWARD_RESTART_GAP_SEC = 24
         /** Segments kept behind the current one before deletion, to bound disk use. */
         private const val KEEP_BEHIND = 4
+        private const val MAX_SUB_STORE_FILES = 512
         private const val COPY_SEGMENT_SEC = 6
         private const val TRANSCODE_SEGMENT_SEC = 3
         /** Subtitle codecs ffmpeg can convert to WebVTT (bitmap subs cannot). */
@@ -220,7 +220,9 @@ class RemuxService(
     }
 
     private fun deleteTree(dir: Path) =
-        Files.walk(dir).sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+        Files.walk(dir).use { tree ->
+            tree.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+        }
 
     /** Kill a session's ffmpeg and wait for it to exit; leaves the connection reservation. */
     private fun killProcess(session: Session) {
@@ -404,19 +406,10 @@ class RemuxService(
      * playlist. ffmpeg is not started until the first segment is fetched. [connectionLimit]
      * is how many concurrent reads the provider permits (its max_connections).
      */
-    @Synchronized
-    fun start(url: String, audioIndex: Int, clientHevc: Boolean, force: Boolean, connectionLimit: Int,
+    fun start(url: String, audioIndex: Int, clientHevc: Boolean, timeshift: Boolean, connectionLimit: Int,
               group: String, supersede: Set<String>): StartResult {
         val id = sessionId(url, clientHevc, audioIndex, group)
-        // This read supersedes the share groups in [supersede]: the caller's own prior session,
-        // the group's stale one (a different track/file, or the room's previous audio), and - when
-        // forming a room - every member's solo session. Dropping them frees the provider slot so a
-        // room collapses to one read no matter which member re-keys first, and no one holds two.
-        sessions[id]?.let {
-            it.lastAccessMs = System.currentTimeMillis()
-            return StartResult(id, playlistUrl(id, it.subLabels.isNotEmpty()), it.durationSec.takeIf { d -> d > 0 },
-                it.audioLabels, it.subLabels, it.nativeVideoCopy)
-        }
+        prepared(id)?.let { return it }
 
         // Refuse a new stream when the provider's other streams (live or other VOD) already
         // fill its connection allowance, so the viewer sees a clear message instead of bumping
@@ -451,7 +444,7 @@ class RemuxService(
         val video = probed.streams.firstOrNull { it.type == "video" }
         val decodableAudio = audios.firstOrNull()?.codec?.lowercase()?.let { it in BROWSER_AUDIO } ?: true
         val decodableVideo = video?.codec?.lowercase()?.let { it in BROWSER_VIDEO } ?: true
-        if (!force && audios.size <= 1 && subs.isEmpty() && decodableAudio && decodableVideo) {
+        if (!timeshift && audios.size <= 1 && subs.isEmpty() && decodableAudio && decodableVideo) {
             throw NoExtraTracksException()
         }
         if (video == null) throw IllegalStateException("No video stream found")
@@ -478,19 +471,34 @@ class RemuxService(
 
         val session = Session(
             id, dir, url, providerKeyOf(url), group, connectionLimit.coerceAtLeast(1), clientHevc, audioIndex,
-            duration, segLen, starts, force, transcode, video.codec, audio, subs,
+            duration, segLen, starts, timeshift, transcode, video.codec, audio, subs,
             audioLabels(audios), subtitleLabels(subs), nativeVideoCopy, System.currentTimeMillis(),
         )
-        Files.writeString(dir.resolve("main.m3u8"), buildPlaylist(session))
         // Publish the viable replacement before retiring old reads. Preparation failures leave
         // existing viewers untouched.
-        sessions[id] = session
-        sessions.values.filter { it.id != id && it.shareKey in supersede }.forEach { evict(it) }
-        log.debug("remux {}: prepared ({}s, {} segs, video {} [{}], {} audio, {} subs)",
-            id, duration, starts.size, video.codec,
-            if (transcode) "->h264/$videoEncoder" else "copy", audios.size, subs.size)
-        return StartResult(id, playlistUrl(id, subs.isNotEmpty()), duration, session.audioLabels,
-            session.subLabels, nativeVideoCopy)
+        return synchronized(launchLock) {
+            prepared(id)?.let { return@synchronized it }
+            Files.writeString(dir.resolve("main.m3u8"), buildPlaylist(session))
+            sessions[id] = session
+            sessions.values.filter { it.id != id && it.shareKey in supersede }.forEach { evict(it) }
+            log.debug("remux {}: prepared ({}s, {} segs, video {} [{}], {} audio, {} subs)",
+                id, duration, starts.size, video.codec,
+                if (transcode) "->h264/$videoEncoder" else "copy", audios.size, subs.size)
+            StartResult(id, playlistUrl(id, subs.isNotEmpty()), duration, session.audioLabels,
+                session.subLabels, nativeVideoCopy)
+        }
+    }
+
+    private fun prepared(id: String): StartResult? = sessions[id]?.let {
+        it.lastAccessMs = System.currentTimeMillis()
+        StartResult(
+            id,
+            playlistUrl(id, it.subLabels.isNotEmpty()),
+            it.durationSec.takeIf { duration -> duration > 0 },
+            it.audioLabels,
+            it.subLabels,
+            it.nativeVideoCopy,
+        )
     }
 
     // Subtitles live in a master playlist as WebVTT renditions; without them the media playlist serves directly.
@@ -825,8 +833,21 @@ class RemuxService(
             val sorted = cues.values.sortedBy { it.start }
             val merged = if (sorted.isEmpty()) "" else
                 buildString { append("WEBVTT\n\n"); sorted.forEach { append(it.block).append("\n\n") } }
-            if (merged.isNotBlank() && merged != stored) runCatching { Files.writeString(file, merged) }
+            if (merged.isNotBlank() && merged != stored) {
+                runCatching { Files.writeString(file, merged) }
+                pruneSubStore()
+            }
             return sorted
+        }
+    }
+
+    private fun pruneSubStore() {
+        runCatching {
+            Files.list(subStore).use { it.toList() }
+                .takeIf { it.size > MAX_SUB_STORE_FILES }
+                ?.sortedByDescending { Files.getLastModifiedTime(it).toMillis() }
+                ?.drop(MAX_SUB_STORE_FILES)
+                ?.forEach { Files.deleteIfExists(it) }
         }
     }
 

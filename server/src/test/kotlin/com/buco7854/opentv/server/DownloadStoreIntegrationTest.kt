@@ -36,6 +36,7 @@ class DownloadStoreIntegrationTest {
             assertEquals(10, storage.downloads.get(id)?.downloadedBytes)
         } finally {
             storage.close()
+            dir.toFile().deleteRecursively()
         }
     }
 

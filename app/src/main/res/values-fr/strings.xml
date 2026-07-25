@@ -264,6 +264,7 @@
     <string name="account_status">Statut</string>
     <string name="account_trial">Essai</string>
     <string name="account_username">Nom d\'utilisateur</string>
+    <string name="account_connections_label">connexions actives / maximum</string>
     <string name="account_expires">Expire</string>
     <plurals name="account_expires_in">
         <item quantity="one">%1$s · dans %2$d jour</item>

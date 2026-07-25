@@ -9,3 +9,5 @@ local.properties
 *.keystore
 server/webapp/node_modules
 server/src/main/resources/web
+server/webapp/tsconfig.tsbuildinfo
+server/webapp/dist

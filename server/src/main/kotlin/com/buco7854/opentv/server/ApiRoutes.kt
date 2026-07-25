@@ -1,8 +1,6 @@
 package com.buco7854.opentv.server
 
-import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
-import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.route
 
@@ -13,23 +11,6 @@ internal fun ApplicationCall.requiredParameter(name: String): String =
     parameters[name] ?: throw IllegalArgumentException("Missing $name")
 
 /** Accepts only an opaque provider token. Download playback is resolved by an owned lease. */
-internal suspend fun remuxSource(media: MediaRouteDependencies, call: ApplicationCall): String? {
-    val downloadId = call.request.queryParameters["d"]
-    val source = if (downloadId != null) {
-        media.downloads.fileFor(call.actor.userId, downloadId)?.second?.toString()
-    } else {
-        call.request.queryParameters["u"]?.let(media.cipher::tryDecrypt)
-            ?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
-    }
-    if (source == null) {
-        call.respond(
-            HttpStatusCode.BadRequest,
-            ApiErrorDto("invalid_target", "Invalid or missing target url"),
-        )
-    }
-    return source
-}
-
 internal fun RemuxService.RemuxDiagnostics.toDto() = RemuxDiagDto(
     videoCodec = videoCodec,
     transcodeVideo = transcodeVideo,
@@ -68,7 +49,7 @@ fun Route.api(
                 graph.authConfig,
                 graph.trustedProxies::clientIp,
             )
-            adminAuthRoutes(graph.auth, graph.trustedProxies::clientIp)
+            adminAuthRoutes(graph.auth)
             playlistRoutes(graph.apiServices.playlists)
             libraryRoutes(graph.apiServices.library)
             downloadRoutes(graph.apiServices.downloads)

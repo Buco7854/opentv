@@ -45,7 +45,7 @@ class DownloadManager(
     private val dir = dataDir.resolve("user-downloads")
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val jobs = ConcurrentHashMap<String, Job>()
-    private val blobLocks = ConcurrentHashMap<String, Mutex>()
+    private val blobLocks = List(64) { Mutex() }
     private val pumpMutex = Mutex()
 
     fun close() {
@@ -231,7 +231,7 @@ class DownloadManager(
             ?: throw ResourceNotFound("download")
 
     private suspend fun <T> withBlobLock(blobId: String, block: suspend () -> T): T =
-        blobLocks.computeIfAbsent(blobId) { Mutex() }.withLock { block() }
+        blobLocks[(blobId.hashCode() and Int.MAX_VALUE) % blobLocks.size].withLock { block() }
 
     private suspend fun deleteBlob(id: String) {
         withBlobLock(id) { deleteBlobUnlocked(id) }

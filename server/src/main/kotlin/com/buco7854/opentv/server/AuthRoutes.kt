@@ -85,7 +85,6 @@ internal fun Route.publicAuthRoutes(
                     call.request.queryParameters["state"],
                     call.request.queryParameters["error"],
                     call.request.cookies[OIDC_TRANSACTION_COOKIE],
-                    clientIp(call),
                 )
                 result.sessionToken?.let { call.response.cookies.append(sessionCookie(it, config)) }
                 call.respondRedirect(
@@ -132,17 +131,14 @@ private fun ApplicationCall.requireAuthOrigin(config: AuthConfig) {
     if (request.headers[HttpHeaders.Origin] != expected) throw CsrfException()
 }
 
-internal fun Route.adminAuthRoutes(
-    auth: AuthService,
-    clientIp: (ApplicationCall) -> String,
-) {
+internal fun Route.adminAuthRoutes(auth: AuthService) {
     route("/admin") {
         route("/users") {
             get { call.respond(auth.adminUsers(call.actor)) }
             post {
                 call.respond(
                     HttpStatusCode.Created,
-                    auth.adminCreateUser(call.actor, call.receive(), clientIp(call)),
+                    auth.adminCreateUser(call.actor, call.receive()),
                 )
             }
             route("/{userId}") {
@@ -152,7 +148,6 @@ internal fun Route.adminAuthRoutes(
                             call.actor,
                             call.requiredParameter("userId"),
                             call.receive(),
-                            clientIp(call),
                         )
                     )
                 }
@@ -161,7 +156,6 @@ internal fun Route.adminAuthRoutes(
                         auth.adminResetUser(
                             call.actor,
                             call.requiredParameter("userId"),
-                            clientIp(call),
                         )
                     )
                 }
@@ -203,7 +197,6 @@ internal fun Route.adminAuthRoutes(
                     auth.adminDeleteUser(
                         call.actor,
                         call.requiredParameter("userId"),
-                        clientIp(call),
                     )
                     call.respond(HttpStatusCode.NoContent)
                 }

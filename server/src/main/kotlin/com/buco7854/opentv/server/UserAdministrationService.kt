@@ -88,7 +88,6 @@ internal class UserAdministrationService(
     suspend fun create(
         actor: Actor,
         request: CreateUserRequestDto,
-        clientIp: String,
     ): CreatedUserDto = mutation.withLock {
         requireAdmin(actor)
         val role = request.role.uppercase()
@@ -104,7 +103,6 @@ internal class UserAdministrationService(
         val challenge = accounts.issueChallenge(
             user.id, ChallengeKind.ACTIVATION, "", 24 * 60 * 60_000L,
         )
-        accounts.event(actor.userId, user.id, "user_created", clientIp)
         CreatedUserDto(accounts.adminUserDto(user), challenge.first)
     }
 
@@ -112,7 +110,6 @@ internal class UserAdministrationService(
         actor: Actor,
         userId: String,
         request: UpdateUserRequestDto,
-        clientIp: String,
     ): AdminUserDto = mutation.withLock {
         requireAdmin(actor)
         val current = db.users().get(userId) ?: throw ResourceNotFound("user")
@@ -151,21 +148,19 @@ internal class UserAdministrationService(
         if (current.status != status || current.manualRole != role) {
             sessions.revokeUser(userId, clock())
         }
-        accounts.event(actor.userId, userId, "user_updated", clientIp)
         accounts.adminUserDto(updated)
     }
 
-    suspend fun delete(actor: Actor, userId: String, clientIp: String) = mutation.withLock {
+    suspend fun delete(actor: Actor, userId: String) = mutation.withLock {
         requireAdmin(actor)
         val user = db.users().get(userId) ?: throw ResourceNotFound("user")
         ensureNotFinalManualAdmin(user, "delete")
         sessions.revokeUser(userId, clock())
-        db.securityEvents().deleteForUser(userId)
         db.users().delete(userId)
         cleanup.userDeleted(userId)
     }
 
-    suspend fun reset(actor: Actor, userId: String, clientIp: String): ResetUserDto =
+    suspend fun reset(actor: Actor, userId: String): ResetUserDto =
         mutation.withLock {
             requireAdmin(actor)
             val user = db.users().get(userId) ?: throw ResourceNotFound("user")
@@ -177,7 +172,6 @@ internal class UserAdministrationService(
             val challenge = accounts.issueChallenge(
                 userId, ChallengeKind.PASSWORD_RESET, "", 24 * 60 * 60_000L,
             )
-            accounts.event(actor.userId, userId, "credentials_reset", clientIp)
             ResetUserDto(challenge.first)
         }
 

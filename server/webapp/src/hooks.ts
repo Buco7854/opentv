@@ -1,5 +1,5 @@
 import {
-  useCallback, useEffect, useMemo, useState, useSyncExternalStore,
+  useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore,
 } from 'react';
 import { api, Download, DownloadStatus } from './api';
 
@@ -209,19 +209,20 @@ export function useFavorites(playlistId: number | null) {
       .catch(() => {});
     return () => { active = false; };
   }, [playlistId]);
+  const contentIdsRef = useRef(contentIds);
+  contentIdsRef.current = contentIds;
   const toggle = useCallback((contentId: string) => {
     if (playlistId == null) return;
+    const adding = !contentIdsRef.current.has(contentId);
     setContentIds((old) => {
       const next = new Set(old);
-      if (next.has(contentId)) {
-        next.delete(contentId);
-        api.removeFavorite(playlistId, contentId).catch(() => {});
-      } else {
-        next.add(contentId);
-        api.addFavorite(playlistId, contentId).catch(() => {});
-      }
+      if (adding) next.add(contentId); else next.delete(contentId);
       return next;
     });
+    const request = adding
+      ? api.addFavorite(playlistId, contentId)
+      : api.removeFavorite(playlistId, contentId);
+    request.catch(() => {});
   }, [playlistId]);
   return { favoriteContentIds: contentIds, toggleFavorite: toggle };
 }

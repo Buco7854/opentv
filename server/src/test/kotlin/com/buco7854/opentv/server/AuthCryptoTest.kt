@@ -16,6 +16,9 @@ class AuthCryptoTest {
     @Test
     fun passwordLengthCountsUnicodeCodePointsWithoutNormalizing() {
         AuthCrypto.validatePassword("😀😀😀😀😀😀😀😀😀😀😀😀")
+        assertFailsWith<IllegalArgumentException> {
+            AuthCrypto.validatePassword("😀😀😀😀😀😀😀😀😀😀😀")
+        }
         assertFailsWith<IllegalArgumentException> { AuthCrypto.validatePassword("short") }
     }
 

@@ -95,7 +95,6 @@ class OidcServiceTest {
                     state = rejectedQuery.getValue("state"),
                     providerError = null,
                     transactionToken = "wrong-cookie",
-                    clientIp = "127.0.0.1",
                 )
             }
 
@@ -110,7 +109,6 @@ class OidcServiceTest {
                 state = query.getValue("state"),
                 providerError = null,
                 transactionToken = start.transactionToken,
-                clientIp = "127.0.0.1",
             )
 
             assertEquals("AUTHENTICATED", result.flow.status)
@@ -124,7 +122,6 @@ class OidcServiceTest {
                     state = query.getValue("state"),
                     providerError = null,
                     transactionToken = start.transactionToken,
-                    clientIp = "127.0.0.1",
                 )
             }
 
@@ -144,7 +141,6 @@ class OidcServiceTest {
                         state = invalidQuery.getValue("state"),
                         providerError = null,
                         transactionToken = invalidStart.transactionToken,
-                        clientIp = "127.0.0.1",
                     )
                 }
             }

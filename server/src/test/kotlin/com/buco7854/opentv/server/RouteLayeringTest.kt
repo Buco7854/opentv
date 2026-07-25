@@ -14,7 +14,8 @@ class RouteLayeringTest {
             files.filter { it.name.endsWith("Routes.kt") }.forEach { file ->
                 val source = Files.readString(file)
                 assertFalse(
-                    "g.storage" in source || "service.storage" in source,
+                    "graph.storage" in source || "service.storage" in source ||
+                        "graph.userDatabase" in source,
                     "${file.name} bypasses its application service",
                 )
                 assertFalse(

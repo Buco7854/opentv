@@ -29,7 +29,6 @@ class DownloadWorker(
     params: WorkerParameters,
     private val dependencies: DownloadWorkerDependencies,
 ) : CoroutineWorker(context, params) {
-
     companion object {
         const val KEY_DOWNLOAD_ID = "download_id"
         const val CHANNEL_ID = "downloads"
@@ -135,7 +134,7 @@ class DownloadWorker(
                 dao.updateStatusIfStatus(
                     downloadId,
                     listOf(DownloadStatus.RUNNING),
-                    DownloadStatus.PAUSED,
+                    DownloadStatus.QUEUED,
                 )
             }
             throw e

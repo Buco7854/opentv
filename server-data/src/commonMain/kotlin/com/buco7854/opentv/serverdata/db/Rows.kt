@@ -310,35 +310,6 @@ data class UserDownloadRow(
     val updatedAtMs: Long,
 )
 
-@Entity(
-    tableName = "security_events",
-    primaryKeys = ["id"],
-    indices = [Index("actorUserId"), Index("subjectUserId"), Index("createdAtMs")],
-    foreignKeys = [
-        ForeignKey(
-            entity = UserRow::class,
-            parentColumns = ["id"],
-            childColumns = ["actorUserId"],
-            onDelete = ForeignKey.CASCADE,
-        ),
-        ForeignKey(
-            entity = UserRow::class,
-            parentColumns = ["id"],
-            childColumns = ["subjectUserId"],
-            onDelete = ForeignKey.CASCADE,
-        ),
-    ],
-)
-data class SecurityEventRow(
-    val id: String,
-    val actorUserId: String?,
-    val subjectUserId: String?,
-    val type: String,
-    val detail: String,
-    val clientIp: String?,
-    val createdAtMs: Long,
-)
-
 @Entity(tableName = "playlist_deletions", primaryKeys = ["playlistId"])
 data class PlaylistDeletionRow(
     val playlistId: Long,

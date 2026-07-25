@@ -122,8 +122,10 @@ class PlaylistApplicationService(
         requireAccess(actor, id)
         val groups = if (group != null) storage.channels.observeSeriesInGroup(id, group).first()
         else storage.channels.observeAllSeries(id).first()
-        return groups.filterNot { it.seriesKey.startsWith("xs:") }.map {
-            it.toDto(cipher, content.m3uSeries(id, it).contentId, actor.userId, id)
+        val series = groups.filterNot { it.seriesKey.startsWith("xs:") }
+        val identities = content.m3uSeriesIdentities(id, series)
+        return series.map {
+            it.toDto(cipher, requireNotNull(identities[it.seriesKey]).contentId, actor.userId, id)
         }
     }
 
@@ -131,7 +133,10 @@ class PlaylistApplicationService(
         requireAccess(actor, id)
         val series = if (category != null) storage.xtreamSeries.observeInCategory(id, category).first()
         else storage.xtreamSeries.observeAll(id).first()
-        return series.map { it.toDto(cipher, content.xtreamSeries(it).contentId, actor.userId) }
+        val identities = content.xtreamSeriesIdentities(series)
+        return series.map {
+            it.toDto(cipher, requireNotNull(identities[it.seriesId]).contentId, actor.userId)
+        }
     }
 
     suspend fun nowAiring(actor: Actor, id: Long): Map<String, ProgrammeDto> {
@@ -149,27 +154,32 @@ class PlaylistApplicationService(
         if (query.trim().length < 2) return SearchResultsDto()
         val escaped = query.trim().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         val rows = storage.channels.search(id, escaped)
-        val m3uSeries = rows.filter { it.kind == ChannelKind.SERIES }
+        val m3uGroups = rows.filter { it.kind == ChannelKind.SERIES }
             .filterNot { it.seriesKey?.startsWith("xs:") == true }
             .groupBy { it.seriesKey ?: it.name }
             .map { (key, episodes) ->
-                val group = SeriesGroup(
+                SeriesGroup(
                     key,
                     episodes.size,
                     episodes.firstOrNull { it.logo != null }?.logo,
                     episodes.first().groupTitle,
                 )
-                SeriesHitDto(
-                    content.m3uSeries(id, group).contentId,
-                    key,
-                    episodes.size,
-                    cipher.encryptOrNull(group.logo, actor.userId, id),
-                    group.groupTitle,
-                )
             }
-        val panelSeries = storage.xtreamSeries.search(id, escaped).map {
+        val m3uIdentities = content.m3uSeriesIdentities(id, m3uGroups)
+        val m3uSeries = m3uGroups.map { group ->
             SeriesHitDto(
-                content.xtreamSeries(it).contentId,
+                requireNotNull(m3uIdentities[group.seriesKey]).contentId,
+                group.seriesKey,
+                group.count,
+                cipher.encryptOrNull(group.logo, actor.userId, id),
+                group.groupTitle,
+            )
+        }
+        val panelHits = storage.xtreamSeries.search(id, escaped)
+        val panelIdentities = content.xtreamSeriesIdentities(panelHits)
+        val panelSeries = panelHits.map {
+            SeriesHitDto(
+                requireNotNull(panelIdentities[it.seriesId]).contentId,
                 it.name,
                 0,
                 cipher.encryptOrNull(it.cover, actor.userId, id),
@@ -226,22 +236,28 @@ class PlaylistApplicationService(
         val movies = resolved.filter { it.second.kind == ChannelKind.MOVIE }
             .map { (contentId, channel) -> channel.toDto(cipher, contentId, actor.userId) }
         val series = mutableListOf<SeriesHitDto>()
-        storage.xtreamSeries.observeAll(id).first().forEach {
-            val contentId = content.xtreamSeries(it).contentId
-            if (contentId in ids) series += SeriesHitDto(
-                contentId, it.name, 0, cipher.encryptOrNull(it.cover, actor.userId, id),
-                it.categoryName, it.seriesId,
+        val panel = storage.xtreamSeries.observeAll(id).first()
+        val panelIdentities = content.xtreamSeriesIdentities(panel)
+        panel.forEach { entry ->
+            val contentId = panelIdentities[entry.seriesId]?.contentId ?: return@forEach
+            if (contentId !in ids) return@forEach
+            series += SeriesHitDto(
+                contentId, entry.name, 0,
+                cipher.encryptOrNull(entry.cover, actor.userId, id),
+                entry.categoryName, entry.seriesId,
             )
         }
-        storage.channels.observeAllSeries(id).first()
+        val m3u = storage.channels.observeAllSeries(id).first()
             .filterNot { it.seriesKey.startsWith("xs:") }
-            .forEach {
-                val contentId = content.m3uSeries(id, it).contentId
-                if (contentId in ids) series += SeriesHitDto(
-                    contentId, it.seriesKey, it.count,
-                    cipher.encryptOrNull(it.logo, actor.userId, id), it.groupTitle,
-                )
-            }
+        val m3uIdentities = content.m3uSeriesIdentities(id, m3u)
+        m3u.forEach { entry ->
+            val contentId = m3uIdentities[entry.seriesKey]?.contentId ?: return@forEach
+            if (contentId !in ids) return@forEach
+            series += SeriesHitDto(
+                contentId, entry.seriesKey, entry.count,
+                cipher.encryptOrNull(entry.logo, actor.userId, id), entry.groupTitle,
+            )
+        }
         return FavoritesResolvedDto(live, movies, series.sortedBy { it.seriesKey.lowercase() })
     }
 
@@ -255,7 +271,7 @@ class PlaylistApplicationService(
         val series = storage.xtreamSeries.get(id, seriesId) ?: throw ResourceNotFound("series")
         val failure = runCatching { xtream.ensureEpisodes(id, seriesId) }.exceptionOrNull()
         val episodes = storage.channels.observeEpisodes(id, xtreamSeriesKey(seriesId)).first()
-        episodes.forEach { content.channel(it) }
+        content.channels(episodes)
         return XtreamSeriesDetailDto(
             series.toDto(cipher, content.xtreamSeries(series).contentId, actor.userId),
             channelDtos(actor, episodes),

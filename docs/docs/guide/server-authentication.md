@@ -27,7 +27,7 @@ openssl rand -base64 32
 | `OPENTV_PUBLIC_URL` | `http://localhost:8080` | Exact browser origin and OIDC callback base. Use HTTPS outside localhost. |
 | `OPENTV_AUTH_ENCRYPTION_KEY` | none | Required 32-byte base64 secret when password auth is enabled. Encrypts TOTP secrets; it is not the media-token key. |
 | `OPENTV_PASSWORD_AUTH_ENABLED` | `true` | Enables local login, bootstrap, activation, and credential reset. |
-| `OPENTV_MFA_REQUIRED_ROLES` | `USER,ADMIN` | Comma-separated local-password roles that must complete TOTP or WebAuthn on every login. |
+| `OPENTV_MFA_REQUIRED_ROLES` | `USER,ADMIN` | Comma-separated local-password roles that must complete TOTP or WebAuthn. Accepts `USER`, `ADMIN`, or both; an empty value is ignored and the default applies on every login. |
 | `OPENTV_INITIAL_ADMIN_USERNAME` | none | Optional one-time initial administrator username. Must be supplied with its password. |
 | `OPENTV_INITIAL_ADMIN_PASSWORD` | none | Optional one-time initial administrator password. Ignored after any administrator exists. |
 | `OPENTV_SESSION_IDLE_HOURS` | `24` | Browser session idle lifetime. |

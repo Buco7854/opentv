@@ -24,7 +24,6 @@ class XmltvProgramme(
  * every Kotlin target.
  */
 object XmltvParser {
-
     suspend fun parse(
         source: TextSource,
         wantedChannelIds: Set<String>,
@@ -36,8 +35,8 @@ object XmltvParser {
         var channel: String? = null
         var start: Long? = null
         var end: Long? = null
-        var title: StringBuilder? = null
-        var desc: StringBuilder? = null
+        var title: String? = null
+        var desc: String? = null
         var inProgramme = false
         var capture: StringBuilder? = null
 
@@ -51,20 +50,26 @@ object XmltvParser {
                         end = parseTime(token.attributes["stop"])
                         title = null
                         desc = null
+                        capture = null
                     }
-                    "title" -> if (inProgramme && !token.selfClosing) {
-                        title = title ?: StringBuilder()
-                        capture = title
+                    "title" -> if (inProgramme && !token.selfClosing && title == null) {
+                        capture = StringBuilder()
                     }
-                    "desc" -> if (inProgramme && !token.selfClosing) {
-                        desc = desc ?: StringBuilder()
-                        capture = desc
+                    "desc" -> if (inProgramme && !token.selfClosing && desc == null) {
+                        capture = StringBuilder()
                     }
                     else -> {}
                 }
                 is Token.Text -> capture?.append(token.text)
                 is Token.EndTag -> when (token.name) {
-                    "title", "desc" -> capture = null
+                    "title" -> {
+                        capture?.let { title = it.toString().trim().takeIf(String::isNotEmpty) }
+                        capture = null
+                    }
+                    "desc" -> {
+                        capture?.let { desc = it.toString().trim().takeIf(String::isNotEmpty) }
+                        capture = null
+                    }
                     "programme" -> {
                         val ch = channel
                         val s = start
@@ -75,8 +80,8 @@ object XmltvParser {
                             batch.add(
                                 XmltvProgramme(
                                     channel = ch,
-                                    title = title?.toString()?.trim().orEmpty().ifEmpty { "Untitled" },
-                                    description = desc?.toString()?.trim()?.takeIf { it.isNotEmpty() },
+                                    title = title ?: "Untitled",
+                                    description = desc,
                                     startMs = s,
                                     endMs = e,
                                 )
@@ -116,10 +121,13 @@ object XmltvParser {
         }
         val suffix = text.substring(14).trim().replace(":", "")
         val offset = when {
-            suffix.isEmpty() -> UtcOffset.ZERO
-            suffix.length == 5 && (suffix[0] == '+' || suffix[0] == '-') -> {
+            suffix.isEmpty() || suffix.equals("Z", true) ||
+                suffix.equals("UTC", true) || suffix.equals("GMT", true) -> UtcOffset.ZERO
+            (suffix.length == 5 || suffix.length == 3) &&
+                (suffix[0] == '+' || suffix[0] == '-') -> {
                 val hours = suffix.substring(1, 3).toIntOrNull() ?: return null
-                val minutes = suffix.substring(3, 5).toIntOrNull() ?: return null
+                val minutes =
+                    if (suffix.length == 5) suffix.substring(3, 5).toIntOrNull() ?: return null else 0
                 val sign = if (suffix[0] == '-') -1 else 1
                 try {
                     UtcOffset(hours = sign * hours, minutes = sign * minutes)
@@ -139,7 +147,6 @@ object XmltvParser {
     }
 
     private class Tokenizer(private val source: TextSource) {
-
         private var pushback = -2 // -2 = empty
 
         private fun read(): Int {

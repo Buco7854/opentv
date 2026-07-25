@@ -30,6 +30,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
+import com.buco7854.opentv.R
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 
@@ -50,7 +52,10 @@ fun PosterGrid(
     onClick: (id: String) -> Unit,
 ) {
     if (items.isEmpty()) {
-        EmptyState("Empty category", "No items in this category.")
+        EmptyState(
+            stringResource(R.string.browse_empty_category),
+            stringResource(R.string.browse_empty_category_subtitle),
+        )
         return
     }
     LazyVerticalGrid(

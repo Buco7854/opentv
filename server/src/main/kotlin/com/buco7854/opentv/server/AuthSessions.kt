@@ -86,14 +86,12 @@ internal class PersistentSessionService(
             ?.takeIf { it.userId == actor.userId && it.revokedAtMs == null }
             ?.csrfToken ?: throw UnauthenticatedApiException()
 
-    suspend fun recentMfa(actor: Actor): AuthSessionRow =
+    suspend fun recentlyAuthenticated(actor: Actor): AuthSessionRow =
         db.sessions().get(actor.authSessionId)
             ?.takeIf {
-                val mfaAt = it.mfaSatisfiedAtMs
                 it.userId == actor.userId &&
                     it.revokedAtMs == null &&
-                    mfaAt != null &&
-                    clock() - mfaAt <= 5 * 60_000L
+                    clock() - it.createdAtMs <= RECENT_AUTHENTICATION_MS
             } ?: throw ForbiddenApiException()
 
     suspend fun requireActive(actor: Actor) {
@@ -138,6 +136,10 @@ internal class PersistentSessionService(
 
     private fun effectiveRole(user: UserRow) =
         if (user.manualRole == UserRole.ADMIN || user.oidcAdmin) UserRole.ADMIN else UserRole.USER
+
+    private companion object {
+        const val RECENT_AUTHENTICATION_MS = 5 * 60_000L
+    }
 }
 
 /** Transport-neutral adapter from an opaque credential to the application actor. */

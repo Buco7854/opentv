@@ -45,10 +45,11 @@ class XtreamRepository(
     private val account: AccountRepository,
     private val log: CoreLog,
 ) {
-
     companion object {
         const val EPISODES_CACHE_MS = 24L * 60 * 60 * 1000
         const val VOD_INFO_CACHE_MS = 30L * 24 * 60 * 60 * 1000
+        const val EPG_CACHE_MS = 10L * 60 * 1000
+        private const val MAX_EPG_CACHE_ENTRIES = 512
     }
 
     private val mutex = Mutex()
@@ -59,12 +60,17 @@ class XtreamRepository(
             val series = storage.xtreamSeries.get(playlistId, seriesId) ?: return
             val seriesKey = xtreamSeriesKey(seriesId)
             val now = nowMs()
-            val cached = storage.channels.countEpisodes(playlistId, seriesKey) > 0
-            if (!force && cached && now - series.episodesFetchedAtMs < EPISODES_CACHE_MS) return
+            if (!force && series.episodesFetchedAtMs > 0 &&
+                now - series.episodesFetchedAtMs < EPISODES_CACHE_MS
+            ) return
 
+            val cached = storage.channels.countEpisodes(playlistId, seriesKey) > 0
             val creds = storage.playlists.get(playlistId)?.credentials() ?: return
             val episodes = xtreamApi.fetchSeriesEpisodes(creds, seriesId)
-            if (episodes.isEmpty() && cached) return // keep existing
+            if (episodes.isEmpty() && cached) {
+                storage.xtreamSeries.setEpisodesFetched(playlistId, seriesId, now)
+                return
+            }
 
             storage.channels.deleteEpisodes(playlistId, seriesKey)
             storage.channels.insertAll(
@@ -92,13 +98,16 @@ class XtreamRepository(
     }
 
     /** Panel-provided movie details (get_vod_info), cached in the metadata store. */
+    private fun hasPanelDetail(metadata: Metadata): Boolean =
+        metadata.overview != null || metadata.castNames != null || metadata.rating != null
+
     suspend fun vodMetadata(channel: Channel): Metadata? {
         val streamId = channel.xtreamStreamId ?: return null
         val cacheKey = "xtreamvod:${channel.playlistId}:$streamId"
         val now = nowMs()
         storage.metadata.get(cacheKey)
             ?.takeIf { now - it.fetchedAtMs < VOD_INFO_CACHE_MS }
-            ?.let { return it.takeIf { m -> m.overview != null || m.castNames != null } }
+            ?.let { return it.takeIf(::hasPanelDetail) }
 
         val creds = storage.playlists.get(channel.playlistId)?.credentials() ?: return null
         return try {
@@ -122,7 +131,7 @@ class XtreamRepository(
                 fetchedAtMs = now,
             )
             storage.metadata.upsert(entity)
-            entity.takeIf { info != null && (info.plot != null || credits != null || info.rating != null) }
+            entity.takeIf(::hasPanelDetail)
         } catch (e: Exception) {
             e.rethrowCancellation()
             log.log("Movie details", e)
@@ -136,6 +145,24 @@ class XtreamRepository(
 
     private class CachedEpg(val entries: List<XtreamEpgEntry>, val atMs: Long)
     private val epgCache = HashMap<String, CachedEpg>()
+    private val epgCacheMutex = Mutex()
+
+    private suspend fun cachedEpg(key: String, now: Long): List<XtreamEpgEntry>? =
+        epgCacheMutex.withLock {
+            epgCache[key]?.takeIf { now - it.atMs < EPG_CACHE_MS }?.entries
+        }
+
+    private suspend fun storeEpg(key: String, entries: List<XtreamEpgEntry>, now: Long) {
+        if (entries.isEmpty()) return
+        epgCacheMutex.withLock {
+            if (epgCache.size >= MAX_EPG_CACHE_ENTRIES) epgCache.clear()
+            epgCache[key] = CachedEpg(entries, now)
+        }
+    }
+
+    suspend fun forgetPlaylist(playlistId: Long) {
+        epgCacheMutex.withLock { epgCache.keys.removeAll { it.startsWith("$playlistId:") } }
+    }
 
     /**
      * Full guide for one channel with per-row catch-up availability. Prefers the
@@ -149,10 +176,10 @@ class XtreamRepository(
             val creds = storage.playlists.get(channel.playlistId)?.credentials()
             if (creds != null) {
                 val key = "${channel.playlistId}:$streamId"
-                val cached = epgCache[key]?.takeIf { now - it.atMs < 10 * 60_000L }?.entries
+                val cached = cachedEpg(key, now)
                     ?: runCatching { xtreamApi.fetchChannelEpg(creds, streamId) }
                         .getOrElse { it.rethrowCancellation(); log.log("Channel EPG", it); emptyList() }
-                        .also { if (it.isNotEmpty()) epgCache[key] = CachedEpg(it, now) }
+                        .also { storeEpg(key, it, now) }
                 if (cached.isNotEmpty()) {
                     // has_archive is unreliable (often 0 on archived channels), so also
                     // treat a past programme as replayable inside the declared archive window.

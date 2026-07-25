@@ -74,7 +74,7 @@ class LiveRelay(
                 closer?.cancel(); closer = null
                 if (reader?.isActive != true) {
                     // First member of the room: claim the one shared connection or give up.
-                    if (!connections.tryOpenStream(key, providerKey, group, limit) { stop() }) {
+                    if (!connections.tryOpenStream(key, providerKey, group, limit, ::evicted)) {
                         return Attach.REFUSED
                     }
                     reader = scope.launch { pump() }
@@ -103,6 +103,10 @@ class LiveRelay(
          *  solo. No-op if this relay doesn't hold that session. */
         fun drop(sid: String) {
             synchronized(lifecycle) { members.remove(sid)?.close() }
+        }
+
+        private fun evicted() {
+            synchronized(lifecycle) { stop() }
         }
 
         // Always called under [lifecycle].

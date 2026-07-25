@@ -72,7 +72,6 @@ internal class AuthFlowService(
             credentials.setPassword(user.id, request.password, now)
             accounts.copyDefaultGrants(user.id, now)
             Files.deleteIfExists(bootstrapFile)
-            accounts.event(null, user.id, "bootstrap_admin_created", clientIp)
             limiter.success(*keys)
             beginPostPassword(user, now)
         }
@@ -107,19 +106,17 @@ internal class AuthFlowService(
         }
         if (!verified || user == null || user.status != UserStatus.ACTIVE) {
             limiter.fail(*keys)
-            accounts.event(user?.id, user?.id, "password_login_failed", clientIp)
             throw InvalidCredentialsException()
         }
         limiter.success(*keys)
         credentials.maybeRehash(user.id, request.password, requireNotNull(credential))
-        accounts.event(user.id, user.id, "password_verified", clientIp)
         return beginPostPassword(user, clock())
     }
 
     suspend fun activate(request: ActivationRequestDto, clientIp: String): AuthResult =
         mutation.withLock {
             require(config.passwordEnabled) { "Password authentication is disabled" }
-            val keys = arrayOf("ip:$clientIp", "activation:${request.token.take(16)}")
+            val keys = arrayOf("ip:$clientIp", "activation:${request.token.take(CHALLENGE_KEY_LENGTH)}")
             limiter.check(*keys)
             val challenge = runCatching {
                 accounts.challenge(ChallengeKind.ACTIVATION, request.token)
@@ -146,7 +143,6 @@ internal class AuthFlowService(
                 accounts.copyDefaultGrants(activated.id, clock())
             }
             limiter.success(*keys)
-            accounts.event(activated.id, activated.id, "account_activated", clientIp)
             beginPostPassword(activated, clock())
         }
 
@@ -154,7 +150,7 @@ internal class AuthFlowService(
         rawChallenge: String,
         clientIp: String,
     ): TotpEnrollmentDto = mutation.withLock {
-        val keys = arrayOf("ip:$clientIp", "totp-enroll:${rawChallenge.take(16)}")
+        val keys = arrayOf("ip:$clientIp", "totp-enroll:${rawChallenge.take(CHALLENGE_KEY_LENGTH)}")
         limiter.check(*keys)
         val parent = runCatching { accounts.challenge(ChallengeKind.MFA, rawChallenge) }
             .getOrElse {
@@ -167,13 +163,11 @@ internal class AuthFlowService(
             limiter.fail(*keys)
             throw it
         }
-        if (parent.payloadJson.isBlank() &&
-            (db.credentials().confirmedTotp(user.id).isNotEmpty() ||
-                db.credentials().webAuthn(user.id).isNotEmpty())
+        if (db.credentials().confirmedTotp(user.id).isNotEmpty() ||
+            (parent.payloadJson.isBlank() && db.credentials().webAuthn(user.id).isNotEmpty())
         ) {
             throw ForbiddenApiException()
         }
-        if (db.credentials().confirmedTotp(user.id).isNotEmpty()) throw ForbiddenApiException()
         db.credentials().deleteUnconfirmedTotp(user.id)
         val secret = AuthCrypto.randomBytes(20)
         val id = UUID.randomUUID().toString()
@@ -211,7 +205,7 @@ internal class AuthFlowService(
         request: TotpCompleteRequestDto,
         clientIp: String,
     ): AuthResult = mutation.withLock {
-        val keys = arrayOf("ip:$clientIp", "challenge:${request.challenge.take(16)}")
+        val keys = arrayOf("ip:$clientIp", "challenge:${request.challenge.take(CHALLENGE_KEY_LENGTH)}")
         limiter.check(*keys)
         val challenge = runCatching {
             accounts.challenge(ChallengeKind.TOTP_ENROLL, request.challenge)
@@ -260,7 +254,6 @@ internal class AuthFlowService(
             throw InvalidChallengeException()
         }
         limiter.success(*keys)
-        accounts.event(user.id, user.id, "totp_enrolled", clientIp)
         authenticated(session, codes.first)
     }
 
@@ -268,7 +261,7 @@ internal class AuthFlowService(
         request: TotpCompleteRequestDto,
         clientIp: String,
     ): AuthResult = mutation.withLock {
-        val keys = arrayOf("ip:$clientIp", "challenge:${request.challenge.take(12)}")
+        val keys = arrayOf("ip:$clientIp", "challenge:${request.challenge.take(CHALLENGE_KEY_LENGTH)}")
         limiter.check(*keys)
         val challenge = runCatching { accounts.challenge(ChallengeKind.MFA, request.challenge) }
             .getOrElse {
@@ -288,7 +281,6 @@ internal class AuthFlowService(
         }
         if (matched == null) {
             limiter.fail(*keys)
-            accounts.event(userId, userId, "totp_login_failed", clientIp)
             throw InvalidCredentialsException()
         }
         val now = clock()
@@ -305,7 +297,6 @@ internal class AuthFlowService(
             throw InvalidChallengeException()
         }
         limiter.success(*keys)
-        accounts.event(user.id, user.id, "login_succeeded", clientIp)
         authenticated(session)
     }
 
@@ -313,7 +304,7 @@ internal class AuthFlowService(
         request: RecoveryCompleteRequestDto,
         clientIp: String,
     ): AuthResult = mutation.withLock {
-        val keys = arrayOf("ip:$clientIp", "challenge:${request.challenge.take(12)}")
+        val keys = arrayOf("ip:$clientIp", "challenge:${request.challenge.take(CHALLENGE_KEY_LENGTH)}")
         limiter.check(*keys)
         val challenge = runCatching { accounts.challenge(ChallengeKind.MFA, request.challenge) }
             .getOrElse {
@@ -346,7 +337,6 @@ internal class AuthFlowService(
             throw InvalidChallengeException()
         }
         limiter.success(*keys)
-        accounts.event(user.id, user.id, "recovery_code_used", clientIp)
         authenticated(session)
     }
 
@@ -412,4 +402,8 @@ internal class AuthFlowService(
 
     private fun constantEquals(left: String, right: String): Boolean =
         MessageDigest.isEqual(left.toByteArray(Charsets.UTF_8), right.toByteArray(Charsets.UTF_8))
+
+    private companion object {
+        const val CHALLENGE_KEY_LENGTH = 16
+    }
 }

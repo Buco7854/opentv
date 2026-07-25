@@ -54,7 +54,7 @@ internal class MediaProbe(
     }
 
     fun keyframes(url: String): List<Double>? {
-        keyframes[url]?.let { return it.ifEmpty { null } }
+        keyframes[url]?.takeIf { it.isNotEmpty() }?.let { return it }
         val output = Files.createTempFile(workDirectory, "kf", ".csv")
         val command = ffprobeCommand(url) +
             listOf("-select_streams", "v:0", "-show_entries", "packet=pts_time,flags", "-of", "csv=p=0", url)
@@ -80,7 +80,7 @@ internal class MediaProbe(
             Files.deleteIfExists(output)
         }
         if (keyframes.size > MAX_KEYFRAME_ENTRIES) keyframes.clear()
-        keyframes[url] = result ?: emptyList()
+        result?.let { keyframes[url] = it }
         return result
     }
 

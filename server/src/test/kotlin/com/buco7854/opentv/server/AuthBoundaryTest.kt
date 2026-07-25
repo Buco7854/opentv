@@ -136,9 +136,20 @@ class AuthBoundaryTest {
 
     @Test
     fun localhostDevelopmentIsTheOnlyInsecureCookieConfiguration() {
-        assertFalse(authConfig(secure = false).secureCookies)
-        assertTrue(authConfig(secure = true).secureCookies)
+        val insecure = AuthConfig.fromEnv(
+            baseEnv() + mapOf("OPENTV_PUBLIC_URL" to "http://localhost:8080"),
+        )
+        assertFalse(insecure.secureCookies)
+
+        val secure = AuthConfig.fromEnv(
+            baseEnv() + mapOf("OPENTV_PUBLIC_URL" to "https://tv.example.com"),
+        )
+        assertTrue(secure.secureCookies)
     }
+
+    private fun baseEnv() = mapOf(
+        "OPENTV_AUTH_ENCRYPTION_KEY" to Base64.getEncoder().encodeToString(ByteArray(32)),
+    )
 
     @Test
     fun oidcGroupClaimsAcceptOnlyBoundedTopLevelStrings() {

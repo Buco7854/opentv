@@ -27,13 +27,15 @@ export function SearchScreen() {
   const downloads = useDownloads();
   const { guideIds } = useGuideIds(playlistId);
 
-  // Debounced to limit server hits while typing.
   useEffect(() => {
     if (query.trim().length < 2) { setResults(null); return; }
+    let current = true;
     const timer = setTimeout(() => {
-      api.search(playlistId, query.trim()).then(setResults).catch(() => setResults({ live: [], movies: [], series: [] }));
+      api.search(playlistId, query.trim())
+        .then((next) => { if (current) setResults(next); })
+        .catch(() => { if (current) setResults({ live: [], movies: [], series: [] }); });
     }, 250);
-    return () => clearTimeout(timer);
+    return () => { current = false; clearTimeout(timer); };
   }, [playlistId, query]);
 
   const pageKey = `${playlistId}:${query.trim().toLowerCase()}`;

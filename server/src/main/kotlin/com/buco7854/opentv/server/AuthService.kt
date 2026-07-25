@@ -141,8 +141,8 @@ class AuthService(
     internal suspend fun mfaChallenge(raw: String): AuthChallengeRow =
         accounts.challenge(ChallengeKind.MFA, raw)
 
-    internal suspend fun recentMfaChallenge(actor: Actor): String {
-        val session = recentMfaSession(actor)
+    internal suspend fun reauthenticationChallenge(actor: Actor): String {
+        val session = recentlyAuthenticatedSession(actor)
         return issueChallenge(
             actor.userId,
             ChallengeKind.MFA,
@@ -161,20 +161,19 @@ class AuthService(
         accounts.challenge(kind, raw)
 
     internal fun checkFlowLimit(clientIp: String, flow: String, challenge: String) =
-        limiter.check("ip:$clientIp", "$flow:${challenge.take(16)}")
+        limiter.check("ip:$clientIp", "$flow:${challenge.take(CHALLENGE_KEY_LENGTH)}")
 
     internal fun failFlowLimit(clientIp: String, flow: String, challenge: String) =
-        limiter.fail("ip:$clientIp", "$flow:${challenge.take(16)}")
+        limiter.fail("ip:$clientIp", "$flow:${challenge.take(CHALLENGE_KEY_LENGTH)}")
 
     internal fun clearFlowLimit(clientIp: String, flow: String, challenge: String) =
-        limiter.success("ip:$clientIp", "$flow:${challenge.take(16)}")
+        limiter.success("ip:$clientIp", "$flow:${challenge.take(CHALLENGE_KEY_LENGTH)}")
 
     internal suspend fun finishWebAuthn(
         webAuthnChallengeId: String,
         parentChallengeId: String,
         credential: WebAuthnCredentialRow,
         enrollment: Boolean,
-        clientIp: String,
     ): AuthResult = mutation.withLock {
         val now = clock()
         val parent = db.challenges().get(parentChallengeId)
@@ -206,7 +205,6 @@ class AuthService(
             throw InvalidChallengeException()
         }
         replacedSession?.let { revokeSessionInternal(credential.userId, it.id, now) }
-        event(user.id, user.id, if (enrollment) "webauthn_enrolled" else "webauthn_login", clientIp)
         AuthResult(sessionFlow(session, recovery?.first.orEmpty()), session.token)
     }
 
@@ -217,7 +215,6 @@ class AuthService(
         displayNameClaim: String?,
         groups: List<String>,
         adminMapped: Boolean,
-        clientIp: String,
     ): AuthResult = mutation.withLock {
         val now = clock()
         val existingIdentity = db.oidc().get(issuer, subject)
@@ -232,7 +229,6 @@ class AuthService(
                         Json.encodeToString(groups), false, prior?.createdAtMs ?: now, now,
                     ),
                 )
-                event(null, null, "oidc_identity_pending", clientIp)
                 return@withLock AuthResult(AuthFlowDto(status = "PENDING_APPROVAL"))
             }
             val base = usernameClaim?.takeIf(String::isNotBlank) ?: "oidc-user"
@@ -265,7 +261,6 @@ class AuthService(
         if (updatedUser.status != UserStatus.ACTIVE) throw InvalidCredentialsException()
         val session = issueSession(updatedUser, AuthMethod.OIDC, mfa = true)
         db.users().markLogin(updatedUser.id, now)
-        event(updatedUser.id, updatedUser.id, "oidc_login_succeeded", clientIp)
         AuthResult(sessionFlow(session), session.token)
     }
 
@@ -327,7 +322,6 @@ class AuthService(
         val now = clock()
         if (all) revokeUserSessions(actor.userId, now)
         else revokeSessionInternal(actor.userId, actor.authSessionId, now)
-        event(actor.userId, actor.userId, if (all) "logout_all" else "logout", null)
     }
 
     suspend fun adminUsers(actor: Actor): List<AdminUserDto> =
@@ -342,24 +336,21 @@ class AuthService(
     internal suspend fun adminCreateUser(
         actor: Actor,
         request: CreateUserRequestDto,
-        clientIp: String,
-    ): CreatedUserDto = userAdministration.create(actor, request, clientIp)
+    ): CreatedUserDto = userAdministration.create(actor, request)
 
     internal suspend fun adminUpdateUser(
         actor: Actor,
         userId: String,
         request: UpdateUserRequestDto,
-        clientIp: String,
-    ): AdminUserDto = userAdministration.update(actor, userId, request, clientIp)
+    ): AdminUserDto = userAdministration.update(actor, userId, request)
 
-    suspend fun adminDeleteUser(actor: Actor, userId: String, clientIp: String) =
-        userAdministration.delete(actor, userId, clientIp)
+    suspend fun adminDeleteUser(actor: Actor, userId: String) =
+        userAdministration.delete(actor, userId)
 
     internal suspend fun adminResetUser(
         actor: Actor,
         userId: String,
-        clientIp: String,
-    ): ResetUserDto = userAdministration.reset(actor, userId, clientIp)
+    ): ResetUserDto = userAdministration.reset(actor, userId)
 
     suspend fun revokeSession(actor: Actor, userId: String, sessionId: String?) =
         userAdministration.revokeSession(actor, userId, sessionId)
@@ -392,7 +383,7 @@ class AuthService(
     suspend fun grants(userId: String): List<Long> = db.grants().forUser(userId)
 
     internal suspend fun regenerateRecoveryCodes(actor: Actor): AuthResult = mutation.withLock {
-        recentMfaSession(actor)
+        recentlyAuthenticatedSession(actor)
         val codes = credentials.replaceRecoveryCodes(actor.userId)
         val user = db.users().get(actor.userId) ?: throw UnauthenticatedApiException()
         revokeSessionInternal(actor.userId, actor.authSessionId, clock())
@@ -405,7 +396,7 @@ class AuthService(
         request: PasswordChangeRequestDto,
     ): AuthResult = mutation.withLock {
         require(config.passwordEnabled) { "Password authentication is disabled" }
-        recentMfaSession(actor)
+        recentlyAuthenticatedSession(actor)
         db.credentials().password(actor.userId) ?: throw ForbiddenApiException()
         credentials.setPassword(actor.userId, request.password, clock())
         revokeSessionInternal(actor.userId, actor.authSessionId, clock())
@@ -444,7 +435,6 @@ class AuthService(
         val user = createUser(seed.username, seed.username, UserStatus.ACTIVE, UserRole.ADMIN, now)
         credentials.setPassword(user.id, seed.password, now)
         copyDefaultGrants(user.id, now)
-        event(null, user.id, "initial_admin_seeded", null)
     }
 
     internal suspend fun createUser(
@@ -480,8 +470,8 @@ class AuthService(
         sessionService.revoke(userId, sessionId, atMs)
     }
 
-    private suspend fun recentMfaSession(actor: Actor): AuthSessionRow =
-        sessionService.recentMfa(actor)
+    private suspend fun recentlyAuthenticatedSession(actor: Actor): AuthSessionRow =
+        sessionService.recentlyAuthenticated(actor)
 
     private fun ensureBootstrapFile() {
         if (Files.exists(bootstrapFile)) return
@@ -512,18 +502,12 @@ class AuthService(
         log.warn("Initial administrator bootstrap token created at {}", bootstrapFile)
     }
 
-    internal suspend fun event(
-        actorUserId: String?,
-        subjectUserId: String?,
-        type: String,
-        clientIp: String?,
-    ) = accounts.event(actorUserId, subjectUserId, type, clientIp)
-
     private fun constantEquals(left: String, right: String): Boolean =
         MessageDigest.isEqual(left.toByteArray(Charsets.UTF_8), right.toByteArray(Charsets.UTF_8))
 
     private companion object {
         const val MAX_ACTIVE_OIDC_STATES = 4_096
+        const val CHALLENGE_KEY_LENGTH = 16
     }
 }
 

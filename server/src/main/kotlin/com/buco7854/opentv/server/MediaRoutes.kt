@@ -1,6 +1,7 @@
 package com.buco7854.opentv.server
 
 import io.ktor.http.HttpStatusCode
+import io.ktor.server.application.ApplicationCall
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.delete
@@ -11,26 +12,13 @@ import kotlinx.coroutines.withContext
 
 internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
     get("/stream") {
-        val source = requiredMediaSource(media, call)
-        media.mediaGrants.validateSource(
-            call.actor,
-            call.request.queryParameters["sid"],
-            call.request.queryParameters["g"],
-            source,
-        )
-        media.proxy.handle(
-            call,
-            sid = call.request.queryParameters["sid"],
-            mediaGrant = call.request.queryParameters["g"],
-            leaseGuard = {
-                media.mediaGrants.validateSource(
-                    call.actor,
-                    call.request.queryParameters["sid"],
-                    call.request.queryParameters["g"],
-                    source,
-                )
-            },
-        )
+        val capability = requiredStreamCapability(media, call)
+        val grant = call.request.queryParameters["g"]
+        val guard = {
+            media.mediaGrants.validateCapability(call.actor, capability.leaseId, grant, capability)
+        }
+        guard()
+        media.proxy.handle(call, capability, grant, guard)
     }
     get("/img") {
         val capability = call.request.queryParameters["u"]
@@ -46,15 +34,14 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
     }
 
     get("/relay") {
-        val url = call.request.queryParameters["u"]?.let { media.cipher.tryDecrypt(it) }
-        if (url.isNullOrBlank() || !url.startsWith("http")) {
-            call.respond(HttpStatusCode.BadRequest, ApiErrorDto("invalid_target", "Invalid or missing target url"))
-            return@get
+        val capability = requiredStreamCapability(media, call)
+        val grant = call.request.queryParameters["g"]
+        val sessionId = capability.leaseId
+        val url = capability.url
+        val guard = {
+            media.mediaGrants.validateCapability(call.actor, sessionId, grant, capability)
         }
-        val sessionId = call.request.queryParameters["sid"].orEmpty()
-        media.mediaGrants.validateSource(
-            call.actor, sessionId, call.request.queryParameters["g"], url,
-        )
+        guard()
         val group = media.sessions.shareGroup(sessionId)
         (media.sessions.roomMembers(sessionId) + sessionId).forEach { media.streamGate.release(it) }
         media.liveRelay.stream(
@@ -64,11 +51,8 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
             providerKeyOf(url),
             media.connectionLimit(url),
             sessionId,
-        ) {
-            media.mediaGrants.validateSource(
-                call.actor, sessionId, call.request.queryParameters["g"], url,
-            )
-        }
+            guard,
+        )
     }
 
     get("/transcode") {
@@ -79,29 +63,22 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
             )
             return@get
         }
-        val url = call.request.queryParameters["u"]?.let { media.cipher.tryDecrypt(it) }
-        if (url.isNullOrBlank() || !(url.startsWith("http://") || url.startsWith("https://"))) {
-            call.respond(HttpStatusCode.BadRequest, ApiErrorDto("invalid_target", "Invalid or missing target url"))
-            return@get
+        val capability = requiredStreamCapability(media, call)
+        val grant = call.request.queryParameters["g"]
+        val sessionId = capability.leaseId
+        val url = capability.url
+        val guard = {
+            media.mediaGrants.validateCapability(call.actor, sessionId, grant, capability)
         }
-        val sessionId = call.request.queryParameters["sid"]
-        media.mediaGrants.validateSource(
-            call.actor, sessionId, call.request.queryParameters["g"], url,
-        )
-        if (sessionId != null &&
-            !media.streamGate.admit(sessionId, providerKeyOf(url), media.connectionLimit(url))
-        ) {
+        guard()
+        if (!media.streamGate.admit(sessionId, providerKeyOf(url), media.connectionLimit(url))) {
             call.respond(
                 HttpStatusCode.TooManyRequests,
                 ApiErrorDto("provider_capacity", "Provider connection limit reached"),
             )
             return@get
         }
-        media.transcoder.stream(url, call, requireNotNull(sessionId)) {
-            media.mediaGrants.validateSource(
-                call.actor, sessionId, call.request.queryParameters["g"], url,
-            )
-        }
+        media.transcoder.stream(url, call, sessionId, guard)
     }
 
     get("/remux/available") { call.respond(RemuxAvailableDto(media.remux.available)) }
@@ -113,12 +90,10 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
             )
             return@post
         }
-        val source = remuxSource(media, call) ?: return@post
+        val (source, sessionId) = remuxTarget(media, call)
         val requestedAudio = call.request.queryParameters["audio"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
-        val force = call.request.queryParameters["force"] == "1"
-        val sessionId = call.request.queryParameters["sid"].orEmpty()
+        val timeshift = call.request.queryParameters["timeshift"] == "1"
         val rawGrant = call.request.queryParameters["g"]
-        media.mediaGrants.validateSource(call.actor, sessionId, rawGrant, source)
         val group = media.sessions.shareGroup(sessionId)
         val audio = media.sessions.roomAudio(sessionId) ?: requestedAudio
         val clientHevc = media.sessions.roomHevc(
@@ -132,7 +107,7 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
                     source,
                     audio,
                     clientHevc,
-                    force,
+                    timeshift,
                     media.connectionLimit(source),
                     group,
                     supersededGroups,
@@ -214,14 +189,33 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
     }
 }
 
-private fun requiredMediaSource(
+private fun requiredStreamCapability(
     media: MediaRouteDependencies,
-    call: io.ktor.server.application.ApplicationCall,
-): String =
-    call.request.queryParameters["u"]?.let(media.cipher::tryDecrypt)
-        ?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
+    call: ApplicationCall,
+): StreamCapability =
+    call.request.queryParameters["u"]?.let(media.cipher::tryDecryptStream)
+        ?.takeIf { it.url.startsWith("http://") || it.url.startsWith("https://") }
         ?: throw IllegalArgumentException("Invalid or missing target url")
 
-private fun mediaQuery(call: io.ktor.server.application.ApplicationCall): String =
+private data class RemuxTarget(val source: String, val leaseId: String)
+
+private suspend fun remuxTarget(
+    media: MediaRouteDependencies,
+    call: ApplicationCall,
+): RemuxTarget {
+    val grant = call.request.queryParameters["g"]
+    val downloadId = call.request.queryParameters["d"]
+        ?: return requiredStreamCapability(media, call).let { capability ->
+            media.mediaGrants.validateCapability(call.actor, capability.leaseId, grant, capability)
+            RemuxTarget(capability.url, capability.leaseId)
+        }
+    val leaseId = call.request.queryParameters["sid"]
+    val source = media.downloads.fileFor(call.actor.userId, downloadId)?.second?.toString()
+        ?: throw IllegalArgumentException("Invalid or missing target url")
+    media.mediaGrants.validateSource(call.actor, leaseId, grant, source)
+    return RemuxTarget(source, requireNotNull(leaseId))
+}
+
+private fun mediaQuery(call: ApplicationCall): String =
     "?sid=${urlEncode(call.request.queryParameters["sid"].orEmpty())}" +
         "&g=${urlEncode(call.request.queryParameters["g"].orEmpty())}"

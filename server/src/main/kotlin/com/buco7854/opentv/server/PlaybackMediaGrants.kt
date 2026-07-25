@@ -51,6 +51,16 @@ class PlaybackMediaGrants(
         }
     }
 
+    fun validateCapability(
+        actor: Actor,
+        leaseId: String?,
+        rawGrant: String?,
+        capability: StreamCapability,
+    ) {
+        validate(actor, leaseId, rawGrant)
+        if (capability.leaseId != leaseId) throw PlaybackRevokedException()
+    }
+
     fun validateSource(actor: Actor, leaseId: String?, rawGrant: String?, source: String) {
         validate(actor, leaseId, rawGrant)
         if (sessions.owned(actor, requireNotNull(leaseId)).sourceUrl != source) {

@@ -11,6 +11,7 @@ import io.ktor.server.response.respondOutputStream
 import io.ktor.server.response.respondText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.slf4j.LoggerFactory
 import java.net.URI
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
@@ -29,15 +30,12 @@ class StreamProxy(
     /** Concurrent reads the provider behind a URL permits (its max_connections). */
     private val connectionLimit: suspend (String) -> Int,
 ) {
+    private val log = LoggerFactory.getLogger("opentv")
     private val activeBodies = ConcurrentHashMap<String, MutableSet<InputStream>>()
 
-    // URIs go back as tokens so a rewritten playlist never exposes provider URLs; the stream
-    // id rides along so a segment fetch counts against the same connection as its playlist.
-    private fun proxied(absoluteUrl: String, sid: String?, mediaGrant: String?): String {
-        val base = "/api/v1/stream?u=${java.net.URLEncoder.encode(cipher.encrypt(absoluteUrl), Charsets.UTF_8)}"
-        return if (sid == null) base else "$base&sid=${java.net.URLEncoder.encode(sid, Charsets.UTF_8)}" +
-            "&g=${java.net.URLEncoder.encode(mediaGrant.orEmpty(), Charsets.UTF_8)}"
-    }
+    private fun proxied(absoluteUrl: String, leaseId: String, mediaGrant: String?): String =
+        "/api/v1/stream?u=${urlEncode(cipher.encryptStream(absoluteUrl, leaseId))}" +
+            "&sid=${urlEncode(leaseId)}&g=${urlEncode(mediaGrant.orEmpty())}"
 
     private val hlsContentTypes = listOf("mpegurl", "m3u8")
     private val allowedImageTypes = setOf(
@@ -51,20 +49,43 @@ class StreamProxy(
         return contentType != null && hlsContentTypes.any { contentType.contains(it, ignoreCase = true) }
     }
 
-    /** Rewrite every URI in an HLS playlist to go through the proxy, carrying [sid] on each. */
-    internal fun rewriteHls(body: String, baseUri: URI, sid: String?, mediaGrant: String? = null): String {
-        val uriAttr = Regex("""URI="([^"]+)"""")
-        return body.lineSequence().joinToString("\n") { line ->
+    internal fun rewriteHls(body: String, baseUri: URI, leaseId: String, mediaGrant: String? = null): String {
+        var rejected = 0
+        fun child(raw: String): String {
+            val resolved = runCatching { baseUri.resolve(raw) }.getOrNull()
+            if (resolved == null || !sameOrigin(baseUri, resolved)) {
+                rejected++
+                return REJECTED_CHILD_URL
+            }
+            return proxied(resolved.toString(), leaseId, mediaGrant)
+        }
+        val rewritten = body.lineSequence().joinToString("\n") { line ->
             val trimmed = line.trim()
             when {
                 trimmed.isEmpty() -> line
-                trimmed.startsWith("#") -> uriAttr.replace(line) { match ->
-                    """URI="${proxied(baseUri.resolve(match.groupValues[1]).toString(), sid, mediaGrant)}""""
-                }
-                else -> proxied(baseUri.resolve(trimmed).toString(), sid, mediaGrant)
+                trimmed.startsWith("#") ->
+                    URI_ATTRIBUTE.replace(line) { """URI="${child(it.groupValues[1])}"""" }
+                else -> child(trimmed)
             }
         }
+        if (rejected > 0) {
+            log.warn("Rejected {} off-origin URI(s) in the playlist at {}", rejected, baseUri)
+        }
+        return rewritten
     }
+
+    private fun sameOrigin(base: URI, candidate: URI): Boolean {
+        val scheme = candidate.scheme?.lowercase() ?: return false
+        if (scheme != "http" && scheme != "https") return false
+        if (scheme != base.scheme?.lowercase()) return false
+        val host = candidate.host ?: return false
+        val baseHost = base.host ?: return false
+        if (!host.equals(baseHost, ignoreCase = true)) return false
+        return effectivePort(candidate) == effectivePort(base)
+    }
+
+    private fun effectivePort(uri: URI): Int =
+        uri.port.takeIf { it > 0 } ?: if (uri.scheme.equals("https", true)) 443 else 80
 
     suspend fun image(call: ApplicationCall, target: String) {
         val uri = runCatching { URI(target) }.getOrNull()
@@ -126,22 +147,17 @@ class StreamProxy(
 
     suspend fun handle(
         call: ApplicationCall,
-        cache: Boolean = false,
-        sid: String? = null,
-        mediaGrant: String? = null,
-        leaseGuard: (() -> Unit)? = null,
+        capability: StreamCapability,
+        mediaGrant: String?,
+        leaseGuard: () -> Unit,
     ) {
-        // Only tokens are accepted - a raw provider URL is never a valid input.
-        var target = call.request.queryParameters["u"]?.let { cipher.tryDecrypt(it) }
-        // Xtream live: the client asks for the HLS variant of a `.ts` token.
-        if (call.request.queryParameters["hls"] == "1" && target != null) {
-            target = target.replace(Regex("""\.ts(\?|$)"""), ".m3u8$1")
+        val leaseId = capability.leaseId
+        val target = if (call.request.queryParameters["hls"] == "1") {
+            capability.url.replace(Regex("""\.ts(\?|$)"""), ".m3u8$1")
+        } else {
+            capability.url
         }
-        val uri = try {
-            URI(target ?: "")
-        } catch (_: Exception) {
-            null
-        }
+        val uri = runCatching { URI(target) }.getOrNull()
         if (uri == null || uri.scheme !in listOf("http", "https")) {
             call.respond(HttpStatusCode.BadRequest, ApiErrorDto("invalid_target", "Invalid or missing target url"))
             return
@@ -149,15 +165,13 @@ class StreamProxy(
 
         // Enforce the provider's concurrent-stream cap here, not just in the UI: refuse a new
         // live stream when the provider's other streams already fill it, instead of cutting one.
-        if (!cache && sid != null) {
-            val streamUrl = uri.toString()
-            if (!gate.admit(sid, providerKeyOf(streamUrl), connectionLimit(streamUrl))) {
-                call.respond(
-                    HttpStatusCode.TooManyRequests,
-                    ApiErrorDto("provider_capacity", "Provider connection limit reached"),
-                )
-                return
-            }
+        val streamUrl = uri.toString()
+        if (!gate.admit(leaseId, providerKeyOf(streamUrl), connectionLimit(streamUrl))) {
+            call.respond(
+                HttpStatusCode.TooManyRequests,
+                ApiErrorDto("provider_capacity", "Provider connection limit reached"),
+            )
+            return
         }
 
         val builder = HttpRequest.newBuilder(uri)
@@ -170,29 +184,30 @@ class StreamProxy(
                 http.client.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream())
             }
         } catch (e: Exception) {
+            log.warn("Upstream request failed for {}: {}", providerKeyOf(streamUrl), e.message)
             call.respond(
                 HttpStatusCode.BadGateway,
-                ApiErrorDto("upstream_failure", "Upstream request failed: ${e.message}"),
+                ApiErrorDto("upstream_failure", "Upstream request failed"),
             )
             return
         }
 
         val status = HttpStatusCode.fromValue(upstream.statusCode())
-        if (sid != null) activeBodies
-            .computeIfAbsent(sid) { ConcurrentHashMap.newKeySet() }
-            .add(upstream.body())
+        val body = upstream.body()
+        trackBody(leaseId, body)
         try {
-            leaseGuard?.invoke()
+            leaseGuard()
         } catch (error: Exception) {
-            upstream.body().close()
-            if (sid != null) activeBodies[sid]?.remove(upstream.body())
+            body.close()
+            releaseBody(leaseId, body)
             throw error
         }
         val headers = upstream.headers()
         val contentType = headers.firstValue("Content-Type").orElse(null)
 
         if (upstream.statusCode() !in 200..299) {
-            upstream.body().close()
+            body.close()
+            releaseBody(leaseId, body)
             call.respond(
                 HttpStatusCode.BadGateway,
                 ApiErrorDto("upstream_failure", "Upstream returned HTTP ${upstream.statusCode()}"),
@@ -201,15 +216,15 @@ class StreamProxy(
         }
 
         // HLS playlists are text and small: buffer, rewrite, respond.
-        if (looksLikeHls(uri.toString(), contentType)) {
+        if (looksLikeHls(streamUrl, contentType)) {
             val text = try {
-                upstream.body().use { withContext(Dispatchers.IO) { it.readBytes() } }.decodeToString()
+                body.use { withContext(Dispatchers.IO) { it.readBytes() } }.decodeToString()
             } finally {
-                if (sid != null) activeBodies[sid]?.remove(upstream.body())
+                releaseBody(leaseId, body)
             }
             if (text.startsWith("#EXTM3U")) {
                 call.respondText(
-                    rewriteHls(text, upstream.uri(), sid, mediaGrant),
+                    rewriteHls(text, upstream.uri(), leaseId, mediaGrant),
                     ContentType.parse("application/vnd.apple.mpegurl"),
                 )
                 return
@@ -220,47 +235,54 @@ class StreamProxy(
 
         headers.firstValue("Content-Range").orElse(null)?.let { call.response.header(HttpHeaders.ContentRange, it) }
         headers.firstValue("Accept-Ranges").orElse(null)?.let { call.response.header(HttpHeaders.AcceptRanges, it) }
-        if (cache) call.response.header(HttpHeaders.CacheControl, "public, max-age=86400")
 
         val length = headers.firstValue("Content-Length").orElse(null)?.toLongOrNull()
         val type = contentType?.let { runCatching { ContentType.parse(it) }.getOrNull() }
             ?: ContentType.Application.OctetStream
         try {
             call.respondOutputStream(type, status, length) {
-                upstream.body().use { input ->
-                withContext(Dispatchers.IO) {
                     // A continuous transport stream is one long read: touch the gate as bytes
                     // flow so its slot isn't reaped mid-stream. Segment reads finish fast and
                     // re-admit on the next request, so this is a no-op for them.
-                    val buffer = ByteArray(64 * 1024)
-                    var lastTouch = 0L
-                    while (true) {
-                        val n = input.read(buffer)
-                        if (n < 0) break
-                        this@respondOutputStream.write(buffer, 0, n)
-                        if (sid != null) {
+                body.use { input ->
+                    withContext(Dispatchers.IO) {
+                        val buffer = ByteArray(64 * 1024)
+                        var lastTouch = 0L
+                        while (true) {
+                            val n = input.read(buffer)
+                            if (n < 0) break
+                            this@respondOutputStream.write(buffer, 0, n)
                             val now = System.currentTimeMillis()
-                            if (now - lastTouch > 4_000) { lastTouch = now; gate.touch(sid) }
+                            if (now - lastTouch > 4_000) { lastTouch = now; gate.touch(leaseId) }
                         }
                     }
                 }
             }
-            }
         } finally {
-            if (sid != null) activeBodies[sid]?.let {
-                it.remove(upstream.body())
-                if (it.isEmpty()) activeBodies.remove(sid, it)
-            }
+            releaseBody(leaseId, body)
         }
     }
 
-    fun drop(sid: String) {
-        activeBodies.remove(sid)?.forEach { runCatching { it.close() } }
+    private fun trackBody(leaseId: String, body: InputStream) {
+        activeBodies.computeIfAbsent(leaseId) { ConcurrentHashMap.newKeySet() }.add(body)
+    }
+
+    private fun releaseBody(leaseId: String, body: InputStream) {
+        activeBodies[leaseId]?.let {
+            it.remove(body)
+            if (it.isEmpty()) activeBodies.remove(leaseId, it)
+        }
+    }
+
+    fun drop(leaseId: String) {
+        activeBodies.remove(leaseId)?.forEach { runCatching { it.close() } }
     }
 
     private class ImageTooLargeException : RuntimeException()
 
     private companion object {
         const val MAX_IMAGE_BYTES = 10 * 1024 * 1024
+        val URI_ATTRIBUTE = Regex("""URI="([^"]+)"""")
+        const val REJECTED_CHILD_URL = "/api/v1/stream"
     }
 }

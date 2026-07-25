@@ -32,6 +32,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -162,7 +163,7 @@ private fun ConnectionsCard(account: AccountInfo) {
                 color = if (atLimit) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
             )
             Text(
-                "active / maximum connections",
+                stringResource(R.string.account_connections_label),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -208,8 +209,16 @@ private fun DetailsCard(account: AccountInfo) {
                 val daysLeft = ((expiry - System.currentTimeMillis()) / 86_400_000L).toInt()
                 DetailRow(stringResource(R.string.account_expires)) {
                     Text(
-                        dateFormat.format(Date(expiry)) +
-                            if (daysLeft >= 0) " · in $daysLeft days" else " · expired",
+                        if (daysLeft >= 0) {
+                            pluralStringResource(
+                                R.plurals.account_expires_in,
+                                daysLeft,
+                                dateFormat.format(Date(expiry)),
+                                daysLeft,
+                            )
+                        } else {
+                            stringResource(R.string.account_expired, dateFormat.format(Date(expiry)))
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = if (daysLeft < 7) MaterialTheme.colorScheme.error
                         else MaterialTheme.colorScheme.onSurface,

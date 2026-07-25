@@ -136,7 +136,7 @@ export function AdminScreen() {
         />
       )}
       {tab === 'downloads' && (
-        <DownloadsPanel downloads={downloads} onChanged={() => adminApi.downloads().then(setDownloads)} />
+        <DownloadsPanel downloads={downloads} onChanged={() => { adminApi.downloads().then(setDownloads).catch(() => {}); }} />
       )}
 
       {createOpen && (
@@ -290,10 +290,14 @@ function UserDialog({ user, playlists, onDismiss, onChanged, onDeleted }: {
 
   useEffect(() => {
     if (section === 'sessions' && sessions === null) {
-      adminApi.sessions(user.id).then(setSessions).catch((error) => snackbar(errorMessage(error)));
+      adminApi.sessions(user.id)
+        .then(setSessions)
+        .catch((error) => { snackbar(errorMessage(error)); setSessions([]); });
     }
     if (section === 'progress' && progress === null) {
-      adminApi.progress(user.id).then(setProgress).catch((error) => snackbar(errorMessage(error)));
+      adminApi.progress(user.id)
+        .then(setProgress)
+        .catch((error) => { snackbar(errorMessage(error)); setProgress([]); });
     }
   }, [section, sessions, progress, user.id]);
 

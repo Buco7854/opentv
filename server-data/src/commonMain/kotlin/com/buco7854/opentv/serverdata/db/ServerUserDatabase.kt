@@ -23,10 +23,9 @@ import androidx.room.RoomDatabaseConstructor
         UserFavoriteRow::class,
         DownloadBlobRow::class,
         UserDownloadRow::class,
-        SecurityEventRow::class,
         PlaylistDeletionRow::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 @ConstructedBy(ServerUserDatabaseConstructor::class)
@@ -40,7 +39,6 @@ abstract class ServerUserDatabase : RoomDatabase() {
     abstract fun content(): ContentDao
     abstract fun activity(): ActivityDao
     abstract fun downloads(): DownloadDao
-    abstract fun securityEvents(): SecurityEventDao
     abstract fun maintenance(): MaintenanceDao
 }
 

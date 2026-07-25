@@ -28,11 +28,12 @@ function metaChips(channel: Channel, meta: Metadata | null): string[] {
 }
 
 export function Poster({ image, kind, cover }: { image: string | null; kind: number; cover?: boolean }) {
-  const [failed, setFailed] = useState(false);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const failed = failedSrc !== null && failedSrc === image;
   return (
     <div className="poster">
       {image && !failed
-        ? <img className={cover ? 'cover' : undefined} src={imgUrl(image)} alt="" onError={() => setFailed(true)} />
+        ? <img className={cover ? 'cover' : undefined} src={imgUrl(image)} data-src={image} alt="" onError={(e) => setFailedSrc(e.currentTarget.getAttribute("data-src"))} />
         : <Icon name={kindIconName(kind)} />}
     </div>
   );
@@ -181,7 +182,8 @@ function EpisodeRow({ episode, progress, downloads, onOpen }: {
   downloads: ReturnType<typeof useDownloads>;
   onOpen: () => void;
 }) {
-  const [failed, setFailed] = useState(false);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const failed = failedSrc !== null && failedSrc === episode.logo;
   const metaLine = [
     episode.durationSecs != null ? fmtDuration(episode.durationSecs) : null,
     episode.airDate,
@@ -191,7 +193,7 @@ function EpisodeRow({ episode, progress, downloads, onOpen }: {
       <div className="episode-row">
         <div className="thumb">
           {episode.logo && !failed
-            ? <img loading="lazy" src={imgUrl(episode.logo)} alt="" onError={() => setFailed(true)} />
+            ? <img loading="lazy" src={imgUrl(episode.logo)} data-src={episode.logo} alt="" onError={(e) => setFailedSrc(e.currentTarget.getAttribute("data-src"))} />
             : <Icon name="videoLib" />}
           {progress != null && <WatchProgressBar fraction={progress} height={3} />}
         </div>

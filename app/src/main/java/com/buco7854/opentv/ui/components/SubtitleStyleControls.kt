@@ -22,6 +22,10 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -62,7 +66,9 @@ fun SubtitleStyleControls(style: SubtitleStyle, onChange: (SubtitleStyle) -> Uni
         }
 
         Spacer(Modifier.height(16.dp))
-        Text(stringResource(R.string.settings_subtitle_size, (style.scale * 100).toInt()), style = MaterialTheme.typography.labelLarge)
+        var draft by remember(style.scale) { mutableStateOf<Float?>(null) }
+        val scale = draft ?: style.scale
+        Text(stringResource(R.string.settings_subtitle_size, (scale * 100).toInt()), style = MaterialTheme.typography.labelLarge)
         // Thin track + round thumb, no ticks/stop indicator, to match the web client.
         val sliderColors = SliderDefaults.colors(
             thumbColor = MaterialTheme.colorScheme.onSurface,
@@ -70,8 +76,9 @@ fun SubtitleStyleControls(style: SubtitleStyle, onChange: (SubtitleStyle) -> Uni
             inactiveTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
         )
         Slider(
-            value = style.scale,
-            onValueChange = { onChange(style.copy(scale = it)) },
+            value = scale,
+            onValueChange = { draft = it },
+            onValueChangeFinished = { draft?.let { onChange(style.copy(scale = it)) } },
             valueRange = 0.5f..2f,
             colors = sliderColors,
             thumb = { Box(Modifier.size(16.dp).background(MaterialTheme.colorScheme.onSurface, CircleShape)) },

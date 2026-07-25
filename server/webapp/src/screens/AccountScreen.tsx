@@ -20,19 +20,28 @@ export function AccountScreen() {
 
   const isXtream = detail?.playlist.hasXtreamPanel ?? false;
 
-  const load = useCallback(async (force: boolean) => {
+  const load = useCallback(async (force: boolean, stillWanted?: () => boolean) => {
     setBusy(true);
     setError(null);
     try {
-      setInfo(await api.account(playlistId, force));
+      const next = await api.account(playlistId, force);
+      if (stillWanted && !stillWanted()) return;
+      setInfo(next);
       setUpdatedAtMs(Date.now());
     } catch {
+      if (stillWanted && !stillWanted()) return;
       setError(t('account.unreachable'));
     }
+    if (stillWanted && !stillWanted()) return;
     setBusy(false);
   }, [playlistId]);
 
-  useEffect(() => { if (isXtream) load(true); }, [isXtream, load]);
+  useEffect(() => {
+    if (!isXtream) return;
+    let current = true;
+    void load(true, () => current);
+    return () => { current = false; };
+  }, [isXtream, load]);
 
   return (
     <>

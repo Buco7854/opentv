@@ -30,7 +30,14 @@ val buildWebapp = tasks.register<Exec>("buildWebapp") {
     commandLine("npm", "run", "ci-build")
     environment("npm_config_cache", layout.buildDirectory.dir("npm-cache").get().asFile.absolutePath)
     inputs.dir(file("webapp/src"))
-    inputs.files(file("webapp/package.json"), file("webapp/package-lock.json"), file("webapp/index.html"))
+    inputs.dir(file("webapp/public"))
+    inputs.files(
+        file("webapp/package.json"),
+        file("webapp/package-lock.json"),
+        file("webapp/index.html"),
+        file("webapp/vite.config.ts"),
+        file("webapp/tsconfig.json"),
+    )
     outputs.dir(file("src/main/resources/web"))
     enabled = !project.hasProperty("webappPrebuilt")
 }

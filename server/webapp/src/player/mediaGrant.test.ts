@@ -37,4 +37,11 @@ describe('media grant URLs', () => {
     expect([401, 403, 410].every(isTerminalPlaybackStatus)).toBe(true);
     expect(isTerminalPlaybackStatus(429)).toBe(false);
   });
+
+  it('does not treat 404 as terminal: it is the answer for a file that needs no remux', () => {
+    expect(isTerminalPlaybackStatus(404)).toBe(false);
+    expect(isTerminalPlaybackStatus(410)).toBe(true);
+    expect(isTerminalPlaybackStatus(500)).toBe(false);
+    expect(isTerminalPlaybackStatus(undefined)).toBe(false);
+  });
 });

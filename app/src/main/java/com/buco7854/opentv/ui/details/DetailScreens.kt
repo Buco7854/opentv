@@ -48,6 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
@@ -214,7 +215,7 @@ fun MovieDetailScreen(
                     WatchProgressBar(progress, Modifier.fillMaxWidth())
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "${(progress * 100).toInt()}% watched",
+                        stringResource(R.string.details_percent_watched, (progress * 100).toInt()),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -329,7 +330,7 @@ fun SeriesDetailScreen(
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     episodes.firstOrNull()?.let { Pill(it.groupTitle) }
-                    Pill("${episodes.size} episodes")
+                    Pill(pluralStringResource(R.plurals.details_episode_count, episodes.size, episodes.size))
                     if (seasons.size > 1) Pill("${seasons.size} seasons")
                     meta?.rating?.let { Pill("★ %.1f".format(it)) }
                 }
@@ -616,7 +617,7 @@ fun EpisodeDetailScreen(
                     WatchProgressBar(progress, Modifier.fillMaxWidth())
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "${(progress * 100).toInt()}% watched",
+                        stringResource(R.string.details_percent_watched, (progress * 100).toInt()),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

@@ -18,6 +18,8 @@ import io.ktor.websocket.readText
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 
+private val LEASE_ENDED = CloseReason(CloseReason.Codes.NORMAL, "playback lease ended")
+
 /** Ktor adapter for owner-bound playback leases and admin playback control. */
 internal fun Route.sessionRoutes(
     service: SessionApplicationService,
@@ -92,29 +94,37 @@ internal fun Route.sessionRoutes(
                 suspend fun flush() = service.commands(actor, id).forEach {
                     send(Frame.Text(Json.encodeToString(SessionCommandDto.serializer(), it)))
                 }
-                service.resendRoomState(actor, id)
-                val sender = launch {
-                    flush()
-                    for (signal in service.commandSignal(actor, id)) flush()
-                    this@webSocket.close(
-                        CloseReason(CloseReason.Codes.NORMAL, "playback lease ended"),
-                    )
-                }
                 try {
-                    for (frame in incoming) {
-                        if (frame !is Frame.Text) continue
-                        val message = runCatching {
-                            Json.decodeFromString(ClientFrameDto.serializer(), frame.readText())
-                        }.getOrNull() ?: continue
-                        when (message.type) {
-                            "heartbeat" -> message.heartbeat
-                                ?.takeIf { it.id == id }
-                                ?.let { service.update(actor, client, it) }
-                            "sync" -> message.sync?.let { service.sync(actor, id, it) }
-                        }
+                    service.resendRoomState(actor, id)
+                    val sender = launch {
+                        flush()
+                        for (signal in service.commandSignal(actor, id)) flush()
+                        this@webSocket.close(LEASE_ENDED)
                     }
-                } finally {
-                    sender.cancel()
+                    try {
+                        for (frame in incoming) {
+                            if (frame !is Frame.Text) continue
+                            val message = runCatching {
+                                Json.decodeFromString(ClientFrameDto.serializer(), frame.readText())
+                            }.getOrNull() ?: continue
+                            when (message.type) {
+                                "heartbeat" -> message.heartbeat
+                                    ?.takeIf { it.id == id }
+                                    ?.let { service.update(actor, client, it) }
+                                "sync" -> message.sync?.let { service.sync(actor, id, it) }
+                            }
+                        }
+                    } finally {
+                        sender.cancel()
+                    }
+                } catch (_: PlaybackRevokedException) {
+                    close(LEASE_ENDED)
+                } catch (_: ResourceNotFound) {
+                    close(LEASE_ENDED)
+                } catch (_: UnauthenticatedApiException) {
+                    close(LEASE_ENDED)
+                } catch (_: ForbiddenApiException) {
+                    close(LEASE_ENDED)
                 }
             }
             delete {

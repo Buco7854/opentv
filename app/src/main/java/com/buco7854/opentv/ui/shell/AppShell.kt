@@ -43,7 +43,10 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material3.MenuDefaults
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -205,6 +208,15 @@ fun PlaylistsPanel(
 ) {
     val playlists by viewModel.playlists.collectAsStateWithLifecycle(initialValue = null)
     val busy by viewModel.busy.collectAsStateWithLifecycle()
+    val message by viewModel.message.collectAsStateWithLifecycle()
+    val snackbar = remember { SnackbarHostState() }
+
+    LaunchedEffect(message) {
+        message?.let {
+            snackbar.showSnackbar(it)
+            viewModel.consumeMessage()
+        }
+    }
     var showAdd by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Playlist?>(null) }
     var pendingDelete by remember { mutableStateOf<Playlist?>(null) }
@@ -256,6 +268,7 @@ fun PlaylistsPanel(
                 Spacer(Modifier.height(12.dp))
             }
         }
+        SnackbarHost(snackbar)
     }
 
     if (showAdd || editing != null) {

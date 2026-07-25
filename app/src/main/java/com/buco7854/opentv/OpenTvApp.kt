@@ -38,9 +38,9 @@ class AppGraph(app: Application) : AutoCloseable {
     val storage: Storage = createRoomStorage(app)
     private val coreLog = CoreLog { context, error -> ErrorLog.log(context, error) }
     val xtreamApi = XtreamApi(Http.fetcher)
-    val playlists = PlaylistRepository(storage, xtreamApi, Http.conditionalFetcher, coreLog)
-    val epg = EpgRepository(storage, Http.conditionalFetcher)
     val account = AccountRepository(xtreamApi, coreLog)
+    val playlists = PlaylistRepository(storage, xtreamApi, Http.conditionalFetcher, coreLog, account)
+    val epg = EpgRepository(storage, Http.conditionalFetcher)
     val xtream = XtreamRepository(storage, xtreamApi, epg, account, coreLog)
     val playerPrefs = PlayerPrefs(app)
     val downloads = DownloadRepository(
@@ -71,7 +71,6 @@ class AppGraph(app: Application) : AutoCloseable {
 }
 
 class OpenTvApp : Application(), Configuration.Provider {
-
     companion object {
         lateinit var graph: AppGraph
             private set

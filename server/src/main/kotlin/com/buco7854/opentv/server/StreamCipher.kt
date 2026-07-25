@@ -14,20 +14,15 @@ data class ImageCapability(
     val expiresAtMs: Long,
 )
 
-/**
- * Turns a provider URL into an opaque token and back, so the browser never sees
- * the panel URL or its password. Token is `<tag>.<base64url(nonce|ciphertext|gcmTag)>`,
- * the tag being the clear stream format. Encryption is deterministic (SIV-style
- * nonce derived from plaintext) so a URL always yields the same token. Stream and
- * image capabilities use separate authenticated-encryption domains so a token minted
- * for one route cannot be replayed against the other. Image capabilities also carry
- * their user, optional playlist entitlement, and expiry.
- */
+data class StreamCapability(
+    val url: String,
+    val leaseId: String,
+)
+
 class StreamCipher(
     masterKeyBase64: String,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
-
     private val encKey: SecretKeySpec
     private val macKey: ByteArray
 
@@ -54,10 +49,12 @@ class StreamCipher(
     fun encryptOrNull(url: String?, userId: String, playlistId: Long? = null): String? =
         url?.let { encryptImage(it, userId, playlistId) }
 
-    /** Decode a token, or pass through a non-token identifier (series key, internal URL). */
-    fun resolve(value: String): String = tryDecrypt(value) ?: value
-
-    fun encrypt(url: String): String = encryptValue(classify(url), url, STREAM_PURPOSE)
+    fun encryptStream(url: String, leaseId: String): String {
+        require(leaseId.isNotBlank() && leaseId.length <= 128 && '\n' !in leaseId) {
+            "Invalid stream capability lease"
+        }
+        return encryptValue(classify(url), "$leaseId\n$url", STREAM_PURPOSE)
+    }
 
     fun encryptImage(url: String, userId: String, playlistId: Long? = null): String {
         require(userId.isNotBlank() && userId.length <= 128) { "Invalid image capability user" }
@@ -83,14 +80,19 @@ class StreamCipher(
         return "$tag.${Base64.getUrlEncoder().withoutPadding().encodeToString(body)}"
     }
 
-    /** Reverses [encrypt]; null for anything that isn't one of our tokens. */
-    fun tryDecrypt(token: String): String? {
-        if (token.length < 3 || token[1] != '.' || token[0] !in "hltd") return null
-        return decryptValue(token, STREAM_PURPOSE)
+    fun tryDecryptStream(token: String): StreamCapability? {
+        if (token.length !in 3..MAX_CAPABILITY_LENGTH ||
+            token[1] != '.' || token[0] !in "hltd"
+        ) return null
+        val payload = decryptValue(token, STREAM_PURPOSE) ?: return null
+        val separator = payload.indexOf('\n')
+        if (separator <= 0) return null
+        val url = payload.substring(separator + 1).takeIf { it.isNotBlank() } ?: return null
+        return StreamCapability(url, payload.substring(0, separator))
     }
 
     fun tryDecryptImage(token: String): ImageCapability? {
-        if (token.length !in 3..MAX_IMAGE_CAPABILITY_LENGTH ||
+        if (token.length !in 3..MAX_CAPABILITY_LENGTH ||
             token[1] != '.' || token[0] != 'i'
         ) return null
         val payload = decryptValue(token, IMAGE_PURPOSE) ?: return null
@@ -119,8 +121,8 @@ class StreamCipher(
 
     private companion object {
         const val IMAGE_CAPABILITY_TTL_MS = 24 * 60 * 60_000L
-        const val MAX_IMAGE_CAPABILITY_LENGTH = 8_192
-        val STREAM_PURPOSE = "opentv-stream-v2".toByteArray()
+        const val MAX_CAPABILITY_LENGTH = 8_192
+        val STREAM_PURPOSE = "opentv-stream-v3".toByteArray()
         val IMAGE_PURPOSE = "opentv-image-v1".toByteArray()
     }
 }

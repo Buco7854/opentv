@@ -42,6 +42,8 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -391,8 +393,11 @@ private val USER_AGENT_PRESETS = listOf(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun UserAgentSetting(current: PlayerSettings, update: (PlayerSettings) -> Unit) {
-    // Local edit buffer so typing stays smooth; persisted on each change.
-    var text by remember(current.userAgent) { mutableStateOf(current.userAgent) }
+    var text by rememberSaveable { mutableStateOf(current.userAgent) }
+    val focused = remember { mutableStateOf(false) }
+    LaunchedEffect(current.userAgent) {
+        if (!focused.value && current.userAgent != text) text = current.userAgent
+    }
     Text(stringResource(R.string.settings_user_agent), style = MaterialTheme.typography.titleSmall)
     FlowRow(
         Modifier.padding(top = 2.dp).fillMaxWidth(),
@@ -418,7 +423,10 @@ private fun UserAgentSetting(current: PlayerSettings, update: (PlayerSettings) -
         singleLine = true,
         label = { Text(stringResource(R.string.settings_custom_user_agent)) },
         placeholder = { Text(Http.DEFAULT_USER_AGENT) },
-        modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp)
+            .onFocusChanged { focused.value = it.isFocused },
     )
     Hint(stringResource(R.string.settings_user_agent_hint))
 }

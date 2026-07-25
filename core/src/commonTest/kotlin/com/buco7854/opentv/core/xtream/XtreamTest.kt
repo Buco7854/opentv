@@ -1,12 +1,12 @@
 package com.buco7854.opentv.core.xtream
 
+import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class XtreamTest {
-
     private val creds = XtreamCredentials("http://host.example:8080", "alice", "secret")
 
     @Test
@@ -47,5 +47,34 @@ class XtreamTest {
         assertEquals("alice", detected?.user)
         assertEquals("secret", detected?.pass)
         assertNull(Xtream.detect("http://host.example/playlist.m3u8"))
+    }
+
+    @Test
+    fun xmltv_url_encodes_credentials() {
+        val awkward = XtreamCredentials("http://host.example:8080", "a&b", "p ss#1")
+        assertEquals(
+            "http://host.example:8080/xmltv.php?username=a%26b&password=p%20ss%231",
+            Xtream.xmltvUrl(awkward),
+        )
+    }
+
+    @Test
+    fun epg_text_decodes_real_base64_and_leaves_plain_words_alone() = runTest {
+        val body = """
+            {"epg_listings":[
+              {"start_timestamp":"1700000000","stop_timestamp":"1700003600",
+               "title":"TGUgSm91cm5hbCBkdSBTb2ly","description":"TcOpdMOpbw=="},
+              {"start_timestamp":"1700003600","stop_timestamp":"1700007200",
+               "title":"Documentaire","description":"News"}
+            ]}
+        """.trimIndent()
+        val api = XtreamApi { body }
+
+        val entries = api.fetchChannelEpg(creds, 42)
+
+        assertEquals("Le Journal du Soir", entries[0].title)
+        assertEquals("M\u00e9t\u00e9o", entries[0].description)
+        assertEquals("Documentaire", entries[1].title)
+        assertEquals("News", entries[1].description)
     }
 }

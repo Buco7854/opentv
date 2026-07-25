@@ -265,15 +265,15 @@ interface ContentDao {
 
     @Query("""
         SELECT * FROM content_identities
-        WHERE playlistId = :playlistId AND kind = :kind AND providerFingerprint = :fingerprint
+        WHERE playlistId = :playlistId AND providerFingerprint IN (:fingerprints)
     """)
-    suspend fun byFingerprint(playlistId: Long, kind: Int, fingerprint: String): ContentIdentityRow?
+    suspend fun byFingerprints(
+        playlistId: Long,
+        fingerprints: List<String>,
+    ): List<ContentIdentityRow>
 
     @Query("SELECT * FROM content_identities WHERE playlistId = :playlistId")
     suspend fun forPlaylist(playlistId: Long): List<ContentIdentityRow>
-
-    @Query("SELECT * FROM content_identities WHERE currentChannelId IN (:channelIds)")
-    suspend fun forChannelIds(channelIds: List<Long>): List<ContentIdentityRow>
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(row: ContentIdentityRow): Long
@@ -440,18 +440,6 @@ interface DownloadDao {
         )
     """)
     suspend fun suspendForPlaylist(userId: String, playlistId: Long, suspended: Boolean, atMs: Long): Int
-}
-
-@Dao
-interface SecurityEventDao {
-    @Insert
-    suspend fun insert(row: SecurityEventRow)
-
-    @Query("SELECT * FROM security_events ORDER BY createdAtMs DESC LIMIT :limit")
-    suspend fun recent(limit: Int): List<SecurityEventRow>
-
-    @Query("DELETE FROM security_events WHERE actorUserId = :userId OR subjectUserId = :userId")
-    suspend fun deleteForUser(userId: String)
 }
 
 @Dao

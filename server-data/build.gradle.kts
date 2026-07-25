@@ -20,6 +20,9 @@ kotlin {
             implementation(libs.kotlin.test)
             implementation(libs.kotlinx.coroutines.test)
         }
+        jvmTest.dependencies {
+            implementation(libs.kotlinx.serialization.json)
+        }
     }
 }
 
@@ -27,6 +30,12 @@ dependencies {
     add("kspJvm", libs.room.compiler)
 }
 
+val schemaDirectory = project.layout.projectDirectory.dir("schemas")
+
 ksp {
-    arg("room.schemaLocation", project.layout.projectDirectory.dir("schemas").asFile.absolutePath)
+    arg("room.schemaLocation", schemaDirectory.asFile.absolutePath)
+}
+
+tasks.withType<Test>().configureEach {
+    systemProperty("opentv.schemaDirectory", schemaDirectory.asFile.absolutePath)
 }

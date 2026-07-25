@@ -71,7 +71,6 @@ class PlaybackSessionRegistry(
     }
 
     private val sessions = ConcurrentHashMap<String, Live>()
-    private val tombstones = ConcurrentHashMap<String, Long>()
     private val rooms = ConcurrentHashMap<String, Room>()
     private val memberRoom = ConcurrentHashMap<String, String>()
     // A host that declined a peer for some content isn't pestered with a modal again for it.
@@ -112,10 +111,9 @@ class PlaybackSessionRegistry(
     }
 
     fun owned(actor: Actor, id: String): Live {
-        if (tombstones.containsKey(id)) throw PlaybackRevokedException()
-        val live = sessions[id] ?: throw ResourceNotFound("playback")
+        val live = sessions[id] ?: throw PlaybackRevokedException()
         if (live.userId != actor.userId || live.authSessionId != actor.authSessionId) {
-            throw ResourceNotFound("playback")
+            throw PlaybackRevokedException()
         }
         return live
     }
@@ -430,7 +428,6 @@ class PlaybackSessionRegistry(
             it.value.requesterId == id || it.value.targetId == id
         }
         if (sessions.remove(id) != null) {
-            tombstones[id] = clock.nowMs() + TOMBSTONE_MS
             val unusedGroup = when {
                 priorRoom == null -> id
                 rooms.containsKey(priorRoom) -> null
@@ -459,7 +456,6 @@ class PlaybackSessionRegistry(
     /** Live sessions (stale ones pruned first), newest first. */
     fun active(): List<Live> {
         val now = clock.nowMs()
-        tombstones.entries.removeIf { it.value <= now }
         val cutoff = now - staleMs
         val stale = sessions.values.filter { it.lastSeenMs < cutoff }.map { it.id }
         stale.forEach { remove(it) }
@@ -470,7 +466,6 @@ class PlaybackSessionRegistry(
         /** Drop a session this long after its last heartbeat (client beats ~every 3s). */
         private const val DEFAULT_STALE_MS = 12_000L
         // Must outlive every media grant so stale lease-scoped URLs consistently return 410.
-        private const val TOMBSTONE_MS = 30 * 60_000L
         private const val JOIN_REQUEST_TTL_MS = 60_000L
     }
 

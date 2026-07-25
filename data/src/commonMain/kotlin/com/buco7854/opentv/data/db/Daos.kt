@@ -6,6 +6,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Update
+import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.model.GroupCount
 import com.buco7854.opentv.core.model.GroupHit
 import com.buco7854.opentv.core.model.SeriesGroup
@@ -83,11 +84,16 @@ interface ChannelDao {
     fun observeEpisodes(playlistId: Long, seriesKey: String): Flow<List<ChannelRow>>
 
     @Query(
-        "SELECT * FROM channels WHERE playlistId = :playlistId " +
+        "SELECT * FROM channels WHERE playlistId = :playlistId AND kind = :kind " +
             "AND name LIKE '%' || :query || '%' ESCAPE '\\' " +
-            "ORDER BY kind, name LIMIT 400"
+            "ORDER BY name LIMIT :limit"
     )
-    suspend fun search(playlistId: Long, query: String): List<ChannelRow>
+    suspend fun searchKind(playlistId: Long, kind: Int, query: String, limit: Int): List<ChannelRow>
+
+    @Transaction
+    suspend fun search(playlistId: Long, query: String): List<ChannelRow> =
+        listOf(ChannelKind.LIVE, ChannelKind.MOVIE, ChannelKind.SERIES)
+            .flatMap { searchKind(playlistId, it, query, SEARCH_LIMIT_PER_KIND) }
 
     @Query(
         "SELECT groupTitle, kind, COUNT(*) as count FROM channels WHERE playlistId = :playlistId " +
@@ -130,11 +136,11 @@ interface ChannelDao {
     )
     suspend fun retagGroup(playlistId: Long, groupTitle: String, kind: Int)
 
-    @Query(
-        "UPDATE channels SET kind = 2, seriesKey = name WHERE playlistId = :playlistId " +
-            "AND groupTitle = :groupTitle"
-    )
-    suspend fun retagGroupAsSeries(playlistId: Long, groupTitle: String)
+    @Query("SELECT * FROM channels WHERE playlistId = :playlistId AND groupTitle = :groupTitle")
+    suspend fun inGroup(playlistId: Long, groupTitle: String): List<ChannelRow>
+
+    @Update
+    suspend fun updateAll(rows: List<ChannelRow>)
 
     @Query("DELETE FROM channels WHERE playlistId = :playlistId AND seriesKey = :seriesKey")
     suspend fun deleteEpisodes(playlistId: Long, seriesKey: String)
@@ -345,3 +351,5 @@ interface DownloadDao {
     @Query("DELETE FROM downloads WHERE id = :id")
     suspend fun delete(id: Long)
 }
+
+private const val SEARCH_LIMIT_PER_KIND = 200

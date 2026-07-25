@@ -362,11 +362,10 @@ export const api = {
   metaEpisode: (series: string, season: number, episode: number) =>
     j<Metadata>(`/meta/episode?series=${encodeURIComponent(series)}&season=${season}&episode=${episode}`),
   remuxAvailable: () => j<{ available: boolean }>('/remux/available'),
-  /** Start a remux from the lease-scoped URL supplied by createPlayback(). */
-  remuxStart: (startUrl: string, audio = 0, force = false, hevc = false) => {
+  remuxStart: (startUrl: string, audio = 0, timeshift = false, hevc = false) => {
     const url = new URL(startUrl, window.location.origin);
     url.searchParams.set('audio', String(audio));
-    if (force) url.searchParams.set('force', '1'); else url.searchParams.delete('force');
+    if (timeshift) url.searchParams.set('timeshift', '1'); else url.searchParams.delete('timeshift');
     if (hevc) url.searchParams.set('hevc', '1'); else url.searchParams.delete('hevc');
     const path = url.pathname.startsWith(API_PREFIX)
       ? url.pathname.slice(API_PREFIX.length) : url.pathname;

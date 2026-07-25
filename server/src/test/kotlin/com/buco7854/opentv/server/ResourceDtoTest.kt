@@ -36,12 +36,12 @@ class ResourceDtoTest {
         assertTrue(source !in Json.encodeToString(ChannelDto.serializer(), dto))
         assertEquals("content-42", dto.contentId)
         assertNotEquals(logo, dto.logo)
-        assertEquals(null, dto.logo?.let(cipher::tryDecrypt))
+        assertEquals(null, dto.logo?.let(cipher::tryDecryptStream))
         val image = dto.logo?.let(cipher::tryDecryptImage)
         assertEquals(logo, image?.url)
         assertEquals("user-1", image?.userId)
         assertEquals(1, image?.playlistId)
-        val streamToken = cipher.encrypt(source)
+        val streamToken = cipher.encryptStream(source, "lease-1")
         assertEquals(null, cipher.tryDecryptImage(streamToken))
     }
 

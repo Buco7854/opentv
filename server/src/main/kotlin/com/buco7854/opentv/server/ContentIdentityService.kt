@@ -24,44 +24,46 @@ class ContentIdentityService(
     suspend fun channel(channel: Channel): ContentIdentityRow =
         channels(listOf(channel)).getValue(channel.id)
 
-    suspend fun channels(channels: List<Channel>): Map<Long, ContentIdentityRow> =
-        reconciliation.withLock {
-            val now = clock()
-            val result = mutableMapOf<Long, ContentIdentityRow>()
-            channels.groupBy(Channel::playlistId).forEach { (playlistId, playlistChannels) ->
-                val existing = db.content().forPlaylist(playlistId)
-                    .associateBy { IdentityKey(it.kind, it.providerFingerprint) }
-                val pending = linkedMapOf<IdentityKey, ContentIdentityRow>()
-                playlistChannels.forEach { channel ->
-                    val key = IdentityKey(channel.kind, channelFingerprint(channel))
-                    val row = pending[key] ?: existing[key]?.copy(
-                        currentChannelId = channel.id,
-                        lastSeenAtMs = now,
-                        retired = false,
-                    ) ?: newIdentity(playlistId, key, channel.id, now)
-                    pending[key] = row
-                    result[channel.id] = row
-                }
-                persist(existing, pending)
-            }
-            result
+    suspend fun channels(channels: List<Channel>): Map<Long, ContentIdentityRow> {
+        if (channels.isEmpty()) return emptyMap()
+        val result = mutableMapOf<Long, ContentIdentityRow>()
+        channels.groupBy(Channel::playlistId).forEach { (playlistId, entries) ->
+            val keys = entries.associate { it.id to IdentityKey(it.kind, channelFingerprint(it)) }
+            val firstChannelOf = keys.entries.reversed().associate { (id, key) -> key to id }
+            val resolved = identities(playlistId, keys.values.toList()) { firstChannelOf[it] }
+            entries.forEach { result[it.id] = requireNotNull(resolved[keys[it.id]]) }
         }
+        return result
+    }
 
     suspend fun xtreamSeries(series: XtreamSeries): ContentIdentityRow =
-        identity(
-            series.playlistId,
-            ChannelKind.SERIES,
-            fingerprint("xtream:series:${series.seriesId}"),
-            null,
-        )
+        xtreamSeriesIdentities(listOf(series)).getValue(series.seriesId)
+
+    suspend fun xtreamSeriesIdentities(
+        series: List<XtreamSeries>,
+    ): Map<Long, ContentIdentityRow> {
+        if (series.isEmpty()) return emptyMap()
+        val result = mutableMapOf<Long, ContentIdentityRow>()
+        series.groupBy(XtreamSeries::playlistId).forEach { (playlistId, entries) ->
+            val keys = entries.associate { it.seriesId to xtreamSeriesKey(it.seriesId) }
+            val resolved = identities(playlistId, keys.values.toList())
+            entries.forEach { result[it.seriesId] = requireNotNull(resolved[keys[it.seriesId]]) }
+        }
+        return result
+    }
 
     suspend fun m3uSeries(playlistId: Long, series: SeriesGroup): ContentIdentityRow =
-        identity(
-            playlistId,
-            ChannelKind.SERIES,
-            fingerprint("m3u:series:${series.seriesKey.trim()}"),
-            null,
-        )
+        m3uSeriesIdentities(playlistId, listOf(series)).getValue(series.seriesKey)
+
+    suspend fun m3uSeriesIdentities(
+        playlistId: Long,
+        series: List<SeriesGroup>,
+    ): Map<String, ContentIdentityRow> {
+        if (series.isEmpty()) return emptyMap()
+        val keys = series.associate { it.seriesKey to m3uSeriesKey(it.seriesKey) }
+        val resolved = identities(playlistId, keys.values.toList())
+        return series.associate { it.seriesKey to requireNotNull(resolved[keys[it.seriesKey]]) }
+    }
 
     suspend fun resolve(contentId: String): Pair<ContentIdentityRow, Channel?> {
         val identity = db.content().get(contentId) ?: throw ResourceNotFound("content")
@@ -105,10 +107,7 @@ class ContentIdentityService(
                 ) ?: newIdentity(playlistId, key, channel.id, seenAt)
             }
             xtreamSeries.forEach { series ->
-                val key = IdentityKey(
-                    ChannelKind.SERIES,
-                    fingerprint("xtream:series:${series.seriesId}"),
-                )
+                val key = xtreamSeriesKey(series.seriesId)
                 pending.putIfAbsent(
                     key,
                     existing[key]?.copy(lastSeenAtMs = seenAt, retired = false)
@@ -116,53 +115,59 @@ class ContentIdentityService(
                 )
             }
             m3uSeries.forEach { series ->
-                val key = IdentityKey(
-                    ChannelKind.SERIES,
-                    fingerprint("m3u:series:${series.seriesKey.trim()}"),
-                )
+                val key = m3uSeriesKey(series.seriesKey)
                 pending.putIfAbsent(
                     key,
                     existing[key]?.copy(lastSeenAtMs = seenAt, retired = false)
                         ?: newIdentity(playlistId, key, null, seenAt),
                 )
             }
-            persist(existing, pending)
+            val inserts = pending.filterKeys { it !in existing }.values.toList()
+            val updates = pending.filterKeys { it in existing }.values.toList()
+            if (inserts.isNotEmpty()) db.content().insertAll(inserts)
+            if (updates.isNotEmpty()) db.content().updateAll(updates)
             db.content().retireNotSeen(playlistId, seenAt)
         }
     }
 
-    private suspend fun identity(
+    private suspend fun identities(
         playlistId: Long,
-        kind: Int,
-        fingerprint: String,
-        channelId: Long?,
-    ): ContentIdentityRow = reconciliation.withLock {
-        val key = IdentityKey(kind, fingerprint)
-        val existing = db.content().forPlaylist(playlistId)
-            .firstOrNull { it.kind == kind && it.providerFingerprint == fingerprint }
+        keys: List<IdentityKey>,
+        channelIdFor: (IdentityKey) -> Long? = { null },
+    ): Map<IdentityKey, ContentIdentityRow> {
+        val wanted = keys.distinct()
+        if (wanted.isEmpty()) return emptyMap()
+        val known = lookup(playlistId, wanted)
+        val missing = wanted.filterNot { it in known }
+        if (missing.isEmpty()) return known
         val now = clock()
-        val row = existing?.copy(
-            currentChannelId = channelId ?: existing.currentChannelId,
-            lastSeenAtMs = now,
-            retired = false,
-        ) ?: newIdentity(playlistId, key, channelId, now)
-        db.content().upsert(row)
-        row
+        val created = reconciliation.withLock {
+            db.content().insertAll(
+                missing.map { newIdentity(playlistId, it, channelIdFor(it), now) },
+            )
+            lookup(playlistId, missing)
+        }
+        return known + created
     }
+
+    private suspend fun lookup(
+        playlistId: Long,
+        keys: List<IdentityKey>,
+    ): Map<IdentityKey, ContentIdentityRow> =
+        keys.map(IdentityKey::fingerprint)
+            .chunked(MAX_BOUND_VARIABLES)
+            .flatMap { db.content().byFingerprints(playlistId, it) }
+            .associateBy { IdentityKey(it.kind, it.providerFingerprint) }
 
     private fun channelFingerprint(channel: Channel): String =
         channel.xtreamStreamId?.let { fingerprint("xtream:${channel.kind}:$it") }
             ?: fingerprint("m3u:${channel.kind}:${normalizeUrl(channel.url)}")
 
-    private suspend fun persist(
-        existing: Map<IdentityKey, ContentIdentityRow>,
-        pending: Map<IdentityKey, ContentIdentityRow>,
-    ) {
-        val inserts = pending.filterKeys { it !in existing }.values.toList()
-        val updates = pending.filterKeys { it in existing }.values.toList()
-        if (inserts.isNotEmpty()) db.content().insertAll(inserts)
-        if (updates.isNotEmpty()) db.content().updateAll(updates)
-    }
+    private fun xtreamSeriesKey(seriesId: Long) =
+        IdentityKey(ChannelKind.SERIES, fingerprint("xtream:series:$seriesId"))
+
+    private fun m3uSeriesKey(seriesKey: String) =
+        IdentityKey(ChannelKind.SERIES, fingerprint("m3u:series:${seriesKey.trim()}"))
 
     private fun newIdentity(
         playlistId: Long,
@@ -203,4 +208,8 @@ class ContentIdentityService(
             .joinToString("") { "%02x".format(it) }
 
     private data class IdentityKey(val kind: Int, val fingerprint: String)
+
+    private companion object {
+        const val MAX_BOUND_VARIABLES = 500
+    }
 }

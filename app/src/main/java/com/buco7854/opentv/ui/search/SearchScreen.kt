@@ -111,8 +111,14 @@ data class SearchResults(
 
 @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 class SearchViewModel(app: Application, private val playlistId: Long) : AndroidViewModel(app) {
-
     val query = MutableStateFlow("")
+
+    private val _message = MutableStateFlow<String?>(null)
+    val message: StateFlow<String?> = _message
+    fun consumeMessage() { _message.value = null }
+
+    private fun str(resId: Int, vararg args: Any) =
+        getApplication<Application>().getString(resId, *args)
 
     /** Debounced to throttle DB hits while typing. */
     val results: StateFlow<SearchResults> = query
@@ -181,7 +187,10 @@ class SearchViewModel(app: Application, private val playlistId: Long) : AndroidV
     }
 
     fun download(channel: Channel) {
-        viewModelScope.launch { graph.downloads.enqueue(channel) }
+        viewModelScope.launch {
+            val blocked = graph.downloads.enqueue(channel)
+            _message.value = blocked ?: str(R.string.downloads_started, channel.name)
+        }
     }
 
     val guideIds: StateFlow<Set<String>> = graph.epg.observeGuideIds(playlistId)
@@ -204,6 +213,7 @@ fun SearchScreen(
     val favoriteKeys by viewModel.favoriteKeys.collectAsStateWithLifecycle()
     val downloadsByUrl by viewModel.downloadsByUrl.collectAsStateWithLifecycle()
     val guideIds by viewModel.guideIds.collectAsStateWithLifecycle()
+    val message by viewModel.message.collectAsStateWithLifecycle()
     val focusRequester = remember { FocusRequester() }
     val resources = LocalResources.current
     val snackbar = remember { SnackbarHostState() }
@@ -211,6 +221,13 @@ fun SearchScreen(
     var guideChannel by remember { mutableStateOf<Channel?>(null) }
 
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
+
+    LaunchedEffect(message) {
+        message?.let {
+            snackbar.showSnackbar(it)
+            viewModel.consumeMessage()
+        }
+    }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },

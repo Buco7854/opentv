@@ -66,7 +66,7 @@ class WebAuthnService(
     }
 
     suspend fun additionalRegistrationOptions(actor: Actor): WebAuthnOptionsDto {
-        val raw = auth.recentMfaChallenge(actor)
+        val raw = auth.reauthenticationChallenge(actor)
         val parent = auth.mfaChallenge(raw)
         val user = db.users().get(actor.userId) ?: throw UnauthenticatedApiException()
         return registrationOptions(parent, user)
@@ -186,7 +186,6 @@ class WebAuthnService(
                 payload.parentId,
                 row,
                 enrollment = true,
-                clientIp,
             ).also {
                 auth.clearFlowLimit(clientIp, "webauthn-register", request.challenge)
             }
@@ -242,7 +241,6 @@ class WebAuthnService(
                     lastUsedAtMs = clock(),
                 ),
                 enrollment = false,
-                clientIp,
             ).also {
                 auth.clearFlowLimit(clientIp, "webauthn-authenticate", request.challenge)
             }

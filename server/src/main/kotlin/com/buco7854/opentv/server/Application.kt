@@ -20,7 +20,12 @@ import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationStopped
 import io.ktor.server.application.install
 import io.ktor.server.http.content.singlePageApplication
+import io.ktor.http.ContentType
 import io.ktor.server.plugins.compression.Compression
+import io.ktor.server.plugins.compression.deflate
+import io.ktor.server.plugins.compression.gzip
+import io.ktor.server.plugins.compression.matchContentType
+import io.ktor.server.plugins.compression.minimumSize
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.PayloadTooLargeException
 import io.ktor.server.plugins.bodylimit.RequestBodyLimit
@@ -95,9 +100,9 @@ object ServerBootstrap {
         val cipher = StreamCipher(settings.streamKey)
         val coreLog = CoreLog { context, error -> log.warn("{}: {}", context, error.message) }
         val xtreamApi = XtreamApi(http.fetcher)
-        val playlists = PlaylistRepository(storage, xtreamApi, http.conditionalFetcher, coreLog)
-        val epg = EpgRepository(storage, http.conditionalFetcher)
         val account = AccountRepository(xtreamApi, coreLog)
+        val playlists = PlaylistRepository(storage, xtreamApi, http.conditionalFetcher, coreLog, account)
+        val epg = EpgRepository(storage, http.conditionalFetcher)
         val connections = ProviderConnections()
         val processRunner = JvmMediaProcessRunner
         val connectionLimit: suspend (String) -> Int = limit@{ url ->
@@ -245,7 +250,7 @@ fun Application.openTvModule(
         })
     }
     installOpenTvRequestBodyLimit()
-    install(Compression)
+    installOpenTvCompression()
     install(PartialContent)
     install(WebSockets)
     install(StatusPages) {
@@ -344,6 +349,20 @@ fun Application.openTvModule(
             filesPath = "web"
             defaultPage = "index.html"
         }
+    }
+}
+
+internal fun Application.installOpenTvCompression() {
+    install(Compression) {
+        gzip()
+        deflate()
+        matchContentType(
+            ContentType.Text.Any,
+            ContentType.Application.Json,
+            ContentType.Application.JavaScript,
+            ContentType.Image.SVG,
+        )
+        minimumSize(1024)
     }
 }
 

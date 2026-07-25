@@ -17,6 +17,7 @@ on:
       - "settings.gradle.kts"
       - "gradle.properties"
       - "gradle/**"
+      - "gradlew"
       - ".github/workflows/web.yml"
   pull_request:
     branches: [main]
@@ -31,6 +32,7 @@ on:
       - "settings.gradle.kts"
       - "gradle.properties"
       - "gradle/**"
+      - "gradlew"
       - ".github/workflows/web.yml"
   workflow_dispatch:
 
@@ -62,7 +64,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
 
       - name: Run shared/server tests and build the server
-        run: ./gradlew :server-data:jvmTest :core:jvmTest :data:compileKotlinJvm :server:test :server:installDist
+        run: ./gradlew :server-data:jvmTest :core:jvmTest :data:jvmTest :server:test :server:installDist
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'

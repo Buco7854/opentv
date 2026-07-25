@@ -32,8 +32,8 @@ class PlaylistRepository(
     private val xtreamApi: XtreamApi,
     private val fetcher: ConditionalFetcher,
     private val log: CoreLog,
+    private val account: AccountRepository? = null,
 ) {
-
     companion object {
         /** Auto-refresh throttle (unless forced). */
         const val MIN_REFRESH_INTERVAL_MS = 6L * 60 * 60 * 1000
@@ -45,7 +45,6 @@ class PlaylistRepository(
 
     private val refreshMutex = Mutex()
 
-    /** Last attempt (success or failure) per playlist; backs failure backoff and forced-tap limiting. */
     private val lastAttemptMs = HashMap<Long, Long>()
 
     val playlists = storage.playlists.observeAll()
@@ -110,7 +109,8 @@ class PlaylistRepository(
             )
         )
         if (credsChanged) {
-            lastAttemptMs.remove(id) // don't let forced-tap throttling skip this
+            refreshMutex.withLock { lastAttemptMs.remove(id) }
+            account?.invalidate(id)
             refresh(id, force = true)
         }
     }
@@ -139,7 +139,7 @@ class PlaylistRepository(
             )
         )
         if (urlChanged) {
-            lastAttemptMs.remove(id)
+            refreshMutex.withLock { lastAttemptMs.remove(id) }
             refresh(id, force = true)
         }
     }
@@ -341,7 +341,16 @@ class PlaylistRepository(
             if (!keepVod) add(ChannelKind.MOVIE)
             if (!keepSeries) add(ChannelKind.SERIES)
         }
-        storage.channels.replaceKinds(playlist.id, replaceKinds, channelRows)
+        val overrides = storage.groupOverrides.forPlaylist(playlist.id)
+            .associate { it.groupTitle to it.kind }
+        val corrected = if (overrides.isEmpty()) channelRows else channelRows.map { row ->
+            when (val forced = overrides[row.groupTitle]) {
+                null -> row
+                row.kind -> row
+                else -> row.copy(kind = forced)
+            }
+        }
+        storage.channels.replaceKinds(playlist.id, replaceKinds, corrected)
 
         if (!keepSeries) {
             storage.xtreamSeries.replaceAll(
@@ -440,7 +449,16 @@ class PlaylistRepository(
         } else {
             storage.groupOverrides.upsert(GroupOverride(playlistId, groupTitle, kind))
             if (kind == ChannelKind.SERIES) {
-                storage.channels.retagGroupAsSeries(playlistId, groupTitle)
+                val regrouped = storage.channels.inGroup(playlistId, groupTitle).map { channel ->
+                    val classification = ContentClassifier.asSeries(channel.name)
+                    channel.copy(
+                        kind = ChannelKind.SERIES,
+                        seriesKey = classification.seriesKey,
+                        season = classification.season,
+                        episode = classification.episode,
+                    )
+                }
+                storage.channels.updateAll(regrouped)
             } else {
                 storage.channels.retagGroup(playlistId, groupTitle, kind)
             }
@@ -448,6 +466,7 @@ class PlaylistRepository(
     }
 
     suspend fun delete(playlistId: Long) {
+        storage.resume.deleteForPlaylist(playlistId)
         storage.channels.deleteForPlaylist(playlistId)
         storage.epg.deleteForPlaylist(playlistId)
         storage.xtreamSeries.deleteForPlaylist(playlistId)

@@ -67,23 +67,20 @@ class SessionApplicationService(
             actor, identity.playlistId, identity.contentId, sourceUrl, client.ip, client.userAgent,
         )
         val grant = mediaGrants.issue(actor, lease.id)
-        val source = cipher.encrypt(sourceUrl)
         val remote = sourceUrl.startsWith("http://") || sourceUrl.startsWith("https://")
-        val remuxStart = if (remote) {
-            mediaUrl("/api/v1/remux/start", source, lease.id, grant.token)
-        } else {
-            "/api/v1/remux/start?d=${urlEncode(requireNotNull(request.downloadId))}" +
-                "&sid=${urlEncode(lease.id)}&g=${urlEncode(grant.token)}"
-        }
+        val source = if (remote) cipher.encryptStream(sourceUrl, lease.id) else null
+        val remuxStart = source?.let { mediaUrl("/api/v1/remux/start", it, lease.id, grant.token) }
+            ?: ("/api/v1/remux/start?d=${urlEncode(requireNotNull(request.downloadId))}" +
+                "&sid=${urlEncode(lease.id)}&g=${urlEncode(grant.token)}")
         return PlaybackLeaseDto(
             id = lease.id,
             contentId = identity.contentId,
             playlistId = identity.playlistId,
             mediaGrant = grant.token,
             mediaGrantExpiresAtMs = grant.expiresAtMs,
-            streamUrl = mediaUrl("/api/v1/stream", source, lease.id, grant.token).takeIf { remote },
-            relayUrl = mediaUrl("/api/v1/relay", source, lease.id, grant.token).takeIf { remote },
-            transcodeUrl = mediaUrl("/api/v1/transcode", source, lease.id, grant.token).takeIf { remote },
+            streamUrl = source?.let { mediaUrl("/api/v1/stream", it, lease.id, grant.token) },
+            relayUrl = source?.let { mediaUrl("/api/v1/relay", it, lease.id, grant.token) },
+            transcodeUrl = source?.let { mediaUrl("/api/v1/transcode", it, lease.id, grant.token) },
             remuxStartUrl = remuxStart,
         )
     }

@@ -137,11 +137,11 @@ fun PlayerScreen(
         AndroidView(
             factory = { surfaceContext ->
                 VideoSurface(surfaceContext).apply {
-                    keepScreenOn = true
                     videoSurface = this
                 }
             },
             update = { surface ->
+                surface.keepScreenOn = playback.playing && playback.error == null
                 surface.setPlayer(session.player)
                 surface.resizeMode = resizeMode
             },

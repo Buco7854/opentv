@@ -19,17 +19,19 @@ class DownloadRepository(
     private val prefs: PlayerPrefs,
     private val scheduler: DownloadScheduler,
 ) {
-
     val downloads = store.observeAll()
 
     private suspend fun targetPath(channel: Channel, downloadId: Long): String {
         val target = DownloadFileName.from(channel.name, channel.url, downloadId)
-        return DownloadStorage.createTarget(
-            context = context,
-            treeUri = prefs.settings.first().downloadDirUri,
-            baseName = target.baseName,
-            extension = target.extension,
-        )
+        val treeUri = prefs.settings.first().downloadDirUri
+        return withContext(Dispatchers.IO) {
+            DownloadStorage.createTarget(
+                context = context,
+                treeUri = treeUri,
+                baseName = target.baseName,
+                extension = target.extension,
+            )
+        }
     }
 
     /** Queue a VOD download. Returns null on success, or a reason if the URL already exists. */
@@ -77,7 +79,7 @@ class DownloadRepository(
 
     suspend fun delete(item: Download) {
         scheduler.cancel(item.id)
-        DownloadStorage.delete(context, item.filePath)
+        withContext(Dispatchers.IO) { DownloadStorage.delete(context, item.filePath) }
         store.delete(item.id)
     }
 

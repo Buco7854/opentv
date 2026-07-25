@@ -15,8 +15,9 @@ export const prefs = {
   get resizeMode() { return localStorage.getItem('resizeMode') ?? 'fit'; },
   set resizeMode(value: string) { localStorage.setItem('resizeMode', value); },
   get volume() {
-    const value = Number(localStorage.getItem('volume'));
-    return isFinite(value) && value > 0 ? Math.min(1, value) : 1;
+    const stored = localStorage.getItem('volume');
+    const value = Number(stored);
+    return stored !== null && isFinite(value) ? Math.min(1, Math.max(0, value)) : 1;
   },
   set volume(value: number) { localStorage.setItem('volume', String(value)); },
   get muted() { return localStorage.getItem('muted') === '1'; },

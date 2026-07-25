@@ -1,6 +1,10 @@
 package com.buco7854.opentv.ui.components
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.autofill.AutofillNode
@@ -23,8 +27,15 @@ fun Modifier.autofill(
     onFill: (String) -> Unit,
 ): Modifier {
     val autofill = LocalAutofill.current
-    val node = AutofillNode(autofillTypes = types, onFill = onFill)
-    LocalAutofillTree.current += node
+    val tree = LocalAutofillTree.current
+    val fill by rememberUpdatedState(onFill)
+    val node = remember(types) {
+        AutofillNode(autofillTypes = types, onFill = { fill(it) })
+    }
+    DisposableEffect(node) {
+        tree += node
+        onDispose { tree.children.remove(node.id) }
+    }
 
     return this
         .onGloballyPositioned { node.boundingBox = it.boundsInWindow() }

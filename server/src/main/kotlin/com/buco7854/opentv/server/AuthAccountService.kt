@@ -2,7 +2,6 @@ package com.buco7854.opentv.server
 
 import com.buco7854.opentv.serverdata.UserRole
 import com.buco7854.opentv.serverdata.db.AuthChallengeRow
-import com.buco7854.opentv.serverdata.db.SecurityEventRow
 import com.buco7854.opentv.serverdata.db.ServerUserDatabase
 import com.buco7854.opentv.serverdata.db.UserPlaylistGrantRow
 import com.buco7854.opentv.serverdata.db.UserRow
@@ -140,25 +139,6 @@ internal class AuthAccountService(
         playlistIds = db.grants().forUser(user.id),
         csrfToken = csrfToken,
     )
-
-    suspend fun event(
-        actorUserId: String?,
-        subjectUserId: String?,
-        type: String,
-        clientIp: String?,
-    ) {
-        db.securityEvents().insert(
-            SecurityEventRow(
-                id = UUID.randomUUID().toString(),
-                actorUserId = actorUserId,
-                subjectUserId = subjectUserId,
-                type = type,
-                detail = "",
-                clientIp = clientIp,
-                createdAtMs = clock(),
-            ),
-        )
-    }
 
     fun effectiveRole(user: UserRow) =
         if (user.manualRole == UserRole.ADMIN || user.oidcAdmin) UserRole.ADMIN else UserRole.USER

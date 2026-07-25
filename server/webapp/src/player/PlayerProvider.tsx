@@ -22,6 +22,9 @@ import { prefs } from '../preferences';
 import { MenuSheet, SubtitleStyleSheet } from './PlaybackSheets';
 import { formatPlaybackTime, streamKind, supportsHevc } from './playbackPolicy';
 import {
+  hlsVariantOf, playbackSource, resolveSource, sourceKind, Transport, TransportContext,
+} from './mediaSource';
+import {
   captureMediaPosition,
   isTerminalPlaybackStatus,
   mediaSourceIdentity,
@@ -66,12 +69,6 @@ export function PlaybackErrorBoundary({ children }: { children: ReactNode }) {
 const hevcCapable = supportsHevc(typeof MediaSource === 'undefined' ? undefined : MediaSource);
 
 type TrackKind = { audio: { names: string[]; current: number }; subs: { names: string[]; current: number } };
-
-function sourceKind(url: string | null) {
-  if (!url) return 'direct' as const;
-  const parsed = new URL(url, window.location.origin);
-  return streamKind(parsed.searchParams.get('u') ?? url);
-}
 
 export function PlayerSurface(props: {
   request: PlayRequest;
@@ -191,13 +188,18 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
   useEffect(() => {
     api.remuxAvailable().then((r) => setRemuxAvailable(r.available)).catch(() => setRemuxAvailable(false));
   }, []);
-  const activeUrl = remux
-    ? replaceMediaGrant(remux.playlistUrl, lease.mediaGrant) ?? ''
-    : lease.streamUrl ?? '';
+  const activeSource = playbackSource({
+    lease,
+    remuxPlaylistUrl: remux?.playlistUrl ?? null,
+    downloadId: request.downloadId ?? null,
+  });
+  const activeUrl = activeSource?.url ?? '';
   const activeSourceKey = mediaSourceIdentity(activeUrl);
   const activeDirect = remux ? true : !!direct;
   const rootRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const resumeSeek = useRef<(() => void) | null>(null);
+  const mpegtsReload = useRef<(() => void) | null>(null);
   const hlsRef = useRef<Hls | null>(null);
   const mpegtsRef = useRef<mpegts.Player | null>(null);
 
@@ -235,15 +237,15 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
   const chosenTracks = useRef<{ audio: number; subs: number | null }>({ audio: -1, subs: null });
   useEffect(() => { chosenTracks.current = { audio: -1, subs: null }; }, [sourceKey]);
 
-  const src = useCallback(
-    (u: string, hls = false) => {
-      if (!hls) return u;
-      const next = new URL(u, window.location.origin);
-      next.searchParams.set('hls', '1');
-      return `${next.pathname}${next.search}${next.hash}`;
-    },
-    [],
-  );
+  const src = useCallback((u: string, hls = false) => (hls ? hlsVariantOf(u) : u), []);
+
+  const transportContextRef = useRef<() => TransportContext>(() => ({ lease }));
+  transportContextRef.current = () => ({
+    lease: leaseRef.current,
+    remuxPlaylistUrl: remuxRef.current?.playlistUrl ?? null,
+    downloadId: request.downloadId ?? null,
+  });
+  const transportContext = useCallback(() => transportContextRef.current(), []);
 
   // Grant rotation changes authorization only. Keep the current engine and remux
   // attachment, reload the HLS manifest in place, and restore the exact VOD
@@ -400,23 +402,23 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
 
     // [relay] serves the room's shared upstream (watch-together live) instead of this viewer's
     // own; the AAC rescue is skipped there, since it would open a second, unshared connection.
-    const playMpegts = (target: string, transcoded = false, relay = false) => {
+    const playMpegts = (transport: Transport) => {
       if (!mpegts.getFeatureList().mseLivePlayback) {
         setError(t('player.mpegtsUnsupported'));
         return;
       }
-      const currentLease = leaseRef.current;
-      const mediaUrl = relay
-        ? currentLease.relayUrl
-        : transcoded ? currentLease.transcodeUrl : currentLease.streamUrl;
-      if (!mediaUrl) {
+      const source = resolveSource(transportContext(), transport);
+      if (!source) {
         setError(t('player.decodeFailed'));
         return;
       }
+      const transcoded = transport === 'transcode';
+      const relay = transport === 'relay';
+      let openedUrl = source.url;
       setAudioTranscoded(transcoded);
       const player = mpegts.createPlayer({
         type: 'mpegts', isLive: true,
-        url: mediaUrl,
+        url: openedUrl,
       });
       mpegtsRef.current = player;
       player.attachMediaElement(video);
@@ -428,7 +430,7 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
         if (transcoded || relay || remuxAvailableRef.current !== true) return false;
         player.destroy();
         if (mpegtsRef.current === player) mpegtsRef.current = null;
-        playMpegts(target, true);
+        playMpegts('transcode');
         return true;
       };
       // mpegts.js fires ERROR for both network hiccups and undecodable codecs.
@@ -437,8 +439,17 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
       // only surface a hard failure when no picture arrives. Network errors get a bounded reload.
       const hasPicture = () => video.videoWidth > 0 && video.readyState >= 2;
       const reload = () => {
+        const current = resolveSource(transportContext(), transport);
+        if (current && current.url !== openedUrl) {
+          openedUrl = current.url;
+          player.destroy();
+          if (mpegtsRef.current === player) mpegtsRef.current = null;
+          playMpegts(transport);
+          return;
+        }
         try { player.unload(); player.load(); player.play()?.catch(() => {}); } catch { /* destroyed */ }
       };
+      mpegtsReload.current = reload;
       let retries = 0;
       let lastErr = 0;
       let noticed = false;
@@ -450,12 +461,12 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
           statusCode?: number;
         } | null;
         const status = Number(response?.code ?? response?.status ?? response?.statusCode);
-        if (isTerminalPlaybackStatus(status)) {
-          terminatePlayback(status);
-          return;
-        }
         if (type === mpegts.ErrorTypes.NETWORK_ERROR) {
           if (hasPicture()) return; // a frozen frame recovers via the watchdog
+          if (isTerminalPlaybackStatus(status)) {
+            terminatePlayback(status);
+            return;
+          }
           const now = performance.now();
           if (now - lastErr > 30_000) retries = 0;
           lastErr = now;
@@ -505,12 +516,12 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
       hls.loadSource(src(target, hlsVariant));
       hls.attachMedia(video);
       hls.on(Hls.Events.ERROR, (_e, data) => {
+        if (!data.fatal) return;
         const status = data.response?.code;
         if (isTerminalPlaybackStatus(status)) {
           terminatePlayback(status);
           return;
         }
-        if (!data.fatal) return;
         // A copied HEVC the browser claimed to support but can't actually decode: force a
         // transcode and re-prepare the session at the current spot.
         if (remuxRef.current?.nativeCopy && data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRecoveries < 1) {
@@ -536,7 +547,7 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
           // The panel may not serve an HLS variant - fall back to raw TS.
           triedTsFallback = true;
           stopEngines();
-          playMpegts(url);
+          playMpegts('proxy');
         } else {
           setError(t('player.failedDetail', { detail: data.details || data.type }));
         }
@@ -564,10 +575,10 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
     // Watch-together live rides the room's shared upstream (one provider seat) via the relay,
     // played as a transport stream; solo live keeps its own connection through the proxy. The
     // relay tees raw TS, so a playlist-only (m3u8) channel can't use it and stays on HLS.
-    if (roomLive && kind !== 'hls') playMpegts(url, false, true);
+    if (roomLive && kind !== 'hls') playMpegts('relay');
     else if (kind === 'hls') playHls(activeUrl);
-    else if (kind === 'livets') playHls(activeUrl, true); // ask the proxy for the HLS variant
-    else if (kind === 'ts') playMpegts(activeUrl);
+    else if (kind === 'livets') playHls(activeUrl, true);
+    else if (kind === 'ts') playMpegts('proxy');
     else video.src = src(activeUrl);
 
     if (!live && !catchup && !remux) {
@@ -577,7 +588,10 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
         if (p && p.positionMs >= 10_000) {
           const apply = () => { video.currentTime = p.positionMs / 1000; };
           if (video.readyState >= 1) apply();
-          else video.addEventListener('loadedmetadata', apply, { once: true });
+          else {
+            resumeSeek.current = apply;
+            video.addEventListener('loadedmetadata', apply, { once: true });
+          }
         }
       }).catch(() => {});
     }
@@ -609,10 +623,7 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
           hlsRef.current.stopLoad();
           hlsRef.current.startLoad();
         } else if (mpegtsRef.current) {
-          const player = mpegtsRef.current;
-          player.unload();
-          player.load();
-          player.play()?.catch(() => {});
+          mpegtsReload.current?.();
         } else if (video.currentSrc) {
           video.load();
           video.play().catch(() => {});
@@ -626,6 +637,8 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
       clearTimeout(retryTimer);
       saveResume();
       stopEngines();
+      if (resumeSeek.current) video.removeEventListener('loadedmetadata', resumeSeek.current);
+      resumeSeek.current = null;
       video.pause();
       video.removeAttribute('src');
       video.load();
@@ -786,7 +799,7 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
     // In a room the audio is shared: only a controller can change it, and the switch comes back
     // as a room-audio command that re-requests the remux for everyone, so don't touch local state.
     if (remuxRef.current && wtRef.current.inRoom) {
-      if (wtRef.current.canControl) api.roomAudio(lease.id, index);
+      if (wtRef.current.canControl) api.roomAudio(lease.id, index).catch(() => {});
       return;
     }
     chosenTracks.current.audio = index;

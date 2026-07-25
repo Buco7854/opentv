@@ -97,7 +97,6 @@ internal class PlayerViewModel(
     private val playlistId: Long,
     private val tvgId: String?,
 ) : ViewModel() {
-
     private val settingsMutex = Mutex()
     private val _bootstrap = MutableStateFlow<PlayerBootstrap?>(null)
     val bootstrap: StateFlow<PlayerBootstrap?> = _bootstrap.asStateFlow()
@@ -180,7 +179,7 @@ internal fun playerViewModel(
     playlistId: Long,
     tvgId: String?,
 ): PlayerViewModel = viewModel(
-    key = "PlayerViewModel-$playlistId-${url.hashCode()}-${tvgId.hashCode()}",
+    key = "PlayerViewModel-$playlistId-$url-$tvgId",
     factory = viewModelFactory {
         initializer {
             PlayerViewModel(LocalPlayerDataSource(OpenTvApp.graph), url, playlistId, tvgId)

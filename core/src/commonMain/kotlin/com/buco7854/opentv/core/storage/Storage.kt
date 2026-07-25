@@ -68,7 +68,8 @@ interface ChannelStore {
     suspend fun countEpisodes(playlistId: Long, seriesKey: String): Int
     /** Immediate best-effort retag of a corrected category (refined at next refresh). */
     suspend fun retagGroup(playlistId: Long, groupTitle: String, kind: Int)
-    suspend fun retagGroupAsSeries(playlistId: Long, groupTitle: String)
+    suspend fun inGroup(playlistId: Long, groupTitle: String): List<Channel>
+    suspend fun updateAll(channels: List<Channel>)
     suspend fun deleteEpisodes(playlistId: Long, seriesKey: String)
 }
 

@@ -79,9 +79,9 @@ absent from the initial bundle.
 - `/api/v1` is the only API prefix; there is no legacy `/api` alias.
 - There is no OpenAPI document. OpenAPI is only wanted if generated and
   validated from executable routes/DTOs.
-- `ApiSecurity.openAccess()` is the current authentication adapter. The API is
-  structurally ready for real auth, but current deployments still need an
-  authenticated reverse proxy or VPN.
+- `ApiSecurity.openAccess()` is a test-only adapter; production composition uses
+  `ApiSecurity.authenticated()`, so the API authenticates itself. Its CSRF/Origin
+  guard is covered by `ApiSecurityTest`, its environment rules by `AuthConfigTest`.
 - Authentication is installed once as a route-scoped plugin. Feature handlers
   contain no credential policy.
 - API failures use `ApiErrorDto(code, message, field)`.
@@ -90,7 +90,13 @@ absent from the initial bundle.
 - Provider URLs and credentials never leave the server.
 - Browser playlist credentials are write-only. There is no credential-read
   endpoint. Blank secret fields on update preserve existing values.
-- Browser playback URLs are opaque `StreamCipher` tokens.
+- Browser playback URLs are opaque `StreamCipher` capabilities. A stream token seals the
+  playback lease it was minted for, so URLs the proxy derives while rewriting a lease's HLS
+  manifest are usable by that lease alone. Media routes take the lease from the token, not
+  from the request.
+- The HLS rewriter mints capabilities only for children on the manifest's own origin;
+  playlists are provider-controlled input and must not be able to aim the server's HTTP
+  client at another host.
 - `api/http.ts` already supports same-origin cookies and has one future bearer
   token provider seam.
 - Browser preferences and server settings are intentionally separate.
@@ -117,13 +123,25 @@ absent from the initial bundle.
 
 ## Persistence and identity
 
-- Room schema version is 8.
+- Room schema version is 8 for `:data` (`opentv.db`), 2 for `:server-data`
+  (`server-users.db`). Both modules keep their migrations in `db/Migrations.kt`,
+  register them in their database factory, and prove them: `ServerUserMigrationTest`
+  and `OpenTvDatabaseSchemaTest` build a database from each exported schema and open
+  it, so a version bump without a migration fails in CI rather than crash-looping a
+  deployment. `:data:jvmTest` and `:server-data:jvmTest` both run in CI.
+- There is no audit/security-event log. The `security_events` table was removed in
+  server-user schema 2: nothing read it. Reintroducing one means designing its
+  reader and its retention first.
 - Destructive migration fallback is not used.
 - Schema changes require explicit Android and JVM migrations, exported schema,
   and migration coverage.
 - Favorites, resume points, and downloads currently use existing URL/key
   identities. A future stable-content identity migration must update all three
   together rather than piecemeal.
+- `ContentIdentityService` has two paths and they are not interchangeable.
+  Reconciliation owns `lastSeenAtMs` and retirement and may scan a playlist;
+  browsing resolves by fingerprint in batches, creates only what is missing, and
+  never writes `lastSeenAtMs`. A read path that scans or touches it is a bug.
 
 ## Build facts
 
@@ -166,6 +184,9 @@ cd ../..
 - Write-only credentials: `PlaylistUpdateSecurityTest`
 - Provider connection budget: `ProviderConnectionsTest`
 - Playback session lifecycle: `PlaybackSessionRegistryTest`
+- Playback capability boundary and HLS rewriting: `MediaCapabilityTest`
+- Content identity reads vs reconciliation: `ContentIdentityServiceTest`
+- Account-security step-up window: `AuthServiceTest`
 - Android player orchestration: `PlayerViewModelTest`
 - Android player policies: `PlayerPolicyTest`
 
@@ -174,6 +195,12 @@ cd ../..
 - No Ktor/Android/Room/server DTO types in `:core`.
 - No provider credentials or raw provider URLs in browser contracts.
 - No unmanaged long-lived scopes, processes, or threads.
+- Compression is an allowlist of text content types. Media is streamed, and Ktor
+  compresses a streaming body by buffering all of it; a new streaming route must not
+  have to remember to opt out.
+- Playback status codes: a lease that is gone is 410 and nothing else. 404 means many
+  ordinary things on these routes (no extra tracks to expose, an unknown segment), so
+  no client may infer "stop playing" from it.
 - No Room destructive fallback.
 - No hand-maintained OpenAPI file.
 - Do not recreate the deleted server `Routes.kt` or Android player god class.
