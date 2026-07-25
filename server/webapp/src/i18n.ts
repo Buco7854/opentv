@@ -265,6 +265,8 @@ const en = {
   'player.codecFailed': 'Playback failed. The stream may use codecs this browser cannot decode.',
   'player.failedDetail': 'Playback failed ({detail}).',
   'player.audioUnsupported': "This stream's audio can't be decoded by the browser; the Android app plays it natively.",
+  'player.unavailableTitle': 'Content unavailable',
+  'player.unavailableSub': 'This item was removed, or you no longer have access to it.',
 
   'sessions.title': 'Now watching',
   'sessions.activeCount': '{count} watching',
@@ -617,6 +619,8 @@ const fr: Catalog = {
   'player.codecFailed': 'Échec de lecture. Le flux utilise peut-être des codecs que ce navigateur ne peut pas décoder.',
   'player.failedDetail': 'Échec de lecture ({detail}).',
   'player.audioUnsupported': "L'audio de ce flux n'est pas décodable par le navigateur ; l'application Android le lit nativement.",
+  'player.unavailableTitle': 'Contenu indisponible',
+  'player.unavailableSub': "Cet élément a été supprimé ou vous n'y avez plus accès.",
 
   'sessions.title': 'En cours de lecture',
   'sessions.activeCount': '{count} en lecture',

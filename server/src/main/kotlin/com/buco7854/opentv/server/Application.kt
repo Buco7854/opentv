@@ -1,6 +1,7 @@
 package com.buco7854.opentv.server
 
 import com.buco7854.opentv.core.log.CoreLog
+import com.buco7854.opentv.core.log.ProviderSecrets
 import com.buco7854.opentv.core.repo.AccountRepository
 import com.buco7854.opentv.core.repo.EpgRepository
 import com.buco7854.opentv.core.repo.MetadataRepository
@@ -95,7 +96,11 @@ object ServerBootstrap {
         val userActivity = UserActivityService(userDatabase, auth, contentIdentities)
         val settings = ServerSettings(config.dataDir, config.pageSize)
         val http = ServerHttp().apply {
-            settings.userAgent.takeIf { it.isNotBlank() }?.let { userAgent = it }
+            // A stored agent predates the validation, or was hand-edited: fall back rather than
+            // start a server whose every provider request throws.
+            settings.userAgent
+                .takeIf { it.isNotBlank() && ServerHttp.isUsableUserAgent(it) }
+                ?.let { userAgent = it }
         }
         val cipher = StreamCipher(settings.streamKey)
         val coreLog = CoreLog { context, error -> log.warn("{}: {}", context, error.message) }
@@ -310,22 +315,24 @@ fun Application.openTvModule(
                 ApiErrorDto("request_too_large", "Request body exceeds the allowed size"),
             )
         }
+        // These three echo a message that may have been built from a provider URL, and those
+        // URLs carry the account's credentials. Mask before it reaches the browser.
         exception<IllegalArgumentException> { call, cause ->
             call.respond(
                 HttpStatusCode.BadRequest,
-                ApiErrorDto("invalid_request", cause.message ?: "Bad request"),
+                ApiErrorDto("invalid_request", ProviderSecrets.redact(cause)),
             )
         }
         exception<XtreamAuthException> { call, cause ->
             call.respond(
                 HttpStatusCode.BadGateway,
-                ApiErrorDto("provider_login_rejected", cause.message ?: "Login rejected"),
+                ApiErrorDto("provider_login_rejected", ProviderSecrets.redact(cause)),
             )
         }
         exception<XtreamUnreachableException> { call, cause ->
             call.respond(
                 HttpStatusCode.BadGateway,
-                ApiErrorDto("provider_unreachable", cause.message ?: "Provider unreachable"),
+                ApiErrorDto("provider_unreachable", ProviderSecrets.redact(cause)),
             )
         }
         exception<CancellationException> { _, cause -> throw cause }
@@ -352,16 +359,26 @@ fun Application.openTvModule(
     }
 }
 
+/**
+ * The only responses worth compressing. Everything else - all media - is streamed for as long
+ * as someone is watching, and no continuous stream survives being run through an encoder.
+ */
+private val COMPRESSIBLE_TYPES = arrayOf(
+    ContentType.Text.Any,
+    ContentType.Application.Json,
+    ContentType.Application.JavaScript,
+    ContentType.Image.SVG,
+)
+
+/** Whether a response of [type] would be compressed by [installOpenTvCompression]. */
+internal fun isCompressible(type: ContentType): Boolean =
+    COMPRESSIBLE_TYPES.any { type.match(it) }
+
 internal fun Application.installOpenTvCompression() {
     install(Compression) {
         gzip()
         deflate()
-        matchContentType(
-            ContentType.Text.Any,
-            ContentType.Application.Json,
-            ContentType.Application.JavaScript,
-            ContentType.Image.SVG,
-        )
+        matchContentType(*COMPRESSIBLE_TYPES)
         minimumSize(1024)
     }
 }

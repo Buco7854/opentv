@@ -1,6 +1,7 @@
 package com.buco7854.opentv.server
 
 import com.buco7854.opentv.core.download.DownloadFileName
+import com.buco7854.opentv.core.log.ProviderSecrets
 import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.serverdata.DownloadBlobStatus
 import com.buco7854.opentv.serverdata.db.ContentIdentityRow
@@ -134,30 +135,21 @@ class DownloadManager(
     }
 
     suspend fun pause(userId: String, userDownloadId: String) {
-        val blobId = owned(userId, userDownloadId).blobId
-        withBlobLock(blobId) {
-            val row = owned(userId, userDownloadId)
+        withOwnedDownload(userId, userDownloadId) { row ->
             db.downloads().upsertUserDownload(row.copy(active = false, updatedAtMs = clock()))
             if (db.downloads().activeReferenceCount(row.blobId) == 0) {
-                db.downloads().blob(row.blobId)?.let {
-                    if (it.status == DownloadBlobStatus.QUEUED || it.status == DownloadBlobStatus.RUNNING) {
-                        db.downloads().upsertBlob(it.copy(status = DownloadBlobStatus.PAUSED, updatedAtMs = clock()))
-                        jobs.remove(it.id)?.cancel()
-                    }
-                }
+                parkTransfer(row.blobId, onlyWhenInFlight = true)
             }
         }
     }
 
     suspend fun resume(userId: String, userDownloadId: String) {
-        val blobId = owned(userId, userDownloadId).blobId
-        withBlobLock(blobId) {
-            val row = owned(userId, userDownloadId)
+        withOwnedDownload(userId, userDownloadId) { row ->
             db.downloads().upsertUserDownload(
                 row.copy(active = true, suspended = false, updatedAtMs = clock())
             )
             db.downloads().blob(row.blobId)?.let {
-                if (it.status in setOf(DownloadBlobStatus.PAUSED, DownloadBlobStatus.FAILED, DownloadBlobStatus.CANCELLED)) {
+                if (it.status in RESUMABLE) {
                     db.downloads().upsertBlob(
                         it.copy(status = DownloadBlobStatus.QUEUED, error = null, updatedAtMs = clock())
                     )
@@ -168,16 +160,11 @@ class DownloadManager(
     }
 
     suspend fun delete(userId: String, userDownloadId: String) {
-        val blobId = owned(userId, userDownloadId).blobId
-        withBlobLock(blobId) {
-            val row = owned(userId, userDownloadId)
+        withOwnedDownload(userId, userDownloadId) { row ->
             db.downloads().deleteUserDownload(row.id)
             if (db.downloads().referenceCount(row.blobId) == 0) deleteBlobUnlocked(row.blobId)
             else if (db.downloads().activeReferenceCount(row.blobId) == 0) {
-                db.downloads().blob(row.blobId)?.let {
-                    db.downloads().upsertBlob(it.copy(status = DownloadBlobStatus.PAUSED, updatedAtMs = clock()))
-                    jobs.remove(it.id)?.cancel()
-                }
+                parkTransfer(row.blobId, onlyWhenInFlight = false)
             }
         }
     }
@@ -212,23 +199,40 @@ class DownloadManager(
         scope.launch {
             db.downloads().blobsForPlaylist(playlistId).forEach { blob ->
                 withBlobLock(blob.id) {
-                    val current = db.downloads().blob(blob.id) ?: return@withBlobLock
-                    if (db.downloads().activeReferenceCount(blob.id) == 0 &&
-                        current.status in setOf(DownloadBlobStatus.QUEUED, DownloadBlobStatus.RUNNING)
-                    ) {
-                        db.downloads().upsertBlob(
-                            current.copy(status = DownloadBlobStatus.PAUSED, updatedAtMs = clock()),
-                        )
-                        jobs.remove(blob.id)?.cancel()
+                    if (db.downloads().activeReferenceCount(blob.id) == 0) {
+                        parkTransfer(blob.id, onlyWhenInFlight = true)
                     }
                 }
             }
         }
     }
 
+    /**
+     * Stop the shared transfer nobody is waiting on any more and park it as PAUSED, so a later
+     * reference resumes it instead of restarting. [onlyWhenInFlight] leaves a blob that already
+     * settled (done, failed, cancelled) alone. Callers hold the blob lock.
+     */
+    private suspend fun parkTransfer(blobId: String, onlyWhenInFlight: Boolean) {
+        val blob = db.downloads().blob(blobId) ?: return
+        if (onlyWhenInFlight && blob.status !in IN_FLIGHT) return
+        db.downloads().upsertBlob(blob.copy(status = DownloadBlobStatus.PAUSED, updatedAtMs = clock()))
+        jobs.remove(blob.id)?.cancel()
+    }
+
     private suspend fun owned(userId: String, id: String): UserDownloadRow =
         db.downloads().userDownload(id)?.takeIf { it.userId == userId }
             ?: throw ResourceNotFound("download")
+
+    /** Take the lock guarding the blob this reference points at, then re-read the reference
+     *  under it, so a concurrent pause/resume/delete can't act on a stale row. */
+    private suspend fun <T> withOwnedDownload(
+        userId: String,
+        userDownloadId: String,
+        block: suspend (UserDownloadRow) -> T,
+    ): T {
+        val blobId = owned(userId, userDownloadId).blobId
+        return withBlobLock(blobId) { block(owned(userId, userDownloadId)) }
+    }
 
     private suspend fun <T> withBlobLock(blobId: String, block: suspend () -> T): T =
         blobLocks[(blobId.hashCode() and Int.MAX_VALUE) % blobLocks.size].withLock { block() }
@@ -266,6 +270,15 @@ class DownloadManager(
     }
 
     private class HttpStatusException(code: Int) : IOException("HTTP $code")
+
+    private companion object {
+        /** A transfer that is running or waiting its turn. */
+        val IN_FLIGHT = setOf(DownloadBlobStatus.QUEUED, DownloadBlobStatus.RUNNING)
+        /** A settled transfer a new reference may restart. */
+        val RESUMABLE = setOf(
+            DownloadBlobStatus.PAUSED, DownloadBlobStatus.FAILED, DownloadBlobStatus.CANCELLED,
+        )
+    }
 
     private suspend fun run(id: String) {
         val ownerJob = requireNotNull(coroutineContext[Job])
@@ -323,7 +336,8 @@ class DownloadManager(
             db.downloads().updateBlobStatus(
                 id,
                 DownloadBlobStatus.FAILED,
-                (error.message ?: error::class.simpleName)?.take(200),
+                // Shown in the user's downloads list; a URL in the message carries credentials.
+                ProviderSecrets.redact(error).take(200),
                 clock(),
                 listOf(DownloadBlobStatus.RUNNING),
             )

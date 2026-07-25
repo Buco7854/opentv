@@ -1,6 +1,7 @@
 package com.buco7854.opentv.diag
 
 import android.content.Context
+import com.buco7854.opentv.core.log.ProviderSecrets
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.io.File
@@ -27,20 +28,8 @@ object ErrorLog {
 
     private val nextId = java.util.concurrent.atomic.AtomicLong(1)
 
-    // Credentials as query parameters: get.php?username=U&password=P, api_key=...
-    private val REDACT_QUERY = Regex("""(?i)\b(username|password|token|pass|api_key)=[^&\s"'<>]+""")
-    // Xtream path credentials: /live|movie(s)|series/USER/PASS/...
-    private val REDACT_KIND_PATH = Regex("""(?i)/(live|movies?|series)/[^/\s"'<>]+/[^/\s"'<>]+/""")
-    // Bare Xtream stream paths: http://host/USER/PASS/1234.ts
-    private val REDACT_BARE_PATH =
-        Regex("""(://[^/\s"'<>]+)/[^/\s"'<>]+/[^/\s"'<>]+/(\d+(?:\.\w{1,5})?)(?=[\s"'<>,)\]}]|$)""")
-
-    fun redact(text: String): String {
-        var result = REDACT_QUERY.replace(text) { "${it.groupValues[1]}=•••" }
-        result = REDACT_BARE_PATH.replace(result) { "${it.groupValues[1]}/•••/•••/${it.groupValues[2]}" }
-        result = REDACT_KIND_PATH.replace(result) { "/${it.groupValues[1]}/•••/•••/" }
-        return result
-    }
+    /** Delegates to the shared policy so Android and the server mask the same things. */
+    fun redact(text: String): String = ProviderSecrets.redact(text)
 
     /** One-line, redacted human description of a throwable, for snackbars. */
     fun describe(error: Throwable): String =

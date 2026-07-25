@@ -122,14 +122,20 @@ object Xtream {
         return XtreamCredentials(base, user, pass)
     }
 
+    /** Credentials sit in the path of every stream URL, so they are escaped as path segments -
+     *  a '/' or a space in a password would otherwise build a different URL, or none at all. */
+    private fun XtreamCredentials.pathCredentials() =
+        "${Urls.encodePathSegment(user)}/${Urls.encodePathSegment(pass)}"
+
     fun liveUrl(c: XtreamCredentials, streamId: Long) =
-        "${c.base}/live/${c.user}/${c.pass}/$streamId.ts"
+        "${c.base}/live/${c.pathCredentials()}/$streamId.ts"
 
     fun vodUrl(c: XtreamCredentials, streamId: Long, extension: String) =
-        "${c.base}/movie/${c.user}/${c.pass}/$streamId.${extension.ifBlank { "mp4" }}"
+        "${c.base}/movie/${c.pathCredentials()}/$streamId.${extension.ifBlank { "mp4" }}"
 
     fun episodeUrl(c: XtreamCredentials, episodeId: String, extension: String) =
-        "${c.base}/series/${c.user}/${c.pass}/$episodeId.${extension.ifBlank { "mp4" }}"
+        "${c.base}/series/${c.pathCredentials()}/" +
+            "${Urls.encodePathSegment(episodeId)}.${extension.ifBlank { "mp4" }}"
 
     fun xmltvUrl(c: XtreamCredentials) =
         "${c.base}/xmltv.php?username=${Urls.percentEncode(c.user)}" +

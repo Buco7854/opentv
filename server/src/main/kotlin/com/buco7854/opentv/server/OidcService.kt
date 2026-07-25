@@ -24,6 +24,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import org.slf4j.LoggerFactory
 import java.net.URI
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
@@ -48,14 +49,32 @@ class OidcService(
     private val auth: AuthService,
     private val config: AuthConfig,
 ) {
+    private val log = LoggerFactory.getLogger("opentv.auth")
     private val oidc: OidcConfig get() = config.oidc ?: throw ResourceNotFound("oidc")
     private val callback: URI get() = config.publicUrl.resolve("/api/v1/auth/oidc/callback")
     private val metadataMutex = Mutex()
     @Volatile private var cachedMetadata: OIDCProviderMetadata? = null
     private val validators = ConcurrentHashMap<JWSAlgorithm, IDTokenValidator>()
 
+    /**
+     * Warm the provider's discovery document at startup so a wrong issuer is reported at once.
+     *
+     * Failure is deliberately not fatal. The document is fetched and validated again on the
+     * first sign-in, so nothing is lost by starting without it - whereas exiting here means an
+     * identity provider that is merely slow to start (the usual case when both run in one
+     * compose stack) or briefly unreachable takes the whole media server down with it, for
+     * password users too.
+     */
     suspend fun validateConfiguration() {
-        if (config.oidc != null) metadata()
+        if (config.oidc == null) return
+        runCatching { metadata() }.onFailure {
+            log.error(
+                "OIDC discovery failed for {}: {}. Single sign-on stays unavailable until the " +
+                    "provider is reachable; everything else starts normally.",
+                config.oidc.issuer,
+                it.message,
+            )
+        }
     }
 
     internal suspend fun start(clientIp: String): OidcStartResult {

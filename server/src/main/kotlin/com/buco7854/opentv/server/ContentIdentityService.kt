@@ -65,10 +65,24 @@ class ContentIdentityService(
         return series.associate { it.seriesKey to requireNotNull(resolved[keys[it.seriesKey]]) }
     }
 
+    /** The identity alone. Prefer this over [resolve] when the channel is not needed: the
+     *  channel lives in the other database, so resolving one is never free. */
+    suspend fun identity(contentId: String): ContentIdentityRow =
+        db.content().get(contentId) ?: throw ResourceNotFound("content")
+
+    /** Identities for a batch of ids, so a list endpoint reads them once rather than per row.
+     *  Ids with no identity are absent from the result. */
+    suspend fun identitiesByContentId(contentIds: Collection<String>): Map<String, ContentIdentityRow> {
+        if (contentIds.isEmpty()) return emptyMap()
+        return contentIds.distinct()
+            .chunked(MAX_BOUND_VARIABLES)
+            .flatMap { db.content().byContentIds(it) }
+            .associateBy { it.contentId }
+    }
+
     suspend fun resolve(contentId: String): Pair<ContentIdentityRow, Channel?> {
-        val identity = db.content().get(contentId) ?: throw ResourceNotFound("content")
-        val channel = identity.currentChannelId?.let { storage.channels.get(it) }
-        return identity to channel
+        val identity = identity(contentId)
+        return identity to identity.currentChannelId?.let { storage.channels.get(it) }
     }
 
     suspend fun requireChannel(contentId: String): Pair<ContentIdentityRow, Channel> {

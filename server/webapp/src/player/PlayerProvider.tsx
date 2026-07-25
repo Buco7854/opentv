@@ -1,36 +1,38 @@
 // Fullscreen playback overlay; navigating away stops playback.
-// Engine per source: .m3u8 -> hls.js (native HLS on Safari); Xtream live .ts ->
-// panel HLS variant then mpegts.js; other .ts -> mpegts.js; mp4/webm/mkv -> native <video>.
+//
+// This file owns the lease and wires the player's parts together: the remux session
+// (useRemuxSession), the engine driving the media element (usePlaybackEngine), what the
+// element reports back (useMediaElement), and the chrome (PlayerChrome). Engine choice per
+// source and the remux policy live in those modules, not here.
 
-import Hls from 'hls.js';
-import mpegts from 'mpegts.js';
 import {
   ReactNode, useCallback, useEffect, useMemo, useRef, useState,
 } from 'react';
 import {
-  api, ApiError, Channel, GuideEntry, PlaybackLease, ResumePoint,
-  SessionCommandInput,
+  api, ApiError, Channel, PlaybackLease, SessionCommandInput,
 } from '../api';
 import { browserApiHttp } from '../api/http';
 import { GuideSheet } from '../components/GuideSheet';
-import { Icon } from '../components/Icons';
 import { IconBtn, snackbar } from '../components/Primitives';
 import { useSessionReporter } from './useSessionReporter';
 import { useWatchTogether, WatchTogetherSheet } from './WatchTogether';
 import { t } from '../i18n';
 import { prefs } from '../preferences';
-import { MenuSheet, SubtitleStyleSheet } from './PlaybackSheets';
-import { formatPlaybackTime, streamKind, supportsHevc } from './playbackPolicy';
+import { MenuSheet, SubtitleStyle, SubtitleStyleSheet } from './PlaybackSheets';
+import { engineForKind } from './playbackPolicy';
+import { playbackSource, sourceKind } from './mediaSource';
+import { isTerminalPlaybackStatus, mediaSourceIdentity, replaceMediaGrant } from './mediaGrant';
+import { usePlaybackStatus } from './playbackStatus';
+import { useRemuxSession } from './useRemuxSession';
+import { usePlaybackEngine } from './usePlaybackEngine';
+import { useMediaElement } from './useMediaElement';
+import { usePlayerShortcuts } from './usePlayerShortcuts';
 import {
-  hlsVariantOf, playbackSource, resolveSource, sourceKind, Transport, TransportContext,
-} from './mediaSource';
-import {
-  captureMediaPosition,
-  isTerminalPlaybackStatus,
-  mediaSourceIdentity,
-  replaceMediaGrant,
-  restoreMediaPosition,
-} from './mediaGrant';
+  PlayerControls, PlayerMenu, PlayerOverlays, useChromeVisibility,
+} from './PlayerChrome';
+
+const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+const SCALE_MODES = ['fit', 'zoom', 'stretch'] as const;
 
 export interface PlayRequest {
   contentId: string;
@@ -63,12 +65,6 @@ export function PlaybackErrorBoundary({ children }: { children: ReactNode }) {
   }, []);
   return <>{children}</>;
 }
-
-// Browser can decode HEVC in fMP4 via MediaSource -> server copies instead of
-// transcoding to H.264. Probed once.
-const hevcCapable = supportsHevc(typeof MediaSource === 'undefined' ? undefined : MediaSource);
-
-type TrackKind = { audio: { names: string[]; current: number }; subs: { names: string[]; current: number } };
 
 export function PlayerSurface(props: {
   request: PlayRequest;
@@ -153,168 +149,106 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
   onClose: () => void;
   onPlayCatchup: (channelId: number, startMs: number, endMs: number) => void;
 }) {
-  const {
-    title, channelId, live, tvgId, hasGuide,
-  } = request;
+  const { title, channelId, live = false, tvgId, hasGuide } = request;
   const catchup = request.mode === 'catchup';
   const direct = request.mode === 'download';
-  const url = lease.streamUrl ?? lease.remuxStartUrl;
-  const sourceKey = mediaSourceIdentity(url);
+  const downloadId = request.downloadId ?? null;
+  const sourceKey = mediaSourceIdentity(lease.streamUrl ?? lease.remuxStartUrl);
   const leaseRef = useRef(lease);
   leaseRef.current = lease;
-  const latestGrant = useRef(lease.mediaGrant);
-  latestGrant.current = lease.mediaGrant;
-  // Server remux override: the file re-served as a VOD HLS playlist (all tracks exposed,
-  // seeking handled by hls.js). `startAt` is the resume/switch position; `audio` is the
-  // muxed-in track (switching re-requests).
-  const [remux, setRemux] = useState<{ id: string; playlistUrl: string; duration: number | null; startAt: number; nativeCopy: boolean; audio: number } | null>(null);
-  const [remuxState, setRemuxState] = useState<'idle' | 'loading' | 'none' | 'failed'>('idle');
-  const [remuxAvailable, setRemuxAvailable] = useState<boolean | null>(null);
-  const remuxRef = useRef(remux);
-  useEffect(() => { remuxRef.current = remux; }, [remux]);
-  // ffmpeg availability, readable from inside the engine closures.
-  const remuxAvailableRef = useRef(remuxAvailable);
-  useEffect(() => { remuxAvailableRef.current = remuxAvailable; }, [remuxAvailable]);
-  // Set when a copied-HEVC remux fails: browser claimed support but couldn't play it;
-  // re-request with a transcode.
-  const forceTranscode = useRef(false);
-  useEffect(() => {
-    // Switching files: release the old session (frees its provider connection).
-    const prev = remuxRef.current;
-    if (prev) api.remuxStop(prev.id, lease.id, latestGrant.current);
-    setRemux(null); setRemuxState('idle'); forceTranscode.current = false;
-    setError(null);
-  }, [sourceKey, lease.id]);
-  useEffect(() => {
-    api.remuxAvailable().then((r) => setRemuxAvailable(r.available)).catch(() => setRemuxAvailable(false));
-  }, []);
-  const activeSource = playbackSource({
-    lease,
-    remuxPlaylistUrl: remux?.playlistUrl ?? null,
-    downloadId: request.downloadId ?? null,
-  });
-  const activeUrl = activeSource?.url ?? '';
-  const activeSourceKey = mediaSourceIdentity(activeUrl);
-  const activeDirect = remux ? true : !!direct;
+
   const rootRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const resumeSeek = useRef<(() => void) | null>(null);
-  const mpegtsReload = useRef<(() => void) | null>(null);
-  const hlsRef = useRef<Hls | null>(null);
-  const mpegtsRef = useRef<mpegts.Player | null>(null);
 
-  const [error, setError] = useState<string | null>(null);
-  const [paused, setPaused] = useState(false);
-  const [buffering, setBuffering] = useState(true);
-  const [bufferedEnd, setBufferedEnd] = useState(0);
-  // Live audio the browser couldn't decode, rescued via the server's AAC transcode
-  // (mpegts path only); surfaced to the activity dashboard.
-  const [audioTranscoded, setAudioTranscoded] = useState(false);
-  const [epgNow, setEpgNow] = useState<GuideEntry | null>(null);
-  const [uiVisible, setUiVisible] = useState(true);
-  const [time, setTime] = useState({ position: 0, duration: NaN });
-  /* Slider position (0..1000) while the user is dragging; null otherwise. */
-  const [scrub, setScrub] = useState<number | null>(null);
+  const { status, actions } = usePlaybackStatus();
+  const { setError, setTracks, setCueText } = actions;
+
+  const [menu, setMenu] = useState<PlayerMenu | null>(null);
+  const [wtMenu, setWtMenu] = useState(false);
+  const [guideChannel, setGuideChannel] = useState<Channel | null>(null);
+  const [scale, setScale] = useState(prefs.resizeMode);
+  const [subStyle, setSubStyle] = useState<SubtitleStyle>({
+    scale: prefs.subScale, style: prefs.subStyle, bold: prefs.subBold,
+  });
+  const { uiVisible, setUiVisible, poke } = useChromeVisibility(videoRef);
+
   /* Full-file target of an in-flight seek; the bar shows this until playback reaches it. */
   const [pendingSeek, setPendingSeek] = useState<number | null>(null);
   useEffect(() => { setPendingSeek(null); }, [sourceKey]);
   // Held-seek target for the seek closures, so a relative nudge starts from where
   // the bar is heading, not stale media time.
   const pendingSeekRef = useRef(pendingSeek);
-  useEffect(() => { pendingSeekRef.current = pendingSeek; }, [pendingSeek]);
-  const [tracks, setTracks] = useState<TrackKind>({ audio: { names: [], current: -1 }, subs: { names: [], current: -1 } });
-  const [menu, setMenu] = useState<null | 'speed' | 'scale' | 'audio' | 'subs' | 'subStyle'>(null);
-  const [wtMenu, setWtMenu] = useState(false);
-  const [guideChannel, setGuideChannel] = useState<Channel | null>(null);
-  const [scale, setScale] = useState(prefs.resizeMode);
-  // Active cue text (rendered by our own overlay) and the user's appearance settings.
-  const [cueText, setCueText] = useState('');
-  const [subStyle, setSubStyle] = useState({ scale: prefs.subScale, style: prefs.subStyle, bold: prefs.subBold });
-  const hideTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const nativeTracks = useRef<{ text: TextTrack[]; audio: { enabled: boolean }[] }>({ text: [], audio: [] });
+  pendingSeekRef.current = pendingSeek;
+
   // Explicit track picks, kept across engine restarts (seek re-anchors rebuild hls.js).
   // audio -1 = untouched; subs null = untouched, -1 = explicitly off.
   const chosenTracks = useRef<{ audio: number; subs: number | null }>({ audio: -1, subs: null });
   useEffect(() => { chosenTracks.current = { audio: -1, subs: null }; }, [sourceKey]);
 
-  const src = useCallback((u: string, hls = false) => (hls ? hlsVariantOf(u) : u), []);
+  const terminatePlayback = useCallback((httpStatus: number) => {
+    snackbar(httpStatus === 403 ? t('player.forbidden') : t('player.revoked'));
+    if (httpStatus === 401) browserApiHttp.notifyUnauthorized();
+    onClose();
+  }, [onClose]);
 
-  const transportContextRef = useRef<() => TransportContext>(() => ({ lease }));
-  transportContextRef.current = () => ({
-    lease: leaseRef.current,
-    remuxPlaylistUrl: remuxRef.current?.playlistUrl ?? null,
-    downloadId: request.downloadId ?? null,
-  });
-  const transportContext = useCallback(() => transportContextRef.current(), []);
-
-  // Grant rotation changes authorization only. Keep the current engine and remux
-  // attachment, reload the HLS manifest in place, and restore the exact VOD
-  // position. Continuous MPEG-TS responses keep using their open transport; any
-  // later engine reconstruction reads the fresh URLs from leaseRef.
-  const previousGrant = useRef(lease.mediaGrant);
-  useEffect(() => {
-    if (previousGrant.current === lease.mediaGrant) return;
-    previousGrant.current = lease.mediaGrant;
-    const video = videoRef.current;
-    if (!video) return;
-    const currentRemux = remuxRef.current;
-    const target = currentRemux
-      ? replaceMediaGrant(currentRemux.playlistUrl, lease.mediaGrant)
-      : lease.streamUrl;
-    if (!target) return;
-    const snapshot = captureMediaPosition(video);
-    const hls = hlsRef.current;
-    if (hls) {
-      const restore = () => {
-        restoreMediaPosition(video, snapshot, live);
-        hls.off(Hls.Events.MANIFEST_PARSED, restore);
-      };
-      hls.on(Hls.Events.MANIFEST_PARSED, restore);
-      const hlsVariant = !currentRemux && sourceKind(lease.streamUrl) === 'livets';
-      hls.loadSource(src(target, hlsVariant));
-      hls.startLoad(live ? -1 : snapshot.position);
-      return () => hls.off(Hls.Events.MANIFEST_PARSED, restore);
-    }
-    if (!mpegtsRef.current && video.currentSrc) {
-      const restore = () => {
-        restoreMediaPosition(video, snapshot, live);
-      };
-      video.addEventListener('loadedmetadata', restore, { once: true });
-      video.src = src(target);
-      return () => video.removeEventListener('loadedmetadata', restore);
-    }
-  }, [lease.mediaGrant, lease.streamUrl, live, src]);
-
-  // Non-live files (VOD, downloads, raw-TS VOD) and catch-up go through the remux:
-  // it exposes tracks, normalizes audio the browser can't decode (E-AC3/AC3), and
-  // gives catch-up a seekable timeline. Engine stays off while pending so
-  // single-connection providers never see two concurrent opens. Live `.ts` is excluded.
+  // Non-live files (VOD, downloads, raw-TS VOD) and catch-up go through the remux; live `.ts`
+  // is excluded. Watch-together needs the same fact: a same-content viewer shares its read.
   const remuxEligible = !live;
-
-  // Watch-together: stable content identity, and whether this stream draws on the provider
-  // (downloads are local). Defined here so the connection check can gate the engine below.
+  // Whether this stream draws on the provider at all (downloads are local).
   const providerBacked = !direct;
+
   // Filled by useSessionReporter with a sender over its live socket, so watch-together sync
   // rides that socket in real time (with a POST fallback) instead of a request per event.
   const wsSend = useRef<((command: SessionCommandInput) => boolean) | null>(null);
+  // startRemux is defined below; the room-audio command only fires later.
+  const startRemuxRef = useRef<(audio: number, startAt: number) => void>(() => {});
   const wt = useWatchTogether({
     selfId: lease.id,
     video: videoRef,
-    active: !error,
-    live: !!live,
+    active: !status.error,
+    live,
     remuxEligible,
     contentId: request.contentId,
     send: wsSend,
-    // A controller changed the room's shared track: re-request the remux with it (startRemuxRef
-    // is set below; this only fires on a later command).
-    onRoomAudio: (index) => { chosenTracks.current.audio = index; startRemuxRef.current(index, videoRef.current?.currentTime ?? 0); },
+    // A controller changed the room's shared track: re-request the remux with it.
+    onRoomAudio: (index) => {
+      chosenTracks.current.audio = index;
+      startRemuxRef.current(index, videoRef.current?.currentTime ?? 0);
+    },
   });
   // Room rights read from inside pickAudio without rebuilding it each roster change.
   const wtRef = useRef({ inRoom: false, canControl: false });
   wtRef.current = { inRoom: wt.inRoom, canControl: wt.canControl };
   // Live watched together goes through the shared relay (one seat for the room); joining or
   // leaving flips this and re-inits the engine onto (or off) the relay.
-  const roomLive = !!live && wt.inRoom;
+  const roomLive = live && wt.inRoom;
+
+  const remux = useRemuxSession({
+    lease,
+    leaseRef,
+    contentId: request.contentId,
+    sourceKey,
+    catchup,
+    eligible: remuxEligible,
+    checking: wt.checking,
+    blocked: wt.blocked,
+    inRoom: wt.inRoom,
+    trackMenuOpen: menu === 'audio' || menu === 'subs',
+    videoRef,
+    chosenTracks,
+    actions,
+    onTerminate: terminatePlayback,
+  });
+  startRemuxRef.current = remux.start;
+
+  const activeSource = playbackSource({
+    lease,
+    remuxPlaylistUrl: remux.session?.playlistUrl ?? null,
+    downloadId,
+  });
+  const activeUrl = activeSource?.url ?? '';
+  const activeSourceKey = mediaSourceIdentity(activeUrl);
+  const activeDirect = remux.session ? true : direct;
 
   // Hold the engine while the provider check is in flight, and keep it off (with a clear
   // message) when the provider is full - so a blocked stream never plays in the background
@@ -324,495 +258,89 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
   // provider only blocks provider-backed streams.
   const holdForChoice = wt.checking || wt.choosing;
   const holdForConnection = holdForChoice || (providerBacked && wt.blocked);
-  const holdEngine = wt.transitioning || holdForConnection || (remuxEligible && !remux &&
-    (remuxAvailable == null ||
-      (remuxAvailable && (remuxState === 'idle' || remuxState === 'loading'))));
+  const holdEngine = wt.transitioning || holdForConnection || (remuxEligible && !remux.session &&
+    (remux.available == null ||
+      (remux.available && (remux.state === 'idle' || remux.state === 'loading'))));
   useEffect(() => {
     // Don't surface the limit error while the viewer is still choosing alone vs together - only
     // once they've picked alone and the provider really is full.
     if (wt.blocked && !wt.choosing) setError((old) => old ?? t('player.connectionLimit'));
     else if (!wt.blocked) setError((old) => (old === t('player.connectionLimit') ? null : old));
-  }, [wt.blocked, wt.choosing]);
-
-  const poke = useCallback(() => {
-    setUiVisible(true);
-    clearTimeout(hideTimer.current);
-    hideTimer.current = setTimeout(() => {
-      if (!videoRef.current?.paused) setUiVisible(false);
-    }, 3000);
-  }, []);
-  const terminatePlayback = useCallback((status: number) => {
-    snackbar(status === 403 ? t('player.forbidden') : t('player.revoked'));
-    if (status === 401) browserApiHttp.notifyUnauthorized();
-    onClose();
-  }, [onClose]);
+  }, [wt.blocked, wt.choosing, setError]);
 
   // Native <video> failures give no reason; probe the URL to surface an upstream
   // HTTP error instead of a misleading "cannot decode".
   const diagnoseNativeError = useCallback(async () => {
+    const url = leaseRef.current.streamUrl ?? leaseRef.current.remuxStartUrl;
     try {
-      const r = await fetch(src(url), { headers: { Range: 'bytes=0-0' } });
-      if (!r.ok) {
-        if (isTerminalPlaybackStatus(r.status)) {
-          terminatePlayback(r.status);
+      const response = await fetch(url, { headers: { Range: 'bytes=0-0' } });
+      if (!response.ok) {
+        if (isTerminalPlaybackStatus(response.status)) {
+          terminatePlayback(response.status);
           return;
         }
-        let message = `HTTP ${r.status}`;
-        try { message = ((await r.json()) as { message?: string }).message || message; } catch { /* not json */ }
+        let message = `HTTP ${response.status}`;
+        try { message = ((await response.json()) as { message?: string }).message || message; } catch { /* not json */ }
         setError(t('player.upstreamFailed', { message }));
         return;
       }
-      try { await r.body?.cancel(); } catch { /* stream already closed */ }
+      try { await response.body?.cancel(); } catch { /* stream already closed */ }
     } catch { /* network failed; keep the generic message */ }
     setError((old) => old ?? t('player.decodeFailed'));
-  }, [src, terminatePlayback, url]);
+  }, [setError, terminatePlayback]);
 
-  // ---- engine wiring ----
-  const lastUrl = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    if (holdEngine) return;
-    const video = videoRef.current!;
-    let triedTsFallback = false;
-    let retryTimer: ReturnType<typeof setTimeout> | undefined;
-    setError(null);
-    setBuffering(true);
-    setBufferedEnd(0);
-    setAudioTranscoded(false);
-    if (lastUrl.current !== url) {
-      lastUrl.current = url;
-      video.playbackRate = 1;
-    }
+  const { hlsRef, mpegtsRef } = usePlaybackEngine({
+    lease,
+    leaseRef,
+    live,
+    catchup,
+    roomLive,
+    hold: holdEngine,
+    contentId: request.contentId,
+    downloadId,
+    activeUrl,
+    activeSourceKey,
+    sourceKey,
+    videoRef,
+    remux,
+    chosenTracks,
+    actions,
+    onTerminate: terminatePlayback,
+  });
 
-    const kind = remux ? streamKind(activeUrl) : sourceKind(leaseRef.current.streamUrl);
+  const nativeTracks = useMediaElement({
+    videoRef,
+    hlsRef,
+    mpegtsRef,
+    remuxRef: remux.ref,
+    activeUrl,
+    actions,
+    onEnded: onClose,
+    onPlaying: remux.markPlaying,
+    onRemuxDied: remux.markDied,
+    onNativeError: diagnoseNativeError,
+  });
 
-    const stopEngines = () => {
-      hlsRef.current?.destroy(); hlsRef.current = null;
-      mpegtsRef.current?.destroy(); mpegtsRef.current = null;
-    };
-
-    const readHlsTracks = (hls: Hls) => {
-      // A remux playlist muxes in one audio track and serves subtitles as sidecars,
-      // so its menus come from /remux/start, not from what hls.js sees here.
-      if (remuxRef.current) return;
-      setTracks({
-        audio: { names: hls.audioTracks.map((track, i) => track.name || track.lang || t('player.audioN', { n: i + 1 })), current: hls.audioTrack },
-        subs: { names: hls.subtitleTracks.map((track, i) => track.name || track.lang || t('player.subtitlesN', { n: i + 1 })), current: hls.subtitleTrack },
-      });
-    };
-
-    // [relay] serves the room's shared upstream (watch-together live) instead of this viewer's
-    // own; the AAC rescue is skipped there, since it would open a second, unshared connection.
-    const playMpegts = (transport: Transport) => {
-      if (!mpegts.getFeatureList().mseLivePlayback) {
-        setError(t('player.mpegtsUnsupported'));
-        return;
-      }
-      const source = resolveSource(transportContext(), transport);
-      if (!source) {
-        setError(t('player.decodeFailed'));
-        return;
-      }
-      const transcoded = transport === 'transcode';
-      const relay = transport === 'relay';
-      let openedUrl = source.url;
-      setAudioTranscoded(transcoded);
-      const player = mpegts.createPlayer({
-        type: 'mpegts', isLive: true,
-        url: openedUrl,
-      });
-      mpegtsRef.current = player;
-      player.attachMediaElement(video);
-      player.load();
-      player.play()?.catch(() => {});
-      // Audio the browser can't decode: server re-muxes to AAC (video copied) and
-      // retry once through the same engine, so it gets sound not a silent picture.
-      const rescueAudio = () => {
-        if (transcoded || relay || remuxAvailableRef.current !== true) return false;
-        player.destroy();
-        if (mpegtsRef.current === player) mpegtsRef.current = null;
-        playMpegts('transcode');
-        return true;
-      };
-      // mpegts.js fires ERROR for both network hiccups and undecodable codecs.
-      // A live TS whose video decodes but whose audio doesn't plays silently yet
-      // still errors: never cover a decoding picture; note the audio issue once and
-      // only surface a hard failure when no picture arrives. Network errors get a bounded reload.
-      const hasPicture = () => video.videoWidth > 0 && video.readyState >= 2;
-      const reload = () => {
-        const current = resolveSource(transportContext(), transport);
-        if (current && current.url !== openedUrl) {
-          openedUrl = current.url;
-          player.destroy();
-          if (mpegtsRef.current === player) mpegtsRef.current = null;
-          playMpegts(transport);
-          return;
-        }
-        try { player.unload(); player.load(); player.play()?.catch(() => {}); } catch { /* destroyed */ }
-      };
-      mpegtsReload.current = reload;
-      let retries = 0;
-      let lastErr = 0;
-      let noticed = false;
-      const noteAudio = () => { if (!noticed) { noticed = true; snackbar(t('player.audioUnsupported')); } };
-      player.on(mpegts.Events.ERROR, (type: string, _detail: string, info: unknown) => {
-        const response = info as {
-          code?: number;
-          status?: number;
-          statusCode?: number;
-        } | null;
-        const status = Number(response?.code ?? response?.status ?? response?.statusCode);
-        if (type === mpegts.ErrorTypes.NETWORK_ERROR) {
-          if (hasPicture()) return; // a frozen frame recovers via the watchdog
-          if (isTerminalPlaybackStatus(status)) {
-            terminatePlayback(status);
-            return;
-          }
-          const now = performance.now();
-          if (now - lastErr > 30_000) retries = 0;
-          lastErr = now;
-          if (retries < 3) { retries++; reload(); return; }
-          setError(t('player.codecFailed'));
-          return;
-        }
-        // Codec/format error: reload won't help. Try the audio rescue; else keep any
-        // decoding picture, else give a late demux a moment before covering the screen.
-        if (rescueAudio()) return;
-        if (hasPicture()) { noteAudio(); return; }
-        setTimeout(() => (hasPicture() ? noteAudio() : setError(t('player.codecFailed'))), 2000);
-      });
-    };
-
-    const playHls = (target: string, hlsVariant = false) => {
-      // hls.js first even on Safari: only it reports tracks/manifest state to the UI.
-      // Native HLS is the no-MSE fallback (iOS).
-      if (!Hls.isSupported()) {
-        if (video.canPlayType('application/vnd.apple.mpegurl')) video.src = src(target, hlsVariant);
-        else setError(t('player.hlsUnsupported'));
-        return;
-      }
-      // The remux playlist is the whole file; open at the resume/switch position.
-      const startAt = remux && remux.startAt > 0 ? remux.startAt : -1;
-      // 30s forward buffer; unbounded back buffer for VOD so seeking back replays from memory.
-      const hls = new Hls({
-        startPosition: startAt,
-        lowLatencyMode: false,
-        maxBufferLength: 30,
-        maxMaxBufferLength: 30,
-        backBufferLength: remux ? Infinity : 90,
-        manifestLoadingTimeOut: 20_000,
-      });
-      hlsRef.current = hls;
-      // Keep the track 'hidden' (cues fire, browser draws nothing) so our overlay renders them.
-      hls.subtitleDisplay = false;
-      let mediaRecoveries = 0;
-      let netRetries = 0;
-      let lastMediaError = 0;
-      // A media error every now and then (e.g. resuming after the tab was backgrounded and the
-      // decoder was suspended) shouldn't burn the recovery budget forever: once fragments flow
-      // again for a few seconds, restore it so each incident gets a fresh attempt.
-      hls.on(Hls.Events.FRAG_BUFFERED, () => {
-        if (performance.now() - lastMediaError > 5000) { mediaRecoveries = 0; netRetries = 0; }
-      });
-      hls.loadSource(src(target, hlsVariant));
-      hls.attachMedia(video);
-      hls.on(Hls.Events.ERROR, (_e, data) => {
-        if (!data.fatal) return;
-        const status = data.response?.code;
-        if (isTerminalPlaybackStatus(status)) {
-          terminatePlayback(status);
-          return;
-        }
-        // A copied HEVC the browser claimed to support but can't actually decode: force a
-        // transcode and re-prepare the session at the current spot.
-        if (remuxRef.current?.nativeCopy && data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRecoveries < 1) {
-          forceTranscode.current = true;
-          startRemuxRef.current(remuxRef.current.audio, video.currentTime);
-          return;
-        }
-        // recoverMediaError, then (provider HLS only) swapAudioCodec and recover, then give up.
-        // Never swap on the remux: its audio is AAC-LC we encoded, so a swap to HE-AAC decodes
-        // as distorted audio that sticks until the buffer is rebuilt.
-        if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRecoveries < 2) {
-          lastMediaError = performance.now();
-          if (mediaRecoveries++ > 0 && !remuxRef.current) hls.swapAudioCodec();
-          hls.recoverMediaError();
-          return;
-        }
-        if (data.type === Hls.ErrorTypes.NETWORK_ERROR && netRetries < 4) {
-          netRetries++;
-          retryTimer = setTimeout(() => hls.startLoad(), 1000 * netRetries);
-          return;
-        }
-        if (kind === 'livets' && !triedTsFallback) {
-          // The panel may not serve an HLS variant - fall back to raw TS.
-          triedTsFallback = true;
-          stopEngines();
-          playMpegts('proxy');
-        } else {
-          setError(t('player.failedDetail', { detail: data.details || data.type }));
-        }
-      });
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        readHlsTracks(hls);
-        setRemuxState((s) => (s === 'loading' ? 'idle' : s));
-      });
-      // Track lists exist only once these fire; setting the pick here pre-empts
-      // hls.js's default selection, so picks survive seek re-anchors.
-      hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => {
-        const chosen = chosenTracks.current;
-        if (chosen.audio >= 0 && chosen.audio < hls.audioTracks.length) hls.audioTrack = chosen.audio;
-        readHlsTracks(hls);
-      });
-      hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, () => {
-        const chosen = chosenTracks.current;
-        if (chosen.subs != null && chosen.subs < hls.subtitleTracks.length) hls.subtitleTrack = chosen.subs;
-        readHlsTracks(hls);
-      });
-      hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, () => readHlsTracks(hls));
-      hls.on(Hls.Events.SUBTITLE_TRACK_SWITCH, () => readHlsTracks(hls));
-    };
-
-    // Watch-together live rides the room's shared upstream (one provider seat) via the relay,
-    // played as a transport stream; solo live keeps its own connection through the proxy. The
-    // relay tees raw TS, so a playlist-only (m3u8) channel can't use it and stays on HLS.
-    if (roomLive && kind !== 'hls') playMpegts('relay');
-    else if (kind === 'hls') playHls(activeUrl);
-    else if (kind === 'livets') playHls(activeUrl, true);
-    else if (kind === 'ts') playMpegts('proxy');
-    else video.src = src(activeUrl);
-
-    if (!live && !catchup && !remux) {
-      // Resume VOD position (remux already starts there); catch-up never resumes.
-      api.resumeAll().then((points) => {
-        const p = points.find((x) => x.contentId === request.contentId);
-        if (p && p.positionMs >= 10_000) {
-          const apply = () => { video.currentTime = p.positionMs / 1000; };
-          if (video.readyState >= 1) apply();
-          else {
-            resumeSeek.current = apply;
-            video.addEventListener('loadedmetadata', apply, { once: true });
-          }
-        }
-      }).catch(() => {});
-    }
-
-    const saveResume = () => {
-      if (live || catchup) return;
-      const duration = remux?.duration ?? video.duration;
-      if (!duration || !isFinite(duration)) return;
-      api.saveResume(
-        request.contentId,
-        Math.floor(video.currentTime * 1000),
-        Math.floor(duration * 1000),
-      ).catch(() => {});
-    };
-    const resumeTimer = live || catchup ? undefined : setInterval(saveResume, 5000);
-
-    // Live streams can silently stall; if position freezes while playing, kick the engine.
-    let watchdog: ReturnType<typeof setInterval> | undefined;
-    if (live) {
-      let lastPos = -1;
-      let stalledFor = 0;
-      watchdog = setInterval(() => {
-        if (video.paused || video.readyState === 0) { stalledFor = 0; return; }
-        if (video.currentTime !== lastPos) { lastPos = video.currentTime; stalledFor = 0; return; }
-        stalledFor += 4;
-        if (stalledFor < 12) return;
-        stalledFor = 0;
-        if (hlsRef.current) {
-          hlsRef.current.stopLoad();
-          hlsRef.current.startLoad();
-        } else if (mpegtsRef.current) {
-          mpegtsReload.current?.();
-        } else if (video.currentSrc) {
-          video.load();
-          video.play().catch(() => {});
-        }
-      }, 4000);
-    }
-
-    return () => {
-      clearInterval(resumeTimer);
-      clearInterval(watchdog);
-      clearTimeout(retryTimer);
-      saveResume();
-      stopEngines();
-      if (resumeSeek.current) video.removeEventListener('loadedmetadata', resumeSeek.current);
-      resumeSeek.current = null;
-      video.pause();
-      video.removeAttribute('src');
-      video.load();
-    };
-  }, [
-    sourceKey, activeSourceKey, live, remux?.id, remux?.startAt, src, holdEngine, roomLive,
-    request.contentId, catchup, terminatePlayback,
-  ]);
-
-  // PiP/fullscreen end when the player closes, not on engine swaps. Closing also
-  // releases the remux session so nothing keeps reading the provider.
-  useEffect(() => () => {
-    if (document.pictureInPictureElement) document.exitPictureInPicture().catch(() => {});
-    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-    if (remuxRef.current) api.remuxStop(remuxRef.current.id, lease.id, latestGrant.current);
-  }, [lease.id]);
-
-  // ---- video element state -> React ----
-  useEffect(() => {
-    const video = videoRef.current!;
-    video.volume = prefs.volume;
-    video.muted = prefs.muted;
-    // Reflect the element's real state now, so a reload (or autoplay being blocked) can't
-    // leave the play/pause button showing the wrong icon until the next event.
-    setPaused(video.paused);
-    const onTime = () => setTime({ position: video.currentTime, duration: video.duration });
-    const onPlay = () => setPaused(false);
-    const onPause = () => setPaused(true);
-    const onWaiting = () => setBuffering(true);
-    const onReady = () => {
-      setBuffering(false);
-      setPaused(video.paused);
-      // Remux is playing: never leave the menus stuck on "preparing".
-      if (remuxRef.current) setRemuxState((s) => (s === 'loading' ? 'idle' : s));
-    };
-    const onVolume = () => {
-      prefs.volume = video.volume;
-      prefs.muted = video.muted;
-    };
-    const onProgress = () => {
-      const ranges = video.buffered;
-      let end = 0;
-      for (let i = 0; i < ranges.length; i++) {
-        if (ranges.start(i) <= video.currentTime + 0.5 && ranges.end(i) > end) end = ranges.end(i);
-      }
-      setBufferedEnd(end);
-    };
-    const onEnded = () => onClose();
-    const onError = () => {
-      if (hlsRef.current || mpegtsRef.current) return;
-      if (remuxRef.current) {
-        // The remux stream died, or the browser couldn't decode a copied HEVC it
-        // claimed to support: force a transcode on the retry and re-anchor.
-        if (remuxRef.current.nativeCopy) forceTranscode.current = true;
-        setRemux(null);
-        setRemuxState('failed');
-        return;
-      }
-      diagnoseNativeError();
-    };
-    // Browser-exposed tracks (native HLS, mp4/webm); hls.js reports its own instead.
-    const readNativeTracks = () => {
-      if (hlsRef.current || remuxRef.current) return;
-      const text = Array.from(video.textTracks ?? []).filter(
-        (track) => track.kind === 'subtitles' || track.kind === 'captions',
-      );
-      type NativeAudioTrack = { enabled: boolean; label?: string; language?: string };
-      const audioList = (video as HTMLVideoElement & { audioTracks?: ArrayLike<NativeAudioTrack> }).audioTracks;
-      const audio = audioList ? Array.from(audioList) : [];
-      nativeTracks.current = { text, audio };
-      setTracks({
-        audio: {
-          names: audio.map((track, i) => track.label || track.language || t('player.audioN', { n: i + 1 })),
-          current: audio.findIndex((track) => track.enabled),
-        },
-        subs: {
-          names: text.map((track, i) => track.label || track.language || t('player.subtitlesN', { n: i + 1 })),
-          current: text.findIndex((track) => track.mode === 'showing'),
-        },
-      });
-    };
-    video.addEventListener('timeupdate', onTime);
-    video.addEventListener('play', onPlay);
-    video.addEventListener('pause', onPause);
-    video.addEventListener('waiting', onWaiting);
-    video.addEventListener('seeking', onWaiting);
-    video.addEventListener('playing', onReady);
-    video.addEventListener('canplay', onReady);
-    video.addEventListener('seeked', onReady);
-    video.addEventListener('volumechange', onVolume);
-    video.addEventListener('progress', onProgress);
-    video.addEventListener('ended', onEnded);
-    video.addEventListener('error', onError);
-    video.addEventListener('loadedmetadata', readNativeTracks);
-    video.textTracks?.addEventListener?.('addtrack', readNativeTracks);
-    video.textTracks?.addEventListener?.('change', readNativeTracks);
-    // Safari fills audioTracks after loadedmetadata; listen for the adds.
-    type TrackList = { addEventListener?: (t: string, l: () => void) => void; removeEventListener?: (t: string, l: () => void) => void };
-    const audioTrackList = (video as HTMLVideoElement & { audioTracks?: TrackList }).audioTracks;
-    audioTrackList?.addEventListener?.('addtrack', readNativeTracks);
-    audioTrackList?.addEventListener?.('change', readNativeTracks);
-    return () => {
-      video.removeEventListener('timeupdate', onTime);
-      video.removeEventListener('play', onPlay);
-      video.removeEventListener('pause', onPause);
-      video.removeEventListener('waiting', onWaiting);
-      video.removeEventListener('seeking', onWaiting);
-      video.removeEventListener('playing', onReady);
-      video.removeEventListener('canplay', onReady);
-      video.removeEventListener('seeked', onReady);
-      video.removeEventListener('volumechange', onVolume);
-      video.removeEventListener('progress', onProgress);
-      video.removeEventListener('ended', onEnded);
-      video.removeEventListener('error', onError);
-      video.removeEventListener('loadedmetadata', readNativeTracks);
-      video.textTracks?.removeEventListener?.('addtrack', readNativeTracks);
-      video.textTracks?.removeEventListener?.('change', readNativeTracks);
-      audioTrackList?.removeEventListener?.('addtrack', readNativeTracks);
-      audioTrackList?.removeEventListener?.('change', readNativeTracks);
-    };
-  }, [onClose, diagnoseNativeError]);
-
-  // Draw subtitles ourselves (track kept 'hidden': browser paints nothing) so size/style
-  // follow the user's preference. Pick the active cue by scanning the track for one that
-  // spans currentTime, rather than reading `activeCues`: on a track switch the browser
-  // doesn't reliably re-activate the cue already spanning the playhead (its "time marches
-  // on" step only re-evaluates as playback crosses a *new* cue boundary, and cues that
-  // load a moment late never activate at all), which left the new track blank until a seek.
-  // Scanning by time shows the right cue as soon as it's present, at the playhead.
-  useEffect(() => {
-    const video = videoRef.current!;
-    let raf = 0;
-    let last = '';
-    const tick = () => {
-      const list = video.textTracks;
-      const now = video.currentTime;
-      let text = '';
-      for (let i = 0; i < list.length; i++) {
-        if (list[i].mode === 'disabled') continue;
-        const cues = list[i].cues;
-        if (!cues || !cues.length) continue;
-        const parts: string[] = [];
-        for (let j = 0; j < cues.length; j++) {
-          const cue = cues[j] as VTTCue;
-          if (cue.startTime <= now && cue.endTime > now) parts.push(cue.text ?? '');
-        }
-        text = parts.join('\n');
-        if (text) break;
-      }
-      if (text !== last) { last = text; setCueText(text); }
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [activeUrl]);
+  // ---- viewer actions ----
 
   const pickAudio = useCallback((index: number) => {
     // In a room the audio is shared: only a controller can change it, and the switch comes back
     // as a room-audio command that re-requests the remux for everyone, so don't touch local state.
-    if (remuxRef.current && wtRef.current.inRoom) {
+    if (remux.ref.current && wtRef.current.inRoom) {
       if (wtRef.current.canControl) api.roomAudio(lease.id, index).catch(() => {});
       return;
     }
     chosenTracks.current.audio = index;
     setTracks((old) => ({ ...old, audio: { ...old.audio, current: index } }));
-    if (remuxRef.current) {
+    if (remux.ref.current) {
       // Switching audio re-requests the playlist muxed with that track, reopened at
       // the current position.
-      startRemuxRef.current(index, videoRef.current!.currentTime);
+      remux.start(index, videoRef.current!.currentTime);
       return;
     }
     if (hlsRef.current) { hlsRef.current.audioTrack = index; return; }
     nativeTracks.current.audio.forEach((track, i) => { track.enabled = i === index; });
-  }, [lease.id]);
+  }, [lease.id, remux.ref, remux.start, hlsRef, nativeTracks, setTracks]);
 
   const pickSubtitle = useCallback((index: number) => {
     chosenTracks.current.subs = index;
@@ -829,7 +357,7 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
     }
     // 'hidden' not 'showing': cues fire for our overlay without browser rendering.
     nativeTracks.current.text.forEach((track, i) => { track.mode = i === index ? 'hidden' : 'disabled'; });
-  }, []);
+  }, [hlsRef, nativeTracks, setCueText, setTracks]);
 
   const togglePlay = useCallback(() => {
     const video = videoRef.current!;
@@ -837,20 +365,34 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
     else video.pause();
   }, []);
 
-  // seekTo/startRemux are defined further down; refs let earlier callbacks reach them.
-  const seekToRef = useRef<(target: number) => void>(() => {});
-  const startRemuxRef = useRef<(audio: number, startAt: number) => void>(() => {});
+  // hls.js (remux) and native players both seek in place; the whole file is addressable.
+  const seekTo = useCallback((target: number) => {
+    const clamped = Math.max(0, target);
+    setPendingSeek(clamped);
+    videoRef.current!.currentTime = clamped;
+  }, []);
+
   const seekBy = useCallback((delta: number) => {
-    const video = videoRef.current!;
     // Start from the held target if any, else media time: a seek still buffering
     // would otherwise nudge from a stale position.
-    const base = pendingSeekRef.current ?? video.currentTime;
-    seekToRef.current(Math.max(0, base + delta));
-  }, []);
+    const base = pendingSeekRef.current ?? videoRef.current!.currentTime;
+    seekTo(base + delta);
+  }, [seekTo]);
 
   const toggleMute = useCallback(() => {
     const video = videoRef.current!;
     video.muted = !video.muted;
+  }, []);
+
+  const changeVolume = useCallback((level: number) => {
+    const video = videoRef.current!;
+    video.volume = Math.min(1, Math.max(0, level));
+    if (video.volume > 0 && video.muted) video.muted = false;
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    else rootRef.current?.requestFullscreen().catch(() => {});
   }, []);
 
   // Rotation lock only meaningful on touch devices.
@@ -868,231 +410,39 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
     } catch { /* not supported here */ }
   }, []);
 
-  const changeVolume = useCallback((v: number) => {
-    const video = videoRef.current!;
-    video.volume = Math.min(1, Math.max(0, v));
-    if (video.volume > 0 && video.muted) video.muted = false;
-  }, []);
+  usePlayerShortcuts({
+    title, live, menu, guideOpen: !!guideChannel, rootRef, videoRef,
+    onClose, poke, togglePlay, toggleMute, seekBy, changeVolume,
+  });
 
-  // Live: show what's airing now, refreshed when the programme ends.
-  useEffect(() => {
-    if (!live || channelId == null) { setEpgNow(null); return; }
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
-    const load = async () => {
-      const entries = await api.guide(channelId).catch(() => [] as GuideEntry[]);
-      if (cancelled) return;
-      const now = Date.now();
-      const current = entries.find((g) => g.startMs <= now && now < g.endMs) ?? null;
-      setEpgNow(current);
-      timer = setTimeout(load, current ? Math.min(current.endMs - now + 1000, 30 * 60_000) : 5 * 60_000);
-    };
-    load();
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [live, channelId]);
+  // ---- derived playback view ----
 
-  // OS media keys / lock-screen controls.
-  useEffect(() => {
-    if (!('mediaSession' in navigator)) return;
-    const session = navigator.mediaSession;
-    session.metadata = new MediaMetadata({ title });
-    session.setActionHandler('play', () => videoRef.current?.play().catch(() => {}));
-    session.setActionHandler('pause', () => videoRef.current?.pause());
-    session.setActionHandler('seekbackward', live ? null : () => seekBy(-prefs.seekSeconds));
-    session.setActionHandler('seekforward', live ? null : () => seekBy(prefs.seekSeconds));
-    return () => {
-      session.metadata = null;
-      session.setActionHandler('play', null);
-      session.setActionHandler('pause', null);
-      session.setActionHandler('seekbackward', null);
-      session.setActionHandler('seekforward', null);
-    };
-  }, [title, live, seekBy]);
-
-  // keyboard shortcuts
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      // A focused slider already consumes arrows/space.
-      if ((e.target as HTMLElement).tagName === 'INPUT') return;
-      // Player closes on Escape only when no sheet is layered over it.
-      if (e.key === 'Escape') {
-        if (!menu && !guideChannel && !document.fullscreenElement) onClose();
-      }
-      else if (e.key === ' ') { e.preventDefault(); togglePlay(); poke(); }
-      else if (e.key === 'ArrowLeft' && !live) { seekBy(-prefs.seekSeconds); poke(); }
-      else if (e.key === 'ArrowRight' && !live) { seekBy(prefs.seekSeconds); poke(); }
-      else if (e.key === 'ArrowUp') { e.preventDefault(); changeVolume((videoRef.current?.volume ?? 1) + 0.05); poke(); }
-      else if (e.key === 'ArrowDown') { e.preventDefault(); changeVolume((videoRef.current?.volume ?? 1) - 0.05); poke(); }
-      else if (e.key === 'm') { toggleMute(); poke(); }
-      else if (e.key === 'f') rootRef.current?.requestFullscreen().catch(() => {});
-    };
-    document.addEventListener('keydown', onKey);
-    poke();
-    return () => { document.removeEventListener('keydown', onKey); clearTimeout(hideTimer.current); };
-  }, [live, menu, guideChannel, onClose, poke, seekBy, togglePlay, toggleMute, changeVolume]);
-
-  const speeds = useMemo(() => [0.5, 0.75, 1, 1.25, 1.5, 2], []);
-  const scaleModes = useMemo(() => ['fit', 'zoom', 'stretch'] as const, []);
-
-  /** Prepares (or re-requests) the HLS remux session with audio track [audio]; hls.js
-   *  then plays its VOD playlist, opening at [startAt] seconds. */
-  const startRemux = useCallback(async (audio: number, startAt: number) => {
-    const audioIdx = Math.max(0, audio);
-    const prevId = remuxRef.current?.id;
-    setRemuxState('loading');
-    try {
-      // Copy (not transcode) HEVC when the browser can decode it, unless a prior copy failed.
-      const hevc = hevcCapable && !forceTranscode.current;
-      // The tab id lets the server group this read: alone it's ours, in a room it's shared, and
-      // there the room's audio track overrides what we asked - result.audio is what it used.
-      const currentLease = leaseRef.current;
-      const result = await api.remuxStart(currentLease.remuxStartUrl, audioIdx, !!catchup, hevc);
-      // Switching audio or share group makes a new session; release the old one so this viewer
-      // never holds two of the provider's connections at once.
-      if (prevId && prevId !== result.id) {
-        api.remuxStop(prevId, currentLease.id, currentLease.mediaGrant);
-      }
-      chosenTracks.current.audio = result.audio;
-      setRemux({
-        id: result.id, playlistUrl: result.playlistUrl,
-        duration: result.duration ?? remuxRef.current?.duration ?? null,
-        startAt, nativeCopy: result.nativeVideoCopy, audio: result.audio,
-      });
-      setTracks({
-        audio: { names: result.audioTracks, current: result.audio },
-        subs: { names: result.subtitleTracks ?? [], current: chosenTracks.current.subs ?? -1 },
-      });
-    } catch (e) {
-      if (e instanceof ApiError && isTerminalPlaybackStatus(e.status)) {
-        terminatePlayback(e.status);
-        return;
-      }
-      // Provider connection limit reached: surface it as a player error like the
-      // decode failure, not a passing snackbar.
-      if ((e as ApiError).status === 429) {
-        setRemuxState('failed');
-        setRemux(null);
-        setError(t('player.connectionLimit'));
-        return;
-      }
-      // "No additional tracks" is normal (source plays directly); anything else surfaces.
-      const noTracks = /no additional tracks/i.test((e as Error).message);
-      setRemuxState(noTracks ? 'none' : 'failed');
-      setRemux(null);
-      if (!noTracks) snackbar((e as Error).message);
-    }
-  }, [catchup, terminatePlayback]);
-  startRemuxRef.current = startRemux;
-
-  // Prepare the remux when the file opens, opening at the saved resume position so
-  // hls.js starts there and the track menus are populated early. Held off until the
-  // connection check clears, so a full provider isn't opened just to be refused.
-  useEffect(() => {
-    if (!remuxEligible || remuxAvailable !== true || remux || remuxState !== 'idle') return;
-    if (wt.checking || wt.blocked) return;
-    let cancelled = false;
-    (async () => {
-      const points = catchup ? [] : await api.resumeAll().catch(() => [] as ResumePoint[]);
-      if (cancelled) return;
-      const point = points.find((x) => x.contentId === request.contentId);
-      const at = point && point.positionMs >= 10_000 ? Math.floor(point.positionMs / 1000) : 0;
-      startRemux(Math.max(0, chosenTracks.current.audio), at);
-    })();
-    return () => { cancelled = true; };
-  }, [
-    remuxEligible, remuxAvailable, remux, remuxState, sourceKey, catchup,
-    startRemux, wt.checking, wt.blocked, request.contentId,
-  ]);
-
-  // Joining or leaving a room changes the share group, so the server keys the remux to a
-  // different session: joiners collapse onto the room's one shared read, a leaver splits back to
-  // its own. Re-request at the current spot when membership flips. If none is running yet (the
-  // viewer was blocked on a full provider, or is still preparing), the prepare effect above starts
-  // it with the new group instead.
-  const wasInRoom = useRef(false);
-  useEffect(() => {
-    if (wt.inRoom === wasInRoom.current) return;
-    const joined = wt.inRoom && !wasInRoom.current;
-    wasInRoom.current = wt.inRoom;
-    if (!remuxEligible || remuxAvailable !== true || !remuxRef.current) return;
-    if (joined) {
-      // Collapse onto the room's shared read at the current spot.
-      startRemux(Math.max(0, chosenTracks.current.audio), videoRef.current?.currentTime ?? 0);
-    } else {
-      // Left or kicked: drop the room's shared read now (so we don't keep playing a session we're
-      // no longer part of); the re-check then blocks us if the provider is full, or the prepare
-      // effect starts our own solo read.
-      api.remuxStop(remuxRef.current.id, lease.id, lease.mediaGrant);
-      setRemux(null);
-      setRemuxState('idle');
-    }
-  }, [
-    wt.inRoom, remuxEligible, remuxAvailable, startRemux,
-    lease.id, lease.mediaGrant,
-  ]);
-
-  // Remux is the only path to sound for undecodable audio (AC3/E-AC3/DTS), so a failed
-  // prepare can't be left as silent direct playback. Usual cause: a single-connection
-  // provider where the first ffprobe still holds the connection; the probe is then cached,
-  // so retries (with backoff) generally get in.
-  const remuxRetries = useRef(0);
-  useEffect(() => { remuxRetries.current = 0; }, [sourceKey]);
-  useEffect(() => {
-    if (remuxState !== 'failed' || !remuxEligible || remuxAvailable !== true) return;
-    if (remuxRetries.current >= 3) return;
-    remuxRetries.current += 1;
-    const timer = setTimeout(
-      () => startRemux(Math.max(0, chosenTracks.current.audio), 0),
-      1500 * remuxRetries.current,
-    );
-    return () => clearTimeout(timer);
-  }, [remuxState, remuxEligible, remuxAvailable, startRemux]);
-
-  // One extra remux retry per track-menu opening, after the automatic ones are used up.
-  const menuRetried = useRef(false);
-  useEffect(() => {
-    if (menu !== 'audio' && menu !== 'subs') { menuRetried.current = false; return; }
-    if (menuRetried.current || remuxState !== 'failed' || !remuxEligible || remuxAvailable !== true) return;
-    menuRetried.current = true;
-    startRemux(Math.max(0, chosenTracks.current.audio), 0);
-  }, [menu, remuxState, remuxEligible, remuxAvailable, startRemux]);
-
-  const fullDuration = remux?.duration ?? time.duration;
-  const fullPosition = time.position;
-  // hls.js (remux) and native players both seek in place; the whole file is addressable.
-  const seekTo = useCallback((target: number) => {
-    const video = videoRef.current!;
-    const clamped = Math.max(0, target);
-    setPendingSeek(clamped);
-    video.currentTime = clamped;
-  }, []);
-  seekToRef.current = seekTo;
-
+  const fullDuration = remux.session?.duration ?? status.time.duration;
   // Release the held seek target once media reaches it (within ~1.5s).
   useEffect(() => {
     if (pendingSeek == null) return;
-    if (isFinite(fullPosition) && Math.abs(fullPosition - pendingSeek) < 1.5) setPendingSeek(null);
-  }, [fullPosition, pendingSeek]);
+    const position = status.time.position;
+    if (isFinite(position) && Math.abs(position - pendingSeek) < 1.5) setPendingSeek(null);
+  }, [status.time.position, pendingSeek]);
 
-  // Report playback to the activity dashboard. Engine mirrors the wiring effect's
-  // choice; remux takes precedence since it re-serves the source as HLS.
+  // Report playback to the activity dashboard. Engine mirrors the wiring module's choice;
+  // remux takes precedence since it re-serves the source as HLS.
   const reportEngine = roomLive ? 'mpegts'
-    : remux ? 'remux'
-      : sourceKind(lease.streamUrl) === 'ts' ? 'mpegts'
-        : sourceKind(lease.streamUrl) === 'direct' ? 'native' : 'hls';
+    : remux.session ? 'remux'
+      : engineForKind(sourceKind(lease.streamUrl));
   useSessionReporter(lease.id, {
     title,
     kind: request.kind ?? (catchup ? 'catchup' : live ? 'live' : 'movie'),
     logo: request.logo ?? null,
-    live: !!live,
+    live,
     durationSec: fullDuration,
     engine: reportEngine,
     direct: activeDirect,
-    audioTranscoded,
+    audioTranscoded: status.audioTranscoded,
     // Engine is held while ffmpeg probes the file; report "preparing" so the
     // dashboard shows that, not the transient pre-remux (proxied) mode.
     preparing: holdEngine,
-    remuxId: remux?.id ?? null,
+    remuxId: remux.session?.id ?? null,
   }, videoRef, wt.onCommand, wsSend, () => {
     snackbar(t('player.revoked'));
     onClose();
@@ -1101,25 +451,12 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
   // Buffering means we're waiting on data (initial load, a seek, a stall) - show the spinner even
   // while paused, so a loading player never shows a resting play icon. A deliberate pause clears
   // buffering (the media has data), so it correctly shows play then.
-  const busy = holdEngine || remuxState === 'loading' || buffering || wt.loading;
-  // VOD/downloads and catch-up all get a scrubber.
-  const showSeek = !live;
+  const busy = holdEngine || remux.state === 'loading' || status.buffering || wt.loading;
   const tracksEmptyText =
-    remuxState === 'loading' || holdEngine ? t('player.remuxPreparing')
-      : remux || remuxState === 'none' ? t('player.noExtraTracks')
+    remux.state === 'loading' || holdEngine ? t('player.remuxPreparing')
+      : remux.session || remux.state === 'none' ? t('player.noExtraTracks')
         : t('player.noTracks');
-  // Bar position: the drag value, else the held seek target, else live media.
-  const barPosition = pendingSeek ?? fullPosition;
-  const seekFrac = scrub != null ? scrub / 1000
-    : fullDuration && isFinite(fullDuration) ? barPosition / fullDuration : 0;
-  const bufferedFrac = fullDuration && isFinite(fullDuration)
-    ? Math.max(seekFrac, Math.min(1, bufferedEnd / fullDuration)) : 0;
-  const seekStyle = {
-    background: `linear-gradient(to right, #fff ${(seekFrac * 100).toFixed(2)}%, `
-      + `rgba(255,255,255,0.45) ${(seekFrac * 100).toFixed(2)}%, `
-      + `rgba(255,255,255,0.45) ${(bufferedFrac * 100).toFixed(2)}%, `
-      + `rgba(255,255,255,0.18) ${(bufferedFrac * 100).toFixed(2)}%)`,
-  };
+
   const chromeTarget = (e: { target: EventTarget }) => {
     const target = e.target as HTMLElement;
     // The frame, the video, or the chrome overlay's empty area.
@@ -1140,165 +477,75 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
            const zone = e.clientX / window.innerWidth;
            if (!live && zone < 1 / 3) { seekBy(-prefs.seekSeconds); poke(); }
            else if (!live && zone > 2 / 3) { seekBy(prefs.seekSeconds); poke(); }
-           else if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-           else rootRef.current?.requestFullscreen().catch(() => {});
+           else toggleFullscreen();
          }}>
       <video ref={videoRef} autoPlay playsInline
              className={scale === 'zoom' ? 'zoom' : scale === 'stretch' ? 'stretch' : undefined} />
 
-      {cueText && (
-        <div className={`player-subs${uiVisible ? ' chrome' : ''}`} aria-live="off">
-          <span className={`cue cue-${subStyle.style}${subStyle.bold ? ' bold' : ''}`}
-                style={{ fontSize: `${subStyle.scale * 3.2}vh` }}>
-            {cueText.split('\n').map((line, i) => <span key={i} className="cue-line">{line}</span>)}
-          </span>
-        </div>
-      )}
+      <PlayerOverlays
+        error={status.error}
+        busy={busy}
+        uiVisible={uiVisible}
+        cueText={status.cueText}
+        subStyle={subStyle}
+        wt={wt}
+        onClose={onClose}
+        onOpenWatchTogether={() => setWtMenu(true)}
+      />
 
-      {!error && busy && !uiVisible && !wt.choosing && !wt.loading && <div className="player-spinner" aria-hidden />}
-
-      {/* Room track change: block input for everyone and show loading until all have reloaded. */}
-      {!error && wt.loading && (
-        <div className="player-lock"><span className="btn-spinner" aria-hidden /></div>
-      )}
-
-      {!error && wt.choosing && (
-        <div className="player-error">
-          <span className="player-choose-close">
-            <IconBtn name="close" label={t('player.stop')} onClick={onClose} />
-          </span>
-          <h3>{t('watch.title')}</h3>
-          <p>{t('watch.choosePrompt')}</p>
-          <div className="watch-actions">
-            <button className="btn tonal" style={{ width: 'auto' }} onClick={() => setWtMenu(true)}>{t('watch.title')}</button>
-            <button className="btn text" style={{ width: 'auto' }} onClick={wt.watchAlone}>{t('watch.watchAlone')}</button>
-          </div>
-        </div>
-      )}
-
-      {error && (
-        <div className="player-error">
-          <h3>{t('player.errorTitle')}</h3>
-          {/* The codec/Android hint only fits a decode failure, not a full-provider refusal. */}
-          <p>{error}{error === t('player.connectionLimit') ? '' : ` ${t('player.errorHint')}`}</p>
-          <button className="btn tonal" style={{ width: 'auto' }} onClick={onClose}>{t('common.close')}</button>
-        </div>
-      )}
-
-      {!error && !wt.choosing && (
-        <div className={`player-ui${uiVisible ? '' : ' hidden'}`}>
-          <div className="top">
-            <IconBtn name="back" label={t('common.back')} onClick={onClose} />
-            <div className="title-block">
-              <div className="t">{title}</div>
-              <div className="s">
-                {live
-                  ? epgNow
-                    ? t('player.nowUntil', {
-                        title: epgNow.title,
-                        end: new Date(epgNow.endMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                      })
-                    : t('player.live')
-                  : catchup ? t('player.catchup') : ''}
-              </div>
-            </div>
-            {wt.available && (
-              <span className="wt-icon">
-                <IconBtn name="person" label={t('watch.title')} onClick={() => setWtMenu(true)} />
-                {wt.hasPending && <span className="wt-badge" aria-hidden />}
-              </span>
-            )}
-            {live && channelId != null && (hasGuide ?? !!tvgId) && (
-              <IconBtn name="calendar" label={t('guide.title')} onClick={async () => {
-                const channel = await api.channel(channelId).catch(() => null);
-                if (channel) setGuideChannel(channel);
-              }} />
-            )}
-            <IconBtn name="close" label={t('player.stop')} onClick={onClose} />
-          </div>
-          <div className="middle">
-            {!live && (
-              <button className="icon-btn big-btn" aria-label={t('player.rewind')} onClick={() => seekBy(-prefs.seekSeconds)}>
-                <Icon name="replay" />
-              </button>
-            )}
-            <button className="icon-btn big-btn" aria-label={paused ? t('common.play') : t('common.pause')} onClick={togglePlay}>
-              {busy ? <span className="btn-spinner" aria-hidden /> : <Icon name={paused ? 'play' : 'pause'} />}
-            </button>
-            {!live && (
-              <button className="icon-btn big-btn" aria-label={t('player.forward')} onClick={() => seekBy(prefs.seekSeconds)}>
-                <Icon name="forward" />
-              </button>
-            )}
-          </div>
-          <div className="bottom">
-            {showSeek && (
-              <div className="seek-row">
-                <span className="time-label">
-                  {formatPlaybackTime(scrub != null && isFinite(fullDuration)
-                    ? (scrub / 1000) * fullDuration
-                    : barPosition)}
-                </span>
-                <input
-                  className="seek" type="range" min={0} max={1000} style={seekStyle}
-                  value={scrub ?? (fullDuration ? Math.floor((barPosition / fullDuration) * 1000) : 0)}
-                  onChange={(e) => { setScrub(Number(e.target.value)); poke(); }}
-                  onPointerUp={(e) => {
-                    const value = Number((e.target as HTMLInputElement).value);
-                    if (fullDuration && isFinite(fullDuration)) seekTo((value / 1000) * fullDuration);
-                    setScrub(null);
-                  }}
-                  onKeyUp={(e) => {
-                    const value = Number((e.target as HTMLInputElement).value);
-                    if (fullDuration && isFinite(fullDuration)) seekTo((value / 1000) * fullDuration);
-                    setScrub(null);
-                  }}
-                />
-                <span className="time-label">{formatPlaybackTime(fullDuration)}</span>
-              </div>
-            )}
-            <div className="controls">
-              {live && <span className="live-chip">{t('player.live').toUpperCase()}</span>}
-              <IconBtn name="audio" label={t('player.audio')} onClick={() => setMenu('audio')} />
-              <IconBtn name="subtitles" label={t('player.subtitles')} onClick={() => setMenu('subs')} />
-              {!live && <IconBtn name="speed" label={t('player.speed')} onClick={() => setMenu('speed')} />}
-              <IconBtn name="aspect" label={t('player.scaling')} onClick={() => setMenu('scale')} />
-              {document.pictureInPictureEnabled &&
-                <IconBtn name="pip" label={t('player.pip')}
-                         onClick={() => videoRef.current?.requestPictureInPicture().catch(() => {})} />}
-              {canRotate &&
-                <IconBtn name="rotate" label={t('player.rotate')} onClick={rotateScreen} />}
-              <IconBtn name="fullscreen" label={t('player.fullscreen')} onClick={() => {
-                if (document.fullscreenElement) document.exitFullscreen();
-                else rootRef.current?.requestFullscreen().catch(() => {});
-              }} />
-            </div>
-          </div>
-        </div>
+      {!status.error && !wt.choosing && (
+        <PlayerControls
+          title={title}
+          live={live}
+          catchup={catchup}
+          channelId={channelId}
+          guideAvailable={hasGuide ?? !!tvgId}
+          wt={wt}
+          uiVisible={uiVisible}
+          paused={status.paused}
+          busy={busy}
+          duration={fullDuration}
+          // Bar position: the held seek target, else live media.
+          position={pendingSeek ?? status.time.position}
+          bufferedEnd={status.bufferedEnd}
+          canRotate={canRotate}
+          onTogglePlay={togglePlay}
+          onSeekBy={seekBy}
+          onSeekTo={seekTo}
+          onOpenMenu={setMenu}
+          onOpenWatchTogether={() => setWtMenu(true)}
+          onGuideChannel={setGuideChannel}
+          onRotate={rotateScreen}
+          onPip={() => videoRef.current?.requestPictureInPicture().catch(() => {})}
+          onToggleFullscreen={toggleFullscreen}
+          onClose={onClose}
+          poke={poke}
+        />
       )}
 
       {menu === 'speed' && (
-        <MenuSheet title={t('player.speed')} options={speeds.map((s) => `${s}×`)}
-                   selected={speeds.indexOf(videoRef.current?.playbackRate ?? 1)}
-                   onPick={(i) => { videoRef.current!.playbackRate = speeds[i]; }}
+        <MenuSheet title={t('player.speed')} options={SPEEDS.map((s) => `${s}×`)}
+                   selected={SPEEDS.indexOf(videoRef.current?.playbackRate ?? 1)}
+                   onPick={(i) => { videoRef.current!.playbackRate = SPEEDS[i]; }}
                    onDismiss={() => setMenu(null)} container={rootRef.current} />
       )}
       {menu === 'scale' && (
         <MenuSheet title={t('player.scaling')}
                    options={[t('settings.scaleFit'), t('settings.scaleZoom'), t('settings.scaleStretch')]}
-                   selected={scaleModes.indexOf(scale as typeof scaleModes[number])}
-                   onPick={(i) => { prefs.resizeMode = scaleModes[i]; setScale(scaleModes[i]); }}
+                   selected={SCALE_MODES.indexOf(scale as typeof SCALE_MODES[number])}
+                   onPick={(i) => { prefs.resizeMode = SCALE_MODES[i]; setScale(SCALE_MODES[i]); }}
                    onDismiss={() => setMenu(null)} container={rootRef.current} />
       )}
       {menu === 'audio' && (
-        <MenuSheet title={t('player.audio')} options={tracks.audio.names} selected={tracks.audio.current}
+        <MenuSheet title={t('player.audio')} options={status.tracks.audio.names}
+                   selected={status.tracks.audio.current}
                    onPick={pickAudio} emptyText={tracksEmptyText}
                    onDismiss={() => setMenu(null)} container={rootRef.current} />
       )}
       {menu === 'subs' && (
         <MenuSheet title={t('player.subtitles')}
-                   options={tracks.subs.names.length ? [t('player.off'), ...tracks.subs.names] : []}
-                   selected={tracks.subs.current + 1}
+                   options={status.tracks.subs.names.length ? [t('player.off'), ...status.tracks.subs.names] : []}
+                   selected={status.tracks.subs.current + 1}
                    onPick={(i) => pickSubtitle(i - 1)} emptyText={tracksEmptyText}
                    headerAction={
                      <IconBtn name="settings" label={t('player.subtitleStyle')} className="sub-style-btn"

@@ -1,5 +1,6 @@
 package com.buco7854.opentv.core.catchup
 
+import com.buco7854.opentv.core.net.Urls
 import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlinx.datetime.LocalDateTime
@@ -74,7 +75,9 @@ object Catchup {
         tz: TimeZone = TimeZone.currentSystemDefault(),
     ): String {
         val start = formatTime(startMs, "Y-m-d:H-M", tz)
-        return "$base/timeshift/$user/$pass/${durationMinutes.coerceAtLeast(1)}/$start/$streamId.ts"
+        // Credentials are path segments here too; see Xtream.liveUrl.
+        return "$base/timeshift/${Urls.encodePathSegment(user)}/${Urls.encodePathSegment(pass)}/" +
+            "${durationMinutes.coerceAtLeast(1)}/$start/$streamId.ts"
     }
 
     private val END_TOKENS = setOf("end", "utcend", "stop")

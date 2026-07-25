@@ -272,6 +272,9 @@ interface ContentDao {
         fingerprints: List<String>,
     ): List<ContentIdentityRow>
 
+    @Query("SELECT * FROM content_identities WHERE contentId IN (:contentIds)")
+    suspend fun byContentIds(contentIds: List<String>): List<ContentIdentityRow>
+
     @Query("SELECT * FROM content_identities WHERE playlistId = :playlistId")
     suspend fun forPlaylist(playlistId: Long): List<ContentIdentityRow>
 

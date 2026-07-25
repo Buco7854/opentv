@@ -11,13 +11,16 @@ class UserActivityService(
     private val content: ContentIdentityService,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
-    suspend fun resume(actor: Actor): List<ResumePointDto> =
-        db.activity().resumeForUser(actor.userId).mapNotNull { row ->
-            val identity = content.resolve(row.contentId).first
-            identity.takeIf { item -> auth.hasPlaylistAccess(actor, item.playlistId) }?.let {
-                ResumePointDto(row.contentId, row.positionMs, row.durationMs, row.updatedAtMs)
-            }
+    suspend fun resume(actor: Actor): List<ResumePointDto> {
+        val rows = db.activity().resumeForUser(actor.userId)
+        val identities = content.identitiesByContentId(rows.map { it.contentId })
+        val access = auth.playlistAccess(actor)
+        return rows.mapNotNull { row ->
+            val identity = identities[row.contentId] ?: return@mapNotNull null
+            if (!access.allows(identity.playlistId)) return@mapNotNull null
+            ResumePointDto(row.contentId, row.positionMs, row.durationMs, row.updatedAtMs)
         }
+    }
 
     suspend fun saveResume(actor: Actor, request: ResumePointDto) {
         val (identity, channel) = content.requireChannel(request.contentId)
@@ -44,7 +47,7 @@ class UserActivityService(
     }
 
     suspend fun deleteResume(actor: Actor, contentId: String) {
-        val identity = content.resolve(contentId).first
+        val identity = content.identity(contentId)
         if (!auth.hasPlaylistAccess(actor, identity.playlistId)) throw ForbiddenApiException()
         db.activity().deleteResume(actor.userId, contentId)
     }
@@ -56,28 +59,29 @@ class UserActivityService(
 
     suspend fun favorites(actor: Actor, playlistId: Long): List<FavoriteDto> {
         if (!auth.hasPlaylistAccess(actor, playlistId)) throw ForbiddenApiException()
-        return db.activity().favorites(actor.userId).mapNotNull { favorite ->
-            val identity = content.resolve(favorite.contentId).first
-            identity.takeIf { it.playlistId == playlistId }?.let {
-                FavoriteDto(
-                    contentId = favorite.contentId,
-                    playlistId = playlistId,
-                    key = favorite.contentId,
-                    kind = identity.kind,
-                    addedMs = favorite.addedAtMs,
-                )
-            }
+        val rows = db.activity().favorites(actor.userId)
+        val identities = content.identitiesByContentId(rows.map { it.contentId })
+        return rows.mapNotNull { favorite ->
+            val identity = identities[favorite.contentId]?.takeIf { it.playlistId == playlistId }
+                ?: return@mapNotNull null
+            FavoriteDto(
+                contentId = favorite.contentId,
+                playlistId = playlistId,
+                key = favorite.contentId,
+                kind = identity.kind,
+                addedMs = favorite.addedAtMs,
+            )
         }
     }
 
     suspend fun addFavorite(actor: Actor, contentId: String) {
-        val identity = content.resolve(contentId).first
+        val identity = content.identity(contentId)
         if (!auth.hasPlaylistAccess(actor, identity.playlistId)) throw ForbiddenApiException()
         db.activity().addFavorite(UserFavoriteRow(actor.userId, contentId, clock()))
     }
 
     suspend fun removeFavorite(actor: Actor, contentId: String) {
-        val identity = content.resolve(contentId).first
+        val identity = content.identity(contentId)
         if (!auth.hasPlaylistAccess(actor, identity.playlistId)) throw ForbiddenApiException()
         db.activity().removeFavorite(actor.userId, contentId)
     }

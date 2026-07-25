@@ -166,12 +166,11 @@ internal class PlayerSession(
     }
 
     private fun persistProgressIfNeeded(onlyWhilePlaying: Boolean) {
-        if ((!onlyWhilePlaying || player.isPlaying) &&
-            !player.isCurrentMediaItemLive &&
-            !player.isCurrentMediaItemDynamic
-        ) {
-            saveProgress(player.currentPosition, player.duration)
-        }
+        if (onlyWhilePlaying && !player.isPlaying) return
+        val live = player.isCurrentMediaItemLive || player.isCurrentMediaItemDynamic
+        val durationMs = player.duration
+        if (!shouldPersistProgress(durationMs, live)) return
+        saveProgress(player.currentPosition, durationMs)
     }
 
     private inline fun update(transform: PlaybackUiState.() -> PlaybackUiState) {

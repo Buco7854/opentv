@@ -30,6 +30,22 @@ class XtreamTest {
     }
 
     @Test
+    fun stream_urls_escape_credentials_that_a_path_segment_cannot_carry() {
+        val awkward = XtreamCredentials("http://host.example:8080", "a/b", "p ss#1")
+        // Raw, "a/b" would add a path segment and "#1" would start a fragment.
+        assertEquals(
+            "http://host.example:8080/live/a%2Fb/p%20ss%231/42.ts",
+            Xtream.liveUrl(awkward, 42),
+        )
+        // Everything a segment may legally hold is left byte-identical.
+        val legal = XtreamCredentials("http://host.example:8080", "a.b-c~d", "p+s=w!")
+        assertEquals(
+            "http://host.example:8080/live/a.b-c~d/p+s=w!/42.ts",
+            Xtream.liveUrl(legal, 42),
+        )
+    }
+
+    @Test
     fun catchup_url_shape() {
         val url = Xtream.catchupUrl(creds, 42, startMs = 1_700_000_000_000, durationMinutes = 90)
         assertTrue(url.startsWith("http://host.example:8080/timeshift/alice/secret/90/"))

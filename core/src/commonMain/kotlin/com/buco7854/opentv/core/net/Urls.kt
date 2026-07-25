@@ -85,11 +85,26 @@ object Urls {
 
     private const val UNRESERVED = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
 
-    fun percentEncode(text: String): String = buildString {
+    /** Everything RFC 3986 permits inside one path segment: unreserved, sub-delims, ':' and '@'. */
+    private const val PATH_SEGMENT = "$UNRESERVED!$&'()*+,;=:@"
+
+    fun percentEncode(text: String): String = encode(text, UNRESERVED)
+
+    /**
+     * Escape one path segment, encoding only what a segment cannot carry literally - the
+     * delimiters `/ ? #`, the escape character itself, spaces, controls and non-ASCII.
+     *
+     * Characters that are legal in a segment are left byte-for-byte alone, so this only ever
+     * changes a URL that was already malformed.
+     */
+    fun encodePathSegment(text: String): String = encode(text, PATH_SEGMENT)
+
+    private fun encode(text: String, safe: String): String = buildString {
         for (b in text.encodeToByteArray()) {
-            val c = b.toInt().toChar()
-            if (c in UNRESERVED) append(c)
-            else append('%').append(((b.toInt() and 0xFF) or 0x100).toString(16).substring(1).uppercase())
+            val code = b.toInt() and 0xFF
+            val c = code.toChar()
+            if (code < 0x80 && c in safe) append(c)
+            else append('%').append((code or 0x100).toString(16).substring(1).uppercase())
         }
     }
 }

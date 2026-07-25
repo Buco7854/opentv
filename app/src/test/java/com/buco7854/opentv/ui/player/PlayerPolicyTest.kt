@@ -40,6 +40,15 @@ class PlayerPolicyTest {
     }
 
     @Test
+    fun `progress is not persisted before the duration is known`() {
+        // C.TIME_UNSET, reported until the timeline arrives.
+        assertFalse(shouldPersistProgress(Long.MIN_VALUE + 1, live = false))
+        assertFalse(shouldPersistProgress(0, live = false))
+        assertFalse(shouldPersistProgress(120_000, live = true))
+        assertTrue(shouldPersistProgress(120_000, live = false))
+    }
+
+    @Test
     fun `pip ratio ignores empty video and clamps system limits`() {
         assertNull(pipAspectRatio(0, 1080))
         assertEquals(2.39f, pipAspectRatio(4_000, 1_000)!!, 0.001f)

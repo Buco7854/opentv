@@ -25,6 +25,18 @@ class ServerHttp {
 
     companion object {
         const val DEFAULT_USER_AGENT = "VLC/3.0.20 LibVLC/3.0.20"
+        const val MAX_USER_AGENT_LENGTH = 512
+
+        /**
+         * A usable agent is one line of printable ASCII.
+         *
+         * The value is sent verbatim by [java.net.http.HttpClient] - which rejects a header
+         * holding a control character, failing *every* provider request - and by ffmpeg's
+         * `-user_agent`, which would instead splice a newline into the provider's request as
+         * extra headers. Neither is worth discovering at stream time.
+         */
+        fun isUsableUserAgent(value: String): Boolean =
+            value.length <= MAX_USER_AGENT_LENGTH && value.all { it.code in 0x20..0x7E }
     }
 
     @Volatile

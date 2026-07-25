@@ -2,7 +2,6 @@ package com.buco7854.opentv.server
 
 import com.buco7854.opentv.serverdata.AuthMethod
 import com.buco7854.opentv.serverdata.ChallengeKind
-import com.buco7854.opentv.serverdata.UserRecord
 import com.buco7854.opentv.serverdata.UserRole
 import com.buco7854.opentv.serverdata.UserStatus
 import com.buco7854.opentv.serverdata.db.AuthChallengeRow
@@ -36,6 +35,16 @@ data class Actor(
     val clientKind: String,
 ) {
     val isAdmin: Boolean get() = UserRole.ADMIN in roles
+}
+
+/** What an actor may see, resolved once. A playlist being deleted is invisible to everyone. */
+class PlaylistAccess internal constructor(
+    private val admin: Boolean,
+    private val granted: Set<Long>,
+    private val deleting: Set<Long>,
+) {
+    fun allows(playlistId: Long): Boolean =
+        playlistId !in deleting && (admin || playlistId in granted)
 }
 
 internal data class IssuedSession(
@@ -404,9 +413,18 @@ class AuthService(
         val session = issueSession(user, AuthMethod.PASSWORD, mfa = true)
         AuthResult(sessionFlow(session), session.token)
     }
+    /**
+     * One snapshot of the playlists [actor] may see. List endpoints take it once instead of
+     * re-reading entitlements for every row; a single check costs the same as it always did.
+     */
+    suspend fun playlistAccess(actor: Actor): PlaylistAccess = PlaylistAccess(
+        admin = actor.isAdmin,
+        granted = if (actor.isAdmin) emptySet() else db.grants().forUser(actor.userId).toSet(),
+        deleting = db.maintenance().pendingPlaylistDeletions().mapTo(mutableSetOf()) { it.playlistId },
+    )
+
     suspend fun hasPlaylistAccess(actor: Actor, playlistId: Long): Boolean =
-        !db.maintenance().isPlaylistDeleting(playlistId) &&
-            (actor.isAdmin || playlistId in db.grants().forUser(actor.userId))
+        playlistAccess(actor).allows(playlistId)
 
     internal suspend fun requireActiveActor(actor: Actor) = sessionService.requireActive(actor)
 
@@ -510,16 +528,3 @@ class AuthService(
         const val CHALLENGE_KEY_LENGTH = 16
     }
 }
-
-private fun UserRow.toRecord() = UserRecord(
-    id,
-    username,
-    normalizedUsername,
-    displayName,
-    status,
-    manualRole,
-    oidcAdmin,
-    createdAtMs,
-    updatedAtMs,
-    lastLoginAtMs,
-)

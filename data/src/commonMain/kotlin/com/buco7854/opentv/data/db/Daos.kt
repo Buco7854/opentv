@@ -8,7 +8,6 @@ import androidx.room.Transaction
 import androidx.room.Update
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.model.GroupCount
-import com.buco7854.opentv.core.model.GroupHit
 import com.buco7854.opentv.core.model.SeriesGroup
 import kotlinx.coroutines.flow.Flow
 
@@ -94,13 +93,6 @@ interface ChannelDao {
     suspend fun search(playlistId: Long, query: String): List<ChannelRow> =
         listOf(ChannelKind.LIVE, ChannelKind.MOVIE, ChannelKind.SERIES)
             .flatMap { searchKind(playlistId, it, query, SEARCH_LIMIT_PER_KIND) }
-
-    @Query(
-        "SELECT groupTitle, kind, COUNT(*) as count FROM channels WHERE playlistId = :playlistId " +
-            "AND groupTitle LIKE '%' || :query || '%' ESCAPE '\\' " +
-            "GROUP BY groupTitle, kind ORDER BY count DESC LIMIT 30"
-    )
-    suspend fun searchGroups(playlistId: Long, query: String): List<GroupHit>
 
     @Query("SELECT COUNT(*) FROM channels WHERE playlistId = :playlistId AND kind = :kind")
     fun observeCount(playlistId: Long, kind: Int): Flow<Int>
@@ -196,13 +188,6 @@ interface XtreamSeriesDao {
             "WHERE playlistId = :playlistId AND seriesId = :seriesId"
     )
     suspend fun setEpisodesFetched(playlistId: Long, seriesId: Long, fetchedAtMs: Long)
-
-    @Query(
-        "SELECT categoryName as groupTitle, 2 as kind, COUNT(*) as count FROM xtream_series " +
-            "WHERE playlistId = :playlistId AND categoryName LIKE '%' || :query || '%' ESCAPE '\\' " +
-            "GROUP BY categoryName ORDER BY count DESC LIMIT 20"
-    )
-    suspend fun searchCategories(playlistId: Long, query: String): List<GroupHit>
 }
 
 @Dao

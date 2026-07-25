@@ -33,7 +33,16 @@ class MetadataRepository(
 
     private val tvMaze = TvMazeApi(http)
     private val iTunes = ITunesApi(http)
-    private val mutex = Mutex()
+
+    /**
+     * Striped so two viewers opening the same title still share one lookup, while unrelated
+     * titles do not queue behind each other: the lock is held across the provider request, and
+     * on a shared server a single slow API must not stall everyone else's metadata.
+     */
+    private val locks = List(32) { Mutex() }
+
+    private suspend fun <T> withTitleLock(cacheKey: String, block: suspend () -> T): T =
+        locks[(cacheKey.hashCode() and Int.MAX_VALUE) % locks.size].withLock { block() }
 
     suspend fun forTitle(isSeries: Boolean, rawName: String): Metadata? {
         val (title, year) = TitleCleaner.clean(rawName)
@@ -44,13 +53,12 @@ class MetadataRepository(
             year ?: "",
         ).joinToString(":")
 
-        mutex.withLock {
+        return withTitleLock(cacheKey) {
             val now = nowMs()
-            store.get(cacheKey)
-                ?.takeIf { now - it.fetchedAtMs < CACHE_MS }
-                ?.let { return it.takeIf(::isUseful) }
+            val cached = store.get(cacheKey)?.takeIf { now - it.fetchedAtMs < CACHE_MS }
+            if (cached != null) return@withTitleLock cached.takeIf(::isUseful)
 
-            return try {
+            try {
                 val info = if (isSeries) tvMaze.fetch(title) else iTunes.fetch(title, year)
                 val entity = Metadata(
                     cacheKey = cacheKey,
@@ -80,12 +88,11 @@ class MetadataRepository(
         val showId = forTitle(isSeries = true, rawName = seriesRawName)?.sourceId
             ?: return null
         val cacheKey = "tvep:$showId:$season:$episode"
-        mutex.withLock {
+        return withTitleLock(cacheKey) {
             val now = nowMs()
-            store.get(cacheKey)
-                ?.takeIf { now - it.fetchedAtMs < CACHE_MS }
-                ?.let { return it.takeIf(::isUseful) }
-            return try {
+            val cached = store.get(cacheKey)?.takeIf { now - it.fetchedAtMs < CACHE_MS }
+            if (cached != null) return@withTitleLock cached.takeIf(::isUseful)
+            try {
                 val info = tvMaze.episode(showId, season, episode)
                 val entity = Metadata(
                     cacheKey = cacheKey,

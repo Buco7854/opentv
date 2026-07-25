@@ -237,7 +237,13 @@ class StreamProxy(
         headers.firstValue("Accept-Ranges").orElse(null)?.let { call.response.header(HttpHeaders.AcceptRanges, it) }
 
         val length = headers.firstValue("Content-Length").orElse(null)?.toLongOrNull()
-        val type = contentType?.let { runCatching { ContentType.parse(it) }.getOrNull() }
+        // Past the playlist branch everything here is opaque media, streamed for as long as the
+        // viewer watches. The content type is the provider's to choose, so one that mislabels a
+        // continuous stream as text would opt this response into the compression allowlist - the
+        // one streaming route that cannot simply be trusted to declare its own type.
+        val type = contentType
+            ?.let { runCatching { ContentType.parse(it) }.getOrNull() }
+            ?.takeUnless(::isCompressible)
             ?: ContentType.Application.OctetStream
         try {
             call.respondOutputStream(type, status, length) {

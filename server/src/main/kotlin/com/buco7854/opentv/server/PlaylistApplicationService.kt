@@ -1,5 +1,6 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.core.log.ProviderSecrets
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.model.Playlist
 import com.buco7854.opentv.core.model.SeriesGroup
@@ -28,9 +29,12 @@ class PlaylistApplicationService(
     private val downloads: DownloadManager,
     private val cleanup: UserStateCleanupCoordinator = NoopUserStateCleanupCoordinator,
 ) {
-    suspend fun list(actor: Actor): List<PlaylistDto> = storage.playlists.getAll()
-        .filter { auth.hasPlaylistAccess(actor, it.id) }
-        .map(Playlist::toApiDto)
+    suspend fun list(actor: Actor): List<PlaylistDto> {
+        val access = auth.playlistAccess(actor)
+        return storage.playlists.getAll()
+            .filter { access.allows(it.id) }
+            .map(Playlist::toApiDto)
+    }
 
     suspend fun create(actor: Actor, request: PlaylistUpsertRequest): PlaylistDto {
         requireAdmin(actor)
@@ -151,9 +155,9 @@ class PlaylistApplicationService(
 
     suspend fun search(actor: Actor, id: Long, query: String): SearchResultsDto {
         requireAccess(actor, id)
-        if (query.trim().length < 2) return SearchResultsDto()
-        val escaped = query.trim().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        val rows = storage.channels.search(id, escaped)
+        val term = query.trim()
+        if (term.length < 2) return SearchResultsDto()
+        val rows = storage.channels.search(id, term)
         val m3uGroups = rows.filter { it.kind == ChannelKind.SERIES }
             .filterNot { it.seriesKey?.startsWith("xs:") == true }
             .groupBy { it.seriesKey ?: it.name }
@@ -175,7 +179,7 @@ class PlaylistApplicationService(
                 group.groupTitle,
             )
         }
-        val panelHits = storage.xtreamSeries.search(id, escaped)
+        val panelHits = storage.xtreamSeries.search(id, term)
         val panelIdentities = content.xtreamSeriesIdentities(panelHits)
         val panelSeries = panelHits.map {
             SeriesHitDto(
@@ -210,7 +214,7 @@ class PlaylistApplicationService(
 
     suspend fun addFavorite(actor: Actor, id: Long, request: FavoriteRequest) {
         requireAccess(actor, id)
-        require(content.resolve(request.contentId).first.playlistId == id) {
+        require(content.identity(request.contentId).playlistId == id) {
             "Content does not belong to playlist"
         }
         activity.addFavorite(actor, request.contentId)
@@ -218,7 +222,7 @@ class PlaylistApplicationService(
 
     suspend fun removeFavorite(actor: Actor, id: Long, contentId: String) {
         requireAccess(actor, id)
-        require(content.resolve(contentId).first.playlistId == id) {
+        require(content.identity(contentId).playlistId == id) {
             "Content does not belong to playlist"
         }
         activity.removeFavorite(actor, contentId)
@@ -227,9 +231,11 @@ class PlaylistApplicationService(
     suspend fun resolvedFavorites(actor: Actor, id: Long): FavoritesResolvedDto {
         requireAccess(actor, id)
         val ids = activity.favoriteIds(actor, id)
+        val identities = content.identitiesByContentId(ids)
         val resolved = ids.mapNotNull { contentId ->
-            val (identity, channel) = content.resolve(contentId)
-            channel?.takeIf { identity.playlistId == id }?.let { contentId to it }
+            val identity = identities[contentId]?.takeIf { it.playlistId == id }
+                ?: return@mapNotNull null
+            identity.currentChannelId?.let { storage.channels.get(it) }?.let { contentId to it }
         }
         val live = resolved.filter { it.second.kind == ChannelKind.LIVE }
             .map { (contentId, channel) -> channel.toDto(cipher, contentId, actor.userId) }
@@ -275,7 +281,8 @@ class PlaylistApplicationService(
         return XtreamSeriesDetailDto(
             series.toDto(cipher, content.xtreamSeries(series).contentId, actor.userId),
             channelDtos(actor, episodes),
-            failure?.let { "Couldn't load episodes: ${it.message}" }?.takeIf { episodes.isEmpty() },
+            failure?.let { "Couldn't load episodes: ${ProviderSecrets.redact(it)}" }
+                ?.takeIf { episodes.isEmpty() },
         )
     }
 

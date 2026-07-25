@@ -45,6 +45,11 @@ adapter. Existing local M3U/Xtream behavior must remain independent.
 - Authentication seam: `ApiSecurity.kt`
 - Media runtime: `Remux.kt`, `LiveRelay.kt`, `StreamGate.kt`,
   `MediaProcessRunner.kt`
+- Remux collaborators: `RemuxSession.kt` (session model), `RemuxCommand.kt`
+  (ffmpeg pipeline), `RemuxPlaylists.kt` (HLS documents), `RemuxSubtitles.kt`
+  (WebVTT cue store), `MediaProbe.kt` (ffprobe)
+- Codec/labelling policy shared by every media path: `MediaCodecs.kt`,
+  `MediaTrackLabels.kt`, `FfmpegSupport.kt`
 
 ### Web
 
@@ -55,7 +60,13 @@ adapter. Existing local M3U/Xtream behavior must remain independent.
 - Browser-only preferences: `src/preferences.ts`
 - Shared async/download state: `src/hooks.ts`
 - Lightweight player navigation: `src/player/PlayerNavigation.tsx`
-- Playback runtime: `src/player/PlayerProvider.tsx`
+- Playback composition (owns the lease, wires the rest):
+  `src/player/PlayerProvider.tsx`
+- Playback runtime parts: `usePlaybackEngine.ts` (engine choice and wiring),
+  `useRemuxSession.ts` (remux lifecycle), `useMediaElement.ts` (element state,
+  native tracks, cues), `playbackStatus.ts` (what the chrome shows),
+  `PlayerChrome.tsx` (overlays and control bars),
+  `usePlayerShortcuts.ts` (keyboard and media keys)
 
 All screens are lazy route boundaries. Player runtime code is intentionally
 absent from the initial bundle.
@@ -204,3 +215,5 @@ cd ../..
 - No Room destructive fallback.
 - No hand-maintained OpenAPI file.
 - Do not recreate the deleted server `Routes.kt` or Android player god class.
+- `PlayerProvider.tsx` composes the player; engine, remux and chrome policy stay
+  in their own modules. `RemuxService` owns session lifetime and HTTP only.

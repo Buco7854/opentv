@@ -1,5 +1,6 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.core.log.ProviderSecrets
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.response.respond
@@ -12,13 +13,8 @@ import kotlinx.coroutines.withContext
 
 internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
     get("/stream") {
-        val capability = requiredStreamCapability(media, call)
-        val grant = call.request.queryParameters["g"]
-        val guard = {
-            media.mediaGrants.validateCapability(call.actor, capability.leaseId, grant, capability)
-        }
-        guard()
-        media.proxy.handle(call, capability, grant, guard)
+        val authorized = authorizedStream(media, call)
+        media.proxy.handle(call, authorized.capability, authorized.grant, authorized.guard)
     }
     get("/img") {
         val capability = call.request.queryParameters["u"]
@@ -34,14 +30,9 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
     }
 
     get("/relay") {
-        val capability = requiredStreamCapability(media, call)
-        val grant = call.request.queryParameters["g"]
+        val (capability, _, guard) = authorizedStream(media, call)
         val sessionId = capability.leaseId
         val url = capability.url
-        val guard = {
-            media.mediaGrants.validateCapability(call.actor, sessionId, grant, capability)
-        }
-        guard()
         val group = media.sessions.shareGroup(sessionId)
         (media.sessions.roomMembers(sessionId) + sessionId).forEach { media.streamGate.release(it) }
         media.liveRelay.stream(
@@ -56,21 +47,10 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
     }
 
     get("/transcode") {
-        if (!media.remux.available) {
-            call.respond(
-                HttpStatusCode.ServiceUnavailable,
-                ApiErrorDto("media_unavailable", "ffmpeg is not installed on the server"),
-            )
-            return@get
-        }
-        val capability = requiredStreamCapability(media, call)
-        val grant = call.request.queryParameters["g"]
+        if (!requireFfmpeg(media, call)) return@get
+        val (capability, _, guard) = authorizedStream(media, call)
         val sessionId = capability.leaseId
         val url = capability.url
-        val guard = {
-            media.mediaGrants.validateCapability(call.actor, sessionId, grant, capability)
-        }
-        guard()
         if (!media.streamGate.admit(sessionId, providerKeyOf(url), media.connectionLimit(url))) {
             call.respond(
                 HttpStatusCode.TooManyRequests,
@@ -83,13 +63,7 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
 
     get("/remux/available") { call.respond(RemuxAvailableDto(media.remux.available)) }
     post("/remux/start") {
-        if (!media.remux.available) {
-            call.respond(
-                HttpStatusCode.ServiceUnavailable,
-                ApiErrorDto("media_unavailable", "ffmpeg is not installed on the server"),
-            )
-            return@post
-        }
+        if (!requireFfmpeg(media, call)) return@post
         val (source, sessionId) = remuxTarget(media, call)
         val requestedAudio = call.request.queryParameters["audio"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
         val timeshift = call.request.queryParameters["timeshift"] == "1"
@@ -139,7 +113,10 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
                 ApiErrorDto("provider_capacity", e.message ?: "Connection limit reached"),
             )
         } catch (e: IllegalStateException) {
-            call.respond(HttpStatusCode.BadGateway, ApiErrorDto("remux_failed", e.message ?: "Remux failed"))
+            call.respond(
+                HttpStatusCode.BadGateway,
+                ApiErrorDto("remux_failed", ProviderSecrets.redact(e)),
+            )
         }
     }
     delete("/remux/{id}") {
@@ -196,6 +173,37 @@ private fun requiredStreamCapability(
     call.request.queryParameters["u"]?.let(media.cipher::tryDecryptStream)
         ?.takeIf { it.url.startsWith("http://") || it.url.startsWith("https://") }
         ?: throw IllegalArgumentException("Invalid or missing target url")
+
+/** A decrypted stream capability whose lease was checked, plus the re-check the transport
+ *  runs while streaming: a lease revoked mid-response must cut the response, not outlive it. */
+private data class AuthorizedStream(
+    val capability: StreamCapability,
+    val grant: String?,
+    val guard: () -> Unit,
+)
+
+private fun authorizedStream(
+    media: MediaRouteDependencies,
+    call: ApplicationCall,
+): AuthorizedStream {
+    val capability = requiredStreamCapability(media, call)
+    val grant = call.request.queryParameters["g"]
+    val guard = {
+        media.mediaGrants.validateCapability(call.actor, capability.leaseId, grant, capability)
+    }
+    guard()
+    return AuthorizedStream(capability, grant, guard)
+}
+
+/** False (having answered 503) when the route needs ffmpeg and the server has none. */
+private suspend fun requireFfmpeg(media: MediaRouteDependencies, call: ApplicationCall): Boolean {
+    if (media.remux.available) return true
+    call.respond(
+        HttpStatusCode.ServiceUnavailable,
+        ApiErrorDto("media_unavailable", "ffmpeg is not installed on the server"),
+    )
+    return false
+}
 
 private data class RemuxTarget(val source: String, val leaseId: String)
 

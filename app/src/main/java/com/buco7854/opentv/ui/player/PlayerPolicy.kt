@@ -28,6 +28,17 @@ internal fun shouldApplyResume(
     endGuardMs: Long = 15_000,
 ): Boolean = targetMs in 1 until (durationMs - endGuardMs).coerceAtLeast(1)
 
+/**
+ * Whether a reported position is worth persisting.
+ *
+ * Until the timeline arrives ExoPlayer reports [androidx.media3.common.C.TIME_UNSET] for the
+ * duration, and the resume store reads a non-positive duration as "finished" and drops the
+ * saved position. Closing a file that had not loaded yet would therefore erase progress the
+ * viewer never actually replaced.
+ */
+internal fun shouldPersistProgress(durationMs: Long, live: Boolean): Boolean =
+    !live && durationMs > 0
+
 internal fun pipAspectRatio(width: Int, height: Int): Float? {
     if (width <= 0 || height <= 0) return null
     return (width.toFloat() / height).coerceIn(0.42f, 2.39f)

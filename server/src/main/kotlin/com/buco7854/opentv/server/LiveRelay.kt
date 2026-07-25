@@ -202,7 +202,7 @@ class LiveRelay(
                 )
                 val codec = process.inputStream.bufferedReader().use { it.readText() }.trim().lowercase()
                 process.waitFor(15, java.util.concurrent.TimeUnit.SECONDS)
-                if (codec.isNotEmpty() && codec !in BROWSER_AUDIO) "aac" else "copy"
+                if (codec.isNotEmpty() && !MediaCodecs.audioDecodable(codec)) "aac" else "copy"
             }.getOrDefault("copy")
         }
     }
@@ -268,7 +268,5 @@ class LiveRelay(
         private const val IDLE_KEEP_MS = 10_000L
         /** Back off this long before reopening a dropped live source. */
         private const val RECONNECT_MS = 500L
-        /** Audio codecs browsers decode natively; anything else the relay transcodes to AAC. */
-        private val BROWSER_AUDIO = setOf("aac", "mp3", "opus", "flac", "vorbis")
     }
 }

@@ -127,12 +127,8 @@ class SearchViewModel(app: Application, private val playlistId: Long) : AndroidV
         .mapLatest { q ->
             if (q.trim().length < 2) SearchResults()
             else try {
-                // Escape LIKE wildcards so "100%" doesn't match everything.
-                val escaped = q.trim()
-                    .replace("\\", "\\\\")
-                    .replace("%", "\\%")
-                    .replace("_", "\\_")
-                val rows = OpenTvApp.graph.storage.channels.search(playlistId, escaped)
+                val term = q.trim()
+                val rows = OpenTvApp.graph.storage.channels.search(playlistId, term)
                 // Collapse episodes into one row per show; xs: keys (cached Xtream episodes) are excluded, that catalog is searched separately.
                 val m3uSeries = rows.filter { it.kind == ChannelKind.SERIES }
                     .filterNot { it.seriesKey?.startsWith("xs:") == true }
@@ -146,7 +142,7 @@ class SearchViewModel(app: Application, private val playlistId: Long) : AndroidV
                         )
                     }
                 val xtreamSeries = OpenTvApp.graph.storage.xtreamSeries
-                    .search(playlistId, escaped)
+                    .search(playlistId, term)
                     .map {
                         SeriesHit(
                             seriesKey = it.name,

@@ -17,6 +17,15 @@ export function streamKind(source: string): StreamKind {
   return 'direct';
 }
 
+/** The engine a source kind is played with, as reported to the activity dashboard. */
+const ENGINE_BY_KIND = {
+  hls: 'hls', livets: 'hls', ts: 'mpegts', direct: 'native',
+} as const;
+
+export type PlaybackEngineName = 'hls' | 'mpegts' | 'native' | 'remux';
+
+export const engineForKind = (kind: StreamKind): PlaybackEngineName => ENGINE_BY_KIND[kind];
+
 /** Browser capability used to choose copy vs transcode during remux setup. */
 export function supportsHevc(mediaSource: typeof MediaSource | undefined): boolean {
   return mediaSource != null

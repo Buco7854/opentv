@@ -4,7 +4,6 @@ import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.core.model.Download
 import com.buco7854.opentv.core.model.Favorite
 import com.buco7854.opentv.core.model.GroupCount
-import com.buco7854.opentv.core.model.GroupHit
 import com.buco7854.opentv.core.model.GroupOverride
 import com.buco7854.opentv.core.model.Metadata
 import com.buco7854.opentv.core.model.Playlist
@@ -76,10 +75,7 @@ class RoomStorage(private val db: OpenTvDatabase) : Storage {
             db.channelDao().observeByUrls(playlistId, kind, urls).map { rows -> rows.map { it.toModel() } }
 
         override suspend fun search(playlistId: Long, query: String): List<Channel> =
-            db.channelDao().search(playlistId, query).map { it.toModel() }
-
-        override suspend fun searchGroups(playlistId: Long, query: String): List<GroupHit> =
-            db.channelDao().searchGroups(playlistId, query)
+            db.channelDao().search(playlistId, likeTerm(query)).map { it.toModel() }
 
         override suspend fun get(id: Long): Channel? = db.channelDao().get(id)?.toModel()
 
@@ -132,10 +128,7 @@ class RoomStorage(private val db: OpenTvDatabase) : Storage {
             db.xtreamSeriesDao().get(playlistId, seriesId)?.toModel()
 
         override suspend fun search(playlistId: Long, query: String): List<XtreamSeries> =
-            db.xtreamSeriesDao().search(playlistId, query).map { it.toModel() }
-
-        override suspend fun searchCategories(playlistId: Long, query: String): List<GroupHit> =
-            db.xtreamSeriesDao().searchCategories(playlistId, query)
+            db.xtreamSeriesDao().search(playlistId, likeTerm(query)).map { it.toModel() }
 
         override suspend fun setEpisodesFetched(playlistId: Long, seriesId: Long, fetchedAtMs: Long) =
             db.xtreamSeriesDao().setEpisodesFetched(playlistId, seriesId, fetchedAtMs)
@@ -246,3 +239,11 @@ class RoomStorage(private val db: OpenTvDatabase) : Storage {
         override suspend fun delete(id: Long) = db.downloadDao().delete(id)
     }
 }
+
+/**
+ * A user's search term is data, not pattern: LIKE reads %, _ and the escape character itself
+ * as syntax, so "100%" would otherwise match every row. Escaping belongs here, with the only
+ * code that knows these queries are LIKE queries.
+ */
+private fun likeTerm(query: String): String =
+    query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")

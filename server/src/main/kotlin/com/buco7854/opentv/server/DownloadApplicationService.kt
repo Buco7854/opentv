@@ -8,10 +8,13 @@ class DownloadApplicationService(
     private val content: ContentIdentityService,
     private val auth: AuthService,
 ) {
-    suspend fun list(actor: Actor): List<DownloadDto> =
-        downloads.list(actor.userId).mapNotNull { (user, blob) ->
-            val identity = content.resolve(blob.contentId).first
-            if (user.suspended || !auth.hasPlaylistAccess(actor, identity.playlistId)) {
+    suspend fun list(actor: Actor): List<DownloadDto> {
+        val rows = downloads.list(actor.userId)
+        val identities = content.identitiesByContentId(rows.map { (_, blob) -> blob.contentId })
+        val access = auth.playlistAccess(actor)
+        return rows.mapNotNull { (user, blob) ->
+            val identity = identities[blob.contentId]
+            if (user.suspended || identity == null || !access.allows(identity.playlistId)) {
                 null
             } else {
                 DownloadDto(
@@ -28,6 +31,7 @@ class DownloadApplicationService(
                 )
             }
         }
+    }
 
     suspend fun enqueue(actor: Actor, request: EnqueueDownloadRequest): MessageDto {
         val (identity, channel) = content.requireChannel(request.contentId)
@@ -81,7 +85,7 @@ class DownloadApplicationService(
 
     private suspend fun requireEntitled(actor: Actor, id: String) {
         val (_, blob) = downloads.get(actor.userId, id)
-        val identity = content.resolve(blob.contentId).first
+        val identity = content.identity(blob.contentId)
         if (!auth.hasPlaylistAccess(actor, identity.playlistId)) throw ForbiddenApiException()
     }
 }

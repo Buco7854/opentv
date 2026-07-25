@@ -8,6 +8,7 @@ import io.ktor.server.response.header
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondText
+import com.buco7854.opentv.core.log.ProviderSecrets
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -17,16 +18,10 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import java.nio.file.Files
 import java.nio.file.Path
-import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
-import kotlin.math.ceil
 
 /**
  * ffmpeg-backed VOD playback for browsers.
@@ -35,18 +30,21 @@ import kotlin.math.ceil
  * duration) played by hls.js; one long ffmpeg produces segments on demand, and a
  * backward or far-forward seek kills it and restarts at the target segment. Video is
  * copied when the browser can decode it (H.264, HEVC where supported), transcoded to
- * H.264 otherwise; audio is always AAC. Segments are fMP4 so HEVC passes through and
- * Chrome reads real AAC-LC instead of the HE-AAC hls.js forces for AAC in MPEG-TS.
+ * H.264 otherwise; audio is always AAC.
+ *
+ * This class owns session lifetime, segment production and HTTP serving; the pipeline it
+ * runs lives in [RemuxCommandBuilder], the documents it publishes in [RemuxPlaylists], and
+ * the cues it accumulates in [SubtitleCueStore].
  *
  * Provider connections: one read per session (a seek kills the previous first),
  * concurrent reads per provider capped at its max_connections (LRU-evicted past that),
  * and an idle session's ffmpeg reaped quickly.
  */
 class RemuxService(
-    private val http: ServerHttp,
+    http: ServerHttp,
     private val connections: ProviderConnections,
     private val videoEncoder: String = "libx264",
-    private val x264Preset: String = "veryfast",
+    x264Preset: String = "veryfast",
     private val processRunner: MediaProcessRunner = JvmMediaProcessRunner,
 ) {
     private val log = LoggerFactory.getLogger("opentv")
@@ -73,60 +71,19 @@ class RemuxService(
         val nativeVideoCopy: Boolean,
     )
 
-    private class Session(
-        val id: String,
-        val dir: Path,
-        val url: String,
-        // Groups sessions that share one provider's connection allowance.
-        val providerKey: String,
-        // The share group holding this session's one provider connection: a lone viewer's own
-        // session id, or a watch-together room id shared by all its members (so a synced room
-        // reads the file once). Two sessions with the same shareKey never double-count a seat.
-        val shareKey: String,
-        // How many reads that provider permits at once (its max_connections).
-        val connectionLimit: Int,
-        val clientHevc: Boolean,
-        val audioIndex: Int,
-        val durationSec: Double,
-        // Target segment length (ffmpeg -hls_time). Actual boundaries are in `starts`.
-        val segLenSec: Double,
-        // Start time (s) of each segment. For copied video these fall on real keyframes so
-        // the playlist's durations match the media exactly; uniform otherwise.
-        val starts: List<Double>,
-        // A catch-up timeshift: the provider serves it sequentially and ffmpeg can't -ss
-        // into it, so it's produced from the start with no restart/prune/read throttle.
-        val timeshift: Boolean,
-        val transcodeVideo: Boolean,
-        val videoCodec: String,
-        val audio: MediaStreamInfo,
-        val subs: List<MediaStreamInfo>,
-        val audioLabels: List<String>,
-        val subLabels: List<String>,
-        val nativeVideoCopy: Boolean,
-        @Volatile var lastAccessMs: Long,
-        // The running ffmpeg and the segment index it was started at (-1 = none).
-        @Volatile var process: Process? = null,
-        @Volatile var startNumber: Int = -1,
-        // Highest segment index this run has written. Only moves forward within a run (reset
-        // on each launch), so pruning segments behind the playhead can't drag it back.
-        @Volatile var writtenHead: Int = -1,
-    )
-
-    private val sessions = ConcurrentHashMap<String, Session>()
+    private val sessions = ConcurrentHashMap<String, RemuxSession>()
     /** Serializes every start/stop of a read, so the per-provider connection cap holds
      *  and there is no per-session lock-ordering hazard. */
     private val launchLock = Any()
     private val root: Path = Files.createTempDirectory("opentv-remux")
-    // Subtitles don't depend on the audio track and mustn't shrink on a seek, so they
-    // live in a grow-only store keyed by source URL, shared across a URL's sessions.
-    private val subStore: Path = Files.createDirectories(root.resolve("subs"))
-    private val subStoreLocks = ConcurrentHashMap<String, Any>()
+    private val subtitles = SubtitleCueStore(root)
     private val mediaProbe = MediaProbe(http, processRunner, root)
+    private val ffmpeg = FfmpegSupport(processRunner)
+    private val commands = RemuxCommandBuilder({ http.userAgent }, videoEncoder, x264Preset, ffmpeg)
 
     companion object {
         private const val IDLE_TIMEOUT_MS = 30_000L
         private const val EVICT_TIMEOUT_MS = 10 * 60_000L
-        private const val PROBE_TTL_MS = 60 * 60_000L
         /** How long a segment/init request waits for ffmpeg to write it. */
         private const val SEGMENT_WAIT_MS = 30_000L
         /** How long a subtitle segment waits for ffmpeg to reach its region before serving. */
@@ -136,62 +93,16 @@ class RemuxService(
         private const val FORWARD_RESTART_GAP_SEC = 24
         /** Segments kept behind the current one before deletion, to bound disk use. */
         private const val KEEP_BEHIND = 4
-        private const val MAX_SUB_STORE_FILES = 512
         private const val COPY_SEGMENT_SEC = 6
         private const val TRANSCODE_SEGMENT_SEC = 3
         /** Subtitle codecs ffmpeg can convert to WebVTT (bitmap subs cannot). */
         private val TEXT_SUB_CODECS = setOf("subrip", "srt", "ass", "ssa", "webvtt", "mov_text", "text")
-        /** Audio codecs browsers decode natively; anything else needs the AAC transcode. */
-        private val BROWSER_AUDIO = setOf("aac", "mp3", "opus", "flac", "vorbis")
-        /** Video codecs browsers decode as-is; anything else is transcoded to H.264. */
-        private val BROWSER_VIDEO = setOf("h264")
+        // Our fMP4 segments start at clock 0, so a cue's local time is the media time as-is.
+        private const val TIMESTAMP_MAP = "X-TIMESTAMP-MAP=MPEGTS:0,LOCAL:00:00:00.000"
     }
-
-    @Volatile
-    private var availableCheck: Pair<Boolean, Long>? = null
 
     /** ffmpeg+ffprobe presence, re-checked periodically after a negative result. */
-    val available: Boolean
-        get() {
-            availableCheck?.let { (ok, atMs) ->
-                if (ok || System.currentTimeMillis() - atMs < 60_000) return ok
-            }
-            fun runs(binary: String) = runCatching {
-                val process = processRunner.start(
-                    MediaProcessRequest(
-                        listOf(binary, "-version"),
-                        discardStdout = true,
-                        discardStderr = true,
-                    )
-                )
-                process.waitFor(10, TimeUnit.SECONDS) && process.exitValue() == 0
-            }.onFailure { log.warn("Could not run {}: {}", binary, it.message) }.getOrDefault(false)
-            val ok = runs("ffmpeg") && runs("ffprobe")
-            availableCheck = ok to System.currentTimeMillis()
-            return ok
-        }
-
-    /** `-readrate` (ffmpeg 5.0) and its initial burst (6.1) throttle the read; on older
-     *  ffmpeg they're an unknown-option error, so gate them by version. */
-    private val readrateArgs: List<String> by lazy {
-        val version = runCatching {
-            val process = processRunner.start(
-                MediaProcessRequest(
-                    listOf("ffmpeg", "-version"),
-                    mergeErrorIntoStdout = true,
-                )
-            )
-            val text = process.inputStream.bufferedReader().readText()
-            process.waitFor(10, TimeUnit.SECONDS)
-            Regex("""version n?(\d+)\.(\d+)""").find(text)?.destructured?.let { (a, b) -> a.toInt() to b.toInt() }
-        }.getOrNull() ?: (0 to 0)
-        val (major, minor) = version
-        when {
-            major > 6 || (major == 6 && minor >= 1) -> listOf("-readrate", "1.5", "-readrate_initial_burst", "30")
-            major >= 5 -> listOf("-readrate", "1.5")
-            else -> emptyList()
-        }
-    }
+    val available: Boolean get() = ffmpeg.available
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     @Volatile private var running = true
@@ -225,7 +136,7 @@ class RemuxService(
         }
 
     /** Kill a session's ffmpeg and wait for it to exit; leaves the connection reservation. */
-    private fun killProcess(session: Session) {
+    private fun killProcess(session: RemuxSession) {
         synchronized(launchLock) {
             session.process?.let { process ->
                 process.destroyForcibly()
@@ -238,13 +149,13 @@ class RemuxService(
 
     /** Stop a session's read and release its provider connection (idle reap, close, or an
      *  eviction by another stream). */
-    private fun stopReading(session: Session) {
+    private fun stopReading(session: RemuxSession) {
         killProcess(session)
         connections.close(session.id)
     }
 
     // Under launchLock so it can't race a launch into a half-deleted dir.
-    private fun evict(session: Session) {
+    private fun evict(session: RemuxSession) {
         synchronized(launchLock) {
             stopReading(session)
             sessions.remove(session.id)
@@ -282,124 +193,36 @@ class RemuxService(
     )
 
     fun diagnostics(id: String): RemuxDiagnostics? {
-        val s = sessions[id] ?: return null
-        val lastLog = runCatching {
-            Files.readString(s.dir.resolve("ffmpeg.log")).trim().lines().lastOrNull { it.isNotBlank() }
-        }.getOrNull()
+        val session = sessions[id] ?: return null
         return RemuxDiagnostics(
-            videoCodec = s.videoCodec,
-            transcodeVideo = s.transcodeVideo,
+            videoCodec = session.videoCodec,
+            transcodeVideo = session.transcodeVideo,
             videoEncoder = videoEncoder,
-            nativeVideoCopy = s.nativeVideoCopy,
-            audioCodec = s.audio.codec,
-            audioChannels = s.audio.channels,
-            audioLabel = s.audioLabels.getOrNull(s.audioIndex),
-            subtitleCount = s.subLabels.size,
-            segmentCount = s.starts.size,
-            timeshift = s.timeshift,
-            providerKey = s.providerKey,
-            connectionLimit = s.connectionLimit,
-            ffmpegRunning = s.process?.isAlive == true,
-            durationSec = s.durationSec.takeIf { it > 0 },
-            lastLog = lastLog,
+            nativeVideoCopy = session.nativeVideoCopy,
+            audioCodec = session.audio.codec,
+            audioChannels = session.audio.channels,
+            audioLabel = session.audioLabels.getOrNull(session.audioIndex),
+            subtitleCount = session.subLabels.size,
+            segmentCount = session.starts.size,
+            timeshift = session.timeshift,
+            providerKey = session.providerKey,
+            connectionLimit = session.connectionLimit,
+            ffmpegRunning = session.process?.isAlive == true,
+            durationSec = session.durationSec.takeIf { it > 0 },
+            lastLog = lastLogLine(session),
         )
     }
 
+    /** ffmpeg echoes the input URL in its errors, and that URL carries the provider's
+     *  credentials - this line is served to the viewer and shown on the admin dashboard. */
+    private fun lastLogLine(session: RemuxSession): String? = runCatching {
+        Files.readString(session.logFile).trim().lines().lastOrNull { it.isNotBlank() }
+    }.getOrNull()?.let(ProviderSecrets::redact)
+
     private fun sessionId(url: String, clientHevc: Boolean, audioIndex: Int, group: String): String =
-        MessageDigest.getInstance("SHA-1").digest("$url@${if (clientHevc) "n" else "s"}@$audioIndex@$group".toByteArray())
-            .joinToString("") { "%02x".format(it) }.take(16)
-
-    // ---- track labels ----
-
-    private val languageNames = mapOf(
-        "eng" to "English", "en" to "English",
-        "fre" to "Français", "fra" to "Français", "fr" to "Français",
-        "spa" to "Español", "es" to "Español",
-        "ger" to "Deutsch", "deu" to "Deutsch", "de" to "Deutsch",
-        "ita" to "Italiano", "it" to "Italiano",
-        "por" to "Português", "pt" to "Português",
-        "rus" to "Русский", "ru" to "Русский",
-        "jpn" to "日本語", "ja" to "日本語",
-        "kor" to "한국어", "ko" to "한국어",
-        "chi" to "中文", "zho" to "中文", "zh" to "中文",
-        "ara" to "العربية", "ar" to "العربية",
-        "tur" to "Türkçe", "tr" to "Türkçe",
-        "nld" to "Nederlands", "dut" to "Nederlands", "nl" to "Nederlands",
-        "pol" to "Polski", "pl" to "Polski",
-        "swe" to "Svenska", "dan" to "Dansk", "nor" to "Norsk", "fin" to "Suomi",
-        "ces" to "Čeština", "cze" to "Čeština",
-        "hun" to "Magyar", "ell" to "Ελληνικά", "gre" to "Ελληνικά",
-        "heb" to "עברית", "hin" to "हिन्दी", "tha" to "ไทย", "vie" to "Tiếng Việt",
-        "ukr" to "Українська", "ron" to "Română", "rum" to "Română",
-        "bul" to "Български", "hrv" to "Hrvatski", "srp" to "Srpski",
-        "slk" to "Slovenčina", "slv" to "Slovenščina", "cat" to "Català",
-        "ind" to "Indonesia", "msa" to "Melayu", "may" to "Melayu",
-        "fas" to "فارسی", "per" to "فارسی",
-    )
-
-    private val codecNames = mapOf(
-        "aac" to "AAC", "ac3" to "AC3", "eac3" to "E-AC3", "dts" to "DTS",
-        "truehd" to "TrueHD", "opus" to "Opus", "mp3" to "MP3",
-        "flac" to "FLAC", "vorbis" to "Vorbis", "mp2" to "MP2",
-    )
-
-    private fun channelsName(channels: Int?) = when (channels) {
-        null -> null
-        1 -> "Mono"
-        2 -> "Stereo"
-        6 -> "5.1"
-        8 -> "7.1"
-        else -> "${channels}ch"
-    }
-
-    /** Display labels: language/title plus codec and layout, skipping what the title already says. */
-    private fun audioLabels(streams: List<MediaStreamInfo>): List<String> =
-        unique(streams.mapIndexed { i, stream ->
-            val language = languageNames[stream.language?.lowercase()] ?: stream.language
-            val base = stream.title ?: language ?: "Track ${i + 1}"
-            val parts = mutableListOf(base)
-            if (stream.title != null && language != null && !base.contains(language, true)
-                && stream.language?.let { base.contains(it, true) } != true) {
-                parts += language
-            }
-            codecNames[stream.codec.lowercase()]?.let { codec ->
-                if (!base.contains(codec, true)) parts += codec
-            }
-            channelsName(stream.channels)?.let { layout ->
-                if (!base.contains(layout)) parts += layout
-            }
-            parts.joinToString(" · ")
-        })
-
-    private fun subtitleLabels(streams: List<MediaStreamInfo>): List<String> =
-        unique(streams.mapIndexed { i, stream ->
-            val language = languageNames[stream.language?.lowercase()] ?: stream.language
-            val base = stream.title ?: language ?: "Track ${i + 1}"
-            val parts = mutableListOf(base)
-            if (stream.title != null && language != null && !base.contains(language, true)
-                && stream.language?.let { base.contains(it, true) } != true) {
-                parts += language
-            }
-            if (stream.forced && !base.contains("forc", true)) parts += "Forced"
-            parts.joinToString(" · ")
-        })
-
-    private fun unique(labels: List<String>): List<String> {
-        val seen = HashMap<String, Int>()
-        return labels.map { raw ->
-            val label = raw.replace("\"", "").replace("\n", " ").trim().ifBlank { "Track" }
-            val count = seen.merge(label, 1, Int::plus)!!
-            if (count == 1) label else "$label ($count)"
-        }
-    }
+        shortSha1("$url@${if (clientHevc) "n" else "s"}@$audioIndex@$group")
 
     // ---- start / playlist ----
-
-    private fun transcodeVideo(video: MediaStreamInfo?, clientHevc: Boolean): Boolean {
-        val decodable = video?.codec?.lowercase()?.let { it in BROWSER_VIDEO } ?: true
-        val nativeCapable = video?.codec?.lowercase() == "hevc" && clientHevc
-        return video != null && !decodable && !videoTranscodeOff && !nativeCapable
-    }
 
     /**
      * Prepare an HLS session for [url] with audio track [audioIndex], writing its VOD
@@ -417,33 +240,17 @@ class RemuxService(
         // the same room) share its one connection and don't count. Checked before probing, since
         // ffprobe itself opens one of the provider's connections.
         val providerKey = providerKeyOf(url)
-        if (connections.distinctStreams(providerKey, group) >= connectionLimit.coerceAtLeast(1)) {
+        val cap = connectionLimit.coerceAtLeast(1)
+        if (connections.distinctStreams(providerKey, group) >= cap) {
             throw ConnectionLimitException(connectionLimit)
         }
 
-        val probed = mediaProbe.inspect(url) {
-            if (!url.startsWith("http")) {
-                null
-            } else {
-                val probeId = "probe:$id"
-                if (!connections.tryOpenStream(
-                        probeId,
-                        providerKey,
-                        probeId,
-                        connectionLimit,
-                        {},
-                    )
-                ) {
-                    throw ConnectionLimitException(connectionLimit)
-                }
-                AutoCloseable { connections.close(probeId) }
-            }
-        }
+        val probed = mediaProbe.inspect(url) { reserveProbeConnection(id, url, providerKey, connectionLimit) }
         val audios = probed.streams.filter { it.type == "audio" }
         val subs = probed.streams.filter { it.type == "subtitle" && it.codec.lowercase() in TEXT_SUB_CODECS }
         val video = probed.streams.firstOrNull { it.type == "video" }
-        val decodableAudio = audios.firstOrNull()?.codec?.lowercase()?.let { it in BROWSER_AUDIO } ?: true
-        val decodableVideo = video?.codec?.lowercase()?.let { it in BROWSER_VIDEO } ?: true
+        val decodableAudio = MediaCodecs.audioDecodable(audios.firstOrNull()?.codec)
+        val decodableVideo = MediaCodecs.videoDecodable(video?.codec)
         if (!timeshift && audios.size <= 1 && subs.isEmpty() && decodableAudio && decodableVideo) {
             throw NoExtraTracksException()
         }
@@ -452,7 +259,10 @@ class RemuxService(
         val duration = probed.durationSec?.takeIf { it > 0 }
             ?: throw IllegalStateException("The source has no known duration")
 
-        val transcode = transcodeVideo(video, clientHevc)
+        // Copy HEVC the browser says it can decode; transcode anything else it can't, unless
+        // transcoding is turned off entirely.
+        val nativeCapable = MediaCodecs.isHevc(video.codec) && clientHevc
+        val transcode = !decodableVideo && !videoTranscodeOff && !nativeCapable
         val nativeVideoCopy = !decodableVideo && !transcode
         // Transcoded video has keyframes forced on every boundary, so uniform segments are
         // exact. For a copied local file, reading its keyframes lists each segment's true
@@ -469,16 +279,17 @@ class RemuxService(
         val audio = audios.getOrElse(audioIndex) { audios.first() }
         val dir = Files.createDirectories(root.resolve(id))
 
-        val session = Session(
-            id, dir, url, providerKeyOf(url), group, connectionLimit.coerceAtLeast(1), clientHevc, audioIndex,
+        val session = RemuxSession(
+            id, dir, url, providerKey, group, cap, audioIndex,
             duration, segLen, starts, timeshift, transcode, video.codec, audio, subs,
-            audioLabels(audios), subtitleLabels(subs), nativeVideoCopy, System.currentTimeMillis(),
+            MediaTrackLabels.audio(audios), MediaTrackLabels.subtitles(subs), nativeVideoCopy,
+            System.currentTimeMillis(),
         )
         // Publish the viable replacement before retiring old reads. Preparation failures leave
         // existing viewers untouched.
         return synchronized(launchLock) {
             prepared(id)?.let { return@synchronized it }
-            Files.writeString(dir.resolve("main.m3u8"), buildPlaylist(session))
+            Files.writeString(session.playlistFile, RemuxPlaylists.media(session))
             sessions[id] = session
             sessions.values.filter { it.id != id && it.shareKey in supersede }.forEach { evict(it) }
             log.debug("remux {}: prepared ({}s, {} segs, video {} [{}], {} audio, {} subs)",
@@ -489,15 +300,31 @@ class RemuxService(
         }
     }
 
-    private fun prepared(id: String): StartResult? = sessions[id]?.let {
-        it.lastAccessMs = System.currentTimeMillis()
+    /** ffprobe opens one of the provider's connections; hold a slot for the length of the probe
+     *  so it can't push the provider over its cap. Local files touch no provider. */
+    private fun reserveProbeConnection(
+        id: String,
+        url: String,
+        providerKey: String,
+        connectionLimit: Int,
+    ): AutoCloseable? {
+        if (!url.startsWith("http")) return null
+        val probeId = "probe:$id"
+        if (!connections.tryOpenStream(probeId, providerKey, probeId, connectionLimit, {})) {
+            throw ConnectionLimitException(connectionLimit)
+        }
+        return AutoCloseable { connections.close(probeId) }
+    }
+
+    private fun prepared(id: String): StartResult? = sessions[id]?.let { session ->
+        session.lastAccessMs = System.currentTimeMillis()
         StartResult(
             id,
-            playlistUrl(id, it.subLabels.isNotEmpty()),
-            it.durationSec.takeIf { duration -> duration > 0 },
-            it.audioLabels,
-            it.subLabels,
-            it.nativeVideoCopy,
+            playlistUrl(id, session.subLabels.isNotEmpty()),
+            session.durationSec.takeIf { duration -> duration > 0 },
+            session.audioLabels,
+            session.subLabels,
+            session.nativeVideoCopy,
         )
     }
 
@@ -505,101 +332,10 @@ class RemuxService(
     private fun playlistUrl(id: String, hasSubs: Boolean) =
         "/api/v1/remux/$id/${if (hasSubs) "master.m3u8" else "main.m3u8"}"
 
-    private fun segFile(session: Session, n: Int): Path = session.dir.resolve("main$n.m4s")
-
-    private fun segLengths(session: Session): List<Double> = session.starts.indices.map {
-        ((if (it + 1 < session.starts.size) session.starts[it + 1] else session.durationSec) - session.starts[it])
-            .coerceAtLeast(0.001)
-    }
-
-    private fun buildPlaylist(session: Session): String = buildString {
-        val lengths = segLengths(session)
-        append("#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-PLAYLIST-TYPE:VOD\n")
-        append("#EXT-X-TARGETDURATION:${ceil(lengths.maxOrNull() ?: session.segLenSec).toInt()}\n")
-        append("#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-MAP:URI=\"init.mp4\"\n")
-        lengths.forEachIndexed { n, len ->
-            append("#EXTINF:%.6f,\n".format(len))
-            append("main$n.m4s\n")
-        }
-        append("#EXT-X-ENDLIST\n")
-    }
-
     // ---- on-demand segments ----
 
-    /** Build the ffmpeg command for [session] starting at segment [startNumber]. */
-    private fun command(session: Session, startNumber: Int): List<String> {
-        val cmd = mutableListOf("ffmpeg", "-nostdin", "-y", "-loglevel", "error")
-        if (session.url.startsWith("http")) {
-            cmd += listOf("-user_agent", http.userAgent,
-                "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "10")
-        }
-        // Read a little ahead of playback (input side) to bound disk and not hold the provider
-        // connection far past what's watched; the initial burst fills hls.js's buffer at startup.
-        if (!session.timeshift) cmd += readrateArgs
-        if (startNumber > 0 && !session.timeshift && startNumber < session.starts.size) {
-            val at = session.starts[startNumber]
-            if (session.transcodeVideo) {
-                cmd += listOf("-ss", at.toString())
-            } else {
-                // Copied video can only start on a keyframe: the +0.5s nudge lands -ss on the
-                // boundary keyframe, and noaccurate_seek keeps the re-encoded audio there too.
-                cmd += listOf("-noaccurate_seek", "-ss", (at + 0.5).toString())
-            }
-        }
-        if (!session.transcodeVideo) cmd += listOf("-fflags", "+genpts")
-        cmd += listOf("-i", session.url, "-map", "0:v:0", "-map", "0:${session.audio.index}")
-        when {
-            !session.transcodeVideo -> {
-                cmd += listOf("-c:v", "copy")
-                // Copied HEVC in fMP4 must be tagged hvc1, not hev1, or Safari/browsers refuse it.
-                if (session.videoCodec.equals("hevc", true)) cmd += listOf("-tag:v", "hvc1")
-            }
-            videoEncoder == "libx264" -> cmd += listOf(
-                "-c:v", "libx264", "-preset", x264Preset, "-crf", "23", "-pix_fmt", "yuv420p",
-                // Keyframe on every segment boundary so equal-length segments are exact.
-                "-force_key_frames", "expr:gte(t,n_forced*${session.segLenSec})", "-sc_threshold", "0",
-            )
-            else -> cmd += listOf("-c:v", videoEncoder,
-                "-g", ceil(session.segLenSec * 25).toInt().toString())
-        }
-        val audioFilters = mutableListOf<String>()
-        // On a copied-video restart the audio starts a few frames before the boundary; drop those
-        // so hls.js joins onto the previous run's tail with a gap, not an overlap that corrupts it.
-        if (!session.transcodeVideo && startNumber > 0 && startNumber < session.starts.size) {
-            audioFilters += "aselect=gte(t\\,${session.starts[startNumber]})"
-        }
-        // Downmix to stereo then cap the level: a loud 5.1 centre summed into L+R can clip; the
-        // 0.85 ceiling leaves headroom for AAC decode overshoot and is transparent below it.
-        audioFilters += "aformat=channel_layouts=stereo"
-        audioFilters += "alimiter=limit=0.85:level=disabled"
-        cmd += listOf("-af", audioFilters.joinToString(","))
-        cmd += listOf(
-            "-c:a", "aac", "-b:a", "192k",
-            // Keep the source clock and zero the base so A/V/subtitles stay aligned across seeks.
-            "-copyts", "-avoid_negative_ts", "disabled", "-start_at_zero", "-max_muxing_queue_size", "2048",
-            "-f", "hls", "-max_delay", "5000000", "-hls_time", session.segLenSec.toString(),
-            "-hls_playlist_type", "vod", "-hls_list_size", "0", "-start_number", startNumber.toString(),
-            "-hls_flags", "temp_file",
-        )
-        // fMP4 for everything: lets HEVC pass through, and keeps AAC signalled as real AAC-LC
-        // instead of the HE-AAC hls.js forces for AAC in MPEG-TS. The init name must be bare:
-        // ffmpeg resolves it against the playlist dir on Linux and the CWD on Windows, both the
-        // session dir here (launch() sets the CWD) — an absolute path would break Linux.
-        cmd += listOf("-hls_segment_type", "fmp4", "-hls_segment_options", "movflags=+frag_discont",
-            "-hls_fmp4_init_filename", "init.mp4",
-            "-hls_segment_filename", session.dir.resolve("main%d.m4s").toString())
-        cmd += session.dir.resolve("ff.m3u8").toString()
-        // Sidecar WebVTT per text sub, on the same zeroed clock as the video; flush per packet.
-        session.subs.forEachIndexed { j, stream ->
-            cmd += listOf("-map", "0:${stream.index}",
-                "-copyts", "-avoid_negative_ts", "disabled", "-start_at_zero", "-flush_packets", "1",
-                "-f", "webvtt", session.dir.resolve("sub_$j.vtt").toString())
-        }
-        return cmd
-    }
-
     // Always called under launchLock (from ensureReaching), so it can't race evict.
-    private fun launch(session: Session, startNumber: Int) {
+    private fun launch(session: RemuxSession, startNumber: Int) {
         if (sessions[session.id] !== session) return // evicted; don't spawn an orphan
         killProcess(session)
         Files.createDirectories(session.dir)
@@ -618,10 +354,10 @@ class RemuxService(
         }
         val process = processRunner.start(
             MediaProcessRequest(
-                command = command(session, startNumber),
+                command = commands.build(session, startNumber),
                 // Bare fMP4 init filenames land in the session directory on every OS.
                 workingDirectory = session.dir,
-                appendStderrFile = session.dir.resolve("ffmpeg.log"),
+                appendStderrFile = session.logFile,
             )
         )
         session.process = process
@@ -635,16 +371,16 @@ class RemuxService(
      *  into place atomically, so any segment that exists is complete. Scan forward from the
      *  last known head, not from startNumber: pruning deletes segments behind the playhead, so
      *  once startNumber's segment is gone a scan from there would wrongly report nothing written. */
-    private fun writtenThrough(session: Session): Int {
+    private fun writtenThrough(session: RemuxSession): Int {
         if (session.startNumber < 0) return -1
         var n = maxOf(session.startNumber, session.writtenHead + 1)
-        while (Files.exists(segFile(session, n))) n++
+        while (Files.exists(session.segmentFile(n))) n++
         session.writtenHead = n - 1
         return session.writtenHead
     }
 
     /** Decide whether the running ffmpeg can reach segment [n] soon, or restart it there. */
-    private fun ensureReaching(session: Session, n: Int) {
+    private fun ensureReaching(session: RemuxSession, n: Int) {
         synchronized(launchLock) {
             val process = session.process
             val alive = process != null && process.isAlive
@@ -664,78 +400,9 @@ class RemuxService(
         }
     }
 
-    suspend fun playlist(id: String, call: ApplicationCall, mediaQuery: String = "") {
-        val session = sessions[id] ?: return notFound(call)
-        session.lastAccessMs = System.currentTimeMillis()
-        call.response.header(HttpHeaders.CacheControl, "no-store")
-        val body = withContext(Dispatchers.IO) { Files.readString(session.dir.resolve("main.m3u8")) }
-            .replace("URI=\"init.mp4\"", "URI=\"init.mp4$mediaQuery\"")
-            .lineSequence()
-            .joinToString("\n") { line ->
-                if (mediaQuery.isNotEmpty() && line.isNotBlank() && !line.startsWith("#")) {
-                    line + mediaQuery
-                } else line
-            }
-        call.respondText(body,
-            ContentType.parse("application/vnd.apple.mpegurl"))
-    }
-
-    suspend fun initSegment(id: String, call: ApplicationCall) {
-        val session = sessions[id] ?: return notFound(call)
-        session.lastAccessMs = System.currentTimeMillis()
-        connections.touch(id)
-        val init = session.dir.resolve("init.mp4")
-        // ffmpeg leaves init.mp4 empty until the first segment is written; wait for that,
-        // not init's mere existence, or hls.js gets a 0-byte init and can't decode.
-        if (!Files.exists(init) || Files.size(init) == 0L) {
-            val start = session.startNumber.coerceAtLeast(0)
-            try {
-                produce(session, start, segFile(session, start))
-            } catch (error: ConnectionLimitException) {
-                call.respond(
-                    HttpStatusCode.TooManyRequests,
-                    ApiErrorDto("provider_capacity", error.message ?: "Provider connection limit reached"),
-                )
-                return
-            }
-        }
-        if (!Files.exists(init) || Files.size(init) == 0L) return failed(session, call)
-        respondFile(call, init, ContentType.parse("video/mp4"))
-    }
-
-    suspend fun segment(id: String, n: Int, call: ApplicationCall) {
-        val session = sessions[id] ?: return notFound(call)
-        session.lastAccessMs = System.currentTimeMillis()
-        connections.touch(id)
-        val seg = segFile(session, n)
-        if (!Files.exists(seg)) {
-            try {
-                produce(session, n, seg)
-            } catch (error: ConnectionLimitException) {
-                call.respond(
-                    HttpStatusCode.TooManyRequests,
-                    ApiErrorDto("provider_capacity", error.message ?: "Provider connection limit reached"),
-                )
-                return
-            }
-        }
-        if (!Files.exists(seg)) return failed(session, call)
-        pruneBehind(session, n)
-        respondFile(call, seg, ContentType.parse("video/iso.segment"))
-    }
-
-    /** Surface ffmpeg's last log line when it produced nothing, instead of a silent 404. */
-    private suspend fun failed(session: Session, call: ApplicationCall) {
-        val tail = withContext(Dispatchers.IO) {
-            runCatching { Files.readString(session.dir.resolve("ffmpeg.log")).trim().lines().lastOrNull() }.getOrNull()
-        }?.takeIf { it.isNotBlank() }
-        log.warn("remux {}: ffmpeg produced no output{}", session.id, tail?.let { " - $it" } ?: "")
-        call.respondText(tail ?: "ffmpeg produced no output", ContentType.Text.Plain, HttpStatusCode.BadGateway)
-    }
-
     /** Reach segment [n] and wait for [file]; if the read dies without producing it (a
      *  stale single-connection provider often drops the first open), start once more. */
-    private suspend fun produce(session: Session, n: Int, file: Path) = withContext(Dispatchers.IO) {
+    private suspend fun produce(session: RemuxSession, n: Int, file: Path) = withContext(Dispatchers.IO) {
         repeat(2) {
             ensureReaching(session, n)
             awaitFile(session, file)
@@ -744,136 +411,28 @@ class RemuxService(
         }
     }
 
-    private class Cue(val start: Double, val end: Double, val block: String)
-
-    // Our fMP4 segments start at clock 0, so a cue's local time is the media time as-is.
-    private val timestampMap = "X-TIMESTAMP-MAP=MPEGTS:0,LOCAL:00:00:00.000"
-
-    /** Master playlist: the video/audio rendition plus one WebVTT subtitle rendition per track. */
-    suspend fun master(id: String, call: ApplicationCall, mediaQuery: String = "") {
-        val session = sessions[id] ?: return notFound(call)
-        session.lastAccessMs = System.currentTimeMillis()
-        val body = buildString {
-            append("#EXTM3U\n#EXT-X-VERSION:7\n")
-            session.subLabels.forEachIndexed { i, label ->
-                append("#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"subs\",NAME=\"${label.replace('"', '\'')}\",")
-                append("AUTOSELECT=YES,DEFAULT=NO,FORCED=NO,URI=\"sub_$i.m3u8$mediaQuery\"\n")
-            }
-            append("#EXT-X-STREAM-INF:BANDWIDTH=3000000")
-            if (session.subLabels.isNotEmpty()) append(",SUBTITLES=\"subs\"")
-            append("\nmain.m3u8$mediaQuery\n")
-        }
-        call.response.header(HttpHeaders.CacheControl, "no-store")
-        call.respondText(body, ContentType.parse("application/vnd.apple.mpegurl"))
-    }
-
-    /** A subtitle rendition's own VOD playlist: one WebVTT segment per video segment, so cues
-     *  become available in step with the video as ffmpeg produces them. */
-    suspend fun subtitlePlaylist(
-        id: String,
-        index: Int,
+    /** Produce [file] unless the provider refuses the read, which is the client's cue to stop
+     *  asking rather than to treat the gap as a decode failure. False when it answered 429. */
+    private suspend fun produceOrRefuse(
+        session: RemuxSession,
+        n: Int,
+        file: Path,
         call: ApplicationCall,
-        mediaQuery: String = "",
-    ) {
-        val session = sessions[id] ?: return notFound(call)
-        session.lastAccessMs = System.currentTimeMillis()
-        val lengths = segLengths(session)
-        val body = buildString {
-            append("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-PLAYLIST-TYPE:VOD\n")
-            append("#EXT-X-TARGETDURATION:${ceil(lengths.maxOrNull() ?: session.segLenSec).toInt()}\n")
-            append("#EXT-X-MEDIA-SEQUENCE:0\n")
-            lengths.forEachIndexed { n, len ->
-                append("#EXTINF:%.6f,\n".format(len))
-                append("sub_${index}_$n.vtt$mediaQuery\n")
-            }
-            append("#EXT-X-ENDLIST\n")
+    ): Boolean {
+        try {
+            produce(session, n, file)
+        } catch (error: ConnectionLimitException) {
+            call.respond(
+                HttpStatusCode.TooManyRequests,
+                ApiErrorDto("provider_capacity", error.message ?: "Provider connection limit reached"),
+            )
+            return false
         }
-        call.response.header(HttpHeaders.CacheControl, "no-store")
-        call.respondText(body, ContentType.parse("application/vnd.apple.mpegurl"))
-    }
-
-    /** One subtitle segment: the store's cues overlapping this video segment, timestamp-mapped. */
-    suspend fun subtitleSegment(id: String, index: Int, n: Int, call: ApplicationCall) {
-        val session = sessions[id] ?: return notFound(call)
-        session.lastAccessMs = System.currentTimeMillis()
-        val starts = session.starts
-        val from = starts.getOrElse(n) { session.durationSec }
-        val to = if (n + 1 < starts.size) starts[n + 1] else session.durationSec
-        val body = withContext(Dispatchers.IO) {
-            // Wait until the matching video segment is written before serving, so hls.js (which
-            // caches VOD segments) never caches an empty one for a region ffmpeg hasn't reached.
-            val deadline = System.currentTimeMillis() + SUBTITLE_WAIT_MS
-            while (writtenThrough(session) < n && System.currentTimeMillis() < deadline) {
-                val process = session.process
-                if (process != null && !process.isAlive) break
-                delay(200)
-            }
-            val fresh = runCatching { Files.readString(session.dir.resolve("sub_$index.vtt")) }.getOrNull()
-            val cues = mergeSubStore(session.url, index, fresh)
-            buildString {
-                append("WEBVTT\n").append(timestampMap).append("\n\n")
-                cues.filter { it.start < to && it.end > from }.forEach { append(it.block).append("\n\n") }
-            }
-        }
-        call.response.header(HttpHeaders.CacheControl, "no-store")
-        call.respondText(body, ContentType.parse("text/vtt"))
-    }
-
-    /** Fold this session's freshly-extracted cues into the URL's persistent store (both on the
-     *  same clock) and return the union, so switching audio or seeking never drops a cue. */
-    private fun mergeSubStore(url: String, index: Int, fresh: String?): List<Cue> {
-        // Subtitles are per URL, not per share group, so key them with a blank group.
-        val key = sessionId(url, false, 0, "") + "_$index"
-        val file = subStore.resolve("$key.vtt")
-        synchronized(subStoreLocks.computeIfAbsent(key) { Any() }) {
-            val stored = runCatching { Files.readString(file) }.getOrNull()
-            val cues = LinkedHashMap<String, Cue>()
-            parseCues(stored).forEach { cues.putIfAbsent(it.block, it) }
-            parseCues(fresh).forEach { cues.putIfAbsent(it.block, it) }
-            val sorted = cues.values.sortedBy { it.start }
-            val merged = if (sorted.isEmpty()) "" else
-                buildString { append("WEBVTT\n\n"); sorted.forEach { append(it.block).append("\n\n") } }
-            if (merged.isNotBlank() && merged != stored) {
-                runCatching { Files.writeString(file, merged) }
-                pruneSubStore()
-            }
-            return sorted
-        }
-    }
-
-    private fun pruneSubStore() {
-        runCatching {
-            Files.list(subStore).use { it.toList() }
-                .takeIf { it.size > MAX_SUB_STORE_FILES }
-                ?.sortedByDescending { Files.getLastModifiedTime(it).toMillis() }
-                ?.drop(MAX_SUB_STORE_FILES)
-                ?.forEach { Files.deleteIfExists(it) }
-        }
-    }
-
-    private fun parseCues(doc: String?): List<Cue> {
-        doc ?: return emptyList()
-        return doc.split(Regex("\\r?\\n\\r?\\n")).mapNotNull { raw ->
-            val block = raw.trim()
-            val line = block.lineSequence().firstOrNull { it.contains("-->") } ?: return@mapNotNull null
-            val start = vttSeconds(line.substringBefore("-->").trim()) ?: return@mapNotNull null
-            val end = vttSeconds(line.substringAfter("-->").trim().substringBefore(' ')) ?: (start + 5)
-            Cue(start, end, block)
-        }
-    }
-
-    private fun vttSeconds(ts: String): Double? {
-        val parts = ts.split(':')
-        val (h, m, s) = when (parts.size) {
-            3 -> Triple(parts[0].toDoubleOrNull(), parts[1].toDoubleOrNull(), parts[2].replace(',', '.').toDoubleOrNull())
-            2 -> Triple(0.0, parts[0].toDoubleOrNull(), parts[1].replace(',', '.').toDoubleOrNull())
-            else -> return null
-        }
-        return if (h != null && m != null && s != null) h * 3600 + m * 60 + s else null
+        return true
     }
 
     /** Wait (bounded) for ffmpeg to write [file], failing fast if it dies first. */
-    private suspend fun awaitFile(session: Session, file: Path) {
+    private suspend fun awaitFile(session: RemuxSession, file: Path) {
         val deadline = System.currentTimeMillis() + SEGMENT_WAIT_MS
         while (!Files.exists(file) && System.currentTimeMillis() < deadline) {
             val process = session.process
@@ -887,14 +446,98 @@ class RemuxService(
 
     /** Delete segments well behind the one being served, bounding disk without disturbing
      *  the ffmpeg that is writing ahead. */
-    private fun pruneBehind(session: Session, current: Int) {
+    private fun pruneBehind(session: RemuxSession, current: Int) {
         // A timeshift can't be re-produced (no -ss), so keep everything already streamed.
         if (session.timeshift) return
         var n = current - KEEP_BEHIND - 1
         while (n >= 0) {
-            if (!Files.deleteIfExists(segFile(session, n))) break
+            if (!Files.deleteIfExists(session.segmentFile(n))) break
             n--
         }
+    }
+
+    // ---- HTTP ----
+
+    suspend fun playlist(id: String, call: ApplicationCall, mediaQuery: String = "") {
+        val session = touched(id) ?: return notFound(call)
+        val stored = withContext(Dispatchers.IO) { Files.readString(session.playlistFile) }
+        respondPlaylist(call, RemuxPlaylists.withMediaQuery(stored, mediaQuery))
+    }
+
+    suspend fun master(id: String, call: ApplicationCall, mediaQuery: String = "") {
+        val session = touched(id) ?: return notFound(call)
+        respondPlaylist(call, RemuxPlaylists.master(session, mediaQuery))
+    }
+
+    suspend fun subtitlePlaylist(id: String, index: Int, call: ApplicationCall, mediaQuery: String = "") {
+        val session = touched(id) ?: return notFound(call)
+        respondPlaylist(call, RemuxPlaylists.subtitles(session, index, mediaQuery))
+    }
+
+    suspend fun initSegment(id: String, call: ApplicationCall) {
+        val session = touched(id) ?: return notFound(call)
+        connections.touch(id)
+        val init = session.initFile
+        // ffmpeg leaves init.mp4 empty until the first segment is written; wait for that,
+        // not init's mere existence, or hls.js gets a 0-byte init and can't decode.
+        if (!hasContent(init)) {
+            val start = session.startNumber.coerceAtLeast(0)
+            if (!produceOrRefuse(session, start, session.segmentFile(start), call)) return
+        }
+        if (!hasContent(init)) return failed(session, call)
+        respondFile(call, init, ContentType.parse("video/mp4"))
+    }
+
+    suspend fun segment(id: String, n: Int, call: ApplicationCall) {
+        val session = touched(id) ?: return notFound(call)
+        connections.touch(id)
+        val segment = session.segmentFile(n)
+        if (!Files.exists(segment) && !produceOrRefuse(session, n, segment, call)) return
+        if (!Files.exists(segment)) return failed(session, call)
+        pruneBehind(session, n)
+        respondFile(call, segment, ContentType.parse("video/iso.segment"))
+    }
+
+    /** One subtitle segment: the store's cues overlapping this video segment, timestamp-mapped. */
+    suspend fun subtitleSegment(id: String, index: Int, n: Int, call: ApplicationCall) {
+        val session = touched(id) ?: return notFound(call)
+        val window = session.segmentWindow(n)
+        val body = withContext(Dispatchers.IO) {
+            // Wait until the matching video segment is written before serving, so hls.js (which
+            // caches VOD segments) never caches an empty one for a region ffmpeg hasn't reached.
+            val deadline = System.currentTimeMillis() + SUBTITLE_WAIT_MS
+            while (writtenThrough(session) < n && System.currentTimeMillis() < deadline) {
+                val process = session.process
+                if (process != null && !process.isAlive) break
+                delay(200)
+            }
+            val fresh = runCatching { Files.readString(session.dir.resolve("sub_$index.vtt")) }.getOrNull()
+            val cues = subtitles.merge(session.url, index, fresh)
+            buildString {
+                append("WEBVTT\n").append(TIMESTAMP_MAP).append("\n\n")
+                cues.filter { it.start < window.endInclusive && it.end > window.start }
+                    .forEach { append(it.block).append("\n\n") }
+            }
+        }
+        call.response.header(HttpHeaders.CacheControl, "no-store")
+        call.respondText(body, ContentType.parse("text/vtt"))
+    }
+
+    private fun touched(id: String): RemuxSession? =
+        sessions[id]?.also { it.lastAccessMs = System.currentTimeMillis() }
+
+    private fun hasContent(path: Path): Boolean = Files.exists(path) && Files.size(path) > 0L
+
+    private suspend fun respondPlaylist(call: ApplicationCall, body: String) {
+        call.response.header(HttpHeaders.CacheControl, "no-store")
+        call.respondText(body, ContentType.parse("application/vnd.apple.mpegurl"))
+    }
+
+    /** Surface ffmpeg's last log line when it produced nothing, instead of a silent 404. */
+    private suspend fun failed(session: RemuxSession, call: ApplicationCall) {
+        val tail = withContext(Dispatchers.IO) { lastLogLine(session) }?.takeIf { it.isNotBlank() }
+        log.warn("remux {}: ffmpeg produced no output{}", session.id, tail?.let { " - $it" } ?: "")
+        call.respondText(tail ?: "ffmpeg produced no output", ContentType.Text.Plain, HttpStatusCode.BadGateway)
     }
 
     private suspend fun respondFile(call: ApplicationCall, path: Path, type: ContentType) {
@@ -903,6 +546,5 @@ class RemuxService(
     }
 
     private suspend fun notFound(call: ApplicationCall) =
-        call.respondText("Not found", ContentType.Text.Plain,
-            io.ktor.http.HttpStatusCode.NotFound)
+        call.respondText("Not found", ContentType.Text.Plain, HttpStatusCode.NotFound)
 }

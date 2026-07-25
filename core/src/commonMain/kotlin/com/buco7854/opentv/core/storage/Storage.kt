@@ -4,7 +4,6 @@ import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.core.model.Download
 import com.buco7854.opentv.core.model.Favorite
 import com.buco7854.opentv.core.model.GroupCount
-import com.buco7854.opentv.core.model.GroupHit
 import com.buco7854.opentv.core.model.GroupOverride
 import com.buco7854.opentv.core.model.Metadata
 import com.buco7854.opentv.core.model.Playlist
@@ -59,9 +58,8 @@ interface ChannelStore {
     fun observeEpisodes(playlistId: Long, seriesKey: String): Flow<List<Channel>>
     fun observeCount(playlistId: Long, kind: Int): Flow<Int>
     fun observeByUrls(playlistId: Long, kind: Int, urls: List<String>): Flow<List<Channel>>
-    /** [query] must have %, _ and \ pre-escaped (LIKE semantics). */
+    /** Plain search term; the adapter escapes whatever its query language treats as a wildcard. */
     suspend fun search(playlistId: Long, query: String): List<Channel>
-    suspend fun searchGroups(playlistId: Long, query: String): List<GroupHit>
     suspend fun get(id: Long): Channel?
     suspend fun getByUrl(playlistId: Long, url: String): Channel?
     suspend fun distinctLiveTvgIds(playlistId: Long): List<String>
@@ -88,8 +86,8 @@ interface XtreamSeriesStore {
     fun observeAll(playlistId: Long): Flow<List<XtreamSeries>>
     fun observeCount(playlistId: Long): Flow<Int>
     suspend fun get(playlistId: Long, seriesId: Long): XtreamSeries?
+    /** Plain search term; see [ChannelStore.search]. */
     suspend fun search(playlistId: Long, query: String): List<XtreamSeries>
-    suspend fun searchCategories(playlistId: Long, query: String): List<GroupHit>
     suspend fun setEpisodesFetched(playlistId: Long, seriesId: Long, fetchedAtMs: Long)
 }
 

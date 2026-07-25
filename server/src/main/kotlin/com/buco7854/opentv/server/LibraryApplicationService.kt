@@ -68,9 +68,13 @@ class LibraryApplicationService(
 
     fun saveSettings(actor: Actor, request: SettingsDto) {
         if (!actor.isAdmin) throw ForbiddenApiException()
-        settings.userAgent = request.userAgent
+        val agent = request.userAgent.trim()
+        require(ServerHttp.isUsableUserAgent(agent)) {
+            "User-Agent must be a single line of at most ${ServerHttp.MAX_USER_AGENT_LENGTH} printable characters"
+        }
+        settings.userAgent = agent
         settings.downloadLimit = request.downloadLimit
-        http.userAgent = request.userAgent.trim().ifBlank { ServerHttp.DEFAULT_USER_AGENT }
+        http.userAgent = agent.ifBlank { ServerHttp.DEFAULT_USER_AGENT }
     }
 
     private suspend fun channelModel(actor: Actor, id: Long): Channel {
