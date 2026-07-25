@@ -120,7 +120,7 @@ every push.
 ./gradlew :app:assembleDebug      # debug APK
 ```
 
-Requires JDK 17 or newer and the Android SDK (platform 35). The CI workflow runs
+Requires JDK 17 or newer and the Android SDK (platform 37). The CI workflow runs
 the unit tests and builds a release APK on every push. It refreshes the rolling
 dev release on `main`, and publishes a tagged GitHub Release when you push a
 `vX.Y.Z` tag.
@@ -132,12 +132,13 @@ the web client. To work on it:
 
 ```bash
 cd docs
-npm install
+npm ci
 npm run docs:dev      # local preview
 npm run docs:build    # production build
 ```
 
-It deploys to GitHub Pages automatically when `docs/` changes on `main`.
+Requires Node.js 24.18 or newer. It deploys to GitHub Pages automatically when
+`docs/` changes on `main`.
 
 ## Privacy
 

@@ -1,6 +1,6 @@
 // Series page for native Xtream playlists. Mirrors XtreamSeriesScreen.kt.
 
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router';
 import { api, ChannelKind } from '../api';
 import { castFromNames, CastRow } from '../components/CastRow';
 import { FavoriteIcon, Pill } from '../components/Common';

@@ -1,7 +1,7 @@
 // Movie / M3U-series / episode detail pages. Mirrors DetailScreens.kt.
 
 import { ReactNode, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router';
 import { api, Channel, ChannelKind, imgUrl, Metadata } from '../api';
 import { BadgeRow, mediaTags } from '../components/Badges';
 import { CastMember, CastRow, castFromNames, decodeCast } from '../components/CastRow';

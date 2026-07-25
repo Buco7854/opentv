@@ -5,7 +5,7 @@
 # OPENTV_AUTH_ENCRYPTION_KEY at runtime; internet-facing deployments also
 # require an HTTPS OPENTV_PUBLIC_URL or a correctly configured TLS proxy.
 
-FROM node:22-slim AS webapp
+FROM node:24.18-slim AS webapp
 WORKDIR /webapp
 COPY server/webapp/package.json server/webapp/package-lock.json ./
 RUN npm ci

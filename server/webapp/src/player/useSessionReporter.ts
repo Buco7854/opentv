@@ -39,7 +39,7 @@ function applyCommand(command: SessionCommand, video: HTMLVideoElement) {
 export function useSessionReporter(
   leaseId: string,
   snapshot: PlaybackSnapshot,
-  video: RefObject<HTMLVideoElement>,
+  video: RefObject<HTMLVideoElement | null>,
   onCommand?: (command: SessionCommand) => void,
   /** Filled with a sender that pushes a frame over the live socket (false if it's down),
    *  so the room layer can send sync in real time instead of POSTing. */

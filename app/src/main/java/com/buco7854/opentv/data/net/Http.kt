@@ -53,7 +53,7 @@ object Http {
                 .build()
             ok.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
-                response.body?.string().orEmpty()
+                response.body.string()
             }
         }
     }
@@ -110,7 +110,7 @@ object Http {
 
     /** Unwraps gzip by magic bytes (0x1f 0x8b), not headers, to cover .gz files and Content-Encoding alike. */
     fun bodyStream(response: Response): InputStream {
-        val raw = BufferedInputStream(response.body!!.byteStream())
+        val raw = BufferedInputStream(response.body.byteStream())
         raw.mark(2)
         val first = raw.read()
         val second = raw.read()

@@ -228,7 +228,7 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
   // Active cue text (rendered by our own overlay) and the user's appearance settings.
   const [cueText, setCueText] = useState('');
   const [subStyle, setSubStyle] = useState({ scale: prefs.subScale, style: prefs.subStyle, bold: prefs.subBold });
-  const hideTimer = useRef<ReturnType<typeof setTimeout>>();
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const nativeTracks = useRef<{ text: TextTrack[]; audio: { enabled: boolean }[] }>({ text: [], audio: [] });
   // Explicit track picks, kept across engine restarts (seek re-anchors rebuild hls.js).
   // audio -1 = untouched; subs null = untouched, -1 = explicitly off.
@@ -366,7 +366,7 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
   }, [src, terminatePlayback, url]);
 
   // ---- engine wiring ----
-  const lastUrl = useRef<string>();
+  const lastUrl = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (holdEngine) return;
     const video = videoRef.current!;

@@ -2,7 +2,7 @@ import { FormEvent, ReactNode, useEffect, useState } from 'react';
 import { toDataURL } from 'qrcode';
 import {
   Link, useLocation, useNavigate, useSearchParams,
-} from 'react-router-dom';
+} from 'react-router';
 import { ApiError } from '../api/http';
 import { snackbar, Spinner, TextField } from '../components/Primitives';
 import { authApi } from './api';

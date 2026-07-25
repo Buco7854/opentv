@@ -96,8 +96,8 @@ absent from the initial bundle.
 - Browser preferences and server settings are intentionally separate.
 - Playlist-dependent web routes are guarded by `LibraryProvider`; keep empty,
   missing, and failed-library states out of feature-screen loading spinners.
-- The web client has no test runner; `npm run build` is its typecheck/bundle
-  validation.
+- The web client uses Vitest; `npm test` and `npm run build` are its focused
+  test and typecheck/bundle validation.
 
 ## Runtime ownership
 
@@ -130,6 +130,7 @@ absent from the initial bundle.
 - Server target/runtime: JDK 25.
 - Android/shared target: JVM 17 compatibility.
 - Android: compile/target SDK 37, min SDK 26.
+- Web/docs build target: Node.js 24.18 LTS or newer.
 - Generated web output: `server/src/main/resources/web/` (ignored).
 - Generated APKs, Gradle output, `node_modules`, `local.properties`, and server
   runtime data are ignored and must not be committed.

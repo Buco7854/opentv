@@ -143,7 +143,7 @@ PORT=8080 OPENTV_DATA=./runtime-data \
   ./server/build/install/server/bin/server
 ```
 
-Requires JDK 25+, Node.js 20+, and `ffmpeg` / `ffprobe` on `PATH` (they power
+Requires JDK 25+, Node.js 24.18+, and `ffmpeg` / `ffprobe` on `PATH` (they power
 the remux that exposes tracks and transcodes non-browser audio and video; the
 Docker image bundles them). The Gradle build compiles the React client in
 `server/webapp` into the server's resources; the Docker build does this in its

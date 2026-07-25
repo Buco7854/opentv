@@ -2,7 +2,7 @@
 // playlist's apps. Burger shows a green dot while downloads run.
 
 import { useEffect, useRef, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router';
 import { api, DownloadStatus, Playlist } from '../api';
 import { useDownloads } from '../hooks';
 import { getLocale, t } from '../i18n';

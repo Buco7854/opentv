@@ -68,7 +68,7 @@ export interface WatchTogether {
 
 export function useWatchTogether(opts: {
   selfId: string;
-  video: RefObject<HTMLVideoElement>;
+  video: RefObject<HTMLVideoElement | null>;
   /** The player is up on real content (not an error), so an intent check is worthwhile. */
   active: boolean;
   live: boolean;

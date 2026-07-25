@@ -158,7 +158,7 @@ class DownloadWorker(
 
         dependencies.httpClient.newCall(requestBuilder.build()).execute().use { response ->
             if (!response.isSuccessful) throw HttpStatusException(response.code)
-            val body = response.body ?: throw IOException("Empty body")
+            val body = response.body
 
             val resuming = response.code == 206
             var downloaded = if (resuming) existing else 0L

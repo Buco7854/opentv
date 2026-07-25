@@ -3,7 +3,7 @@
 // guide sheet and group-kind correction for M3U playlists.
 
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router';
 import {
   api, canShowGuide, Channel, ChannelKind, GroupCount, hasCatchup,
   Programme, SeriesGroup, XtreamSeries,

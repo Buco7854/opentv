@@ -2,7 +2,7 @@
 // provider (open and refresh both force a fresh request).
 
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router';
 import { api, AccountInfo } from '../api';
 import { EmptyState, Pill } from '../components/Common';
 import { IconBtn, Spinner, ScreenHeader } from '../components/Primitives';

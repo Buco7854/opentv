@@ -71,7 +71,7 @@ function explain(stream: Session['stream']): string[] {
 export function SessionsScreen() {
   const [sessions, setSessions] = useState<Session[] | null>(null);
   const [messaging, setMessaging] = useState<Session | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout>>();
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const schedulePoll = useRef<(delay: number) => void>(() => {});
   // The viewer applies a pause/play over its socket and heartbeats the new state
   // right away, so a confirming poll is usually a second out. Hold the optimistic

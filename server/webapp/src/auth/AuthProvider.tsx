@@ -1,7 +1,7 @@
 import {
   createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState,
 } from 'react';
-import { Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { Navigate, useLocation, useNavigate } from 'react-router';
 import { browserApiHttp } from '../api/http';
 import { Spinner } from '../components/Primitives';
 import { clearUserActivitySnapshots, setServerSettingsAllowed } from '../hooks';

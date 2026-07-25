@@ -1,7 +1,7 @@
 // "/": forwards into the active playlist, or greets a fresh install.
 
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { EmptyState } from '../components/Common';
 import { Icon } from '../components/Icons';
 import { Spinner } from '../components/Primitives';

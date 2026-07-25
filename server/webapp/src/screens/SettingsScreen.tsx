@@ -38,7 +38,7 @@ export function SettingsScreen() {
   const [theme, setTheme] = useState<Theme>(prefs.theme);
   const [language, setLanguage] = useState<Language>(languageSetting.get());
   const [current, setCurrent] = useState<SectionId>('appearance');
-  const saveTimer = useRef<ReturnType<typeof setTimeout>>();
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const pendingSettings = useRef<Settings | null>(null);
 
   useEffect(() => {

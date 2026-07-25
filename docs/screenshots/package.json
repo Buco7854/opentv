@@ -2,6 +2,9 @@
   "name": "opentv-docs-screenshots",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=24.18.0"
+  },
   "scripts": {
     "capture": "node capture.mjs",
     "frame": "node frame.mjs",
@@ -9,7 +12,7 @@
     "shots": "node capture.mjs && node frame.mjs && node compress.mjs"
   },
   "dependencies": {
-    "playwright": "^1.48.0",
-    "sharp": "^0.33.0"
+    "playwright": "1.62.0",
+    "sharp": "0.35.3"
   }
 }

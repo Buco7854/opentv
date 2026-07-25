@@ -1,7 +1,7 @@
 import { lazy, ReactNode, Suspense, useSyncExternalStore } from 'react';
 import {
   BrowserRouter, Route, Routes, useNavigate, useParams,
-} from 'react-router-dom';
+} from 'react-router';
 import { EmptyState } from './components/Common';
 import { Dock } from './components/Dock';
 import { Icon } from './components/Icons';

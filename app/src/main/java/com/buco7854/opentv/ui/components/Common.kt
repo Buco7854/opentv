@@ -42,7 +42,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import com.buco7854.opentv.R
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.ui.theme.Coral

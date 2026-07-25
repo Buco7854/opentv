@@ -1,5 +1,5 @@
 import { createContext, ReactNode, useContext, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 
 /** Route-based player navigation. Source tokens never enter browser history. */
 export interface PlayerNav {

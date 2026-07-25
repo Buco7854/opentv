@@ -6,8 +6,8 @@ serves fake, illustrative data, then framed in a window on a wallpaper backdrop.
 
 ## Prerequisites
 
-- Node 20+
-- `npm install` here
+- Node 24.18+
+- `npm ci` here
 - `npx playwright install chromium` (first run)
 
 ## Run

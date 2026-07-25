@@ -2,7 +2,7 @@
 // Mirrors SearchScreen.kt.
 
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router';
 import { api, canShowGuide, Channel, ChannelKind, hasCatchup, SearchResults } from '../api';
 import { mediaTags } from '../components/Badges';
 import { EmptyState } from '../components/Common';

@@ -1,7 +1,7 @@
 // Player as a real route: each screen resolves content by id and renders the
 // shared PlayerSurface, keeping tokens and provider URLs out of the address bar.
 
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router';
 import { api, ChannelKind } from '../api';
 import { EmptyState } from '../components/Common';
 import { t } from '../i18n';

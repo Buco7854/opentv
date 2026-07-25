@@ -97,6 +97,7 @@ dependencies {
     implementation(libs.media3.datasource.okhttp)
     implementation(libs.okhttp)
     implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
     implementation(libs.work.runtime.ktx)
     implementation(libs.datastore.preferences)
     implementation(libs.documentfile)
