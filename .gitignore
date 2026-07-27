@@ -1,0 +1,45 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+app/build
+
+# Signing material — never commit
+*.jks
+*.keystore
+keystore.b64
+keystore.properties
+
+# Kotlin compiler session files
+.kotlin/
+
+# Docs site (Docusaurus)
+docs/node_modules/
+docs/build/
+docs/.docusaurus/
+
+# Module build outputs
+core/build
+data/build
+server/build
+
+# Web client: npm deps + compiled output (built from server/webapp sources)
+server/webapp/node_modules/
+server/src/main/resources/web/
+
+# JVM server identity module build output. Runtime state belongs under OPENTV_DATA
+# (which defaults to ./data), not in this source directory.
+/server-data/build/
+server/webapp/tsconfig.tsbuildinfo
+
+# Sample/test media dropped at the repo root — never commit
+/*.mkv
+/*.mp4
+/*.ts
+/*.avi

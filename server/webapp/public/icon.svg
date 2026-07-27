@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="108" height="108" role="img" aria-label="OpenTV">
+  <defs>
+    <clipPath id="round"><rect width="108" height="108" rx="24"/></clipPath>
+  </defs>
+  <g clip-path="url(#round)">
+    <rect width="108" height="108" fill="#000000"/>
+    <path d="M46,25 L54,34 L62,25" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <rect x="27" y="36" width="54" height="40" rx="9" stroke="#FFFFFF" stroke-width="5" fill="none"/>
+    <path d="M49,48 L63,56 L49,64 Z" fill="#FFFFFF"/>
+  </g>
+</svg>

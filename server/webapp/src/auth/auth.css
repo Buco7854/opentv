@@ -1,0 +1,142 @@
+@reference "../index.css";
+
+@layer theme, base, components, utilities;
+
+@layer components {
+  .auth-page {
+    @apply flex min-h-dvh flex-col items-center justify-center px-5 py-12;
+    background:
+      radial-gradient(120% 60% at 50% -10%, color-mix(in srgb, var(--c-fg) 7%, transparent), transparent 60%),
+      var(--c-bg);
+  }
+
+  .auth-brand { @apply mb-9 flex items-center justify-center gap-2.5; }
+  .auth-brand .mark {
+    @apply grid size-10 place-items-center rounded-[12px] text-on-surface;
+    background: var(--c-input);
+    border: 1px solid var(--c-hairline);
+  }
+  .auth-brand .mark .icon { @apply size-5; stroke-width: 1.8; }
+  .auth-brand .word {
+    @apply uppercase;
+    font: var(--type-title-medium);
+    font-family: var(--font-display);
+    letter-spacing: 0.22em;
+  }
+
+  .auth-head { @apply mb-6 flex flex-col gap-1.5; }
+  .auth-head .eyebrow {
+    @apply uppercase text-on-surface-variant;
+    font: var(--type-label-small);
+    letter-spacing: 0.14em;
+  }
+  .auth-head h1 { font: var(--type-headline-medium); letter-spacing: -0.4px; }
+  .auth-head p { @apply text-on-surface-variant; font: var(--type-body-medium); }
+
+  .auth-step { @apply flex flex-col gap-3; }
+  .auth-choices { @apply flex flex-col gap-2; }
+  .auth-choices .row .sub { @apply whitespace-normal; }
+  .auth-choices .row .icon.chev { @apply size-[18px] flex-none text-on-surface-variant; }
+
+  .auth-row { @apply flex items-center gap-2; }
+  .auth-row .btn { @apply flex-1; }
+  .auth-foot { @apply mt-7 flex flex-col items-center gap-1; }
+  .auth-foot .link {
+    @apply rounded-lg px-2.5 py-1.5 text-on-surface-variant;
+    font: var(--type-label-large);
+  }
+  .auth-foot .link:active { background: var(--c-press); }
+  @media (hover: hover) { .auth-foot .link:hover { color: var(--c-fg); background: var(--c-press); } }
+
+  .auth-sep { @apply my-1 flex items-center gap-3 text-on-surface-variant; font: var(--type-label-medium); }
+  .auth-sep::before, .auth-sep::after {
+    content: "";
+    @apply h-px flex-1;
+    background: var(--c-hairline);
+  }
+
+  /* Inline sibling of the error toast: same red rail, same icon, so a failure looks the
+     same whether it lands next to a form or over the app. */
+  .auth-error {
+    @apply relative flex items-start gap-2.5 overflow-hidden rounded-[10px] py-2.5 pr-3 pl-[10px] text-error;
+    background: color-mix(in srgb, var(--c-bad) 12%, transparent);
+    font: var(--type-body-medium);
+  }
+  .auth-error::before {
+    @apply absolute inset-y-0 left-0 w-1 content-[''];
+    background: var(--c-bad);
+  }
+  .auth-error .icon { @apply mt-0.5 size-[18px]; }
+  .auth-hint { @apply text-on-surface-variant; font: var(--type-body-small); }
+
+  .otp { @apply relative; }
+  .otp input {
+    @apply absolute inset-0 z-10 size-full rounded-[10px] opacity-0;
+    -webkit-text-fill-color: transparent;
+  }
+  .otp .cells { @apply flex gap-2; }
+  .otp .cell {
+    @apply grid h-14 flex-1 place-items-center rounded-[10px] tabular-nums;
+    background: var(--c-input);
+    font: var(--type-title-large);
+    transition: box-shadow 0.1s ease-out;
+  }
+  .otp .cell.on { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--c-fg) 35%, transparent); }
+  .otp .cell .caret { @apply h-6 w-px; background: var(--c-fg); animation: otp-blink 1.1s steps(1) infinite; }
+
+  .auth-qr { @apply mx-auto size-[212px] rounded-xl bg-white p-2.5; }
+  .auth-secret { @apply flex items-center gap-2 rounded-[10px] py-1.5 pr-1.5 pl-3.5; background: var(--c-input); }
+  .auth-secret .body { @apply min-w-0 flex-1 py-1; }
+  .auth-secret .k { @apply text-on-surface-variant; font: var(--type-label-small); }
+  .auth-secret code { @apply block break-all; font: var(--type-body-medium); font-family: ui-monospace, monospace; }
+
+  .auth-codes {
+    @apply grid select-all grid-cols-2 gap-x-3 gap-y-1.5 rounded-xl p-4;
+    background: var(--c-input);
+  }
+  .auth-codes li { @apply flex items-baseline gap-2; }
+  .auth-codes .n { @apply w-4 flex-none text-right tabular-nums text-on-surface-variant; font: var(--type-label-small); }
+  .auth-codes code { font: var(--type-body-medium); font-family: ui-monospace, monospace; letter-spacing: 0.02em; }
+
+  .link-account {
+    @apply flex items-center gap-3.5 rounded-xl p-3.5;
+    background: var(--c-input);
+  }
+  .link-account .body { @apply min-w-0 flex-1; }
+  .link-account .name { @apply truncate; font: var(--type-title-medium); letter-spacing: -0.1px; }
+  .link-account .sub { @apply truncate text-on-surface-variant; font: var(--type-body-small); }
+  .link-avatar {
+    @apply grid size-11 flex-none place-items-center rounded-full uppercase;
+    background: var(--c-panel-top);
+    font: var(--type-title-small);
+  }
+  .link-question { font: var(--type-title-medium); letter-spacing: -0.1px; }
+  .link-status {
+    @apply flex items-center justify-center gap-2 text-on-surface-variant;
+    font: var(--type-label-large);
+  }
+  .link-status .dot {
+    @apply size-2 rounded-full;
+    background: var(--c-good);
+    animation: link-pulse 1.6s ease-in-out infinite;
+  }
+
+  .link-card { @apply flex flex-col gap-4 rounded-2xl p-5; background: var(--c-panel); }
+  .link-card .actions { @apply flex flex-wrap items-center gap-2; }
+  .link-card .actions .btn { @apply w-auto; }
+
+  .security-card { @apply flex flex-col gap-4 rounded-2xl p-5; background: var(--c-panel); }
+  .security-card .head { @apply flex items-start gap-3.5; }
+  .security-card .head .body { @apply min-w-0 flex-1; }
+  .security-card .head .title { font: var(--type-title-medium); letter-spacing: -0.1px; }
+  .security-card .head .sub { @apply mt-0.5 text-on-surface-variant; font: var(--type-body-small); }
+  .security-card .actions { @apply flex flex-wrap gap-2; }
+  .security-card .actions .btn { @apply w-auto; }
+  .key-list { @apply -mx-1 flex flex-col; }
+  .key-list .row + .row { border-top: 1px solid var(--c-hairline); }
+  .key-list .row .sub { @apply whitespace-normal; }
+  .key-list .logo-box .icon { @apply size-5; }
+}
+
+@keyframes otp-blink { 50% { opacity: 0; } }
+@keyframes link-pulse { 50% { opacity: 0.25; } }

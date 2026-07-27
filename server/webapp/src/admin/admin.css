@@ -1,0 +1,70 @@
+@reference "../index.css";
+
+@layer theme, base, components, utilities;
+
+@layer components {
+  .admin-label { @apply mx-1 mb-2.5 hidden md:block; font: var(--type-title-medium); letter-spacing: -0.1px; }
+
+  .admin-toolbar { @apply mb-3 flex flex-wrap items-center gap-2; }
+  .admin-toolbar .search-wrap { @apply m-0 min-w-[220px] flex-1; }
+  .admin-toolbar .field.round > input { height: 44px; }
+
+  .admin-hint { @apply text-on-surface-variant; font: var(--type-body-small); }
+  .admin-provisioning-note { @apply mx-1 mb-3; }
+  .admin-mono { @apply break-all; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+  .admin-card { @apply flex flex-col gap-4 rounded-2xl p-5; background: var(--c-panel); }
+  .admin-card > .title { font: var(--type-title-medium); letter-spacing: -0.1px; }
+  .admin-card .actions { @apply flex flex-wrap items-center gap-2; }
+  .admin-card .actions .btn { @apply w-auto; }
+  .admin-card .actions.end { @apply justify-end; }
+
+  .admin-avatar {
+    @apply grid size-11 flex-none place-items-center rounded-full uppercase;
+    background: var(--c-panel-top);
+    font: var(--type-title-small);
+  }
+  .pill.good { color: var(--c-good); }
+  .pill.bad { color: var(--c-bad); }
+  .pill.strong {
+    background: color-mix(in srgb, var(--c-accent) 18%, transparent);
+    color: color-mix(in srgb, var(--c-accent) 72%, var(--c-fg));
+  }
+
+  .admin-hero { @apply flex items-center gap-3.5 rounded-2xl p-4; background: var(--c-panel); }
+  .admin-hero .admin-avatar { @apply size-14; font: var(--type-title-medium); }
+  .admin-hero .body { @apply min-w-0 flex-1; }
+  .admin-hero .name { @apply truncate; font: var(--type-title-large); letter-spacing: -0.2px; }
+  .admin-hero .sub { @apply mt-0.5 truncate text-on-surface-variant; font: var(--type-body-small); }
+  .admin-detail { @apply mx-auto flex max-w-[680px] flex-col items-stretch gap-3 px-4 pb-6; }
+  .admin-detail > .chip-set { @apply md:w-auto md:self-start; }
+
+  .admin-rows { @apply flex flex-col; }
+  .admin-row { @apply flex items-center gap-3 py-3; }
+  .admin-row + .admin-row { border-top: 1px solid var(--c-hairline); }
+  .admin-row .body { @apply min-w-0 flex-1; }
+  .admin-row .name { @apply truncate; font: var(--type-title-small); }
+  .admin-row .name-line { @apply flex min-w-0 items-center gap-2; }
+  .admin-row .sub { @apply mt-0.5 truncate text-on-surface-variant; font: var(--type-body-small); }
+  .admin-row .admin-mono { @apply whitespace-normal; }
+  .admin-row .progress-track { @apply mt-2; }
+
+  .admin-picks { @apply -mx-2 flex flex-col; }
+  .admin-picks .panel-row .sub { @apply whitespace-normal; }
+
+  .admin-progress { @apply mt-3; }
+  .admin-progress .times {
+    @apply mt-1 flex justify-between tabular-nums text-on-surface-variant;
+    font: var(--type-label-small);
+  }
+
+  .admin-token {
+    @apply block max-h-36 select-all overflow-auto rounded-xl p-3.5;
+    background: var(--c-input);
+    font: var(--type-body-small);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    overflow-wrap: anywhere;
+  }
+  .admin-form { @apply flex flex-col gap-3; }
+  .admin-form .admin-hint { @apply -mt-1; }
+}
