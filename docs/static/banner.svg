@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="340" viewBox="0 0 1200 340" fill="none" font-family="Barlow,'Inter Variable',Inter,system-ui,sans-serif">
+  <rect width="1200" height="340" rx="28" fill="#000000"/>
+
+  <!-- App mark -->
+  <g transform="translate(120,116)">
+    <rect width="108" height="108" rx="24" fill="#000000" stroke="rgba(255,255,255,0.14)" stroke-width="2"/>
+    <path d="M46,25 L54,34 L62,25" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <rect x="27" y="36" width="54" height="40" rx="9" stroke="#FFFFFF" stroke-width="5" fill="none"/>
+    <path d="M49,48 L63,56 L49,64 Z" fill="#FFFFFF"/>
+  </g>
+
+  <text x="280" y="178" font-size="76" font-weight="600" letter-spacing="-1.5" fill="#FFFFFF">OpenTV</text>
+  <text x="284" y="228" font-size="27" fill="#9B9B9B">Open-source IPTV player for Android, Android TV and your own server.</text>
+</svg>
