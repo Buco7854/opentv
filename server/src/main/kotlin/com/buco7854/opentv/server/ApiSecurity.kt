@@ -15,9 +15,8 @@ import io.ktor.util.AttributeKey
 /**
  * Authentication data available to application endpoints.
  *
- * Keeping this type independent from a particular authentication mechanism lets a
- * future native bearer-token implementation coexist with browser cookies without
- * changing route handlers.
+ * Keeping this type independent from transport lets every client share the same
+ * bearer-token authentication path without changing route handlers.
  */
 data class ApiPrincipal(
     val subject: String,
@@ -31,14 +30,10 @@ data class ApiPrincipal(
 
 data class ApiRequestCredentials(
     val authorization: String?,
-    val cookie: String?,
     val method: String,
     val path: String,
     val clientIp: String,
-    val csrfToken: String? = null,
-    val origin: String? = null,
-    /** The `Host` this request was addressed to; half of the same-origin decision. */
-    val host: String? = null,
+    val webSocketToken: String? = null,
 )
 
 fun interface ApiAuthenticator {
@@ -52,16 +47,12 @@ fun interface ApiAccessPolicy {
 class ApiSecurity(
     private val authenticator: ApiAuthenticator,
     private val accessPolicy: ApiAccessPolicy = ApiAccessPolicy { _, _ -> true },
-    private val requestGuard: suspend (ApiPrincipal, ApiRequestCredentials) -> Unit = { _, _ -> },
 ) {
     suspend fun authenticate(request: ApiRequestCredentials): ApiPrincipal? =
         authenticator.authenticate(request)
 
     suspend fun isAllowed(principal: ApiPrincipal, request: ApiRequestCredentials): Boolean =
         accessPolicy.isAllowed(principal, request)
-
-    suspend fun validate(principal: ApiPrincipal, request: ApiRequestCredentials) =
-        requestGuard(principal, request)
 
     companion object {
         /**
@@ -71,40 +62,45 @@ class ApiSecurity(
             ApiAuthenticator { ApiPrincipal(subject = "anonymous", roles = setOf("user")) },
         )
 
-        fun authenticated(auth: AuthService, config: AuthConfig): ApiSecurity = ApiSecurity(
+        fun authenticated(auth: AuthService, cipher: StreamCipher): ApiSecurity = ApiSecurity(
             authenticator = ApiAuthenticator { request ->
-                val token = request.cookie
-                    ?.split(';')
-                    ?.map(String::trim)
-                    ?.firstOrNull { it.startsWith("$SESSION_COOKIE=") }
-                    ?.substringAfter('=')
-                auth.requestAuthenticator.authenticate(token)?.let { actor ->
+                val actor = bearerToken(request.authorization)
+                    ?.let { auth.requestAuthenticator.authenticate(it) }
+                    ?: webSocketSession(request, cipher)
+                        ?.let { auth.authenticateSession(it) }
+                actor?.let {
                     ApiPrincipal(
-                        subject = actor.userId,
-                        displayName = actor.displayName,
-                        roles = actor.roles,
-                        authSessionId = actor.authSessionId,
-                        username = actor.username,
-                        authMethod = actor.authMethod,
-                        clientKind = actor.clientKind,
+                        subject = it.userId,
+                        displayName = it.displayName,
+                        roles = it.roles,
+                        authSessionId = it.authSessionId,
+                        username = it.username,
+                        authMethod = it.authMethod,
+                        clientKind = it.clientKind,
                     )
-                }
-            },
-            requestGuard = { principal, request ->
-                val actor = principal.toActor()
-                val unsafe = request.method !in setOf("GET", "HEAD", "OPTIONS")
-                if (unsafe) auth.validateCsrf(actor, request.csrfToken)
-                if (unsafe || request.path.endsWith("/ws")) {
-                    if (!RequestOrigin.isSameOrigin(request.origin, request.host, config.publicUrl)) {
-                        throw RejectedOriginException(request.origin, config.publicUrl)
-                    }
                 }
             },
         )
     }
 }
 
-internal const val SESSION_COOKIE = "opentv_session"
+private fun bearerToken(authorization: String?): String? {
+    val parts = authorization?.trim()?.split(Regex("\\s+")) ?: return null
+    return parts.takeIf { it.size == 2 && it[0].equals("Bearer", ignoreCase = true) }
+        ?.get(1)
+        ?.takeIf(String::isNotBlank)
+}
+
+private fun webSocketSession(
+    request: ApiRequestCredentials,
+    cipher: StreamCipher,
+): String? {
+    if (!request.path.endsWith("/ws")) return null
+    val capability = request.webSocketToken?.let(cipher::tryDecryptWebSocket) ?: return null
+    val leaseId = request.path.substringAfterLast("/playback/", "").substringBefore("/ws")
+    return capability.sessionId.takeIf { leaseId.isNotBlank() && capability.leaseId == leaseId }
+}
+
 private val ApiPrincipalKey = AttributeKey<ApiPrincipal>("OpenTvApiPrincipal")
 
 val ApplicationCall.apiPrincipal: ApiPrincipal
@@ -140,17 +136,13 @@ private val ApiSecurityPlugin = createRouteScopedPlugin(
     onCall { call ->
         val request = ApiRequestCredentials(
             authorization = call.request.headers[HttpHeaders.Authorization],
-            cookie = call.request.headers[HttpHeaders.Cookie],
             method = call.request.httpMethod.value,
             path = call.request.path(),
             clientIp = clientIp(call),
-            csrfToken = call.request.headers["X-CSRF-Token"],
-            origin = call.request.headers[HttpHeaders.Origin],
-            host = call.request.headers[HttpHeaders.Host],
+            webSocketToken = call.request.queryParameters["ws_token"],
         )
         val principal = security.authenticate(request) ?: throw UnauthenticatedApiException()
         if (!security.isAllowed(principal, request)) throw ForbiddenApiException()
-        security.validate(principal, request)
         call.attributes.put(ApiPrincipalKey, principal)
     }
 }

@@ -1,5 +1,6 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.contract.*
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
@@ -19,6 +20,10 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 
 private val LEASE_ENDED = CloseReason(CloseReason.Codes.NORMAL, "playback lease ended")
+internal val sessionProtocolJson = Json {
+    ignoreUnknownKeys = true
+    encodeDefaults = true
+}
 
 /** Ktor adapter for owner-bound playback leases and admin playback control. */
 internal fun Route.sessionRoutes(
@@ -43,6 +48,9 @@ internal fun Route.sessionRoutes(
             }
             post("/media-grant") {
                 call.respond(service.refreshMediaGrant(call.actor, call.requiredParameter("id")))
+            }
+            post("/ws-token") {
+                call.respond(service.webSocketAccess(call.actor, call.requiredParameter("id")))
             }
             post("/intent") {
                 call.respond(service.watchIntent(call.actor, call.requiredParameter("id")))
@@ -80,7 +88,7 @@ internal fun Route.sessionRoutes(
                 call.respond(HttpStatusCode.NoContent)
             }
             post("/ready") {
-                service.ready(call.actor, call.requiredParameter("id"))
+                service.ready(call.actor, call.requiredParameter("id"), call.receive())
                 call.respond(HttpStatusCode.NoContent)
             }
             post("/leave") {
@@ -92,7 +100,7 @@ internal fun Route.sessionRoutes(
                 val actor = call.actor
                 val client = call.playbackClient()
                 suspend fun flush() = service.commands(actor, id).forEach {
-                    send(Frame.Text(Json.encodeToString(SessionCommandDto.serializer(), it)))
+                    send(Frame.Text(sessionProtocolJson.encodeToString(SessionCommandDto.serializer(), it)))
                 }
                 try {
                     service.resendRoomState(actor, id)
@@ -105,7 +113,10 @@ internal fun Route.sessionRoutes(
                         for (frame in incoming) {
                             if (frame !is Frame.Text) continue
                             val message = runCatching {
-                                Json.decodeFromString(ClientFrameDto.serializer(), frame.readText())
+                                sessionProtocolJson.decodeFromString(
+                                    ClientFrameDto.serializer(),
+                                    frame.readText(),
+                                )
                             }.getOrNull() ?: continue
                             when (message.type) {
                                 "heartbeat" -> message.heartbeat

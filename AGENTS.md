@@ -9,21 +9,25 @@ OpenTV is a modular monolith with two independent clients:
 
 - `:app`: standalone Android/Android TV IPTV reader.
 - `:server`: Kotlin/JVM Ktor server that embeds the React web client.
+- `:server-contract`: Kotlin Multiplatform wire DTOs shared by the server and
+  hub clients.
 - `:core`: platform-neutral logic shared by Android and server.
 - `:data`: Room implementation of `:core` storage ports for Android and JVM.
 - `server/webapp`: React/TypeScript/Vite client for `:server`.
 
-Android does not use or bundle the server. It includes `:core` and Android
-`:data`; it does not include `:server` or JVM `:data`. R8 and resource shrinking
-are currently disabled.
+Android does not bundle the server. It includes `:core`, Android `:data`,
+`:server-contract`, and `:hub-client`; it does not include `:server`,
+`:server-data`, or JVM `:data`. Release builds enable R8 minification and
+resource shrinking.
 
-Future Android support for an OpenTV server is expected to be an optional source
-adapter. Existing local M3U/Xtream behavior must remain independent.
+An OpenTV server is an optional Android source adapter. Existing local
+M3U/Xtream behavior remains independent.
 
 ## Where things are
 
 ### Shared
 
+- Server wire DTOs: `server-contract/src/commonMain/.../contract/`
 - Domain models: `core/.../model/Models.kt`
 - Storage ports: `core/.../storage/Storage.kt`
 - Repositories/use cases: `core/.../repo/`
@@ -41,10 +45,10 @@ adapter. Existing local M3U/Xtream behavior must remain independent.
 - Feature adapters: `PlaylistRoutes.kt`, `LibraryRoutes.kt`,
   `DownloadRoutes.kt`, `SessionRoutes.kt`, `MediaRoutes.kt`
 - Feature use cases: matching `*ApplicationService.kt`
-- HTTP contracts: `ApiModels.kt`, `ResourceDtos.kt`, `PlaybackModels.kt`
+- Domain-to-wire mapping helpers: `ResourceDtos.kt`
 - Authentication seam: `ApiSecurity.kt`
 - Media runtime: `Remux.kt`, `LiveRelay.kt`, `StreamGate.kt`,
-  `MediaProcessRunner.kt`
+  `SharedHlsCache.kt`, `MediaProcessRunner.kt`
 - Remux collaborators: `RemuxSession.kt` (session model), `RemuxCommand.kt`
   (ffmpeg pipeline), `RemuxPlaylists.kt` (HLS documents), `RemuxSubtitles.kt`
   (WebVTT cue store), `MediaProbe.kt` (ffprobe)
@@ -89,23 +93,38 @@ absent from the initial bundle.
 ## Current contracts and decisions
 
 - `/api/v1` is the only API prefix; there is no legacy `/api` alias.
+- `GET /api/v1/server-info` is public discovery metadata and returns only
+  `product="opentv"`, `apiVersion=1`, and the running server version. The server
+  JAR's `Implementation-Version` comes from `-PopentvVersion`, then
+  `OPENTV_VERSION`, and is `dev` when neither build input is set.
 - There is no OpenAPI document. OpenAPI is only wanted if generated and
   validated from executable routes/DTOs.
 - `ApiSecurity.openAccess()` is a test-only adapter; production composition uses
-  `ApiSecurity.authenticated()`, so the API authenticates itself. Its CSRF/Origin
-  guard is covered by `ApiSecurityTest`, its environment rules by `AuthConfigTest`.
-- The same-origin decision is `RequestOrigin.isSameOrigin`: an `Origin` is accepted
-  when it names the `Host` the request was addressed to, or `OPENTV_PUBLIC_URL`. A
-  browser sets both headers, so this is still same-origin, and it is what lets a
-  first-run visitor create the first administrator over a LAN address or the dev
-  server's port. Comparing against the configured URL alone made that impossible.
-  A rejection is `403 origin_rejected` (distinct from `csrf_rejected`, which means a
-  stale token) and is logged with both sides. `RequestOriginTest`,
-  `PublicAuthOriginTest`.
+  `ApiSecurity.authenticated()`, so the API authenticates itself. Every client sends
+  the same opaque session as `Authorization: Bearer`; session cookies, CSRF tokens,
+  and auth-path Origin checks do not exist. `ApiSecurityTest`, `NativeAuthFlowTest`.
+- The bundled web client keeps the bearer token in localStorage. Successful JSON auth
+  flows return it as `AuthFlowDto.sessionToken`; OIDC returns it in `/#session=...`,
+  alongside the browser-generated `handoff` correlation stored for that flow in
+  sessionStorage. The client accepts a recent exact match, consumes both fragment values,
+  and clears the URL before loading the current user. The CSP allows scripts only from
+  this origin and forbids script attributes as the compensating control for a
+  script-readable token. There is no compatibility transport for former cookie sessions.
+- Android stores a hub's bearer only in `HubSessionVault`: AES-256-GCM under a
+  non-exportable Android Keystore key. The token never enters Room.
+- Browser WebSockets cannot set `Authorization`, so `/playback/{id}/ws-token` mints a
+  signed 30-second capability bound to the auth session and playback lease. The client
+  puts only that capability in the `ws_token` query parameter; the route-scoped
+  authenticator strips and validates it before the upgrade. The long-lived bearer is
+  never put in a URL.
+- `X-OpenTV-Client: native` tags sessions created by public auth flows as
+  `ClientKind.NATIVE`; absent or other values mean `BROWSER`. It is descriptive admin
+  metadata with no authorization meaning. Device-link sessions remain
+  `LINKED_DEVICE`.
 - Error responses are mapped in one place: `installOpenTvErrorResponses`.
 - `OPENTV_PUBLIC_URL` is optional. `PublicOrigin` answers the four questions that need an
-  absolute address - OIDC callback, device-link QR, WebAuthn relying party, cookie
-  `Secure`/HSTS - from the configuration when it is pinned (`AuthConfig.publicUrlPinned`,
+  absolute address - OIDC callback, device-link QR, WebAuthn relying party, OIDC
+  transaction-cookie `Secure`/HSTS - from the configuration when it is pinned (`AuthConfig.publicUrlPinned`,
   `webAuthnPinned`) and from the request when it is not. Forwarded scheme and host are read
   only through the `trustsPeer` predicate, i.e. `OPENTV_TRUSTED_PROXIES`. A pinned address
   is never second-guessed: the OIDC callback is registered at the provider and a passkey
@@ -136,20 +155,20 @@ absent from the initial bundle.
 - Listings are paged by the server, not by the browser. Channel, series and episode
   endpoints take `offset`/`limit` (validated at the route, 1..MAX) and answer with a page
   object plus a total; `useServerPaged` drives them. Listing DTOs are projections - they
-  carry no provider URLs or detail-only fields. This replaced returning whole groups: a
-  5,000-item category went from 2.5 MB and ~85 ms to 17 kB and ~5 ms.
+  carry no provider URLs or detail-only fields.
 - Search is indexed, never a scan: a normalized `searchName` prefix B-tree, plus FTS5
   `unicode61` (word prefixes) and trigram (mid-word, three characters or more) sidecars
   maintained by triggers. Ranking is title-prefix, then word boundary, then mid-word, and
   every section is capped server-side. Room 2.x cannot export FTS5 entities, so that DDL
-  lives in the migration and callback and is proven by `OpenTvDatabaseSchemaTest` rather
-  than by the exported JSON. The catalog is rewritten wholesale on refresh, so every index
-  here is paid on every refresh - the ones that were kept were measured on both sides.
+  lives in a database creation/open callback and is proven by `OpenTvDatabaseSchemaTest`
+  rather than by the exported JSON. The catalog is rewritten wholesale on refresh, so
+  index cost is paid on every refresh.
 - The image proxy caches: bounded memory tier, disk tier for large posters, LRU eviction,
   single-flight so concurrent grids fetch a poster once, and upstream validator
   revalidation. The disk tier is optional - a filesystem that refuses it degrades the tier,
-  never the server's ability to start. Authorization is unchanged: every request still
-  authenticates and rechecks playlist access, the cache only reuses bytes.
+  never the server's ability to start. Image elements authenticate with the signed,
+  expiring image capability minted only into an entitled listing; no media element depends
+  on the bearer header.
 - Remux fragments are served with `LocalFileContent`, so ranges work and a fragment never
   lands in heap. One `media_start` debug record per playback start carries the stage
   timings (connection limit, ffprobe, preparation, launch, init, first fragment), so
@@ -167,40 +186,43 @@ absent from the initial bundle.
 - `MediaProbe.inspect` is single-flighted: a remote probe costs a provider connection on the
   path to playback, so two viewers of one title share the result. It probes with bounded
   `-analyzeduration`/`-probesize` first and re-probes unbounded only when that looks short.
-- Listings are paged by the server, not by the browser. Channel, series and episode
-  endpoints take `offset`/`limit` (validated at the route, 1..MAX) and answer with a page
-  object plus a total; `useServerPaged` drives them. Listing DTOs are projections - they
-  carry no provider URLs or detail-only fields. This replaced returning whole groups: a
-  5,000-item category went from 2.5 MB and ~85 ms to 17 kB and ~5 ms.
-- Search is indexed, never a scan: a normalized `searchName` prefix B-tree, plus FTS5
-  `unicode61` (word prefixes) and trigram (mid-word, three characters or more) sidecars
-  maintained by triggers. Ranking is title-prefix, then word boundary, then mid-word, and
-  every section is capped server-side. Room 2.x cannot export FTS5 entities, so that DDL
-  lives in the migration and callback and is proven by `OpenTvDatabaseSchemaTest` rather
-  than by the exported JSON. The catalog is rewritten wholesale on refresh, so every index
-  here is paid on every refresh - the ones that were kept were measured on both sides.
-- The image proxy caches: bounded memory tier, disk tier for large posters, LRU eviction,
-  single-flight so concurrent grids fetch a poster once, and upstream validator
-  revalidation. The disk tier is optional - a filesystem that refuses it degrades the tier,
-  never the server's ability to start. Authorization is unchanged: every request still
-  authenticates and rechecks playlist access, the cache only reuses bytes.
-- Remux fragments are served with `LocalFileContent`, so ranges work and a fragment never
-  lands in heap. One `media_start` debug record per playback start carries the stage
-  timings (connection limit, ffprobe, preparation, launch, init, first fragment), so
-  startup latency is measurable in production instead of argued about.
-- A catalog refresh deletes and re-inserts channel rows, so every numeric channel id is a
-  refresh-generation value. Browser links, and anything that must outlive a refresh, use the
-  stable `contentId`; `/content/{contentId}` serves the same three reads as `/channels/{id}`,
-  which stays only for links made before this. `ContentIdentityServiceTest` proves a content
-  link survives the renumbering.
-- Nothing on the path to the first frame waits on the provider's account API.
-  `ProviderConnectionLimits` bounds it, reuses the last known limit and backs off from a slow
-  panel; `AccountRepository` locks per playlist and answers with stale data rather than
-  queueing behind an in-flight request. The same rule applies to the panel EPG in
-  `XtreamRepository.guideFor`, which falls back to stored XMLTV.
-- `MediaProbe.inspect` is single-flighted: a remote probe costs a provider connection on the
-  path to playback, so two viewers of one title share the result. It probes with bounded
-  analyze/probe limits first and re-probes unbounded only when that looks short.
+- Playback codec support is a lease property, reported as normalized ffprobe video/audio names
+  on `POST /playback`; a missing or empty report means the exact browser baseline. Unknown,
+  overlong and excess names are discarded. There is one negotiation path and no `hevc` remux
+  query parameter.
+- `ClientCapabilitiesDto.selectsTracksInBand` is false by default. Android reports true because
+  ExoPlayer selects muxed audio and subtitle tracks itself. The room intersection ANDs the flag,
+  and the media-capability fingerprint includes it. An all-in-band room can direct-play only when
+  every audio stream and the video stream are decodable; a browser or mixed room retains the
+  first-audio/single-audio/no-subtitles direct-play restriction.
+- A watch-together room serves one media format, so its effective capabilities are the
+  intersection of every member's stored lease report. An intersection change on join or leave
+  uses the existing `room-audio` reload/ready/`room-go` barrier to move every member to the new
+  shared read together.
+- Fully capable in-band clients can direct-play multi-audio or subtitled VOD without a
+  room remux. Raw-TS live rooms use `LiveRelay` and one upstream read. Playlist-only
+  `.m3u8` rooms use `SharedHlsCache`: manifests and media resources are single-flighted
+  and bounded per share group, then each viewer receives a lease-specific rewritten
+  manifest. Both live paths replace per-viewer provider reads with one room-owned
+  provider-budget seat.
+- Every server-emitted playback command carries a positive, per-lease monotonic `sequence`.
+  Browser and Android clients keep a high-water mark and ignore missing, duplicate, or older
+  commands, which orders WebSocket delivery against a delayed HTTP-heartbeat fallback without
+  turning the queue into a reliable-delivery protocol.
+- Each room reload barrier has its own positive, monotonically increasing `generation`.
+  `room-audio` and `room-go` carry it, `/playback/{id}/ready` requires
+  `ReadyBody(generation)`, and stale/missing generations are ignored by the barrier rather than
+  being treated as a wildcard. Repeated current-generation `ready` and repeated `leave` are
+  harmless. Android retries ready at most three times (immediately, then after 500 ms and 1 s),
+  all inside the existing 12-second client fail-open window.
+- Kicking removes the viewer from the room/shared read immediately, queues and wakes delivery of
+  `room-ended`, then a server-owned timer terminates the lease after a fixed 750 ms notice grace.
+  Draining the notice does not cancel or extend the timer, so a stalled or adversarial client
+  cannot skip revocation; runtime shutdown also removes every lease.
+- Remux artifacts are keyed by a short stable fingerprint of the effective codec sets in
+  addition to source, audio track and share group. Remux, live relay and audio-transcode paths
+  all make copy-versus-transcode decisions from that effective set; unlike capability sets
+  cannot accidentally share a prepared media pipeline.
 - Nothing is decodable until one HLS fragment closes, so the segment target is the floor on
   time-to-first-frame; copied video uses the same 3s target as transcoded video and can still
   only cut on a source keyframe.
@@ -234,21 +256,82 @@ absent from the initial bundle.
   a resolved `title`, batched through one identity lookup and one `getMany`, and null when
   the catalog no longer holds it.
 - API failures use `ApiErrorDto(code, message, field)`.
+- API wire declarations shared with hub clients live in `:server-contract`; Ktor,
+  server-domain types, validation, domain-to-DTO mapping, the health response, and
+  private persistence/challenge payloads stay in `:server`.
 - Server DTOs are separate from `:core` models.
 - Kotlin DTO and TypeScript contract changes must remain synchronized.
-- Provider URLs and credentials never leave the server.
+- Provider-controlled numeric identities are decimal strings on every wire:
+  `xtreamStreamId`, Xtream `seriesId`/`xtreamSeriesId`, and metadata `sourceId`.
+  The current core/Room catalog remains `Long`-backed and accepts only canonical
+  positive decimal ids that round-trip through `Long`. Xtream rows with a
+  nonnumeric, noncanonical, non-positive, or oversized id are skipped at
+  ingestion; invalid optional TVMaze `sourceId` is stored as null while the
+  remaining metadata is kept. The Xtream-series route rejects the same invalid
+  forms with a typed 400 instead of normalizing them into another identity.
+- Provider URLs and credentials held by the server never appear in response contracts.
 - Browser playlist credentials are write-only. There is no credential-read
   endpoint. Blank secret fields on update preserve existing values.
 - Browser playback URLs are opaque `StreamCipher` capabilities. A stream token seals the
   playback lease it was minted for, so URLs the proxy derives while rewriting a lease's HLS
   manifest are usable by that lease alone. Media routes take the lease from the token, not
   from the request.
+- `/stream`, `/shared-hls`, `/relay`, `/transcode`, `/remux/*`, and `/img` live
+  outside the bearer boundary because native media and image elements cannot add headers.
+  Stream/remux routes validate the encrypted source plus the rotating grant bound to its live
+  lease and derive user/session identity from that lease. Download-file snapshots, including
+  readable prefixes of a running blob, similarly use a signed, expiring,
+  owner-and-download-bound `StreamCipher` capability and remain range-capable.
+- Android hub downloads pipeline the provider fetch and device pull.
+  `HubDownloadCoordinator` hands off as soon as the server's growing blob has usable bytes;
+  each signed file response is a fixed snapshot, and the authenticated download DTO remains
+  authoritative for status and expected size. Android marks the local row done only when the
+  DTO is `DONE` and both byte counts match. The pull refreshes its short-lived capability
+  through the authenticated hub API after a 401 and bypasses the provider-connection gate.
 - The HLS rewriter mints capabilities only for children on the manifest's own origin;
   playlists are provider-controlled input and must not be able to aim the server's HTTP
   client at another host.
-- `api/http.ts` already supports same-origin cookies and has one future bearer
-  token provider seam.
+- HLS live rooms use the explicit lease `sharedHlsUrl`, never the raw-TS relay. The server
+  caches untouched upstream resources by room share group, URL, and Range: concurrent reads
+  are single-flighted, playlists live for 1 second, and each room keeps at most 24 media
+  resources/32 total entries/64 MiB (256 MiB globally), with 32 MiB per resource and
+  30-second idle eviction. The existing `StreamProxy.rewriteHls` remains the only playlist
+  rewriter and mints lease-specific `/shared-hls` child capabilities. Extensionless playlists
+  are recognized from their `#EXTM3U` prefix, so raw provider URLs never enter a served
+  manifest even when a panel labels one as generic binary data. A room owns one `StreamGate`
+  seat under its share-group id;
+  last-member cleanup closes readers, evicts bytes, and releases that id immediately.
+- `api/http.ts` installs one localStorage-backed bearer provider for every HTTP request;
+  it sends no ambient credentials and has no CSRF seam.
 - Browser preferences and server settings are intentionally separate.
+- Android catalog gateways are cached in a thread-safe, access-order LRU capped at 64.
+  Gateway lookup/construction never reads Room: `CatalogGateway.traits()` is suspending, and
+  a local gateway resolves its playlist-backed traits only after the ViewModel has entered a
+  coroutine. The gateway-cache monitor is never held across suspension.
+- Conditional playlist/EPG bodies are consumed through suspending `TextBody.readLines` /
+  `readChars` callbacks. Platform adapters run the callback on their blocking-I/O dispatcher,
+  close or cancel the underlying HTTP exchange when the coroutine is cancelled, and expose
+  only a streaming `Sequence` / `TextSource`; neither Android nor server buffers the full file.
+- Android hub re-authentication routes carry the existing hub row id. A successful flow replaces
+  that row's vaulted token without inserting or changing its address, clears identity cached for
+  the old session, and refreshes `/auth/me`. Signing into a different account on the same hub is
+  allowed and replaces the cached identity; if the row was removed before the flow starts, the
+  screen falls back to the ordinary add flow.
+- Android keeps `allowBackup=false` plus matching `backup_rules.xml` exclusions for
+  pre-31 devices and uses `data_extraction_rules.xml` on Android 12+: cloud backup and
+  device transfer exclude `opentv.db` plus its journal/WAL sidecars,
+  `hub_sessions.xml`, and the `player_prefs.preferences_pb` DataStore.
+- `HubBrowserHandoff` opens same-origin account/admin pages in a Custom Tab and falls
+  back to a QR code on televisions or devices without a browser. Keep the HTTP and HTTPS
+  `ACTION_VIEW` declarations in the manifest's `<queries>` block: Android 11+ package
+  visibility otherwise makes the browser probe lie.
+- `DownloadStateIcon` is the single contextual `POST_NOTIFICATIONS` request seam for every
+  download source, including hub downloads. It asks only on Android 13+ and always invokes the
+  enqueue callback immediately, so denial hides progress notification UI but never blocks work.
+  The Downloads screen reuses the same seam when Resume or Retry reschedules a worker.
+- `DownloadWorker` must successfully enter foreground execution before transferring any bytes.
+  Later notification-content refresh failures may be logged and ignored because the worker is
+  already foreground; a true initial promotion failure follows the ordinary retry/failure path.
 - Playlist-dependent web routes are guarded by `LibraryProvider`; keep empty,
   missing, and failed-library states out of feature-screen loading spinners.
 - `PlaylistRepository.refresh` reports whether it actually rewrote the catalog;
@@ -270,28 +353,47 @@ absent from the initial bundle.
   Interactive streams may evict downloads, never another viewer.
 - Android workers receive dependencies through `DownloadWorkerFactory`.
 - Android repositories use `DownloadScheduler`, not WorkManager statics.
+- `HubDownloadCoordinator` lives with the Android download application layer because it
+  owns the persisted local row and the handoff between preparation and `DownloadWorker`;
+  hub HTTP calls remain behind its registry-backed adapter.
 - Android composables consume ViewModel state; direct graph access is confined
   to composition/ViewModel-factory boundaries.
 - `PlayerSession` owns ExoPlayer, listeners, polling, progress persistence, and
   cleanup.
+- Hub direct playback uses ExoPlayer's in-band track picker. A hub remux exposes the server's
+  audio-track list instead; selecting one re-requests the remux and replaces the media item at
+  the captured playback position. Local M3U/Xtream playback never owns a hub controller.
+- Android watch-together policy lives in `WatchTogetherCoordinator`, not in Compose or
+  `PlayerSession`. `room-state` replaces its roster, only a roster controller emits sync, and
+  the ExoPlayer event seam suppresses echoes of applied server/admin commands. It mirrors the
+  web thresholds: 750 ms for an explicit seek and 4 s for a periodic drift anchor.
+- Android enters the `room-audio` reload/ready/`room-go` barrier only while its hub playback is
+  remuxed or while a direct live player changes between its solo and room source. HLS changes to
+  the lease's shared-HLS URL and remains direct ExoPlayer playback; TS changes to the relay. A
+  direct player whose in-band source is already correct acknowledges that server generation
+  without a reload; a remux/shared-source transition restores the captured position, stays
+  paused after media readiness, and resumes only on the matching `room-go` (with the same bounded
+  fail-open as the web client).
 
 ## Persistence and identity
 
-- Room schema version is 10 for `:data` (`opentv.db`), 2 for `:server-data`
-  (`server-users.db`). Both modules keep their migrations in `db/Migrations.kt`,
-  register them in their database factory, and prove them: `ServerUserMigrationTest`
-  and `OpenTvDatabaseSchemaTest` build a database from each exported schema and open
-  it, so a version bump without a migration fails in CI rather than crash-looping a
-  deployment. `:data:jvmTest` and `:server-data:jvmTest` both run in CI.
+- Room schema version is 12 for `:data` (`opentv.db`), 2 for `:server-data`
+  (`server-users.db`). The catalog database deliberately uses destructive migration
+  fallback and is recreated on a schema-version mismatch. On Android this wipes local
+  playlists, connected-hub rows, favorites, resume points, download records, and other
+  catalog-backed state; on the server it wipes playlists and their catalog/guide data.
+  Downloaded files may remain on disk without their Room records. Exported catalog schemas
+  remain documentation, while `OpenTvDatabaseSchemaTest` pins fresh creation, indexed
+  search, and destructive reopening. `:server-data` keeps explicit migrations and
+  migration coverage in `ServerUserMigrationTest`.
+- `auth_sessions.csrfToken` remains only as an unused schema column so the bearer-only
+  transport does not require a database migration; it is never exposed or validated.
 - There is no audit/security-event log. The `security_events` table was removed in
   server-user schema 2: nothing read it. Reintroducing one means designing its
   reader and its retention first.
-- Destructive migration fallback is not used.
-- Schema changes require explicit Android and JVM migrations, exported schema,
-  and migration coverage.
-- Favorites, resume points, and downloads currently use existing URL/key
-  identities. A future stable-content identity migration must update all three
-  together rather than piecemeal.
+- Android local-playlist favorites, resume points, and downloads use existing URL/key
+  identities; hub-backed state uses server `contentId`. A future stable identity
+  migration for local content must update all three together rather than piecemeal.
 - `ContentIdentityService` has two paths and they are not interchangeable.
   Reconciliation owns `lastSeenAtMs` and retirement and may scan a playlist;
   browsing resolves by fingerprint in batches, creates only what is missing, and
@@ -334,7 +436,6 @@ cd ../..
 ## Useful executable references
 
 - Route layering: `RouteLayeringTest`
-- Authentication seam: `ApiSecurityTest`
 - Write-only credentials: `PlaylistUpdateSecurityTest`
 - Provider connection budget: `ProviderConnectionsTest`
 - Playback session lifecycle: `PlaybackSessionRegistryTest`
@@ -348,14 +449,19 @@ cd ../..
 - Typed administration failures: `UserAdministrationErrorTest`
 - Browser transport contract: `webapp/src/api/http.test.ts`
 - Browser failure copy and reporting: `webapp/src/errors.test.ts`
-- Same-origin decision: `RequestOriginTest`, `PublicAuthOriginTest`
+- Bearer, WebSocket-capability, and public-route boundary: `ApiSecurityTest`,
+  `NativeAuthFlowTest`, `RouteLayeringTest`
 - Android player orchestration: `PlayerViewModelTest`
 - Android player policies: `PlayerPolicyTest`
+- Watch-together generations, sequencing, retry bounds, and kick grace:
+  `PlaybackSessionRegistryTest`, `WatchTogetherCoordinatorTest`,
+  `webapp/src/player/sessionProtocol.test.ts`
 
 ## Invariants
 
 - No Ktor/Android/Room/server DTO types in `:core`.
-- No provider credentials or raw provider URLs in browser contracts.
+- No provider credentials or raw provider URLs in browser response contracts.
+  Playlist create/update requests carry write-only provider inputs by necessity.
 - No unmanaged long-lived scopes, processes, or threads.
 - Compression is an allowlist of text content types. Media is streamed, and Ktor
   compresses a streaming body by buffering all of it; a new streaming route must not
@@ -363,7 +469,7 @@ cd ../..
 - Playback status codes: a lease that is gone is 410 and nothing else. 404 means many
   ordinary things on these routes (no extra tracks to expose, an unknown segment), so
   no client may infer "stop playing" from it.
-- No Room destructive fallback.
+- The catalog Room database uses destructive fallback; `:server-data` does not.
 - No hand-maintained OpenAPI file.
 - Security headers and the CSP are configured once at composition in
   `Application.kt`; caching headers are bound to the static-content route so they
@@ -374,9 +480,10 @@ cd ../..
 - Browser transport failures are `ApiError(status 0, code network/timeout/aborted)`.
   A transport failure is not an authorization outcome: it must not clear a
   session, and 401/403 listeners must not fire for it.
-- Secrets that arrive in a URL (activation, password reset, device link) travel in
-  the fragment, never the query string: the query reaches the server's and every
-  proxy's access log.
+- Human-delivered secrets in a URL (activation, password reset, device link) travel
+  in the fragment, never the query string: the query reaches the server's and every
+  proxy's access log. Query credentials are purpose-limited media, image, download-file,
+  and 30-second WebSocket capabilities; a long-lived session bearer never travels there.
 - Failed async state is rendered by `asyncFallback`/`LoadFailed`, never as an
   endless spinner. `useAsync` exposes `error` and `reload` for exactly this.
 - `src/errors.ts` turns a failure into words and puts it on screen; screens do not
@@ -395,8 +502,9 @@ cd ../..
 - `Dialog` and `Sheet` are modal: role, `aria-modal`, labelling, Escape, focus
   trap and focus restore come from `useModalFocus`. Anything the user must
   acknowledge (recovery codes) uses `dismissible={false}`.
-- Every activation target is a real control. A clickable `div` is a bug: this UI
-  is driven by keyboards and TV remotes as well as touch.
+- Every content action is a real control: this UI is driven by keyboards and TV
+  remotes as well as touch. The modal scrim is the only pointer-only clickable `div`;
+  dialogs also provide Escape and explicit controls.
 - `IconName` is a closed union; a name that is not a glyph is a compile error
   rather than an invisible button.
 - Do not recreate the deleted server `Routes.kt` or Android player god class.

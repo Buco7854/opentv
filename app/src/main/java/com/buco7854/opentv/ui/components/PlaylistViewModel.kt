@@ -7,6 +7,8 @@ import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.AP
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.buco7854.opentv.source.SourceId
+import com.buco7854.opentv.source.encode
 
 /** ViewModel keyed by (screen, playlistId). */
 @Composable
@@ -17,5 +19,17 @@ inline fun <reified VM : ViewModel> playlistViewModel(
     key = "${VM::class.java.simpleName}-$playlistId",
     factory = viewModelFactory {
         initializer { create(this[APPLICATION_KEY]!! as Application, playlistId) }
+    },
+)
+
+/** ViewModel keyed by (screen, sourceId). */
+@Composable
+inline fun <reified VM : ViewModel> sourceViewModel(
+    sourceId: SourceId,
+    crossinline create: (Application, SourceId) -> VM,
+): VM = viewModel(
+    key = "${VM::class.java.simpleName}-${sourceId.encode()}",
+    factory = viewModelFactory {
+        initializer { create(this[APPLICATION_KEY]!! as Application, sourceId) }
     },
 )

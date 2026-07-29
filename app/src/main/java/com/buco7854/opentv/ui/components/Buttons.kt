@@ -22,7 +22,7 @@ fun OtvButton(
     content: @Composable RowScope.() -> Unit,
 ) = Button(
     onClick = onClick,
-    modifier = modifier.heightIn(min = 44.dp),
+    modifier = modifier.focusHighlight(OtvButtonShape).heightIn(min = 44.dp),
     enabled = enabled,
     shape = OtvButtonShape,
     content = content,
@@ -36,7 +36,7 @@ fun OtvTonalButton(
     content: @Composable RowScope.() -> Unit,
 ) = Button(
     onClick = onClick,
-    modifier = modifier.heightIn(min = 44.dp),
+    modifier = modifier.focusHighlight(OtvButtonShape).heightIn(min = 44.dp),
     enabled = enabled,
     shape = OtvButtonShape,
     colors = ButtonDefaults.buttonColors(
@@ -55,7 +55,7 @@ fun OtvTextButton(
     content: @Composable RowScope.() -> Unit,
 ) = TextButton(
     onClick = onClick,
-    modifier = modifier,
+    modifier = modifier.focusHighlight(OtvButtonShape),
     enabled = enabled,
     shape = OtvButtonShape,
     colors = ButtonDefaults.textButtonColors(

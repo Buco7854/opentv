@@ -546,14 +546,25 @@
     -webkit-user-select: none;
     user-select: none;
   }
+  .card.interactive-card {
+    @apply w-full text-left;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
   button.card:active, .card.clickable:active { background: var(--c-panel-hi); }
+  .card.interactive-card:active { background: var(--c-panel-hi); }
   @media (hover: hover) {
     button.card:hover, .card.clickable:hover { background: var(--c-panel-hi); }
+    .card.interactive-card:hover { background: var(--c-panel-hi); }
   }
   .card.r20 { @apply rounded-2xl; }
   .card.selected { background: var(--c-listsel); }
-  button.card.selected:active { background: var(--c-listsel); }
-  @media (hover: hover) { button.card.selected:hover { background: var(--c-listsel); } }
+  button.card.selected:active, .card.interactive-card.selected:active { background: var(--c-listsel); }
+  @media (hover: hover) {
+    button.card.selected:hover, .card.interactive-card.selected:hover { background: var(--c-listsel); }
+  }
 
   /* Selection checkbox shown at the left of a row in multi-select mode. */
   .select-check {
@@ -605,6 +616,7 @@
   .badge.premium { background: var(--c-seg); color: var(--c-on-seg); }
 
   .row { @apply flex items-center gap-3.5 p-3; }
+  .row .row-open { @apply flex min-w-0 flex-1 items-center gap-3.5 self-stretch rounded-lg text-left; }
   .row .body { @apply min-w-0 flex-1; }
   .row .title-line { @apply flex min-w-0 items-center gap-1.5; }
   .row .sub, .poster-card .meta .sub, .download-card .status, .session-card .sub {
@@ -637,6 +649,7 @@
   .poster-card .meta .title { @apply line-clamp-2; font: var(--type-label-large); }
 
   .group-row { @apply flex items-center gap-3.5 py-1.5 pr-1 pl-4; }
+  .group-row .group-open { @apply flex min-w-0 flex-1 items-center gap-3.5 rounded-lg text-left; }
   .group-row .icon.folder { @apply text-on-surface-variant; stroke-width: 1.8; }
   .group-row .name { @apply flex-1 truncate py-2.5; font: var(--type-title-medium); letter-spacing: -0.1px; }
   .group-row .count { @apply text-on-surface-variant; font: var(--type-label-large); }

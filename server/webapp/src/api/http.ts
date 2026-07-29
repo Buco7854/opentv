@@ -29,7 +29,6 @@ export const isTransportError = (error: unknown): error is ApiError =>
   error instanceof ApiError && error.status === TRANSPORT_STATUS;
 
 export type AccessTokenProvider = () => string | null | Promise<string | null>;
-export type CsrfTokenProvider = () => string | null;
 export type UnauthorizedListener = () => void;
 export type ForbiddenListener = () => void;
 export interface RequestBehavior {
@@ -62,12 +61,10 @@ function transportError(cause: unknown, budget: AbortSignal): ApiError {
 /**
  * HTTP transport for the executable API.
  *
- * Authentication is intentionally a transport concern: cookie auth works via
- * same-origin credentials today, while a future bearer provider can be
+ * Authentication is intentionally a transport concern: the bearer provider is
  * installed once at composition instead of modifying every feature call.
  */
 export class ApiHttpClient {
-  private csrfToken?: CsrfTokenProvider;
   private unauthorizedListeners = new Set<UnauthorizedListener>();
   private forbiddenListeners = new Set<ForbiddenListener>();
 
@@ -75,10 +72,6 @@ export class ApiHttpClient {
     private readonly fetchImpl: typeof fetch = browserFetch,
     private readonly accessToken?: AccessTokenProvider,
   ) {}
-
-  setCsrfTokenProvider(provider?: CsrfTokenProvider) {
-    this.csrfToken = provider;
-  }
 
   onUnauthorized(listener: UnauthorizedListener): () => void {
     this.unauthorizedListeners.add(listener);
@@ -106,28 +99,37 @@ export class ApiHttpClient {
     const headers = new Headers(init.headers);
     const token = await this.accessToken?.();
     if (token) headers.set('Authorization', `Bearer ${token}`);
-    const method = (init.method ?? 'GET').toUpperCase();
-    if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
-      const csrf = this.csrfToken?.();
-      if (csrf) headers.set('X-CSRF-Token', csrf);
-    }
     const budget = AbortSignal.timeout(behavior.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     const signal = init.signal ? AbortSignal.any([init.signal, budget]) : budget;
     let response: Response;
     try {
       response = await this.fetchImpl(this.endpoint(path), {
-        credentials: 'same-origin',
         ...init,
+        credentials: 'omit',
         headers,
         signal,
       });
     } catch (cause) {
       throw transportError(cause, budget);
     }
-    if (response.status === 401 && behavior.broadcastAuthFailure !== false) {
-      this.unauthorizedListeners.forEach((listener) => listener());
-    } else if (response.status === 403 && behavior.broadcastAuthFailure !== false) {
-      this.forbiddenListeners.forEach((listener) => listener());
+    if ((response.status === 401 || response.status === 403)
+        && behavior.broadcastAuthFailure !== false) {
+      // A request can outlive the bearer that authorized it. In particular, another tab may
+      // replace the session while this one is waiting for a response. Never let that old 401/403
+      // invalidate or re-check the newer account.
+      let stillCurrent = true;
+      if (this.accessToken) {
+        try {
+          stillCurrent = await this.accessToken() === token;
+        } catch {
+          stillCurrent = false;
+        }
+      }
+      if (stillCurrent && response.status === 401) {
+        this.unauthorizedListeners.forEach((listener) => listener());
+      } else if (stillCurrent && response.status === 403) {
+        this.forbiddenListeners.forEach((listener) => listener());
+      }
     }
     return response;
   }
@@ -146,9 +148,11 @@ export class ApiHttpClient {
     return await response.json() as T;
   }
 
-  socketUrl(path: string): string {
+  socketUrl(path: string, token?: string): string {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${protocol}//${location.host}${this.endpoint(path)}`;
+    const url = new URL(`${protocol}//${location.host}${this.endpoint(path)}`);
+    if (token) url.searchParams.set('ws_token', token);
+    return url.toString();
   }
 
   private async toError(response: Response): Promise<ApiError> {
@@ -169,7 +173,30 @@ export class ApiHttpClient {
   }
 }
 
-export const browserApiHttp = new ApiHttpClient();
+export const ACCESS_TOKEN_STORAGE_KEY = 'opentv.accessToken';
+let volatileAccessToken: string | null = null;
+
+export function browserAccessToken(): string | null {
+  try {
+    const stored = localStorage.getItem(ACCESS_TOKEN_STORAGE_KEY);
+    volatileAccessToken = stored;
+    return stored;
+  } catch {
+    return volatileAccessToken;
+  }
+}
+
+export function setBrowserAccessToken(token: string | null) {
+  volatileAccessToken = token;
+  try {
+    if (token) localStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, token);
+    else localStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
+  } catch {
+    // Storage-disabled browsers retain the session for this page lifetime only.
+  }
+}
+
+export const browserApiHttp = new ApiHttpClient(browserFetch, browserAccessToken);
 
 export const jsonBody = (method: 'POST' | 'PUT' | 'PATCH', body: unknown): RequestInit => ({
   method,

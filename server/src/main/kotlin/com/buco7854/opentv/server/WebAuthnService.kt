@@ -1,6 +1,8 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.contract.*
 import com.buco7854.opentv.serverdata.ChallengeKind
+import com.buco7854.opentv.serverdata.ClientKind
 import com.buco7854.opentv.serverdata.UserStatus
 import com.buco7854.opentv.serverdata.db.ServerUserDatabase
 import com.buco7854.opentv.serverdata.db.WebAuthnCredentialRow
@@ -233,6 +235,7 @@ class WebAuthnService private constructor(
     internal suspend fun completeRegistration(
         request: WebAuthnCompleteRequestDto,
         clientIp: String,
+        clientKind: String = ClientKind.BROWSER,
     ): AuthResult {
         require(request.challenge.length <= 512) { "WebAuthn challenge is too large" }
         require(request.credential.length <= 65_536) { "WebAuthn response is too large" }
@@ -282,6 +285,7 @@ class WebAuthnService private constructor(
                 payload.parentId,
                 row,
                 enrollment = true,
+                clientKind = clientKind,
             ).also {
                 auth.clearFlowLimit(clientIp, "webauthn-register", request.challenge)
             }
@@ -294,6 +298,7 @@ class WebAuthnService private constructor(
     internal suspend fun completeAuthentication(
         request: WebAuthnCompleteRequestDto,
         clientIp: String,
+        clientKind: String = ClientKind.BROWSER,
     ): AuthResult {
         require(request.challenge.length <= 512) { "WebAuthn challenge is too large" }
         require(request.credential.length <= 65_536) { "WebAuthn response is too large" }
@@ -325,6 +330,7 @@ class WebAuthnService private constructor(
                     lastUsedAtMs = clock(),
                 ),
                 enrollment = false,
+                clientKind = clientKind,
             ).also {
                 auth.clearFlowLimit(clientIp, "webauthn-authenticate", request.challenge)
             }
@@ -337,6 +343,7 @@ class WebAuthnService private constructor(
     internal suspend fun completeLogin(
         request: WebAuthnLoginCompleteRequestDto,
         clientIp: String,
+        clientKind: String = ClientKind.BROWSER,
     ): AuthResult {
         require(request.challenge.length <= 512) { "WebAuthn challenge is too large" }
         require(request.credential.length <= 65_536) { "WebAuthn response is too large" }
@@ -376,6 +383,7 @@ class WebAuthnService private constructor(
                     backedUp = verified.backedUp,
                     lastUsedAtMs = clock(),
                 ),
+                clientKind,
             ).also {
                 auth.clearFlowLimit(clientIp, "webauthn-login", request.challenge)
             }

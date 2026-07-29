@@ -116,11 +116,6 @@ function DetailsCard({ account }: { account: AccountInfo }) {
       {account.isTrial && <Pill>{t('account.trial')}</Pill>}
     </div>,
   );
-  if (account.username != null) {
-    rows.push(
-      <div className="kv-row" key="user"><div className="k">{t('account.username')}</div><div className="v">{account.username}</div></div>,
-    );
-  }
   if (account.expiresAtMs != null) {
     const daysLeft = Math.floor((account.expiresAtMs - Date.now()) / 86_400_000);
     rows.push(

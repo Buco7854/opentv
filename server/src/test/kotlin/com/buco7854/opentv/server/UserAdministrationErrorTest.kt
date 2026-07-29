@@ -1,8 +1,10 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.contract.*
 import com.buco7854.opentv.serverdata.UserRole
 import com.buco7854.opentv.serverdata.UserStatus
 import com.buco7854.opentv.serverdata.createServerUserDatabase
+import com.buco7854.opentv.serverdata.db.PlaylistDeletionRow
 import com.buco7854.opentv.serverdata.db.ServerUserDatabase
 import kotlinx.coroutines.test.runTest
 import java.net.URI
@@ -148,6 +150,21 @@ class UserAdministrationErrorTest {
                 service.setUserPlaylists(actor, created.user.id, listOf(7L, 4_711L))
             }
             assertEquals("Unknown playlist: 4711", failure.message)
+        }
+    }
+
+    @Test
+    fun aDeletingPlaylistCannotBeReintroducedThroughAuthorizationState() = runTest {
+        withAdmin(knownPlaylists = setOf(7L)) { service, actor, _, db ->
+            val created = service.adminCreateUser(actor, CreateUserRequestDto("viewer", "Viewer"))
+            db.maintenance().beginPlaylistDeletion(PlaylistDeletionRow(7L, 1_700_000_000_000L))
+
+            assertFailsWith<UnknownPlaylistException> {
+                service.setDefaultPlaylists(actor, listOf(7L))
+            }
+            assertFailsWith<UnknownPlaylistException> {
+                service.setUserPlaylists(actor, created.user.id, listOf(7L))
+            }
         }
     }
 

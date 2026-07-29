@@ -1,5 +1,6 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.contract.*
 import com.buco7854.opentv.serverdata.AuthMethod
 import com.buco7854.opentv.serverdata.createServerUserDatabase
 import com.buco7854.opentv.serverdata.db.WebAuthnCredentialRow

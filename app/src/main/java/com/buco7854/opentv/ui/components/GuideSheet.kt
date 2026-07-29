@@ -31,9 +31,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
@@ -46,6 +49,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.buco7854.opentv.R
 import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.core.repo.GuideEntry
+import com.buco7854.opentv.source.CatalogGuideEntry
+import com.buco7854.opentv.source.CatalogItem
+import com.buco7854.opentv.source.CatalogLoadError
+import com.buco7854.opentv.source.ContentRef
+import com.buco7854.opentv.source.SourceId
 import com.buco7854.opentv.ui.theme.Mint
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -63,17 +71,22 @@ val guideSheetHeight: Dp
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GuideSheet(
-    channel: Channel,
+    sourceId: SourceId,
+    item: CatalogItem,
     hasEpgConfigured: Boolean,
     onDismiss: () -> Unit,
     onPlayCatchup: (url: String, title: String) -> Unit,
+    onPlayHubCatchup: (item: CatalogItem, entry: CatalogGuideEntry) -> Unit,
+    onSignIn: () -> Unit,
     onUnavailable: () -> Unit,
 ) {
-    val viewModel = guideViewModel()
-    val entries by viewModel.entries.collectAsStateWithLifecycle()
+    val viewModel = guideViewModel(sourceId)
+    val state by viewModel.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
+    val entries = state.entries
+    val displayEntries = entries?.map(CatalogGuideEntry::toGuideEntry)
 
-    LaunchedEffect(channel.id) { viewModel.show(channel) }
+    LaunchedEffect(item.ref) { viewModel.show(item) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -86,11 +99,11 @@ fun GuideSheet(
                 .padding(bottom = 24.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                ChannelLogo(channel.logo, kindIcon(channel.kind))
+                ChannelLogo(item.imageUrl, kindIcon(item.kind))
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
-                        channel.name,
+                        item.title,
                         style = MaterialTheme.typography.titleLarge,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -100,22 +113,85 @@ fun GuideSheet(
             }
             Spacer(Modifier.height(8.dp))
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            GuideEntryContent(
-                entries = entries,
-                emptyText = if (hasEpgConfigured) stringResource(R.string.guide_no_data)
-                else stringResource(R.string.guide_no_data_epg_hint),
-                onReplay = { entry ->
-                    scope.launch {
-                        val url = viewModel.catchupUrlFor(entry)
-                        if (url != null) onPlayCatchup(url, "${channel.name} · ${entry.title}")
-                        else onUnavailable()
-                    }
-                },
-                modifier = Modifier.weight(1f),
-            )
+            when (state.error) {
+                CatalogLoadError.SignedOut -> SourceSignedOut(
+                    onSignIn = onSignIn,
+                    modifier = Modifier.weight(1f),
+                )
+                CatalogLoadError.Unreachable -> SourceUnreachable(
+                    onRetry = viewModel::retry,
+                    modifier = Modifier.weight(1f),
+                )
+                is CatalogLoadError.Failed -> SourceLoadFailed(
+                    message = null,
+                    onRetry = viewModel::retry,
+                    modifier = Modifier.weight(1f),
+                )
+                null -> GuideEntryContent(
+                    entries = displayEntries,
+                    emptyText = if (hasEpgConfigured) stringResource(R.string.guide_no_data)
+                    else stringResource(R.string.guide_no_data_epg_hint),
+                    onReplay = { display ->
+                        val entry = entries?.firstOrNull {
+                            it.startMs == display.startMs && it.endMs == display.endMs
+                        } ?: return@GuideEntryContent
+                        if (sourceId is SourceId.Hub) {
+                            onPlayHubCatchup(item, entry)
+                        } else {
+                            scope.launch {
+                                val url = viewModel.catchupUrlFor(entry)
+                                if (url != null) {
+                                    onPlayCatchup(url, "${item.title} · ${entry.title}")
+                                } else {
+                                    onUnavailable()
+                                }
+                            }
+                        }
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+            }
         }
     }
 }
+
+@Composable
+fun GuideSheet(
+    channel: Channel,
+    hasEpgConfigured: Boolean,
+    onDismiss: () -> Unit,
+    onPlayCatchup: (url: String, title: String) -> Unit,
+    onUnavailable: () -> Unit,
+) {
+    GuideSheet(
+        sourceId = SourceId.LocalPlaylist(channel.playlistId),
+        item = CatalogItem(
+            ref = ContentRef.LocalUrl(channel.url, channel.id),
+            title = channel.name,
+            imageUrl = channel.logo,
+            kind = channel.kind,
+            group = channel.groupTitle,
+            seriesKey = channel.seriesKey,
+            season = channel.season,
+            episode = channel.episode,
+            durationSecs = channel.durationSecs,
+            tvgId = channel.tvgId,
+            airDate = channel.airDate,
+            catchupDays = channel.catchupDays,
+            hasCatchup = channel.catchupDays > 0 || channel.catchupSource != null,
+            hasGuide = channel.xtreamStreamId != null,
+        ),
+        hasEpgConfigured = hasEpgConfigured,
+        onDismiss = onDismiss,
+        onPlayCatchup = onPlayCatchup,
+        onPlayHubCatchup = { _, _ -> },
+        onSignIn = {},
+        onUnavailable = onUnavailable,
+    )
+}
+
+private fun CatalogGuideEntry.toGuideEntry() =
+    GuideEntry(title, description, startMs, endMs, replayable)
 
 /** Subtitle under the sheet title: catch-up hint when replays exist. */
 @Composable
@@ -156,10 +232,17 @@ fun GuideEntryContent(
                 val now = System.currentTimeMillis()
                 val listState = rememberLazyListState()
                 val expandedKeys = remember { mutableStateMapOf<Long, Boolean>() }
+                val initialFocusRequester = remember { FocusRequester() }
+                val television = isTelevisionUiMode(LocalConfiguration.current.uiMode)
+                val anchor = list.indexOfFirst { it.endMs > now }
+                    .takeIf { it >= 0 }
+                    ?: (list.size - 1)
+                val focusIndex = (anchor - 1).coerceAtLeast(0)
                 // Open at the present, not at a week of history.
                 LaunchedEffect(list) {
-                    val anchor = list.indexOfFirst { it.endMs > now }.takeIf { it >= 0 } ?: (list.size - 1)
-                    listState.scrollToItem((anchor - 1).coerceAtLeast(0))
+                    listState.scrollToItem(focusIndex)
+                    withFrameNanos { }
+                    if (television) initialFocusRequester.requestFocus()
                 }
                 LazyColumn(state = listState) {
                     itemsIndexed(list) { i, entry ->
@@ -177,6 +260,11 @@ fun GuideEntryContent(
                                     expandedKeys[entry.startMs] = expandedKeys[entry.startMs] != true
                                 },
                                 onReplay = onReplay,
+                                modifier = if (i == focusIndex) {
+                                    Modifier.focusRequester(initialFocusRequester)
+                                } else {
+                                    Modifier
+                                },
                             )
                         }
                     }
@@ -220,12 +308,14 @@ private fun GuideRow(
     expanded: Boolean,
     onToggleExpand: () -> Unit,
     onReplay: (GuideEntry) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val isNow = entry.startMs <= now && entry.endMs > now
     val isPast = entry.endMs <= now
     Row(
-        Modifier
+        modifier
             .fillMaxWidth()
+            .focusHighlight(RoundedCornerShape(12.dp))
             .clip(RoundedCornerShape(12.dp))
             .background(if (isNow) Mint.copy(alpha = 0.09f) else Color.Transparent)
             .then(
@@ -263,10 +353,12 @@ private fun GuideRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = if (expanded) Int.MAX_VALUE else 2,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                    ) { onToggleExpand() },
+                    modifier = Modifier
+                        .focusHighlight(RoundedCornerShape(4.dp))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) { onToggleExpand() },
                 )
             }
         }

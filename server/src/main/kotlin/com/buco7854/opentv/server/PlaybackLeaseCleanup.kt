@@ -2,11 +2,13 @@ package com.buco7854.opentv.server
 
 interface PlaybackLeaseCleanup {
     fun memberLeaving(leaseId: String)
+    fun shareGroupUnused(group: String)
     fun leaseTerminated(leaseId: String, unusedShareGroup: String?)
 }
 
 object NoopPlaybackLeaseCleanup : PlaybackLeaseCleanup {
     override fun memberLeaving(leaseId: String) = Unit
+    override fun shareGroupUnused(group: String) = Unit
     override fun leaseTerminated(leaseId: String, unusedShareGroup: String?) = Unit
 }
 
@@ -32,11 +34,18 @@ class RuntimePlaybackLeaseCleanup : PlaybackLeaseCleanup {
         current.dropTransports(leaseId)
     }
 
+    override fun shareGroupUnused(group: String) {
+        val current = requireNotNull(runtime) { "Playback cleanup has not been bound" }
+        current.proxy.dropShareGroup(group)
+        current.streamGate.release(group)
+        current.remux.stopGroup(group)
+    }
+
     override fun leaseTerminated(leaseId: String, unusedShareGroup: String?) {
         val current = requireNotNull(runtime) { "Playback cleanup has not been bound" }
         current.mediaGrants.revokeLease(leaseId).forEach(current.remux::stop)
         current.dropTransports(leaseId)
-        unusedShareGroup?.let(current.remux::stopGroup)
+        unusedShareGroup?.let(::shareGroupUnused)
     }
 
     private fun RuntimeCleanup.dropTransports(leaseId: String) {
@@ -44,6 +53,7 @@ class RuntimePlaybackLeaseCleanup : PlaybackLeaseCleanup {
         liveRelay.drop(leaseId)
         transcoder.drop(leaseId)
         streamGate.release(leaseId)
+        streamGate.release(transcodeGateId(leaseId))
     }
 
     private data class RuntimeCleanup(

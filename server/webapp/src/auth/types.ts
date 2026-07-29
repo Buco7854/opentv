@@ -1,4 +1,5 @@
 export type UserRole = 'USER' | 'ADMIN';
+export type ClientKind = 'BROWSER' | 'NATIVE' | 'LINKED_DEVICE';
 export type AuthStatus =
   | 'AUTHENTICATED'
   | 'MFA_REQUIRED'
@@ -24,9 +25,8 @@ export interface CurrentUser {
   /** Whether the account has a password credential - not how this session signed in. */
   hasPassword: boolean;
   authSessionId: string;
-  clientKind: string;
+  clientKind: ClientKind;
   playlistIds: number[];
-  csrfToken: string;
 }
 
 export interface AuthFlow {
@@ -36,7 +36,7 @@ export interface AuthFlow {
   methods: string[];
   expiresAtMs: number | null;
   user: CurrentUser | null;
-  csrfToken: string | null;
+  sessionToken: string | null;
   recoveryCodes: string[];
 }
 
@@ -97,18 +97,39 @@ export interface WebAuthnDescriptor {
   transports: AuthenticatorTransport[];
 }
 
+export interface WebAuthnRp {
+  id: string;
+  name: string;
+}
+
+export interface WebAuthnUser {
+  id: string;
+  name: string;
+  displayName: string;
+}
+
+export interface WebAuthnAlgorithm {
+  type: 'public-key';
+  alg: number;
+}
+
+export interface WebAuthnSelection {
+  residentKey: ResidentKeyRequirement;
+  requireResidentKey: boolean;
+  userVerification: UserVerificationRequirement;
+}
+
 export interface WebAuthnOptions {
   challenge: string;
-  rp: { id: string; name: string } | null;
-  user: { id: string; name: string; displayName: string } | null;
+  rp: WebAuthnRp | null;
+  user: WebAuthnUser | null;
   rpId: string | null;
-  pubKeyCredParams: PublicKeyCredentialParameters[];
+  pubKeyCredParams: WebAuthnAlgorithm[];
   excludeCredentials: WebAuthnDescriptor[];
   allowCredentials: WebAuthnDescriptor[];
-  authenticatorSelection: AuthenticatorSelectionCriteria | null;
+  authenticatorSelection: WebAuthnSelection | null;
   timeout: number;
   attestation: AttestationConveyancePreference | null;
   userVerification: UserVerificationRequirement | null;
   serverChallenge: string;
 }
-

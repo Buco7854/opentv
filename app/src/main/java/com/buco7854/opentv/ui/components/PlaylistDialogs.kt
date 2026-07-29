@@ -2,10 +2,12 @@ package com.buco7854.opentv.ui.components
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
@@ -19,6 +21,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.autofill.AutofillType
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -27,6 +31,9 @@ import com.buco7854.opentv.core.model.Playlist
 import com.buco7854.opentv.core.xtream.Xtream
 import com.buco7854.opentv.core.xtream.XtreamCredentials
 import androidx.compose.ui.unit.dp
+
+/** Source chooser mode that routes to the server sign-in flow instead of adding a playlist. */
+private const val HUB_MODE = 3
 
 /** Add/edit playlist dialog with Xtream auto-detection for get.php links. */
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
@@ -38,6 +45,8 @@ fun PlaylistDialog(
     onSubmitXtream: (id: Long?, name: String, server: String, username: String, password: String) -> Unit,
     onSubmitFile: (id: Long?, name: String, uri: android.net.Uri) -> Unit,
     onRename: (id: Long, name: String) -> Unit,
+    /** Null hides the server option (nothing to route to). */
+    onConnectHub: (() -> Unit)? = null,
 ) {
     val isEdit = editing != null
     // On edit the source type is fixed by the playlist; on add the user picks it.
@@ -55,6 +64,9 @@ fun PlaylistDialog(
     var username by remember(editing) { mutableStateOf(editing?.xtreamUser ?: "") }
     var password by remember(editing) { mutableStateOf(editing?.xtreamPass ?: "") }
     var xtreamSuggestion by remember { mutableStateOf<XtreamCredentials?>(null) }
+    val cancelFocusRequester = remember { FocusRequester() }
+    val suggestionFocusRequester = remember { FocusRequester() }
+    RequestInitialFocusOnTv(cancelFocusRequester, editing)
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) onSubmitFile(editing?.id, name, uri)
@@ -66,19 +78,49 @@ fun PlaylistDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (!isEdit) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(selected = mode == 0, onClick = { mode = 0 }, label = { Text(stringResource(R.string.playlist_type_xtream)) })
-                        FilterChip(selected = mode == 1, onClick = { mode = 1 }, label = { Text(stringResource(R.string.playlist_type_m3u_url)) })
-                        FilterChip(selected = mode == 2, onClick = { mode = 2 }, label = { Text(stringResource(R.string.playlist_type_file)) })
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        FilterChip(
+                            selected = mode == 0,
+                            onClick = { mode = 0 },
+                            label = { Text(stringResource(R.string.playlist_type_xtream)) },
+                            modifier = Modifier.focusHighlight(),
+                        )
+                        FilterChip(
+                            selected = mode == 1,
+                            onClick = { mode = 1 },
+                            label = { Text(stringResource(R.string.playlist_type_m3u_url)) },
+                            modifier = Modifier.focusHighlight(),
+                        )
+                        FilterChip(
+                            selected = mode == 2,
+                            onClick = { mode = 2 },
+                            label = { Text(stringResource(R.string.playlist_type_file)) },
+                            modifier = Modifier.focusHighlight(),
+                        )
+                        if (onConnectHub != null) {
+                            FilterChip(
+                                selected = mode == HUB_MODE,
+                                onClick = { mode = HUB_MODE },
+                                label = { Text(stringResource(R.string.hub_type)) },
+                                modifier = Modifier.focusHighlight(),
+                            )
+                        }
                     }
                 }
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text(stringResource(R.string.playlist_field_name)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                if (mode != HUB_MODE) {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = { Text(stringResource(R.string.playlist_field_name)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 when (mode) {
                     0 -> {
                         OutlinedTextField(
@@ -138,6 +180,13 @@ fun PlaylistDialog(
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
+                    HUB_MODE -> {
+                        Text(
+                            stringResource(R.string.hub_type_description),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     else -> {
                         Text(
                             if (isEdit) stringResource(R.string.playlist_file_edit_hint)
@@ -167,6 +216,8 @@ fun PlaylistDialog(
                             if (creds != null) xtreamSuggestion = creds
                             else onSubmitUrl(editing?.id, name, url, epg)
                         }
+                        // Connecting to a server is a flow of its own, not a form.
+                        HUB_MODE -> onConnectHub?.invoke()
                         else -> if (isEdit) onRename(editing!!.id, name)
                         else filePicker.launch(arrayOf("*/*"))
                     }
@@ -175,16 +226,23 @@ fun PlaylistDialog(
                 Text(
                     stringResource(
                         if (isEdit) R.string.common_save
+                        else if (mode == HUB_MODE) R.string.hub_connect
                         else if (mode == 2) R.string.playlist_choose_file
                         else R.string.common_add
                     )
                 )
             }
         },
-        dismissButton = { OtvTextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) } },
+        dismissButton = {
+            OtvTextButton(
+                onClick = onDismiss,
+                modifier = Modifier.focusRequester(cancelFocusRequester),
+            ) { Text(stringResource(R.string.common_cancel)) }
+        },
     )
 
     xtreamSuggestion?.let { creds ->
+        RequestInitialFocusOnTv(suggestionFocusRequester, creds)
         AlertDialog(
             onDismissRequest = { xtreamSuggestion = null },
             title = { Text(stringResource(R.string.playlist_xtream_detected_title)) },
@@ -201,7 +259,9 @@ fun PlaylistDialog(
                 OtvTextButton(onClick = {
                     xtreamSuggestion = null
                     onSubmitUrl(null, name, url, epg)
-                }) { Text(stringResource(R.string.playlist_keep_m3u)) }
+                }, modifier = Modifier.focusRequester(suggestionFocusRequester)) {
+                    Text(stringResource(R.string.playlist_keep_m3u))
+                }
             },
         )
     }

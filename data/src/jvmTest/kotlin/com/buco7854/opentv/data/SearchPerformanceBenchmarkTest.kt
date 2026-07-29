@@ -5,9 +5,11 @@ import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.model.Playlist
 import com.buco7854.opentv.core.model.XtreamSeries
 import kotlinx.coroutines.test.runTest
+import org.junit.Assume.assumeTrue
 import java.nio.file.Files
 import kotlin.system.measureNanoTime
 import kotlin.test.Test
+import kotlin.test.assertTrue
 
 /**
  * Opt-in catalog benchmark. It stays out of the normal test budget; run with:
@@ -18,7 +20,10 @@ import kotlin.test.Test
 class SearchPerformanceBenchmarkTest {
     @Test
     fun realistic_catalog_search() = runTest {
-        if (System.getenv("OPENTV_SEARCH_BENCHMARK") != "1") return@runTest
+        assumeTrue(
+            "Set OPENTV_SEARCH_BENCHMARK=1 to run the catalog benchmark",
+            System.getenv("OPENTV_SEARCH_BENCHMARK") == "1",
+        )
 
         val dir = Files.createTempDirectory("opentv-search-benchmark")
         val path = dir.resolve("opentv.db")
@@ -35,6 +40,16 @@ class SearchPerformanceBenchmarkTest {
                 )
                 storage.xtreamSeries.replaceAll(playlistId, series)
             }.nanosToMillis()
+
+            val auroraHits =
+                storage.channels.search(playlistId, "aurora") +
+                    storage.xtreamSeries.search(playlistId, "aurora")
+            assertTrue(auroraHits.isNotEmpty(), "the measured catalog must return known hits")
+            assertTrue(
+                storage.channels.search(playlistId, "zzmissing").isEmpty() &&
+                    storage.xtreamSeries.search(playlistId, "zzmissing").isEmpty(),
+                "the measured catalog must not fabricate missing hits",
+            )
 
             val queries = listOf(
                 "news",

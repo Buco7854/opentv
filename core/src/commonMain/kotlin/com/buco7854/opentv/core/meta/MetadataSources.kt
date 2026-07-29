@@ -31,6 +31,12 @@ private fun JsonObject.obj(key: String): JsonObject? = this[key] as? JsonObject
 private fun JsonObject.array(key: String): JsonArray? = this[key] as? JsonArray
 private fun JsonObject.int(key: String): Int? = text(key)?.toDoubleOrNull()?.toInt()
 private fun JsonObject.double(key: String): Double? = text(key)?.toDoubleOrNull()
+private val PROVIDER_ID = Regex("""[1-9][0-9]*""")
+private fun JsonObject.providerId(key: String): Long? {
+    val raw = text(key) ?: return null
+    if (!PROVIDER_ID.matches(raw)) return null
+    return raw.toLongOrNull()?.takeIf { it.toString() == raw }
+}
 
 private val HTML_TAGS = Regex("""<[^>]*>""")
 private fun String.stripHtml(): String =
@@ -53,8 +59,8 @@ class TvMazeApi(private val http: HttpFetcher) {
         val show = parseArray(http.getText(searchUrl))
             ?.firstOrNull()?.let { it as? JsonObject }?.obj("show") ?: return null
 
-        val id = show.text("id")?.toLongOrNull() ?: -1
-        val cast: List<CastMember> = if (id > 0) {
+        val id = show.providerId("id")
+        val cast: List<CastMember> = if (id != null) {
             runCatching {
                 val people = parseArray(http.getText("https://api.tvmaze.com/shows/$id/cast"))
                 buildList {
@@ -97,7 +103,7 @@ class TvMazeApi(private val http: HttpFetcher) {
             },
             castList = cast,
             infoLine = infoLine,
-            sourceId = id.takeIf { it > 0 },
+            sourceId = id,
         )
     }
 

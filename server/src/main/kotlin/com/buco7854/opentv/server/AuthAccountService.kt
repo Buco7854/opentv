@@ -1,5 +1,6 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.contract.*
 import com.buco7854.opentv.serverdata.UserRole
 import com.buco7854.opentv.serverdata.db.AuthChallengeRow
 import com.buco7854.opentv.serverdata.db.ServerUserDatabase
@@ -112,7 +113,11 @@ internal class AuthAccountService(
     suspend fun validatePlaylistIds(ids: List<Long>): List<Long> {
         require(ids.size <= 1_000) { "Too many playlist assignments" }
         val distinct = ids.distinct()
-        distinct.forEach { if (!playlistExists(it)) throw UnknownPlaylistException(it) }
+        distinct.forEach {
+            if (db.maintenance().isPlaylistDeleting(it) || !playlistExists(it)) {
+                throw UnknownPlaylistException(it)
+            }
+        }
         return distinct
     }
 
@@ -143,7 +148,6 @@ internal class AuthAccountService(
         method: String,
         clientKind: String,
         authSessionId: String,
-        csrfToken: String,
     ) = CurrentUserDto(
         id = user.id,
         username = user.username,
@@ -153,7 +157,6 @@ internal class AuthAccountService(
         clientKind = clientKind,
         authSessionId = authSessionId,
         playlistIds = db.grants().forUser(user.id),
-        csrfToken = csrfToken,
         hasPassword = db.credentials().password(user.id) != null,
     )
 

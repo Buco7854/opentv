@@ -1,5 +1,6 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.contract.*
 import com.buco7854.opentv.serverdata.AuthMethod
 import com.buco7854.opentv.serverdata.ClientKind
 import com.buco7854.opentv.serverdata.UserRole
@@ -48,16 +49,19 @@ class DeviceLinkServiceTest {
             assertEquals("APPROVED", claimed.status.status)
             assertEquals(actor.displayName, claimed.status.preview?.displayName)
             assertEquals(actor.username, claimed.status.preview?.username)
-            assertEquals("AUTHENTICATED", claimed.status.flow?.status)
-            assertEquals(AuthMethod.PASSWORD, claimed.status.flow?.user?.authMethod)
-            assertEquals(ClientKind.LINKED_DEVICE, claimed.status.flow?.user?.clientKind)
+            val flow = assertNotNull(claimed.status.flow)
+            assertEquals("AUTHENTICATED", flow.status)
+            assertEquals(AuthMethod.PASSWORD, flow.user?.authMethod)
+            assertEquals(ClientKind.LINKED_DEVICE, flow.user?.clientKind)
             val session = assertNotNull(
-                db.sessions().byTokenHash(AuthCrypto.hashToken(assertNotNull(claimed.sessionToken)))
+                db.sessions().byTokenHash(
+                    AuthCrypto.hashToken(assertNotNull(flow.sessionToken)),
+                ),
             )
             assertEquals(ClientKind.LINKED_DEVICE, session.clientKind)
             assertEquals("Model3", session.deviceName)
             assertEquals(actor.authMethod, session.authMethod)
-            assertNotNull(auth.authenticate(claimed.sessionToken))
+            assertNotNull(auth.authenticate(flow.sessionToken))
         }
     }
 
@@ -150,7 +154,7 @@ class DeviceLinkServiceTest {
 
             assertEquals("PENDING", pending.status.status)
             assertNull(pending.status.preview)
-            assertNull(pending.sessionToken)
+            assertNull(pending.status.flow?.sessionToken)
             assertFailsWith<AuthRateLimitedException> {
                 links.poll(DeviceLinkPollRequestDto(started.pollToken))
             }
@@ -174,7 +178,7 @@ class DeviceLinkServiceTest {
 
             assertEquals("EXPIRED", expired.status.status)
             assertEquals(actor.username, expired.status.preview?.username)
-            assertNull(expired.sessionToken)
+            assertNull(expired.status.flow?.sessionToken)
             assertTrue(
                 db.sessions().activeForUser(actor.userId)
                     .none { it.clientKind == ClientKind.LINKED_DEVICE },
@@ -198,7 +202,7 @@ class DeviceLinkServiceTest {
 
             assertEquals("DENIED", denied.status.status)
             assertEquals(actor.username, denied.status.preview?.username)
-            assertNull(denied.sessionToken)
+            assertNull(denied.status.flow?.sessionToken)
             assertTrue(
                 db.sessions().activeForUser(actor.userId)
                     .none { it.clientKind == ClientKind.LINKED_DEVICE },
@@ -219,7 +223,7 @@ class DeviceLinkServiceTest {
             assertEquals("DENIED", denied.status.status)
             assertEquals(actor.displayName, denied.status.preview?.displayName)
             assertNull(denied.status.flow)
-            assertNull(denied.sessionToken)
+            assertNull(denied.status.flow?.sessionToken)
         }
     }
 

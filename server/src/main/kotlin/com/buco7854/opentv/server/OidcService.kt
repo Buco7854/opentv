@@ -1,5 +1,6 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.serverdata.ClientKind
 import com.nimbusds.jose.JWSAlgorithm
 import com.nimbusds.oauth2.sdk.AuthorizationCode
 import com.nimbusds.oauth2.sdk.AuthorizationCodeGrant
@@ -39,9 +40,11 @@ private data class OidcChallengePayload(
     /**
      * The redirect URI this flow was started with. The token exchange has to repeat the
      * value the authorization request used, so it travels with the flow rather than being
-     * recomputed from a callback request that may not carry the same address.
+    * recomputed from a callback request that may not carry the same address.
      */
     val redirectUri: String = "",
+    /** Browser-generated correlation value echoed only after this signed flow completes. */
+    val browserHandoff: String? = null,
 )
 
 internal data class OidcStartResult(
@@ -84,11 +87,16 @@ class OidcService(
         }
     }
 
-    internal suspend fun start(clientIp: String, callback: URI = configuredCallback): OidcStartResult {
+    internal suspend fun start(
+        clientIp: String,
+        callback: URI = configuredCallback,
+        browserHandoff: String? = null,
+    ): OidcStartResult {
         val metadata = metadata()
         val verifier = CodeVerifier()
         val nonce = Nonce()
         val transaction = AuthCrypto.token()
+        val handoff = browserHandoff?.takeIf(OIDC_BROWSER_HANDOFF::matches)
         val (state, expires) = auth.issueOidcState(
             Json.encodeToString(
                 OidcChallengePayload(
@@ -96,6 +104,7 @@ class OidcService(
                     nonce.value,
                     AuthCrypto.hashToken(transaction).toHex(),
                     callback.toString(),
+                    handoff,
                 )
             ),
             clientIp,
@@ -119,6 +128,7 @@ class OidcService(
         state: String?,
         providerError: String?,
         transactionToken: String?,
+        clientKind: String = ClientKind.BROWSER,
     ): AuthResult {
         if (providerError != null || code.isNullOrBlank() || state.isNullOrBlank()) {
             throw InvalidCredentialsException()
@@ -177,7 +187,8 @@ class OidcService(
             displayNameClaim = (values[oidc.displayNameClaim] as? String)?.boundedClaim("display name"),
             groups = groups,
             adminMapped = groups.any(oidc.adminGroups::contains),
-        )
+            clientKind = clientKind,
+        ).copy(oidcHandoff = payload.browserHandoff)
     }
 
     private suspend fun metadata(): OIDCProviderMetadata {
@@ -202,6 +213,10 @@ class OidcService(
         also { require(it.length <= 256) { "OIDC $name claim is too large" } }
 
     private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
+
+    private companion object {
+        val OIDC_BROWSER_HANDOFF = Regex("[A-Za-z0-9_-]{32,128}")
+    }
 }
 
 internal fun parseOidcGroups(value: Any?): List<String> {

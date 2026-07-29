@@ -3,7 +3,9 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { authApi } from './api';
 import { ActivateScreen, SecurityScreen } from './AuthScreens';
-import { AuthCapabilities, AuthFlow, CurrentUser } from './types';
+import {
+  AuthCapabilities, AuthFlow, CurrentUser, TotpStatus, WebAuthnCredential,
+} from './types';
 
 const acceptFlow = vi.fn();
 const session = vi.fn();
@@ -14,8 +16,11 @@ vi.mock('./api', () => ({
     activate: vi.fn(),
     webAuthnCredentials: vi.fn(),
     totpStatus: vi.fn(),
+    startTotpAdd: vi.fn(),
+    completeTotpAdd: vi.fn(),
   },
 }));
+vi.mock('qrcode', () => ({ toDataURL: vi.fn().mockResolvedValue('data:image/png;base64,AA') }));
 vi.mock('./webauthn', async (importOriginal) => ({
   ...await importOriginal<typeof import('./webauthn')>(),
   webAuthnSupported: () => true,
@@ -39,9 +44,8 @@ const user = (authMethod: string, hasPassword = false): CurrentUser => ({
   authMethod,
   hasPassword,
   authSessionId: 'session-1',
-  clientKind: 'WEB',
+  clientKind: 'BROWSER',
   playlistIds: [],
-  csrfToken: 'csrf',
 });
 
 const authenticated = (): AuthFlow => ({
@@ -51,9 +55,15 @@ const authenticated = (): AuthFlow => ({
   methods: [],
   expiresAtMs: null,
   user: user('PASSWORD'),
-  csrfToken: 'csrf',
+  sessionToken: 'session-token',
   recoveryCodes: [],
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
 
 describe('ActivateScreen', () => {
   beforeEach(() => {
@@ -138,5 +148,61 @@ describe('SecurityScreen', () => {
 
     expect(await screen.findByText(/Passkeys need an HTTPS address/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Add security key' })).toBeNull();
+  });
+
+  it('does not let an older factor-list request overwrite a post-enrollment refresh', async () => {
+    const staleKeys = deferred<WebAuthnCredential[]>();
+    const staleTotp = deferred<TotpStatus>();
+    const fresh: WebAuthnCredential = {
+      id: 'fresh-key',
+      label: 'Fresh key',
+      createdAtMs: Date.now(),
+      lastUsedAtMs: null,
+      backedUp: false,
+    };
+    session.mockReturnValue({
+      phase: 'authenticated',
+      capabilities,
+      user: user('PASSWORD', true),
+      acceptFlow,
+      logout: vi.fn(),
+    });
+    vi.mocked(authApi.webAuthnCredentials)
+      .mockReset()
+      .mockResolvedValueOnce([])
+      .mockReturnValueOnce(staleKeys.promise)
+      .mockResolvedValueOnce([fresh]);
+    vi.mocked(authApi.totpStatus)
+      .mockReset()
+      .mockResolvedValueOnce({ enrolled: false, confirmedAtMs: null })
+      .mockReturnValueOnce(staleTotp.promise)
+      .mockResolvedValueOnce({ enrolled: true, confirmedAtMs: Date.now() });
+    vi.mocked(authApi.startTotpAdd).mockResolvedValue({
+      challenge: 'challenge',
+      secret: 'secret',
+      uri: 'otpauth://totp/OpenTV:test',
+      expiresAtMs: Date.now() + 60_000,
+    });
+    vi.mocked(authApi.completeTotpAdd).mockResolvedValue(authenticated());
+    render(<MemoryRouter initialEntries={['/security']}><SecurityScreen /></MemoryRouter>);
+
+    const enroll = async (completed: number) => {
+      fireEvent.click(await screen.findByRole('button', { name: 'Set up authenticator app' }));
+      fireEvent.change(await screen.findByLabelText('6-digit code'), {
+        target: { value: '123456' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Verify' }));
+      await waitFor(() => expect(authApi.completeTotpAdd).toHaveBeenCalledTimes(completed));
+    };
+    await enroll(1);
+    await waitFor(() => expect(authApi.webAuthnCredentials).toHaveBeenCalledTimes(2));
+    await enroll(2);
+    expect(await screen.findByText('Fresh key')).toBeTruthy();
+
+    staleKeys.resolve([]);
+    staleTotp.resolve({ enrolled: false, confirmedAtMs: null });
+    await waitFor(() => expect(authApi.webAuthnCredentials).toHaveBeenCalledTimes(3));
+
+    expect(screen.getByText('Fresh key')).toBeTruthy();
   });
 });

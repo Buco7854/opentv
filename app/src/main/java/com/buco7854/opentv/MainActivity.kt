@@ -17,6 +17,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
@@ -29,6 +30,11 @@ import androidx.navigation.navArgument
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.buco7854.opentv.core.model.ChannelKind
+import com.buco7854.opentv.source.CatalogItem
+import com.buco7854.opentv.source.ContentRef
+import com.buco7854.opentv.source.SourceId
+import com.buco7854.opentv.source.decode
+import com.buco7854.opentv.source.encode
 import com.buco7854.opentv.ui.account.AccountScreen
 import com.buco7854.opentv.ui.browse.BrowseScreen
 import com.buco7854.opentv.ui.details.EpisodeDetailScreen
@@ -37,10 +43,15 @@ import com.buco7854.opentv.ui.details.SeriesDetailScreen
 import com.buco7854.opentv.ui.details.XtreamSeriesScreen
 import com.buco7854.opentv.ui.diag.LogScreen
 import com.buco7854.opentv.ui.downloads.DownloadsScreen
-import com.buco7854.opentv.ui.favorites.FavoritesScreen
+import com.buco7854.opentv.ui.favorites.AllFavoritesScreen
 import com.buco7854.opentv.ui.home.HomeScreen
+import com.buco7854.opentv.ui.hub.HubSettingsScreen
+import com.buco7854.opentv.ui.hub.HubSignInScreen
 import com.buco7854.opentv.ui.player.PipController
 import com.buco7854.opentv.ui.player.PlayerScreen
+import com.buco7854.opentv.ui.player.PlayerTarget
+import com.buco7854.opentv.ui.player.decode
+import com.buco7854.opentv.ui.player.encode
 import com.buco7854.opentv.ui.search.SearchScreen
 import com.buco7854.opentv.ui.settings.SettingsScreen
 import com.buco7854.opentv.ui.shell.DockSection
@@ -62,6 +73,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        OpenTvApp.graph.downloads.setForeground(true)
+    }
+
+    override fun onStop() {
+        OpenTvApp.graph.downloads.setForeground(false)
+        super.onStop()
+    }
+
     // Auto-enter PiP when leaving while the player is active.
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
@@ -78,21 +99,47 @@ class MainActivity : ComponentActivity() {
 }
 
 object Routes {
-    fun browse(playlistId: Long, tab: Int? = null, group: String? = null) =
-        "browse/$playlistId?t=${tab ?: -1}&g=${Uri.encode(group ?: "")}"
-    fun search(playlistId: Long) = "search/$playlistId"
-    fun movie(channelId: Long) = "movie/$channelId"
+    fun browse(sourceId: SourceId, tab: Int? = null, group: String? = null) =
+        "browse/${Uri.encode(sourceId.encode())}?t=${tab ?: -1}&g=${Uri.encode(group ?: "")}"
+    fun search(sourceId: SourceId) = "search/${Uri.encode(sourceId.encode())}"
+    fun movie(sourceId: SourceId, ref: ContentRef) =
+        "movie/${Uri.encode(sourceId.encode())}/${Uri.encode(ref.encode())}"
     fun account(playlistId: Long) = "account/$playlistId"
-    fun episode(channelId: Long) = "episode/$channelId"
-    fun favorites(playlistId: Long) = "favorites/$playlistId"
-    fun series(playlistId: Long, seriesKey: String) = "series/$playlistId/${Uri.encode(seriesKey)}"
-    fun xtreamSeries(playlistId: Long, seriesId: Long) = "xseries/$playlistId/$seriesId"
-    fun player(url: String, title: String, playlistId: Long = -1, tvgId: String? = null, live: Boolean = false) =
-        "player?u=${Uri.encode(url)}&t=${Uri.encode(title)}&p=$playlistId&c=${Uri.encode(tvgId ?: "")}&l=$live"
+    fun episode(sourceId: SourceId, ref: ContentRef) =
+        "episode/${Uri.encode(sourceId.encode())}/${Uri.encode(ref.encode())}"
+    const val ALL_FAVORITES = "favorites"
+    fun series(sourceId: SourceId, item: CatalogItem) =
+        "series/${Uri.encode(sourceId.encode())}/${Uri.encode(item.ref.encode())}" +
+            "?k=${Uri.encode(item.seriesKey ?: item.title)}"
+    fun xtreamSeries(sourceId: SourceId, item: CatalogItem) =
+        "xseries/${Uri.encode(sourceId.encode())}/${Uri.encode(item.ref.encode())}" +
+            "?k=${Uri.encode(item.seriesKey ?: item.title)}&i=${Uri.encode(item.seriesId.orEmpty())}"
+    fun player(
+        url: String,
+        title: String,
+        playlistId: Long = -1,
+        tvgId: String? = null,
+        live: Boolean = false,
+    ) = player(PlayerTarget.LocalUrl(url, title, playlistId, tvgId, live))
+
+    fun player(target: PlayerTarget): String {
+        val local = target as? PlayerTarget.LocalUrl
+        return "player?u=${Uri.encode(local?.url.orEmpty())}" +
+            "&t=${Uri.encode(target.title)}" +
+            "&p=${local?.playlistId ?: -1L}" +
+            "&c=${Uri.encode(local?.tvgId.orEmpty())}" +
+            "&l=${target.live}" +
+            "&x=${Uri.encode(target.encode())}"
+    }
+    fun hubSettings(hubId: Long) = "hub/$hubId"
     const val DOWNLOADS = "downloads"
     const val LOG = "log"
     const val SETTINGS = "settings"
     const val HOME = "home"
+    const val HUB_SIGN_IN = "hub/connect"
+    const val HUB_SIGN_IN_ROUTE = "hub/connect?hubId={hubId}"
+    fun hubSignIn(hubId: Long?) =
+        hubId?.let { "$HUB_SIGN_IN?hubId=$it" } ?: HUB_SIGN_IN
 }
 
 /** Dock-first shell mirroring the web client's phone layout. */
@@ -107,6 +154,13 @@ fun AppShell(
 
     val backStack by nav.currentBackStackEntryAsState()
     val route = backStack?.destination?.route
+    val routeSource = backStack?.arguments?.getString("source")
+        ?.let(SourceId::decode)
+    var rememberedSource by rememberSaveable { mutableStateOf<String?>(null) }
+    LaunchedEffect(routeSource) {
+        routeSource?.let { rememberedSource = it.encode() }
+    }
+    val activeSource = activeCatalogSource(routeSource, rememberedSource, activePlaylistId)
     val dockHidden = route?.startsWith("player") == true
 
     // Dock destinations replace the stack like tabs; details push on top.
@@ -123,7 +177,7 @@ fun AppShell(
                 else -> DockSection.LIVE
             }
         }
-        route?.startsWith("favorites/") == true -> DockSection.FAVORITES
+        route == Routes.ALL_FAVORITES -> DockSection.FAVORITES
         route?.startsWith("search/") == true -> DockSection.SEARCH
         else -> null
     }
@@ -132,14 +186,18 @@ fun AppShell(
         bottomBar = {
             if (!dockHidden) {
                 OpenTvDock(
-                    hasActivePlaylist = activePlaylistId > 0,
+                    hasActivePlaylist = activeSource != null,
                     activeSection = activeSection,
                     onOpenPanel = { panelOpen = true },
                     onSection = { section ->
                         when (section) {
-                            DockSection.FAVORITES -> navigateSection(Routes.favorites(activePlaylistId))
-                            DockSection.SEARCH -> navigateSection(Routes.search(activePlaylistId))
-                            else -> navigateSection(Routes.browse(activePlaylistId, section.tab))
+                            DockSection.FAVORITES -> navigateSection(Routes.ALL_FAVORITES)
+                            DockSection.SEARCH -> activeSource?.let {
+                                navigateSection(Routes.search(it))
+                            }
+                            else -> activeSource?.let {
+                                navigateSection(Routes.browse(it, section.tab))
+                            }
                         }
                     },
                 )
@@ -153,25 +211,72 @@ fun AppShell(
 
     if (panelOpen) {
         PlaylistsPanel(
-            activePlaylistId = activePlaylistId,
+            activeSourceId = activeSource,
             onDismiss = { panelOpen = false },
-            onOpenPlaylist = {
+            onOpenSource = {
                 panelOpen = false
-                viewModel.setActivePlaylist(it)
+                if (it is SourceId.LocalPlaylist) {
+                    viewModel.setActivePlaylist(it.playlistId)
+                }
                 navigateSection(Routes.browse(it))
             },
             onOpenAccount = { panelOpen = false; nav.navigate(Routes.account(it)) },
             onOpenDownloads = { panelOpen = false; nav.navigate(Routes.DOWNLOADS) },
             onOpenSettings = { panelOpen = false; nav.navigate(Routes.SETTINGS) },
             onOpenLog = { panelOpen = false; nav.navigate(Routes.LOG) },
+            onConnectHub = { panelOpen = false; nav.navigate(Routes.HUB_SIGN_IN) },
+            onOpenHub = { panelOpen = false; nav.navigate(Routes.hubSettings(it)) },
         )
     }
 }
+
+internal fun activeCatalogSource(
+    routeSource: SourceId?,
+    rememberedSource: String?,
+    activePlaylistId: Long,
+): SourceId? = routeSource
+    ?: rememberedSource?.let(SourceId::decode)
+    ?: activePlaylistId.takeIf { it > 0 }?.let(SourceId::LocalPlaylist)
 
 @Composable
 fun AppNav(nav: NavHostController, onActivePlaylist: (Long) -> Unit) {
     // Quick fades instead of the default slow cross-fade.
     val fadeSpec = tween<Float>(180)
+
+    fun targetFor(
+        sourceId: SourceId,
+        item: CatalogItem,
+        live: Boolean,
+        localPlaylistId: Long = -1L,
+        localTvgId: String? = null,
+    ): PlayerTarget? = when (val ref = item.ref) {
+        is ContentRef.LocalUrl -> PlayerTarget.LocalUrl(
+            url = ref.url,
+            title = item.title,
+            playlistId = localPlaylistId,
+            tvgId = localTvgId,
+            live = live,
+        )
+        is ContentRef.HubContent -> {
+            val hub = sourceId as? SourceId.Hub ?: return null
+            PlayerTarget.HubContent(
+                hubId = hub.hubId,
+                playlistId = hub.playlistId,
+                contentId = ref.contentId,
+                title = item.title,
+                live = live,
+            )
+        }
+    }
+
+    fun signInRoute(source: SourceId): String = Routes.hubSignIn(
+        when (source) {
+            is SourceId.Hub -> source.hubId
+            is SourceId.HubConnection -> source.hubId
+            is SourceId.LocalPlaylist -> null
+        },
+    )
+
     NavHost(
         navController = nav,
         startDestination = Routes.HOME,
@@ -182,12 +287,15 @@ fun AppNav(nav: NavHostController, onActivePlaylist: (Long) -> Unit) {
     ) {
         composable(Routes.HOME) {
             HomeScreen(
-                onOpenPlaylist = { playlistId ->
-                    onActivePlaylist(playlistId)
-                    nav.navigate(Routes.browse(playlistId)) {
+                onOpenSource = { source ->
+                    if (source is SourceId.LocalPlaylist) {
+                        onActivePlaylist(source.playlistId)
+                    }
+                    nav.navigate(Routes.browse(source)) {
                         popUpTo(Routes.HOME) { inclusive = true }
                     }
                 },
+                onConnectHub = { nav.navigate(Routes.HUB_SIGN_IN) },
             )
         }
         composable(
@@ -199,6 +307,36 @@ fun AppNav(nav: NavHostController, onActivePlaylist: (Long) -> Unit) {
                 onBack = { nav.popBackStack() },
             )
         }
+        // Registered before "hub/{hubId}" so the literal path wins the match.
+        composable(
+            route = Routes.HUB_SIGN_IN_ROUTE,
+            arguments = listOf(
+                navArgument("hubId") {
+                    type = NavType.LongType
+                    defaultValue = -1L
+                },
+            ),
+        ) { entry ->
+            val hubId = entry.arguments!!.getLong("hubId").takeIf { it > 0 }
+            HubSignInScreen(
+                hubId = hubId,
+                onDone = { hubId ->
+                    nav.popBackStack()
+                    nav.navigate(Routes.hubSettings(hubId))
+                },
+                onBack = { nav.popBackStack() },
+            )
+        }
+        composable(
+            route = "hub/{hubId}",
+            arguments = listOf(navArgument("hubId") { type = NavType.LongType }),
+        ) { entry ->
+            HubSettingsScreen(
+                hubId = entry.arguments!!.getLong("hubId"),
+                onBack = { nav.popBackStack() },
+                onRemoved = { nav.popBackStack() },
+            )
+        }
         composable(Routes.LOG) {
             LogScreen(onBack = { nav.popBackStack() })
         }
@@ -206,100 +344,253 @@ fun AppNav(nav: NavHostController, onActivePlaylist: (Long) -> Unit) {
             SettingsScreen(onBack = { nav.popBackStack() })
         }
         composable(
-            route = "browse/{playlistId}?t={t}&g={g}",
+            route = "browse/{source}?t={t}&g={g}",
             arguments = listOf(
-                navArgument("playlistId") { type = NavType.LongType },
+                navArgument("source") { type = NavType.StringType },
                 navArgument("t") { type = NavType.IntType; defaultValue = -1 },
                 navArgument("g") { type = NavType.StringType; defaultValue = "" },
             ),
         ) { entry ->
-            val playlistId = entry.arguments!!.getLong("playlistId")
-            LaunchedEffect(playlistId) { onActivePlaylist(playlistId) }
+            val sourceId = entry.arguments!!.getString("source")
+                ?.let(SourceId::decode)
+                ?: return@composable
+            if (sourceId is SourceId.LocalPlaylist) {
+                LaunchedEffect(sourceId.playlistId) {
+                    onActivePlaylist(sourceId.playlistId)
+                }
+            }
             BrowseScreen(
-                playlistId = playlistId,
+                sourceId = sourceId,
                 initialTab = entry.arguments!!.getInt("t").takeIf { it >= 0 },
                 initialGroup = entry.arguments!!.getString("g").orEmpty().ifEmpty { null },
-                onPlay = { url, title, tvgId, live -> nav.navigate(Routes.player(url, title, playlistId, tvgId, live)) },
-                onOpenMovie = { nav.navigate(Routes.movie(it)) },
-                onOpenSeries = { nav.navigate(Routes.series(playlistId, it)) },
-                onOpenXtreamSeries = { nav.navigate(Routes.xtreamSeries(playlistId, it)) },
-                onOpenAccount = { nav.navigate(Routes.account(playlistId)) },
+                onPlay = { item, live ->
+                    val playlistId = (sourceId as? SourceId.LocalPlaylist)?.playlistId ?: -1L
+                    targetFor(sourceId, item, live, playlistId, item.tvgId)
+                        ?.let { nav.navigate(Routes.player(it)) }
+                },
+                onPlayHubCatchup = { item, programme ->
+                    val hub = sourceId as? SourceId.Hub ?: return@BrowseScreen
+                    val content = item.ref as? ContentRef.HubContent ?: return@BrowseScreen
+                    nav.navigate(
+                        Routes.player(
+                            PlayerTarget.HubCatchUp(
+                                hubId = hub.hubId,
+                                playlistId = hub.playlistId,
+                                contentId = content.contentId,
+                                title = "${item.title} · ${programme.title}",
+                                startMs = programme.startMs,
+                                durationMs = (programme.endMs - programme.startMs).coerceAtLeast(0),
+                            ),
+                        ),
+                    )
+                },
+                onOpenMovie = { nav.navigate(Routes.movie(sourceId, it)) },
+                onOpenSeries = { nav.navigate(Routes.series(sourceId, it)) },
+                onOpenXtreamSeries = {
+                    nav.navigate(Routes.xtreamSeries(sourceId, it))
+                },
+                onOpenAccount = {
+                    when (sourceId) {
+                        is SourceId.LocalPlaylist ->
+                            nav.navigate(Routes.account(sourceId.playlistId))
+                        is SourceId.Hub -> nav.navigate(Routes.hubSettings(sourceId.hubId))
+                        is SourceId.HubConnection -> Unit
+                    }
+                },
+                onSignIn = { nav.navigate(signInRoute(sourceId)) },
             )
         }
-        composable(
-            route = "favorites/{playlistId}",
-            arguments = listOf(navArgument("playlistId") { type = NavType.LongType }),
-        ) { entry ->
-            val playlistId = entry.arguments!!.getLong("playlistId")
-            FavoritesScreen(
-                playlistId = playlistId,
+        composable(Routes.ALL_FAVORITES) {
+            AllFavoritesScreen(
                 onBack = { nav.popBackStack() },
-                onPlay = { url, title, tvgId, live -> nav.navigate(Routes.player(url, title, playlistId, tvgId, live)) },
-                onOpenMovie = { nav.navigate(Routes.movie(it)) },
-                onOpenSeries = { nav.navigate(Routes.series(playlistId, it)) },
-                onOpenXtreamSeries = { nav.navigate(Routes.xtreamSeries(playlistId, it)) },
+                onOpen = { source, item ->
+                    when (item.kind) {
+                        ChannelKind.MOVIE -> nav.navigate(Routes.movie(source, item.ref))
+                        ChannelKind.SERIES ->
+                            if (item.seriesId != null) nav.navigate(Routes.xtreamSeries(source, item))
+                            else nav.navigate(Routes.series(source, item))
+                        else -> targetFor(
+                            sourceId = source,
+                            item = item,
+                            live = true,
+                            localPlaylistId = (source as? SourceId.LocalPlaylist)?.playlistId ?: -1L,
+                            localTvgId = item.tvgId,
+                        )?.let { nav.navigate(Routes.player(it)) }
+                    }
+                },
+                onPlay = { source, item, live ->
+                    targetFor(
+                        sourceId = source,
+                        item = item,
+                        live = live,
+                        localPlaylistId =
+                            (source as? SourceId.LocalPlaylist)?.playlistId ?: -1L,
+                        localTvgId = item.tvgId,
+                    )?.let { nav.navigate(Routes.player(it)) }
+                },
+                onPlayHubCatchup = { source, item, programme ->
+                    val hub = source as? SourceId.Hub ?: return@AllFavoritesScreen
+                    val content =
+                        item.ref as? ContentRef.HubContent ?: return@AllFavoritesScreen
+                    nav.navigate(
+                        Routes.player(
+                            PlayerTarget.HubCatchUp(
+                                hubId = hub.hubId,
+                                playlistId = hub.playlistId,
+                                contentId = content.contentId,
+                                title = "${item.title} · ${programme.title}",
+                                startMs = programme.startMs,
+                                durationMs =
+                                    (programme.endMs - programme.startMs).coerceAtLeast(0),
+                            ),
+                        ),
+                    )
+                },
+                onSignIn = { source -> nav.navigate(signInRoute(source)) },
             )
         }
         composable(
-            route = "xseries/{playlistId}/{seriesId}",
+            route = "xseries/{source}/{content}?k={k}&i={i}",
             arguments = listOf(
-                navArgument("playlistId") { type = NavType.LongType },
-                navArgument("seriesId") { type = NavType.LongType },
+                navArgument("source") { type = NavType.StringType },
+                navArgument("content") { type = NavType.StringType },
+                navArgument("k") {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
+                navArgument("i") {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
             ),
         ) { entry ->
+            val sourceId = entry.arguments!!.getString("source")
+                ?.let(SourceId::decode)
+                ?: return@composable
+            val ref = entry.arguments!!.getString("content")
+                ?.let(ContentRef::decode)
+                ?: return@composable
             XtreamSeriesScreen(
-                playlistId = entry.arguments!!.getLong("playlistId"),
-                seriesId = entry.arguments!!.getLong("seriesId"),
+                sourceId = sourceId,
+                ref = ref,
+                seriesKey = entry.arguments!!.getString("k").orEmpty().ifEmpty { null },
+                seriesId = entry.arguments!!.getString("i").orEmpty().ifEmpty { null },
                 onBack = { nav.popBackStack() },
-                onOpenEpisode = { nav.navigate(Routes.episode(it)) },
+                onOpenEpisode = { nav.navigate(Routes.episode(sourceId, it)) },
+                onSignIn = { nav.navigate(signInRoute(sourceId)) },
             )
         }
         composable(
-            route = "episode/{channelId}",
-            arguments = listOf(navArgument("channelId") { type = NavType.LongType }),
-        ) { entry ->
-            EpisodeDetailScreen(
-                channelId = entry.arguments!!.getLong("channelId"),
-                onBack = { nav.popBackStack() },
-                onPlay = { url, title -> nav.navigate(Routes.player(url, title)) },
-            )
-        }
-        composable(
-            route = "movie/{channelId}",
-            arguments = listOf(navArgument("channelId") { type = NavType.LongType }),
-        ) { entry ->
-            MovieDetailScreen(
-                channelId = entry.arguments!!.getLong("channelId"),
-                onBack = { nav.popBackStack() },
-                onPlay = { url, title -> nav.navigate(Routes.player(url, title)) },
-            )
-        }
-        composable(
-            route = "series/{playlistId}/{seriesKey}",
+            route = "episode/{source}/{content}",
             arguments = listOf(
-                navArgument("playlistId") { type = NavType.LongType },
-                navArgument("seriesKey") { type = NavType.StringType },
+                navArgument("source") { type = NavType.StringType },
+                navArgument("content") { type = NavType.StringType },
             ),
         ) { entry ->
-            SeriesDetailScreen(
-                playlistId = entry.arguments!!.getLong("playlistId"),
-                seriesKey = entry.arguments!!.getString("seriesKey")!!,
+            val sourceId = entry.arguments!!.getString("source")
+                ?.let(SourceId::decode)
+                ?: return@composable
+            val ref = entry.arguments!!.getString("content")
+                ?.let(ContentRef::decode)
+                ?: return@composable
+            EpisodeDetailScreen(
+                sourceId = sourceId,
+                ref = ref,
                 onBack = { nav.popBackStack() },
-                onOpenEpisode = { nav.navigate(Routes.episode(it)) },
+                onPlay = { item ->
+                    targetFor(sourceId, item, live = false)
+                        ?.let { nav.navigate(Routes.player(it)) }
+                },
+                onSignIn = { nav.navigate(signInRoute(sourceId)) },
             )
         }
         composable(
-            route = "search/{playlistId}",
-            arguments = listOf(navArgument("playlistId") { type = NavType.LongType }),
+            route = "movie/{source}/{content}",
+            arguments = listOf(
+                navArgument("source") { type = NavType.StringType },
+                navArgument("content") { type = NavType.StringType },
+            ),
         ) { entry ->
-            val playlistId = entry.arguments!!.getLong("playlistId")
-            SearchScreen(
-                playlistId = playlistId,
+            val sourceId = entry.arguments!!.getString("source")
+                ?.let(SourceId::decode)
+                ?: return@composable
+            val ref = entry.arguments!!.getString("content")
+                ?.let(ContentRef::decode)
+                ?: return@composable
+            MovieDetailScreen(
+                sourceId = sourceId,
+                ref = ref,
                 onBack = { nav.popBackStack() },
-                onPlay = { url, title, live -> nav.navigate(Routes.player(url, title, playlistId, live = live)) },
-                onOpenMovie = { nav.navigate(Routes.movie(it)) },
-                onOpenSeries = { nav.navigate(Routes.series(playlistId, it)) },
-                onOpenXtreamSeries = { nav.navigate(Routes.xtreamSeries(playlistId, it)) },
+                onPlay = { item ->
+                    targetFor(sourceId, item, live = false)
+                        ?.let { nav.navigate(Routes.player(it)) }
+                },
+                onSignIn = { nav.navigate(signInRoute(sourceId)) },
+            )
+        }
+        composable(
+            route = "series/{source}/{content}?k={k}",
+            arguments = listOf(
+                navArgument("source") { type = NavType.StringType },
+                navArgument("content") { type = NavType.StringType },
+                navArgument("k") {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
+            ),
+        ) { entry ->
+            val sourceId = entry.arguments!!.getString("source")
+                ?.let(SourceId::decode)
+                ?: return@composable
+            val ref = entry.arguments!!.getString("content")
+                ?.let(ContentRef::decode)
+                ?: return@composable
+            SeriesDetailScreen(
+                sourceId = sourceId,
+                ref = ref,
+                seriesKey = entry.arguments!!.getString("k").orEmpty().ifEmpty { null },
+                onBack = { nav.popBackStack() },
+                onOpenEpisode = { nav.navigate(Routes.episode(sourceId, it)) },
+                onSignIn = { nav.navigate(signInRoute(sourceId)) },
+            )
+        }
+        composable(
+            route = "search/{source}",
+            arguments = listOf(navArgument("source") { type = NavType.StringType }),
+        ) { entry ->
+            val sourceId = entry.arguments!!.getString("source")
+                ?.let(SourceId::decode)
+                ?: return@composable
+            SearchScreen(
+                sourceId = sourceId,
+                onBack = { nav.popBackStack() },
+                onPlay = { item, live ->
+                    val playlistId = (sourceId as? SourceId.LocalPlaylist)?.playlistId ?: -1L
+                    targetFor(sourceId, item, live, playlistId)
+                        ?.let { nav.navigate(Routes.player(it)) }
+                },
+                onPlayHubCatchup = { item, programme ->
+                    val hub = sourceId as? SourceId.Hub ?: return@SearchScreen
+                    val content = item.ref as? ContentRef.HubContent ?: return@SearchScreen
+                    nav.navigate(
+                        Routes.player(
+                            PlayerTarget.HubCatchUp(
+                                hubId = hub.hubId,
+                                playlistId = hub.playlistId,
+                                contentId = content.contentId,
+                                title = "${item.title} · ${programme.title}",
+                                startMs = programme.startMs,
+                                durationMs = (programme.endMs - programme.startMs).coerceAtLeast(0),
+                            ),
+                        ),
+                    )
+                },
+                onOpenMovie = { nav.navigate(Routes.movie(sourceId, it)) },
+                onOpenSeries = { nav.navigate(Routes.series(sourceId, it)) },
+                onOpenXtreamSeries = {
+                    nav.navigate(Routes.xtreamSeries(sourceId, it))
+                },
+                onSignIn = { nav.navigate(signInRoute(sourceId)) },
             )
         }
         composable(Routes.DOWNLOADS) {
@@ -309,23 +600,44 @@ fun AppNav(nav: NavHostController, onActivePlaylist: (Long) -> Unit) {
             )
         }
         composable(
-            route = "player?u={u}&t={t}&p={p}&c={c}&l={l}",
+            route = "player?u={u}&t={t}&p={p}&c={c}&l={l}&x={x}",
             arguments = listOf(
-                navArgument("u") { type = NavType.StringType },
+                navArgument("u") { type = NavType.StringType; defaultValue = "" },
                 navArgument("t") { type = NavType.StringType; defaultValue = "" },
                 navArgument("p") { type = NavType.LongType; defaultValue = -1L },
                 navArgument("c") { type = NavType.StringType; defaultValue = "" },
                 navArgument("l") { type = NavType.BoolType; defaultValue = false },
+                navArgument("x") { type = NavType.StringType; defaultValue = "" },
             ),
         ) { entry ->
             val args = entry.arguments!!
+            val target = args.getString("x")
+                .orEmpty()
+                .takeIf(String::isNotEmpty)
+                ?.let(PlayerTarget::decode)
+                ?: PlayerTarget.LocalUrl(
+                    url = args.getString("u").orEmpty(),
+                    title = args.getString("t").orEmpty(),
+                    playlistId = args.getLong("p"),
+                    tvgId = args.getString("c").orEmpty().ifEmpty { null },
+                    live = args.getBoolean("l"),
+                )
             PlayerScreen(
-                url = args.getString("u")!!,
-                title = args.getString("t").orEmpty(),
-                playlistId = args.getLong("p"),
-                tvgId = args.getString("c").orEmpty().ifEmpty { null },
-                initialLive = args.getBoolean("l"),
+                target = target,
                 onBack = { nav.popBackStack() },
+                onSignIn = {
+                    val hubId = when (target) {
+                        is PlayerTarget.HubContent -> target.hubId
+                        is PlayerTarget.HubCatchUp -> target.hubId
+                        is PlayerTarget.LocalUrl -> null
+                    }
+                    nav.navigate(Routes.hubSignIn(hubId))
+                },
+                onPlayTarget = {
+                    nav.navigate(Routes.player(it)) {
+                        popUpTo(entry.destination.id) { inclusive = true }
+                    }
+                },
             )
         }
     }

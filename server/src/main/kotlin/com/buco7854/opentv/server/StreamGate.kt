@@ -9,6 +9,9 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 
+/** A per-viewer audio transcode is a second physical provider read, not the lease's solo proxy. */
+internal fun transcodeGateId(leaseId: String): String = "transcode:$leaseId"
+
 /**
  * Admits live streams into the shared [ProviderConnections] budget, so the backend enforces a
  * provider's concurrent-stream cap even if a client ignores the UI. Each player tab is one live
@@ -24,12 +27,23 @@ class StreamGate(
 ) {
 
     private val lastSeen = ConcurrentHashMap<String, Long>()
+    private val stateLock = Any()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val reaper = scope.launch {
         while (isActive) {
             delay(5_000)
             val cutoff = clock.nowMs() - IDLE_MS
-            lastSeen.filterValues { it < cutoff }.keys.forEach { release(it) }
+            lastSeen.filterValues { it < cutoff }.forEach(::releaseIfStillIdle)
+        }
+    }
+
+    /** Complete one reaper decision made from [observedLastSeenMs]. */
+    internal fun releaseIfStillIdle(sid: String, observedLastSeenMs: Long) {
+        synchronized(stateLock) {
+            if (lastSeen[sid] == observedLastSeenMs) {
+                lastSeen.remove(sid)
+                connections.close(sid)
+            }
         }
     }
 
@@ -40,26 +54,36 @@ class StreamGate(
     }
 
     /** Register or refresh live stream [sid] on [providerKey]; false when the provider is full. */
-    fun admit(sid: String, providerKey: String, limit: Int): Boolean {
-        if (lastSeen.containsKey(sid) && connections.isOpen(sid)) {
+    fun admit(sid: String, providerKey: String, limit: Int): Boolean =
+        synchronized(stateLock) {
+            if (lastSeen.containsKey(sid) && connections.isOpen(sid)) {
+                lastSeen[sid] = clock.nowMs()
+                connections.touch(sid)
+                return@synchronized true
+            }
+            // A live viewer's connection is its own (share key = the session id).
+            if (!connections.tryOpenStream(sid, providerKey, sid, limit) { release(sid) }) {
+                return@synchronized false
+            }
             lastSeen[sid] = clock.nowMs()
-            connections.touch(sid)
-            return true
+            true
         }
-        // A live viewer's connection is its own (share key = the session id).
-        if (!connections.tryOpenStream(sid, providerKey, sid, limit) { release(sid) }) return false
-        lastSeen[sid] = clock.nowMs()
-        return true
-    }
 
     /** Keep a continuous stream's slot alive between its infrequent requests. */
     fun touch(sid: String) {
-        if (lastSeen.containsKey(sid)) { lastSeen[sid] = clock.nowMs(); connections.touch(sid) }
+        synchronized(stateLock) {
+            if (lastSeen.containsKey(sid)) {
+                lastSeen[sid] = clock.nowMs()
+                connections.touch(sid)
+            }
+        }
     }
 
     fun release(sid: String) {
-        lastSeen.remove(sid)
-        connections.close(sid)
+        synchronized(stateLock) {
+            lastSeen.remove(sid)
+            connections.close(sid)
+        }
     }
 
     /** Distinct streams currently reading from [providerKey], ignoring the caller's own share

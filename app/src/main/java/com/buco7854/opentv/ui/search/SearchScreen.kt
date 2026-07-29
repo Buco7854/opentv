@@ -24,6 +24,7 @@ import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -52,21 +53,28 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.compose.runtime.LaunchedEffect
-import com.buco7854.opentv.core.log.rethrowCancellation
 import com.buco7854.opentv.OpenTvApp
+import com.buco7854.opentv.AppGraph
 import com.buco7854.opentv.R
-import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.model.Download
 import com.buco7854.opentv.core.model.DownloadStatus
-import com.buco7854.opentv.core.model.GroupHit
-import com.buco7854.opentv.core.model.hasCatchup
-import com.buco7854.opentv.core.model.hasGuide
+import com.buco7854.opentv.download.downloadIdentityKey
 import com.buco7854.opentv.diag.ErrorLog
-import com.buco7854.opentv.core.repo.xtreamFavoriteKey
+import com.buco7854.opentv.source.CatalogGateway
+import com.buco7854.opentv.source.CatalogGuideEntry
+import com.buco7854.opentv.source.CatalogItem
+import com.buco7854.opentv.source.CatalogLoadError
+import com.buco7854.opentv.source.CatalogResult
+import com.buco7854.opentv.source.CatalogSearchResult
+import com.buco7854.opentv.source.ContentRef
+import com.buco7854.opentv.source.DEFAULT_CATALOG_PAGE_SIZE
+import com.buco7854.opentv.source.SourceId
+import com.buco7854.opentv.source.encode
 import com.buco7854.opentv.ui.components.ChannelLogo
 import com.buco7854.opentv.ui.components.DownloadStateIcon
 import com.buco7854.opentv.ui.components.FavoriteIcon
@@ -78,12 +86,17 @@ import com.buco7854.opentv.ui.components.Pill
 import com.buco7854.opentv.ui.components.kindIcon
 import com.buco7854.opentv.ui.components.focusHighlight
 import com.buco7854.opentv.ui.components.kindLabel
-import com.buco7854.opentv.ui.components.playlistViewModel
+import com.buco7854.opentv.ui.components.SourceLoadFailed
+import com.buco7854.opentv.ui.components.SourceSignedOut
+import com.buco7854.opentv.ui.components.SourceUnreachable
+import com.buco7854.opentv.ui.components.sourceViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -91,121 +104,239 @@ import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-/** One row per series, however many episodes matched. */
-data class SeriesHit(
-    val seriesKey: String,
-    val count: Int,
-    val logo: String?,
-    val groupTitle: String,
-    /** Set when the hit comes from an Xtream panel's series catalog. */
-    val xtreamSeriesId: Long? = null,
+data class SearchUiState(
+    val results: CatalogSearchResult = CatalogSearchResult(),
+    val loading: Boolean = false,
+    val error: CatalogLoadError? = null,
 )
 
-data class SearchResults(
-    val live: List<Channel> = emptyList(),
-    val movies: List<Channel> = emptyList(),
-    val series: List<SeriesHit> = emptyList(),
-) {
-    val isEmpty get() = live.isEmpty() && movies.isEmpty() && series.isEmpty()
-}
+internal fun searchItemKey(item: CatalogItem): String =
+    "${if (item.seriesId == null) "series" else "xtream"}:${item.ref.encode()}"
 
 @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
-class SearchViewModel(app: Application, private val playlistId: Long) : AndroidViewModel(app) {
+class SearchViewModel private constructor(
+    private val application: Application?,
+    val sourceId: SourceId,
+    private val gateway: CatalogGateway,
+    private val graph: AppGraph?,
+) : ViewModel() {
+    constructor(app: Application, sourceId: SourceId) : this(
+        app,
+        sourceId,
+        OpenTvApp.graph.catalogFor(sourceId),
+        OpenTvApp.graph,
+    )
+
+    internal constructor(sourceId: SourceId, gateway: CatalogGateway) :
+        this(null, sourceId, gateway, null)
+
     val query = MutableStateFlow("")
+
+    private val mutableState = MutableStateFlow(SearchUiState())
+    val state: StateFlow<SearchUiState> = mutableState
+    private var searchGeneration = 0L
 
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message
     fun consumeMessage() { _message.value = null }
 
     private fun str(resId: Int, vararg args: Any) =
-        getApplication<Application>().getString(resId, *args)
+        application?.getString(resId, *args).orEmpty()
 
     /** Debounced to throttle DB hits while typing. */
-    val results: StateFlow<SearchResults> = query
-        .debounce(250)
-        .distinctUntilChanged()
-        .mapLatest { q ->
-            if (q.trim().length < 2) SearchResults()
-            else try {
-                val term = q.trim()
-                val rows = OpenTvApp.graph.storage.channels.search(playlistId, term)
-                // Collapse episodes into one row per show; xs: keys (cached Xtream episodes) are excluded, that catalog is searched separately.
-                val m3uSeries = rows.filter { it.kind == ChannelKind.SERIES }
-                    .filterNot { it.seriesKey?.startsWith("xs:") == true }
-                    .groupBy { it.seriesKey ?: it.name }
-                    .map { (key, episodes) ->
-                        SeriesHit(
-                            seriesKey = key,
-                            count = episodes.size,
-                            logo = episodes.firstOrNull { it.logo != null }?.logo,
-                            groupTitle = episodes.first().groupTitle,
-                        )
-                    }
-                val xtreamSeries = OpenTvApp.graph.storage.xtreamSeries
-                    .search(playlistId, term)
-                    .map {
-                        SeriesHit(
-                            seriesKey = it.name,
-                            count = 0,
-                            logo = it.cover,
-                            groupTitle = it.categoryName,
-                            xtreamSeriesId = it.seriesId,
-                        )
-                    }
-                SearchResults(
-                    live = rows.filter { it.kind == ChannelKind.LIVE },
-                    movies = rows.filter { it.kind == ChannelKind.MOVIE },
-                    series = xtreamSeries + m3uSeries,
-                )
-            } catch (e: Exception) {
-                e.rethrowCancellation()
-                ErrorLog.log("Search", e)
-                SearchResults()
-            }
+    init {
+        viewModelScope.launch {
+            query.debounce(250).distinctUntilChanged().collect(::requestSearch)
         }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SearchResults())
+        observeFavorites()
+        reloadGuideIds()
+    }
 
     /** Same favourite affordance as the browse rows. */
-    val favoriteKeys: StateFlow<Set<String>> = graph.favorites.observeKeys(playlistId)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
+    private val mutableFavoriteKeys = MutableStateFlow<Set<String>>(emptySet())
+    val favoriteKeys: StateFlow<Set<String>> = mutableFavoriteKeys
 
-    val downloadsByUrl: StateFlow<Map<String, Download>> = graph.downloads.downloads
-        .map { list ->
-            list.filter { it.status != DownloadStatus.CANCELLED && it.status != DownloadStatus.FAILED }
-                .associateBy { it.url }
-        }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+    val downloadsByUrl: StateFlow<Map<String, Download>> =
+        graph?.downloads?.downloads
+            ?.map { list ->
+                list.filter {
+                    it.status != DownloadStatus.CANCELLED && it.status != DownloadStatus.FAILED
+                }.associateBy { it.downloadIdentityKey() }
+            }
+            ?.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+            ?: MutableStateFlow(emptyMap())
 
-    fun toggleFavorite(key: String, kind: Int) {
+    fun retry() {
+        requestSearch(query.value)
+    }
+
+    fun toggleFavorite(item: CatalogItem) {
         viewModelScope.launch {
-            graph.favorites.toggle(playlistId, key, kind)
+            when (val result = safeCall { gateway.toggleFavorite(item.ref) }) {
+                is CatalogResult.Success -> {
+                    val key = favoriteKey(item)
+                    mutableFavoriteKeys.value = if (result.value) {
+                        mutableFavoriteKeys.value + key
+                    } else {
+                        mutableFavoriteKeys.value - key
+                    }
+                }
+                CatalogResult.SignedOut -> fail(CatalogLoadError.SignedOut)
+                CatalogResult.Unreachable -> fail(CatalogLoadError.Unreachable)
+                is CatalogResult.Failed -> fail(CatalogLoadError.Failed(result.cause))
+            }
         }
     }
 
-    fun download(channel: Channel) {
+    fun download(item: CatalogItem) {
+        val currentGraph = graph ?: return
         viewModelScope.launch {
-            val blocked = graph.downloads.enqueue(channel)
-            _message.value = blocked ?: str(R.string.downloads_started, channel.name)
+            val blocked = when (val source = sourceId) {
+                is SourceId.LocalPlaylist -> {
+                    val ref = item.ref as? ContentRef.LocalUrl ?: return@launch
+                    val channel = ref.channelId.takeIf { it != 0L }
+                        ?.let { currentGraph.storage.channels.get(it) }
+                        ?.takeIf {
+                            it.playlistId == source.playlistId && it.url == ref.url
+                        }
+                        ?: currentGraph.storage.channels.getByUrl(source.playlistId, ref.url)
+                        ?: return@launch
+                    currentGraph.downloads.enqueue(channel)
+                }
+                is SourceId.Hub -> {
+                    val ref = item.ref as? ContentRef.HubContent ?: return@launch
+                    currentGraph.downloads.enqueueHub(source.hubId, ref.contentId, item.title)
+                }
+                is SourceId.HubConnection -> return@launch
+            }
+            _message.value = blocked ?: str(R.string.downloads_started, item.title)
         }
     }
 
-    val guideIds: StateFlow<Set<String>> = graph.epg.observeGuideIds(playlistId)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
+    private val mutableGuideIds = MutableStateFlow<Set<String>>(emptySet())
+    val guideIds: StateFlow<Set<String>> = mutableGuideIds
+
+    private fun requestSearch(raw: String) {
+        val generation = ++searchGeneration
+        viewModelScope.launch { search(raw, generation) }
+    }
+
+    private suspend fun search(raw: String, generation: Long) {
+        val term = raw.trim()
+        if (term.length < 2) {
+            mutableState.value = mutableState.value.copy(
+                results = CatalogSearchResult(),
+                loading = false,
+                error = null,
+            )
+            return
+        }
+        mutableState.value = mutableState.value.copy(loading = true, error = null)
+        val result = safeCall { gateway.search(term) }
+        if (generation != searchGeneration) return
+        when (result) {
+            is CatalogResult.Success ->
+                mutableState.value = SearchUiState(results = result.value)
+            CatalogResult.SignedOut -> fail(CatalogLoadError.SignedOut)
+            CatalogResult.Unreachable -> fail(CatalogLoadError.Unreachable)
+            is CatalogResult.Failed -> {
+                if (sourceId is SourceId.LocalPlaylist) {
+                    ErrorLog.log("Search", result.cause)
+                    mutableState.value = SearchUiState()
+                } else {
+                    fail(CatalogLoadError.Failed(result.cause))
+                }
+            }
+        }
+    }
+
+    private fun observeFavorites() {
+        val local = sourceId as? SourceId.LocalPlaylist
+        if (graph != null && local != null) {
+            viewModelScope.launch {
+                graph.favorites.observeKeys(local.playlistId).collect(mutableFavoriteKeys::emit)
+            }
+            return
+        }
+        viewModelScope.launch {
+            val items = mutableListOf<CatalogItem>()
+            while (true) {
+                when (val result = safeCall {
+                    gateway.favorites(items.size, DEFAULT_CATALOG_PAGE_SIZE)
+                }) {
+                    is CatalogResult.Success -> {
+                        items += result.value.items
+                        if (items.size >= result.value.total || result.value.items.isEmpty()) {
+                            mutableFavoriteKeys.value =
+                                items.mapTo(mutableSetOf(), ::favoriteKey)
+                            return@launch
+                        }
+                    }
+                    CatalogResult.SignedOut -> {
+                        fail(CatalogLoadError.SignedOut)
+                        return@launch
+                    }
+                    CatalogResult.Unreachable -> {
+                        fail(CatalogLoadError.Unreachable)
+                        return@launch
+                    }
+                    is CatalogResult.Failed -> {
+                        fail(CatalogLoadError.Failed(result.cause))
+                        return@launch
+                    }
+                }
+            }
+        }
+    }
+
+    private fun reloadGuideIds() {
+        val local = sourceId as? SourceId.LocalPlaylist
+        if (graph != null && local != null) {
+            viewModelScope.launch {
+                graph.epg.observeGuideIds(local.playlistId).collect(mutableGuideIds::emit)
+            }
+            return
+        }
+        viewModelScope.launch {
+            when (val result = safeCall(gateway::guideIds)) {
+                is CatalogResult.Success -> mutableGuideIds.value = result.value
+                CatalogResult.SignedOut -> fail(CatalogLoadError.SignedOut)
+                CatalogResult.Unreachable -> fail(CatalogLoadError.Unreachable)
+                is CatalogResult.Failed -> fail(CatalogLoadError.Failed(result.cause))
+            }
+        }
+    }
+
+    private fun fail(error: CatalogLoadError) {
+        mutableState.value = mutableState.value.copy(loading = false, error = error)
+    }
+
+    private suspend fun <T> safeCall(call: suspend () -> CatalogResult<T>): CatalogResult<T> =
+        try {
+            call()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            CatalogResult.Failed(error)
+        }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SearchScreen(
-    playlistId: Long,
+    sourceId: SourceId,
     onBack: () -> Unit,
-    onPlay: (url: String, title: String, live: Boolean) -> Unit,
-    onOpenMovie: (channelId: Long) -> Unit,
-    onOpenSeries: (seriesKey: String) -> Unit,
-    onOpenXtreamSeries: (seriesId: Long) -> Unit,
+    onPlay: (item: CatalogItem, live: Boolean) -> Unit,
+    onPlayHubCatchup: (item: CatalogItem, entry: CatalogGuideEntry) -> Unit,
+    onOpenMovie: (ContentRef) -> Unit,
+    onOpenSeries: (CatalogItem) -> Unit,
+    onOpenXtreamSeries: (CatalogItem) -> Unit,
+    onSignIn: () -> Unit,
 ) {
-    val viewModel = playlistViewModel(playlistId, ::SearchViewModel)
+    val viewModel = sourceViewModel(sourceId, ::SearchViewModel)
     val query by viewModel.query.collectAsStateWithLifecycle()
-    val results by viewModel.results.collectAsStateWithLifecycle()
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val results = state.results
     val favoriteKeys by viewModel.favoriteKeys.collectAsStateWithLifecycle()
     val downloadsByUrl by viewModel.downloadsByUrl.collectAsStateWithLifecycle()
     val guideIds by viewModel.guideIds.collectAsStateWithLifecycle()
@@ -214,7 +345,11 @@ fun SearchScreen(
     val resources = LocalResources.current
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    var guideChannel by remember { mutableStateOf<Channel?>(null) }
+    var guideItem by remember { mutableStateOf<CatalogItem?>(null) }
+
+    fun play(item: CatalogItem, live: Boolean) {
+        onPlay(item, live)
+    }
 
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
@@ -262,10 +397,21 @@ fun SearchScreen(
                     .focusRequester(focusRequester),
             )
             when {
+                state.error is CatalogLoadError.SignedOut -> SourceSignedOut(onSignIn)
+                state.error is CatalogLoadError.Unreachable ->
+                    SourceUnreachable(viewModel::retry)
+                state.error is CatalogLoadError.Failed ->
+                    SourceLoadFailed(message = null, onRetry = viewModel::retry)
                 query.trim().length < 2 -> EmptyState(
                     stringResource(R.string.search_empty_title),
                     stringResource(R.string.search_empty_subtitle),
                 )
+                state.loading -> androidx.compose.foundation.layout.Box(
+                    Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.onSurface)
+                }
                 results.isEmpty -> EmptyState(
                     stringResource(R.string.search_no_results),
                     stringResource(R.string.search_no_results_subtitle, query),
@@ -283,17 +429,23 @@ fun SearchScreen(
                                     expandedSections["live"] = !expanded("live")
                                 }
                             }
-                            if (expanded("live")) items(results.live, key = { it.id }) { channel ->
+                            if (expanded("live")) items(
+                                results.live,
+                                key = { it.ref.encode() },
+                            ) { channel ->
                                 MediaListRow(
-                                    title = channel.name,
-                                    subtitle = channel.groupTitle,
-                                    logo = channel.logo,
+                                    title = channel.title,
+                                    subtitle = channel.group,
+                                    logo = channel.imageUrl,
                                     fallbackKind = channel.kind,
-                                    titleTags = mediaTags(channel.name, 1),
-                                    onClick = { onPlay(channel.url, channel.name, true) },
-                                    isFavorite = channel.url in favoriteKeys,
-                                    onToggleFavorite = { viewModel.toggleFavorite(channel.url, channel.kind) },
-                                    onGuide = if (channel.hasGuide(guideIds)) ({ guideChannel = channel }) else null,
+                                    titleTags = mediaTags(channel.title, 1),
+                                    onClick = { play(channel, true) },
+                                    isFavorite = favoriteKey(channel) in favoriteKeys,
+                                    onToggleFavorite = { viewModel.toggleFavorite(channel) },
+                                    onGuide = if (
+                                        channel.hasGuide ||
+                                        channel.tvgId?.let { it in guideIds } == true
+                                    ) ({ guideItem = channel }) else null,
                                     guideHighlight = channel.hasCatchup,
                                 )
                             }
@@ -304,18 +456,26 @@ fun SearchScreen(
                                     expandedSections["movies"] = !expanded("movies")
                                 }
                             }
-                            if (expanded("movies")) items(results.movies, key = { it.id }) { channel ->
+                            if (expanded("movies")) items(
+                                results.movies,
+                                key = { it.ref.encode() },
+                            ) { channel ->
                                 MediaListRow(
-                                    title = channel.name,
-                                    subtitle = channel.groupTitle,
-                                    logo = channel.logo,
+                                    title = channel.title,
+                                    subtitle = channel.group,
+                                    logo = channel.imageUrl,
                                     fallbackKind = channel.kind,
-                                    titleTags = mediaTags(channel.name, 1),
-                                    onClick = { onOpenMovie(channel.id) },
-                                    isFavorite = channel.url in favoriteKeys,
-                                    onToggleFavorite = { viewModel.toggleFavorite(channel.url, channel.kind) },
-                                    downloadState = downloadsByUrl[channel.url],
-                                    onDownload = { viewModel.download(channel) },
+                                    titleTags = mediaTags(channel.title, 1),
+                                    onClick = { onOpenMovie(channel.ref) },
+                                    isFavorite = favoriteKey(channel) in favoriteKeys,
+                                    onToggleFavorite = { viewModel.toggleFavorite(channel) },
+                                    downloadState = downloadIdentityKey(sourceId, channel.ref)
+                                        ?.let { downloadsByUrl[it] },
+                                    onDownload = if (
+                                        sourceId is SourceId.LocalPlaylist || sourceId is SourceId.Hub
+                                    ) {
+                                        { viewModel.download(channel) }
+                                    } else null,
                                 )
                             }
                         }
@@ -325,24 +485,28 @@ fun SearchScreen(
                                     expandedSections["series"] = !expanded("series")
                                 }
                             }
-                            if (expanded("series")) items(results.series, key = { "series-${it.xtreamSeriesId ?: it.seriesKey}" }) { hit ->
-                                val favKey = hit.xtreamSeriesId?.let { xtreamFavoriteKey(it) } ?: hit.seriesKey
+                            if (expanded("series")) items(
+                                results.series,
+                                key = ::searchItemKey,
+                            ) { hit ->
                                 MediaListRow(
-                                    title = hit.seriesKey,
-                                    subtitle = hit.groupTitle +
-                                        if (hit.count > 0) {
+                                    title = hit.title,
+                                    subtitle = hit.group.orEmpty() +
+                                        if ((hit.count ?: 0) > 0) {
                                             " · " + pluralStringResource(
-                                                R.plurals.search_matching_episodes, hit.count, hit.count,
+                                                R.plurals.search_matching_episodes,
+                                                hit.count ?: 0,
+                                                hit.count ?: 0,
                                             )
                                         } else "",
-                                    logo = hit.logo,
+                                    logo = hit.imageUrl,
                                     fallbackKind = ChannelKind.SERIES,
                                     onClick = {
-                                        hit.xtreamSeriesId?.let { onOpenXtreamSeries(it) }
-                                            ?: onOpenSeries(hit.seriesKey)
+                                        if (hit.seriesId != null) onOpenXtreamSeries(hit)
+                                        else onOpenSeries(hit)
                                     },
-                                    isFavorite = favKey in favoriteKeys,
-                                    onToggleFavorite = { viewModel.toggleFavorite(favKey, ChannelKind.SERIES) },
+                                    isFavorite = favoriteKey(hit) in favoriteKeys,
+                                    onToggleFavorite = { viewModel.toggleFavorite(hit) },
                                     trailingChevron = true,
                                 )
                             }
@@ -353,15 +517,21 @@ fun SearchScreen(
         }
     }
 
-    guideChannel?.let { channel ->
+    guideItem?.let { item ->
         GuideSheet(
-            channel = channel,
+            sourceId = sourceId,
+            item = item,
             hasEpgConfigured = true,
-            onDismiss = { guideChannel = null },
+            onDismiss = { guideItem = null },
             onPlayCatchup = { url, title ->
-                guideChannel = null
-                onPlay(url, title, false)
+                guideItem = null
+                onPlay(
+                    item.copy(ref = ContentRef.LocalUrl(url, 0), title = title),
+                    false,
+                )
             },
+            onPlayHubCatchup = onPlayHubCatchup,
+            onSignIn = onSignIn,
             onUnavailable = {
                 scope.launch { snackbar.showSnackbar(resources.getString(R.string.guide_catchup_unavailable)) }
             },
@@ -391,4 +561,13 @@ private fun SectionHeader(text: String, count: Int, expanded: Boolean, onToggle:
         )
     }
 }
-    private val graph = OpenTvApp.graph
+
+private fun favoriteKey(item: CatalogItem): String = when (val ref = item.ref) {
+    is ContentRef.HubContent -> ref.contentId
+    is ContentRef.LocalUrl -> when {
+        item.kind == ChannelKind.SERIES -> item.seriesId?.let { "x:$it" }
+            ?: item.seriesKey
+            ?: ref.url
+        else -> ref.url
+    }
+}

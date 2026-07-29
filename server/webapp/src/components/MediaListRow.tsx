@@ -50,30 +50,37 @@ export function MediaListRow({
   };
   const handleClick = () => { if (fired.current) { fired.current = false; return; } onClick(); };
   return (
-    <button className={`card${selectable && selected ? ' selected' : ''}`} onClick={handleClick}
-            onPointerDown={onLongPress ? onDown : undefined}
-            onPointerMove={onLongPress ? onMove : undefined}
-            onPointerUp={onLongPress ? clear : undefined}
-            onPointerLeave={onLongPress ? clear : undefined}
-            onContextMenu={onLongPress ? (e) => e.preventDefault() : undefined}
-            aria-pressed={selectable ? !!selected : undefined}>
+    <div className={`card interactive-card${selectable && selected ? ' selected' : ''}`}>
       <div className="row">
-        {selectable && (
-          <span className={`select-check${selected ? ' on' : ''}`} aria-hidden>
-            {selected && <Icon name="check" />}
-          </span>
-        )}
-        <ChannelLogo url={logo} kind={kind} />
-        <div className="body">
-          <div className="title-line">
-            <span className="title">{title}</span>
-            <BadgeRow tags={tags} />
+        <button
+          type="button"
+          className="row-open"
+          aria-label={title}
+          aria-pressed={selectable ? !!selected : undefined}
+          onClick={handleClick}
+          onPointerDown={onLongPress ? onDown : undefined}
+          onPointerMove={onLongPress ? onMove : undefined}
+          onPointerUp={onLongPress ? clear : undefined}
+          onPointerLeave={onLongPress ? clear : undefined}
+          onContextMenu={onLongPress ? (e) => e.preventDefault() : undefined}
+        >
+          {selectable && (
+            <span className={`select-check${selected ? ' on' : ''}`} aria-hidden>
+              {selected && <Icon name="check" />}
+            </span>
+          )}
+          <ChannelLogo url={logo} kind={kind} />
+          <div className="body">
+            <div className="title-line">
+              <span className="title">{title}</span>
+              <BadgeRow tags={tags} />
+            </div>
+            {airing
+              ? <div className="sub airing">{airing}</div>
+              : subtitle && <div className="sub">{subtitle}</div>}
+            {airing && airingProgress != null && <WatchProgressBar fraction={airingProgress} mint />}
           </div>
-          {airing
-            ? <div className="sub airing">{airing}</div>
-            : subtitle && <div className="sub">{subtitle}</div>}
-          {airing && airingProgress != null && <WatchProgressBar fraction={airingProgress} mint />}
-        </div>
+        </button>
         {!selectable && (
           <div className="actions">
             {onToggleFavorite && <FavoriteIcon isFavorite={!!isFavorite} onToggle={onToggleFavorite} />}
@@ -88,10 +95,10 @@ export function MediaListRow({
               </button>
             )}
             {downloadSlot}
-            {chevron && <Icon name="chevron" className="sm" />}
           </div>
         )}
+        {chevron && <Icon name="chevron" className="sm" />}
       </div>
-    </button>
+    </div>
   );
 }

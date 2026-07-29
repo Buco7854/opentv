@@ -1,5 +1,6 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.contract.*
 import com.buco7854.opentv.serverdata.db.DefaultPlaylistRow
 import com.buco7854.opentv.serverdata.createServerUserDatabase
 import com.buco7854.opentv.serverdata.AuthMethod
@@ -10,6 +11,7 @@ import com.buco7854.opentv.serverdata.db.OidcIdentityRow
 import com.buco7854.opentv.serverdata.db.RecoveryCodeRow
 import com.buco7854.opentv.serverdata.db.TotpCredentialRow
 import com.buco7854.opentv.serverdata.db.WebAuthnCredentialRow
+import androidx.room.useWriterConnection
 import kotlinx.coroutines.test.runTest
 import java.net.URI
 import java.nio.file.Files
@@ -306,6 +308,128 @@ class AuthServiceTest {
             }
             assertEquals(1, db.credentials().webAuthn(user.id).size)
             assertNotNull(disabled.authenticate(passkeySession.token))
+        } finally {
+            db.close()
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun aPersistedOidcIdentityIsNotASignInFactorWhenOidcIsDisabled() = runTest {
+        val dir = Files.createTempDirectory("opentv-auth-disabled-oidc-factor-test")
+        val db = createServerUserDatabase(dir.resolve("server-users.db").toString())
+        val now = 1_700_000_000_000L
+        try {
+            val enabledConfig = authConfig(mfaRequiredRoles = emptySet())
+            val enabled = AuthService(db, enabledConfig, dir, { now })
+            enabled.initialize()
+            val bootstrapToken = Files.readString(dir.resolve("bootstrap.token")).trim()
+            enabled.bootstrap(
+                BootstrapRequestDto(
+                    bootstrapToken,
+                    "Admin",
+                    "a sufficiently long password",
+                    "Administrator",
+                ),
+                "127.0.0.1",
+            )
+            val user = assertNotNull(db.users().byNormalizedUsername("admin"))
+            val credential = passkey(user.id, now)
+            db.credentials().upsertWebAuthn(credential)
+            db.oidc().upsert(
+                OidcIdentityRow(
+                    issuer = "https://disabled-issuer.example",
+                    subject = "persisted",
+                    userId = user.id,
+                    usernameClaim = user.username,
+                    displayNameClaim = user.displayName,
+                    groupsJson = "[]",
+                    adminMapped = false,
+                    updatedAtMs = now,
+                ),
+            )
+            val disabledConfig = authConfig(
+                mfaRequiredRoles = emptySet(),
+                passwordEnabled = false,
+                oidc = null,
+            )
+            val session = PersistentSessionService(
+                db,
+                disabledConfig,
+                NoopUserStateCleanupCoordinator,
+                { now },
+            ).issue(user, AuthMethod.WEBAUTHN, mfa = true)
+            val disabled = AuthService(db, disabledConfig, dir, { now })
+            disabled.initialize()
+            val actor = assertNotNull(disabled.authenticate(session.token)).first
+
+            assertFailsWith<LastFactorException> {
+                disabled.deleteWebAuthnCredential(actor, credential.credentialId)
+            }
+
+            assertEquals(1, db.credentials().webAuthn(user.id).size)
+            assertNotNull(disabled.authenticate(session.token))
+        } finally {
+            db.close()
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun oidcGroupRemappingRollsBackTheIdentityWhenTheEffectiveRoleCannotBeStored() = runTest {
+        val dir = Files.createTempDirectory("opentv-auth-oidc-role-transaction-test")
+        val db = createServerUserDatabase(dir.resolve("server-users.db").toString())
+        val now = 1_700_000_000_000L
+        val config = authConfig(mfaRequiredRoles = emptySet(), oidc = oidcConfig())
+        try {
+            val service = AuthService(db, config, dir, { now })
+            val user = service.createUser(
+                "oidc-admin",
+                "OIDC administrator",
+                UserStatus.ACTIVE,
+                UserRole.USER,
+                now,
+            ).copy(oidcAdmin = true)
+            db.users().update(user)
+            db.oidc().upsert(
+                OidcIdentityRow(
+                    issuer = config.oidc!!.issuer.toString(),
+                    subject = "subject",
+                    userId = user.id,
+                    usernameClaim = user.username,
+                    displayNameClaim = user.displayName,
+                    groupsJson = "[\"admins\"]",
+                    adminMapped = true,
+                    updatedAtMs = now,
+                ),
+            )
+            db.useWriterConnection {
+                it.usePrepared(
+                    """
+                    CREATE TRIGGER reject_oidc_role_update
+                    BEFORE UPDATE ON users
+                    BEGIN
+                        SELECT RAISE(ABORT, 'role update rejected');
+                    END
+                    """.trimIndent(),
+                ) { statement -> statement.step() }
+            }
+
+            assertFailsWith<Exception> {
+                service.completeOidc(
+                    issuer = config.oidc.issuer.toString(),
+                    subject = "subject",
+                    usernameClaim = user.username,
+                    displayNameClaim = user.displayName,
+                    groups = emptyList(),
+                    adminMapped = false,
+                )
+            }
+
+            assertTrue(
+                assertNotNull(db.oidc().get(config.oidc.issuer.toString(), "subject")).adminMapped,
+            )
+            assertTrue(assertNotNull(db.users().get(user.id)).oidcAdmin)
         } finally {
             db.close()
             dir.toFile().deleteRecursively()

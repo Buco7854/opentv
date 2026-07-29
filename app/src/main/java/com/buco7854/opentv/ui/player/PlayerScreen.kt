@@ -1,9 +1,11 @@
 package com.buco7854.opentv.ui.player
 
+import android.app.Activity
 import android.content.res.Configuration
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,6 +26,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -35,6 +40,7 @@ import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import com.buco7854.opentv.R
+import com.buco7854.opentv.hub.playback.HubMediaDataSourceFactory
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.DateFormat
@@ -44,53 +50,108 @@ import java.util.Date
 @OptIn(UnstableApi::class)
 @Composable
 fun PlayerScreen(
-    url: String,
-    title: String,
-    playlistId: Long,
-    tvgId: String?,
+    target: PlayerTarget,
     onBack: () -> Unit,
-    initialLive: Boolean = false,
+    onSignIn: () -> Unit,
+    onPlayTarget: (PlayerTarget) -> Unit,
 ) {
     val context = LocalContext.current
     val configuration = LocalConfiguration.current
     val scope = rememberCoroutineScope()
-    val viewModel = playerViewModel(url, playlistId, tvgId)
+    val viewModel = playerViewModel(target)
     val bootstrap by viewModel.bootstrap.collectAsStateWithLifecycle()
     val settingsState by viewModel.settings.collectAsStateWithLifecycle()
-    val channel by viewModel.channel.collectAsStateWithLifecycle()
+    val guideAvailable by viewModel.guideAvailable.collectAsStateWithLifecycle()
     val nowNext by viewModel.nowNext.collectAsStateWithLifecycle()
     val guideEntries by viewModel.guideEntries.collectAsStateWithLifecycle()
+    val playbackSource by viewModel.playbackSource.collectAsStateWithLifecycle()
+    val hubAudioTracks by viewModel.hubAudioTracks.collectAsStateWithLifecycle()
+    val watchTogether by viewModel.watchTogetherState.collectAsStateWithLifecycle()
+    val problem by viewModel.problem.collectAsStateWithLifecycle()
     val inPip by PipController.isInPip.collectAsStateWithLifecycle()
+
+    DisposableEffect(viewModel) {
+        onDispose {
+            val changingConfigurations = (context as? Activity)?.isChangingConfigurations == true
+            if (shouldClosePlayerOnDispose(changingConfigurations)) viewModel.closePlayer()
+        }
+    }
 
     val initial = bootstrap
     if (initial == null) {
         Box(Modifier.fillMaxSize().background(Color.Black))
         return
     }
+    val mediaSource = playbackSource
+    if (mediaSource == null) {
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            if (problem == null) {
+                CircularProgressIndicator(
+                    modifier = Modifier.align(Alignment.Center).size(44.dp),
+                    color = Color.White,
+                    strokeWidth = 3.dp,
+                )
+            } else {
+                PlayerErrorOverlay(
+                    message = problemMessage(problem!!),
+                    onClose = onBack,
+                    actionLabel = when (problem) {
+                        PlayerProblem.SIGNED_OUT -> stringResource(R.string.hub_sign_in_again)
+                        PlayerProblem.AT_CAPACITY -> stringResource(R.string.common_retry)
+                        else -> null
+                    },
+                    onAction = when (problem) {
+                        PlayerProblem.SIGNED_OUT -> onSignIn
+                        PlayerProblem.AT_CAPACITY -> viewModel::retryHubPlayback
+                        else -> null
+                    },
+                )
+            }
+        }
+        return
+    }
     val settings = settingsState ?: initial.settings
-    val session = remember(url, initial) {
+    val dataSourceFactory = remember(target) {
+        if (target is PlayerTarget.LocalUrl) {
+            null
+        } else {
+            HubMediaDataSourceFactory(
+                defaultPlayerDataSourceFactory(context.applicationContext),
+                viewModel::currentGrant,
+            )
+        }
+    }
+    val session = remember(target, initial) {
         PlayerSession(
             context = context.applicationContext,
-            url = url,
-            title = title,
+            url = mediaSource.url,
+            title = target.title,
             settings = initial.settings,
-            initialLive = initialLive,
+            initialLive = target.live,
             resumeTargetMs = initial.resumePositionMs,
             saveProgress = viewModel::saveProgress,
             clearProgress = viewModel::clearProgress,
+            dataSourceFactory = dataSourceFactory,
+            onMediaRequestFailed = viewModel::onMediaRequestFailed,
         )
     }
-    DisposableEffect(session) {
-        onDispose(session::close)
+    DisposableEffect(session, viewModel) {
+        viewModel.attachWatchTogetherPlayer(session)
+        onDispose {
+            viewModel.attachWatchTogetherPlayer(null)
+            session.close()
+        }
+    }
+    LaunchedEffect(mediaSource, session) {
+        session.replaceMediaItem(mediaSource.url, mediaSource.startPositionMs)
     }
 
     val playback by session.state.collectAsStateWithLifecycle()
     val systemController = rememberPlayerSystemController(session.player)
     PlayerSystemEffects(session, systemController)
-    BackHandler(onBack = onBack)
-
-    var currentTitle by remember(session) { mutableStateOf(title) }
+    var currentTitle by remember(session) { mutableStateOf(target.title) }
     var controlsVisible by remember(session) { mutableStateOf(true) }
+    var controlsFocused by remember(session) { mutableStateOf(false) }
     var interactionNonce by remember(session) { mutableIntStateOf(0) }
     var scrubFraction by remember(session) { mutableStateOf<Float?>(null) }
     var resizeMode by remember(session) { mutableIntStateOf(initial.settings.resizeMode) }
@@ -100,6 +161,8 @@ fun PlayerScreen(
     var showSubtitleTracks by remember(session) { mutableStateOf(false) }
     var showAudioTracks by remember(session) { mutableStateOf(false) }
     var showSpeed by remember(session) { mutableStateOf(false) }
+    var showWatchTogether by remember(session) { mutableStateOf(false) }
+    val remoteSurfaceFocusRequester = remember(session) { FocusRequester() }
 
     fun markInteraction() {
         interactionNonce++
@@ -111,14 +174,60 @@ fun PlayerScreen(
             hint = null
         }
     }
-    LaunchedEffect(controlsVisible, playback.playing, scrubFraction, interactionNonce) {
-        if (controlsVisible && playback.playing && scrubFraction == null) {
+    LaunchedEffect(watchTogether.choosing) {
+        if (watchTogether.choosing) showWatchTogether = true
+    }
+    LaunchedEffect(watchTogether.available, watchTogether.choosing) {
+        if (!watchTogether.available && !watchTogether.choosing) showWatchTogether = false
+    }
+    LaunchedEffect(watchTogether.notice?.id) {
+        val notice = watchTogether.notice ?: return@LaunchedEffect
+        if (notice.kind == WatchTogetherNoticeKind.JOIN_REQUEST ||
+            notice.kind == WatchTogetherNoticeKind.CONTROL_REQUEST
+        ) {
+            showWatchTogether = true
+        }
+        delay(
+            if (notice.kind == WatchTogetherNoticeKind.ADMIN_MESSAGE ||
+                notice.kind == WatchTogetherNoticeKind.ROOM_ENDED
+            ) {
+                6_000
+            } else {
+                3_500
+            },
+        )
+        viewModel.dismissWatchTogetherNotice(notice.id)
+    }
+    val modalOpen = showGuide || showSubtitleTracks || showAudioTracks ||
+        showSpeed || showWatchTogether
+    LaunchedEffect(
+        controlsVisible,
+        controlsFocused,
+        modalOpen,
+        playback.playing,
+        scrubFraction,
+        interactionNonce,
+    ) {
+        if (controlsVisible && !controlsFocused && !modalOpen &&
+            playback.playing && scrubFraction == null
+        ) {
             delay(3_000)
             controlsVisible = false
         }
     }
+    LaunchedEffect(controlsVisible) {
+        if (!controlsVisible) remoteSurfaceFocusRequester.requestFocus()
+    }
     LaunchedEffect(videoSurface, settings.subtitleStyle) {
         videoSurface?.subtitleView?.let { applySubtitleStyle(it, settings.subtitleStyle) }
+    }
+    LaunchedEffect(playback) {
+        viewModel.updatePlaybackSnapshot(playback)
+    }
+    // Resolved here: the effect below runs outside composition.
+    val problemText = problem?.let { problemMessage(it) }
+    LaunchedEffect(problemText) {
+        problemText?.let(session::stopWithError)
     }
 
     val seekBackHint = stringResource(R.string.player_seek_back_hint, settings.seekSeconds)
@@ -132,6 +241,15 @@ fun PlayerScreen(
             timeFormat.format(Date(programme.currentEndMs)),
         )
     } ?: if (playback.isLive) stringResource(R.string.common_live) else null
+
+    BackHandler {
+        when (playerBackAction(watchTogether.notice != null, controlsVisible)) {
+            PlayerBackAction.DISMISS_NOTICE ->
+                watchTogether.notice?.let { viewModel.dismissWatchTogetherNotice(it.id) }
+            PlayerBackAction.HIDE_CONTROLS -> controlsVisible = false
+            PlayerBackAction.EXIT -> onBack()
+        }
+    }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(
@@ -152,14 +270,20 @@ fun PlayerScreen(
         if (!inPip && playback.error == null) {
             PlayerGestureSurface(
                 seekSeconds = settings.seekSeconds,
+                remoteEnabled = !controlsVisible,
+                remoteFocusRequester = remoteSurfaceFocusRequester,
                 onToggleControls = { controlsVisible = !controlsVisible },
                 onSeekBack = {
-                    session.seekBack()
-                    hint = seekBackHint
+                    if (!watchTogether.loading) {
+                        session.seekBack()
+                        hint = seekBackHint
+                    }
                 },
                 onSeekForward = {
-                    session.seekForward()
-                    hint = seekForwardHint
+                    if (!watchTogether.loading) {
+                        session.seekForward()
+                        hint = seekForwardHint
+                    }
                 },
             )
         }
@@ -195,30 +319,39 @@ fun PlayerScreen(
                     positionMs = playback.positionMs,
                     durationMs = playback.durationMs,
                     scrubFraction = scrubFraction,
-                    showGuide = channel?.let { it.tvgId != null || it.xtreamStreamId != null } == true,
+                    showGuide = guideAvailable,
+                    showWatchTogether = watchTogether.available,
+                    watchTogetherPending = watchTogether.hasPending,
                     pipSupported = systemController.pipSupported,
                 ),
                 actions = PlayerChromeActions(
                     onBack = onBack,
                     onInteraction = ::markInteraction,
+                    onChromeFocusChanged = { controlsFocused = it },
                     onTogglePlayback = {
-                        session.togglePlayback()
+                        if (!watchTogether.loading) session.togglePlayback()
                         markInteraction()
                     },
                     onSeekBack = {
-                        session.seekBack()
-                        hint = seekBackHint
+                        if (!watchTogether.loading) {
+                            session.seekBack()
+                            hint = seekBackHint
+                        }
                         markInteraction()
                     },
                     onSeekForward = {
-                        session.seekForward()
-                        hint = seekForwardHint
+                        if (!watchTogether.loading) {
+                            session.seekForward()
+                            hint = seekForwardHint
+                        }
                         markInteraction()
                     },
                     onScrub = { scrubFraction = it },
                     onScrubFinished = {
-                        scrubFraction?.let { fraction ->
-                            session.seekTo((fraction * playback.durationMs).toLong())
+                        if (!watchTogether.loading) {
+                            scrubFraction?.let { fraction ->
+                                session.seekTo((fraction * playback.durationMs).toLong())
+                            }
                         }
                         scrubFraction = null
                         markInteraction()
@@ -226,6 +359,10 @@ fun PlayerScreen(
                     onOpenGuide = {
                         viewModel.loadGuide()
                         showGuide = true
+                        markInteraction()
+                    },
+                    onOpenWatchTogether = {
+                        showWatchTogether = true
                         markInteraction()
                     },
                     onOpenAudio = {
@@ -259,7 +396,31 @@ fun PlayerScreen(
 
         if (!inPip) {
             playback.error?.let { message ->
-                PlayerErrorOverlay(message = message, onClose = onBack)
+                PlayerErrorOverlay(
+                    message = message,
+                    onClose = onBack,
+                    actionLabel = when (problem) {
+                        PlayerProblem.SIGNED_OUT -> stringResource(R.string.hub_sign_in_again)
+                        PlayerProblem.AT_CAPACITY -> stringResource(R.string.common_retry)
+                        else -> null
+                    },
+                    onAction = when (problem) {
+                        PlayerProblem.SIGNED_OUT -> onSignIn
+                        PlayerProblem.AT_CAPACITY -> viewModel::retryHubPlayback
+                        else -> null
+                    },
+                )
+            }
+            if (watchTogether.loading) {
+                WatchTogetherLoadingOverlay()
+            }
+            watchTogether.notice?.let { notice ->
+                Box(
+                    Modifier.fillMaxSize().padding(top = 84.dp),
+                    contentAlignment = Alignment.TopCenter,
+                ) {
+                    WatchTogetherNoticeOverlay(notice)
+                }
             }
         }
     }
@@ -271,13 +432,16 @@ fun PlayerScreen(
             onDismiss = { showGuide = false },
             onReplay = { entry ->
                 scope.launch {
-                    val catchupUrl = viewModel.catchupUrlFor(entry)
-                    if (catchupUrl == null) {
+                    val catchupTarget = viewModel.catchupTargetFor(entry)
+                    if (catchupTarget == null) {
                         hint = catchupUnavailableHint
+                    } else if (catchupTarget is PlayerTarget.LocalUrl) {
+                        showGuide = false
+                        currentTitle = catchupTarget.title
+                        session.playCatchup(catchupTarget.url)
                     } else {
                         showGuide = false
-                        currentTitle = "${channel?.name ?: title} · ${entry.title}"
-                        session.playCatchup(catchupUrl)
+                        onPlayTarget(catchupTarget)
                     }
                 }
             },
@@ -292,23 +456,80 @@ fun PlayerScreen(
         )
     }
     if (showAudioTracks) {
-        TrackSheet(
-            player = session.player,
-            trackType = C.TRACK_TYPE_AUDIO,
-            heading = stringResource(R.string.player_audio),
-            emptyText = stringResource(R.string.player_no_audio_tracks),
-            allowOff = false,
-            onDismiss = { showAudioTracks = false },
-        )
+        val serverTracks = hubAudioTracks
+        if (serverTracks == null) {
+            TrackSheet(
+                player = session.player,
+                trackType = C.TRACK_TYPE_AUDIO,
+                heading = stringResource(R.string.player_audio),
+                emptyText = stringResource(R.string.player_no_audio_tracks),
+                allowOff = false,
+                onDismiss = { showAudioTracks = false },
+            )
+        } else {
+            HubAudioTrackSheet(
+                tracks = serverTracks,
+                heading = stringResource(R.string.player_audio),
+                emptyText = stringResource(R.string.player_no_audio_tracks),
+                onSelect = { index ->
+                    showAudioTracks = false
+                    viewModel.selectHubAudioTrack(index, session.currentPositionMs())
+                },
+                onDismiss = { showAudioTracks = false },
+            )
+        }
     }
     if (showSpeed) {
         SpeedSheet(player = session.player, onDismiss = { showSpeed = false })
     }
+    if (showWatchTogether) {
+        WatchTogetherSheet(
+            state = watchTogether,
+            actions = WatchTogetherActions(
+                onWatchAlone = {
+                    viewModel.watchAlone()
+                    showWatchTogether = false
+                },
+                onJoin = { peerId ->
+                    viewModel.askToJoin(peerId)
+                    showWatchTogether = false
+                },
+                onAnswerJoin = viewModel::answerJoin,
+                onRequestControl = {
+                    viewModel.requestRoomControl()
+                    showWatchTogether = false
+                },
+                onAnswerControl = viewModel::answerRoomControl,
+                onSetControl = viewModel::setRoomControl,
+                onKick = viewModel::kickRoomMember,
+                onLeave = {
+                    viewModel.leaveRoom()
+                    showWatchTogether = false
+                },
+            ),
+            onDismiss = {
+                if (watchTogether.choosing) viewModel.watchAlone()
+                showWatchTogether = false
+            },
+        )
+    }
 }
+
+@Composable
+private fun problemMessage(problem: PlayerProblem): String = stringResource(
+    when (problem) {
+        PlayerProblem.PLAYBACK_ENDED -> R.string.player_playback_ended
+        PlayerProblem.SIGNED_OUT -> R.string.player_signed_out
+        PlayerProblem.AT_CAPACITY -> R.string.player_at_capacity
+        PlayerProblem.FAILED -> R.string.player_stream_failed
+    }
+)
 
 @Composable
 private fun PlayerGestureSurface(
     seekSeconds: Int,
+    remoteEnabled: Boolean,
+    remoteFocusRequester: FocusRequester,
     onToggleControls: () -> Unit,
     onSeekBack: () -> Unit,
     onSeekForward: () -> Unit,
@@ -327,7 +548,27 @@ private fun PlayerGestureSurface(
                         }
                     },
                 )
-            },
+            }
+            .focusRequester(remoteFocusRequester)
+            .onPreviewKeyEvent { event ->
+                val native = event.nativeKeyEvent
+                when (playerRemoteAction(remoteEnabled, native.keyCode, native.action)) {
+                    PlayerRemoteAction.SHOW_CONTROLS -> {
+                        onToggleControls()
+                        true
+                    }
+                    PlayerRemoteAction.SEEK_BACK -> {
+                        onSeekBack()
+                        true
+                    }
+                    PlayerRemoteAction.SEEK_FORWARD -> {
+                        onSeekForward()
+                        true
+                    }
+                    PlayerRemoteAction.NONE -> false
+                }
+            }
+            .focusable(enabled = remoteEnabled),
     )
 }
 

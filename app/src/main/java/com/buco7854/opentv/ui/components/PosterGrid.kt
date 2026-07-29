@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,6 +25,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,6 +52,9 @@ fun PosterGrid(
     items: List<PosterItem>,
     fallback: ImageVector,
     onClick: (id: String) -> Unit,
+    hasMore: Boolean = false,
+    loadingMore: Boolean = false,
+    onLoadMore: () -> Unit = {},
 ) {
     if (items.isEmpty()) {
         EmptyState(
@@ -66,6 +71,14 @@ fun PosterGrid(
     ) {
         items(items, key = { it.id }) { item ->
             PosterCard(item = item, fallback = fallback, onClick = { onClick(item.id) })
+        }
+        if (hasMore) {
+            item(key = "catalog-page-${items.size}", span = { GridItemSpan(maxLineSpan) }) {
+                LaunchedEffect(items.size, loadingMore) {
+                    if (!loadingMore) onLoadMore()
+                }
+                OtvProgressBar(Modifier.fillMaxWidth().padding(vertical = 8.dp))
+            }
         }
     }
 }
@@ -86,6 +99,7 @@ fun PosterCard(
         border = if (selected == true) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
         modifier = Modifier
             .focusHighlight(RoundedCornerShape(16.dp))
+            .dpadLongClick(onLongClick)
             // Clip before the clickable so the ripple stays inside the rounded corners.
             .clip(RoundedCornerShape(16.dp))
             .combinedClickable(onClick = onClick, onLongClick = onLongClick),

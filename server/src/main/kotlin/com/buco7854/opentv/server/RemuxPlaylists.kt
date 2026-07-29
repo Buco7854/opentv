@@ -1,6 +1,7 @@
 package com.buco7854.opentv.server
 
 import kotlin.math.ceil
+import java.util.Locale
 
 /**
  * The HLS documents a remux session publishes. All three are VOD playlists listing every
@@ -16,7 +17,7 @@ internal object RemuxPlaylists {
         append("#EXT-X-TARGETDURATION:${targetDuration(session, lengths)}\n")
         append("#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-MAP:URI=\"init.mp4\"\n")
         lengths.forEachIndexed { n, length ->
-            append("#EXTINF:%.6f,\n".format(length))
+            append("#EXTINF:%.6f,\n".format(Locale.ROOT, length))
             append("main$n.m4s\n")
         }
         append("#EXT-X-ENDLIST\n")
@@ -42,7 +43,7 @@ internal object RemuxPlaylists {
         append("#EXT-X-TARGETDURATION:${targetDuration(session, lengths)}\n")
         append("#EXT-X-MEDIA-SEQUENCE:0\n")
         lengths.forEachIndexed { n, length ->
-            append("#EXTINF:%.6f,\n".format(length))
+            append("#EXTINF:%.6f,\n".format(Locale.ROOT, length))
             append("sub_${index}_$n.vtt$mediaQuery\n")
         }
         append("#EXT-X-ENDLIST\n")

@@ -1,5 +1,6 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.contract.*
 import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.statement.bodyAsText
@@ -19,6 +20,7 @@ import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlinx.serialization.decodeFromString
 
 class ApiNotFoundTest {
     private fun ApplicationTestBuilder.routes(terminateApiPrefix: Boolean) = application {
@@ -58,5 +60,31 @@ class ApiNotFoundTest {
         val document = client.get("/browse/7")
         assertEquals(HttpStatusCode.OK, document.status)
         assertTrue("<div id=\"root\">" in document.bodyAsText())
+    }
+
+    @Test
+    fun `server info is public and exposes only identity and protocol version`() = testApplication {
+        application {
+            install(ContentNegotiation) { json(Json { encodeDefaults = true }) }
+            routing {
+                route("/api/v1") {
+                    serverInfoRoutes("test-version")
+                    apiSecurityBoundary(
+                        ApiSecurity(ApiAuthenticator { null }),
+                        clientIp = { "127.0.0.1" },
+                    ) {
+                        get("/protected") { error("must not run") }
+                    }
+                    unknownApiPaths()
+                }
+            }
+        }
+
+        val response = client.get("/api/v1/server-info")
+        assertEquals(HttpStatusCode.OK, response.status)
+        assertEquals(
+            ServerInfoDto("opentv", 1, "test-version"),
+            Json.decodeFromString<ServerInfoDto>(response.bodyAsText()),
+        )
     }
 }

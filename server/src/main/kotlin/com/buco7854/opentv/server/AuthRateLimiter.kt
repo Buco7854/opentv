@@ -1,6 +1,5 @@
 package com.buco7854.opentv.server
 
-import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
 
 internal class AuthRateLimiter(
@@ -68,7 +67,6 @@ internal class AuthRateLimiter(
 internal class AuthRateLimitedException(val retryAtMs: Long) : RuntimeException()
 internal class InvalidCredentialsException : RuntimeException()
 internal class InvalidChallengeException : RuntimeException()
-internal class CsrfException : RuntimeException()
 
 /**
  * A WebAuthn ceremony was asked for on an address no browser will accept as a relying
@@ -76,13 +74,3 @@ internal class CsrfException : RuntimeException()
  * inside the browser with nothing the user can act on.
  */
 internal class WebAuthnUnavailableException(val origin: String) : RuntimeException()
-
-/**
- * The `Origin` header named neither the host the request was addressed to nor
- * `OPENTV_PUBLIC_URL`. Distinct from [CsrfException] so the browser can tell a stale CSRF
- * token (reload and retry) from a server that is misconfigured for this address.
- */
-internal class RejectedOriginException(
-    val received: String?,
-    val publicUrl: URI,
-) : RuntimeException()

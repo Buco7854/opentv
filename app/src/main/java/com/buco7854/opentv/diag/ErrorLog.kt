@@ -42,6 +42,7 @@ object ErrorLog {
         add(tag, redact(text), error?.let { redact(it.stackTraceToString()) })
     }
 
+    @Synchronized
     fun clear() {
         _entries.value = emptyList()
     }

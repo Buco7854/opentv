@@ -1,4 +1,6 @@
 import { browserApiHttp, post } from '../api/http';
+import type { DownloadStatus } from '../api';
+import type { ClientKind } from '../auth/types';
 
 export interface AdminUser {
   id: string;
@@ -24,7 +26,7 @@ export interface CreatedUser {
 export interface AdminAuthSession {
   id: string;
   authMethod: string;
-  clientKind: string;
+  clientKind: ClientKind;
   deviceName: string | null;
   createdAtMs: number;
   lastSeenAtMs: number;
@@ -57,7 +59,7 @@ export interface AdminDownload {
   blobId: string;
   contentId: string;
   title: string;
-  status: string;
+  status: DownloadStatus;
   active: boolean;
   suspended: boolean;
   totalBytes: number;
@@ -80,6 +82,10 @@ export interface AdminUserUpdate {
   status?: AdminUser['status'];
 }
 
+export interface ResetUser { setupToken: string }
+export interface PlaylistIds { playlistIds: number[] }
+export interface AdminBlobCancellation { affectedUserIds: string[] }
+
 const j = <T>(path: string, init?: RequestInit) => browserApiHttp.json<T>(path, init);
 const remove = (path: string) => j<null>(path, { method: 'DELETE' });
 const userPath = (userId: string) => `/admin/users/${encodeURIComponent(userId)}`;
@@ -97,7 +103,7 @@ export const adminApi = {
   updateUser: (userId: string, request: AdminUserUpdate) =>
     j<AdminUser>(`${userPath(userId)}/update`, post(request)),
   resetUser: (userId: string) =>
-    j<{ setupToken: string }>(`${userPath(userId)}/reset`, post({})),
+    j<ResetUser>(`${userPath(userId)}/reset`, post({})),
   revokeAllSessions: (userId: string) =>
     j<null>(`${userPath(userId)}/revoke-sessions`, post({})),
   sessions: (userId: string) =>
@@ -113,7 +119,7 @@ export const adminApi = {
   deleteUser: (userId: string) => remove(userPath(userId)),
 
   playlists: () => j<AdminPlaylist[]>('/playlists'),
-  playlistTemplate: () => j<{ playlistIds: number[] }>('/admin/playlist-template'),
+  playlistTemplate: () => j<PlaylistIds>('/admin/playlist-template'),
   savePlaylistTemplate: (playlistIds: number[]) =>
     j<null>('/admin/playlist-template', post({ playlistIds })),
 
@@ -123,7 +129,7 @@ export const adminApi = {
 
   downloads: () => j<AdminDownload[]>('/admin/downloads'),
   cancelDownloadBlob: (blobId: string) =>
-    j<{ affectedUserIds: string[] }>(
+    j<AdminBlobCancellation>(
       `/admin/downloads/blobs/${encodeURIComponent(blobId)}`,
       { method: 'DELETE' },
     ),

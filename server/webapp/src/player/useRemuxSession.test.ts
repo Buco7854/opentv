@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, PlaybackLease, RemuxStart } from '../api';
 import { ApiError } from '../api/http';
@@ -15,9 +15,11 @@ const lease: PlaybackLease = {
   mediaGrant: 'grant-1',
   mediaGrantExpiresAtMs: Date.now() + 600_000,
   streamUrl: '/api/v1/stream?u=d.token&sid=lease-1&g=grant-1',
+  sharedHlsUrl: null,
   relayUrl: null,
   transcodeUrl: null,
   remuxStartUrl: '/api/v1/remux/start?u=d.token&sid=lease-1&g=grant-1',
+  downloadFileUrl: null,
 };
 
 const started = (overrides: Partial<RemuxStart> = {}): RemuxStart => ({
@@ -42,7 +44,16 @@ const actions = (): PlaybackStatusActions => ({
   setCueText: vi.fn(),
 });
 
-function mountSession(video: HTMLVideoElement) {
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+function mountSession(
+  video: HTMLVideoElement,
+  recoverMediaGrant = vi.fn().mockResolvedValue(true),
+) {
   const stable = {
     lease,
     leaseRef: { current: lease },
@@ -57,6 +68,7 @@ function mountSession(video: HTMLVideoElement) {
     videoRef: { current: video },
     chosenTracks: { current: { audio: -1, subs: null } },
     actions: actions(),
+    recoverMediaGrant,
     onTerminate: vi.fn(),
   };
   return renderHook(() => useRemuxSession(stable));
@@ -83,6 +95,7 @@ describe('remux session lifecycle', () => {
 
     await waitFor(() => expect(result.current.state).toBe('none'));
     expect(prepare).toHaveBeenCalledOnce();
+    expect(prepare).toHaveBeenCalledWith(lease.remuxStartUrl, 0, false);
     expect(toast).not.toHaveBeenCalled();
   });
 
@@ -107,6 +120,56 @@ describe('remux session lifecycle', () => {
     await vi.advanceTimersByTimeAsync(2000);
 
     await waitFor(() => expect(result.current.session?.startAt).toBe(615));
+    expect(prepare).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the newest track prepare when concurrent responses arrive out of order', async () => {
+    const firstSwitch = deferred<RemuxStart>();
+    const secondSwitch = deferred<RemuxStart>();
+    const prepare = vi.spyOn(api, 'remuxStart')
+      .mockResolvedValueOnce(started())
+      .mockImplementationOnce(() => firstSwitch.promise)
+      .mockImplementationOnce(() => secondSwitch.promise);
+    const { result } = mountSession(document.createElement('video'));
+    await waitFor(() => expect(result.current.session?.id).toBe('remux-1'));
+
+    act(() => {
+      result.current.start(1, 10);
+      result.current.start(2, 20);
+    });
+    await waitFor(() => expect(prepare).toHaveBeenCalledTimes(3));
+    await act(async () => secondSwitch.resolve(started({
+      id: 'remux-2',
+      playlistUrl: '/api/v1/remux/remux-2/main.m3u8',
+      audio: 2,
+    })));
+    await waitFor(() => expect(result.current.session?.id).toBe('remux-2'));
+
+    await act(async () => firstSwitch.resolve(started({
+      id: 'remux-stale',
+      playlistUrl: '/api/v1/remux/remux-stale/main.m3u8',
+      audio: 1,
+    })));
+
+    expect(result.current.session?.id).toBe('remux-2');
+    expect(result.current.session?.audio).toBe(2);
+    expect(api.remuxStop).toHaveBeenCalledWith(
+      'remux-stale',
+      lease.id,
+      lease.mediaGrant,
+    );
+  });
+
+  it('refreshes an expired grant and retries the remux prepare', async () => {
+    const recover = vi.fn().mockResolvedValue(true);
+    const prepare = vi.spyOn(api, 'remuxStart')
+      .mockRejectedValueOnce(new ApiError('expired', 410, 'playback_revoked'))
+      .mockResolvedValueOnce(started());
+    const { result } = mountSession(document.createElement('video'), recover);
+
+    await waitFor(() => expect(result.current.session?.id).toBe('remux-1'));
+
+    expect(recover).toHaveBeenCalledOnce();
     expect(prepare).toHaveBeenCalledTimes(2);
   });
 });

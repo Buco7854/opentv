@@ -95,10 +95,21 @@ private fun JsonObject.text(key: String): String? =
     (this[key] as? JsonPrimitive)?.takeIf { it !is kotlinx.serialization.json.JsonNull }?.content
 
 private fun JsonObject.textOr(key: String, default: String = ""): String = text(key) ?: default
-private fun JsonObject.long(key: String, default: Long = 0): Long = text(key)?.toLongOrNull() ?: default
 private fun JsonObject.int(key: String, default: Int = 0): Int = text(key)?.toDoubleOrNull()?.toInt() ?: default
 private fun JsonObject.obj(key: String): JsonObject? = this[key] as? JsonObject
 private fun JsonObject.array(key: String): JsonArray? = this[key] as? JsonArray
+private val PROVIDER_ID = Regex("""[1-9][0-9]*""")
+
+/**
+ * Xtream stream and series ids are positive decimal integers in the panel API.
+ * Reject a row when its id cannot be represented losslessly by the current
+ * Long-backed catalog instead of normalizing it into a different identity.
+ */
+private fun JsonObject.providerId(key: String): Long? {
+    val raw = text(key) ?: return null
+    if (!PROVIDER_ID.matches(raw)) return null
+    return raw.toLongOrNull()?.takeIf { it.toString() == raw }
+}
 
 /** Pure URL construction and detection for Xtream-codes panels. */
 object Xtream {
@@ -281,8 +292,7 @@ class XtreamApi(private val http: HttpFetcher) {
         return buildList {
             for (element in array) {
                 val obj = element as? JsonObject ?: continue
-                val id = obj.long("stream_id", -1)
-                if (id <= 0) continue
+                val id = obj.providerId("stream_id") ?: continue
                 add(
                     XtreamLiveStream(
                         streamId = id,
@@ -304,8 +314,7 @@ class XtreamApi(private val http: HttpFetcher) {
         return buildList {
             for (element in array) {
                 val obj = element as? JsonObject ?: continue
-                val id = obj.long("stream_id", -1)
-                if (id <= 0) continue
+                val id = obj.providerId("stream_id") ?: continue
                 add(
                     XtreamVodStream(
                         streamId = id,
@@ -324,8 +333,7 @@ class XtreamApi(private val http: HttpFetcher) {
         return buildList {
             for (element in array) {
                 val obj = element as? JsonObject ?: continue
-                val id = obj.long("series_id", -1)
-                if (id <= 0) continue
+                val id = obj.providerId("series_id") ?: continue
                 add(
                     XtreamSeriesItem(
                         seriesId = id,

@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.outlined.FavoriteBorder
@@ -107,7 +108,7 @@ fun EmptyState(title: String, subtitle: String, modifier: Modifier = Modifier) {
 
 @Composable
 fun FavoriteIcon(isFavorite: Boolean, onToggle: () -> Unit) {
-    IconButton(onClick = onToggle) {
+    IconButton(onClick = onToggle, modifier = Modifier.focusHighlight(CircleShape)) {
         Icon(
             if (isFavorite) Icons.Rounded.Favorite else Icons.Outlined.FavoriteBorder,
             contentDescription = if (isFavorite) {

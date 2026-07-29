@@ -11,6 +11,7 @@ function isAuthFlow(value: unknown): value is AuthFlow {
     flow.status === 'AUTHENTICATED'
     || flow.status === 'MFA_REQUIRED'
     || flow.status === 'ENROLLMENT_REQUIRED'
+    || flow.status === 'PENDING_APPROVAL'
   );
 }
 

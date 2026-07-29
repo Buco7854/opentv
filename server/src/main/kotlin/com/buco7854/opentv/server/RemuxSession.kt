@@ -19,7 +19,7 @@ internal class RemuxSession(
     // reads the file once). Two sessions with the same shareKey never double-count a seat.
     val shareKey: String,
     // How many reads that provider permits at once (its max_connections).
-    val connectionLimit: Int,
+    @Volatile var connectionLimit: Int,
     val audioIndex: Int,
     val durationSec: Double,
     // Target segment length (ffmpeg -hls_time). Actual boundaries are in `starts`.

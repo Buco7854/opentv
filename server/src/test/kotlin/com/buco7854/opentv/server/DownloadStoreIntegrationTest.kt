@@ -34,6 +34,14 @@ class DownloadStoreIntegrationTest {
             )
             assertEquals(DownloadStatus.PAUSED, storage.downloads.get(id)?.status)
             assertEquals(10, storage.downloads.get(id)?.downloadedBytes)
+            assertFalse(
+                storage.downloads.updateUrlIfStatus(
+                    id,
+                    "https://provider/new-token",
+                    listOf(DownloadStatus.RUNNING),
+                ),
+            )
+            assertEquals("https://provider/movie", storage.downloads.get(id)?.url)
         } finally {
             storage.close()
             dir.toFile().deleteRecursively()

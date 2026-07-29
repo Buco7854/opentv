@@ -1,5 +1,6 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.contract.*
 import androidx.sqlite.SQLiteException
 import com.buco7854.opentv.serverdata.ChallengeKind
 import com.buco7854.opentv.serverdata.UserStatus
@@ -29,10 +30,9 @@ private data class DeviceLinkPayload(
 
 internal data class DeviceLinkPollResult(
     val status: DeviceLinkStatusDto,
-    val sessionToken: String? = null,
 )
 
-/** Device authorization flow independent from HTTP origin, cookie, and header handling. */
+/** Device authorization flow independent from HTTP delivery. */
 class DeviceLinkService(
     private val db: ServerUserDatabase,
     private val auth: AuthService,
@@ -188,7 +188,6 @@ class DeviceLinkService(
                 intervalMs = SCANNED_POLL_INTERVAL_MS,
                 expiresAtMs = row.expiresAtMs,
             ),
-            result.sessionToken,
         )
     }
 

@@ -37,8 +37,10 @@ Store. There are two channels:
 - **Dev channel**: rebuilt from the latest commit on `main`.
   [Download](https://github.com/Buco7854/opentv/releases/download/dev/app-release.apk)
 
-Both builds are signed with the same key, so updates install in place without
-losing your data. Full instructions and documentation are on the
+Both published builds are signed with the same key, so updates install in place.
+Catalog schema changes deliberately recreate the catalog database and can remove
+playlists, connected servers, favorites, resume points, and download records;
+read the update guide first. Full instructions and documentation are on the
 **[OpenTV docs site](https://buco7854.github.io/opentv/)**.
 
 ## Web client
@@ -57,9 +59,11 @@ docker run -d -p 127.0.0.1:8080:8080 -v opentv-data:/data \
 ```
 
 The server has local password authentication with MFA, OIDC SSO, revocable
-sessions, users, roles, and playlist assignments. Generate the required secret
-with `openssl rand -base64 32` or `openssl rand -hex 32`; use HTTPS and set
-`OPENTV_PUBLIC_URL` when deploying beyond localhost. See the
+bearer sessions, users, roles, and playlist assignments. The web client keeps
+its bearer in `localStorage`; Android stores it encrypted under Android
+Keystore. Generate the required secret with `openssl rand -base64 32` or
+`openssl rand -hex 32`; use HTTPS and set `OPENTV_PUBLIC_URL` when deploying
+beyond localhost. See the
 [authentication guide](https://buco7854.github.io/opentv/guide/server-authentication).
 
 The **Now watching** page (in the playlists panel) shows who is watching what,
@@ -82,6 +86,8 @@ genuinely good while doing it.
   classification guessing, the full series catalog, and auto-wired EPG and
   catch-up) plus M3U/M3U8 by URL or file. Flat playlists get smart, unit-tested
   VOD detection, and a `get.php` URL is offered an automatic upgrade to Xtream.
+  An optional OpenTV server source adds granted playlists, synced favorites and
+  progress, watch together, and pipelined downloads stored on the device.
 - **Browsing**: list or poster-grid views with 4K/FHD/HDR badges, a filter bar,
   global search, favorites keyed by stable identity, and rich movie, series and
   episode pages with cast photos (keyless via TVMaze and iTunes).
@@ -109,8 +115,9 @@ Xtream refresh is six requests.
 ## Tech
 
 Kotlin, Jetpack Compose (Material 3), Media3 and ExoPlayer, Room, WorkManager,
-DataStore, OkHttp and Coil. Single-module app, MVVM, around 50 unit tests, CI on
-every push.
+DataStore, OkHttp and Coil. The Android app, server, shared core/data,
+server-contract and hub-client are separate Gradle modules, with CI on every
+push.
 
 ## Building
 
@@ -142,9 +149,12 @@ Requires Node.js 24.18 or newer. It deploys to GitHub Pages automatically when
 
 ## Privacy
 
-OpenTV has no servers, accounts, analytics or ads. Credentials and data stay on
-your device. The app only talks to your provider and optional keyless metadata
-APIs. Full policy: **[PRIVACY.md](PRIVACY.md)**.
+The OpenTV project runs no hosted service and includes no analytics or ads.
+Standalone Android sources talk only to your provider and optional keyless
+metadata APIs. If you connect a self-hosted OpenTV server, its account,
+playback, favorites, progress, and download requests go to that server, which
+also records your viewing activity for its administrator. Full policy:
+[PRIVACY.md](PRIVACY.md).
 
 ## Contributing
 

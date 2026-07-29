@@ -1,9 +1,11 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.contract.*
+import com.buco7854.opentv.serverdata.ClientKind
 import io.ktor.http.Cookie
 import io.ktor.http.CookieEncoding
-import io.ktor.http.HttpStatusCode
 import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
@@ -27,19 +29,21 @@ internal fun Route.publicAuthRoutes(
     route("/auth") {
         get("/capabilities") { call.respond(flows.capabilities(origins.webAuthn(call))) }
         post("/bootstrap") {
-            call.requireAuthOrigin(config)
-            call.respondAuth(flows.bootstrap(call.receive(), clientIp(call)), config, origins)
+            call.respondAuth(
+                flows.bootstrap(call.receive(), clientIp(call), call.clientKind()),
+            )
         }
         post("/password") {
-            call.requireAuthOrigin(config)
-            call.respondAuth(flows.password(call.receive(), clientIp(call)), config, origins)
+            call.respondAuth(
+                flows.password(call.receive(), clientIp(call), call.clientKind()),
+            )
         }
         post("/activate") {
-            call.requireAuthOrigin(config)
-            call.respondAuth(flows.activate(call.receive(), clientIp(call)), config, origins)
+            call.respondAuth(
+                flows.activate(call.receive(), clientIp(call), call.clientKind()),
+            )
         }
         post("/totp/enroll/start") {
-            call.requireAuthOrigin(config)
             call.respond(
                 flows.startTotpEnrollment(
                     call.receive<TotpEnrollmentStartRequestDto>().challenge,
@@ -48,47 +52,49 @@ internal fun Route.publicAuthRoutes(
             )
         }
         post("/totp/enroll/complete") {
-            call.requireAuthOrigin(config)
-            call.respondAuth(flows.completeTotpEnrollment(call.receive(), clientIp(call)), config, origins)
+            call.respondAuth(
+                flows.completeTotpEnrollment(call.receive(), clientIp(call), call.clientKind()),
+            )
         }
         post("/totp") {
-            call.requireAuthOrigin(config)
-            call.respondAuth(flows.completeTotp(call.receive(), clientIp(call)), config, origins)
+            call.respondAuth(
+                flows.completeTotp(call.receive(), clientIp(call), call.clientKind()),
+            )
         }
         post("/recovery") {
-            call.requireAuthOrigin(config)
-            call.respondAuth(flows.completeRecovery(call.receive(), clientIp(call)), config, origins)
+            call.respondAuth(
+                flows.completeRecovery(call.receive(), clientIp(call), call.clientKind()),
+            )
         }
         post("/webauthn/register/options") {
-            call.requireAuthOrigin(config)
             call.respond(
                 webAuthn.registrationOptions(call.receive(), clientIp(call), origins.webAuthn(call)),
             )
         }
         post("/webauthn/register/complete") {
-            call.requireAuthOrigin(config)
             call.respondAuth(
-                webAuthn.completeRegistration(call.receive(), clientIp(call)),
-                config,
-                origins,
+                webAuthn.completeRegistration(
+                    call.receive(),
+                    clientIp(call),
+                    call.clientKind(),
+                ),
             )
         }
         post("/webauthn/authenticate/options") {
-            call.requireAuthOrigin(config)
             call.respond(
                 webAuthn.authenticationOptions(call.receive(), clientIp(call), origins.webAuthn(call)),
             )
         }
         post("/webauthn/authenticate/complete") {
-            call.requireAuthOrigin(config)
             call.respondAuth(
-                webAuthn.completeAuthentication(call.receive(), clientIp(call)),
-                config,
-                origins,
+                webAuthn.completeAuthentication(
+                    call.receive(),
+                    clientIp(call),
+                    call.clientKind(),
+                ),
             )
         }
         post("/webauthn/login/options") {
-            call.requireAuthOrigin(config)
             call.respond(
                 webAuthn.loginOptions(
                     call.receive<WebAuthnLoginOptionsRequestDto>(),
@@ -98,11 +104,11 @@ internal fun Route.publicAuthRoutes(
             )
         }
         post("/webauthn/login/complete") {
-            call.requireAuthOrigin(config)
-            call.respondAuth(webAuthn.completeLogin(call.receive(), clientIp(call)), config, origins)
+            call.respondAuth(
+                webAuthn.completeLogin(call.receive(), clientIp(call), call.clientKind()),
+            )
         }
         post("/link/start") {
-            call.requireAuthOrigin(config)
             call.respond(
                 deviceLink.start(
                     call.receive(),
@@ -113,16 +119,16 @@ internal fun Route.publicAuthRoutes(
             )
         }
         post("/link/poll") {
-            call.requireAuthOrigin(config)
             val result = deviceLink.poll(call.receive())
-            result.sessionToken?.let {
-                call.response.cookies.append(sessionCookie(it, config, origins.secure(call)))
-            }
             call.respond(result.status)
         }
         get("/oidc/start") {
             val secure = origins.secure(call)
-            val start = oidc.start(clientIp(call), origins.url(call, OIDC_CALLBACK_PATH))
+            val start = oidc.start(
+                clientIp(call),
+                origins.url(call, OIDC_CALLBACK_PATH),
+                call.request.queryParameters["handoff"],
+            )
             call.response.cookies.append(
                 oidcTransactionCookie(start.transactionToken, config, secure),
             )
@@ -140,12 +146,10 @@ internal fun Route.publicAuthRoutes(
                     call.request.queryParameters["state"],
                     call.request.queryParameters["error"],
                     call.request.cookies[OIDC_TRANSACTION_COOKIE],
+                    call.clientKind(),
                 )
-                result.sessionToken?.let {
-                    call.response.cookies.append(sessionCookie(it, config, secure))
-                }
                 call.respondRedirect(
-                    if (result.flow.status == "AUTHENTICATED") "/" else "/?auth=pending",
+                    oidcResultRedirect(result.flow, result.oidcHandoff),
                 )
             } catch (_: InvalidCredentialsException) {
                 call.respondRedirect("/login?auth=oidc_error")
@@ -157,6 +161,12 @@ internal fun Route.publicAuthRoutes(
         }
     }
 }
+
+internal fun oidcResultRedirect(flow: AuthFlowDto, handoff: String? = null): String =
+    flow.sessionToken?.let {
+        "/#session=${urlEncode(it)}" +
+            (handoff?.let { value -> "&handoff=${urlEncode(value)}" } ?: "")
+    } ?: "/?auth=pending"
 
 internal const val MAX_PUBLIC_AUTH_REQUEST_BODY_BYTES = 65_536L
 
@@ -184,13 +194,6 @@ internal fun requestBodyLimit(path: String): Long =
     } else {
         MAX_REQUEST_BODY_BYTES
     }
-
-private fun ApplicationCall.requireAuthOrigin(config: AuthConfig) {
-    val origin = request.headers[HttpHeaders.Origin]
-    if (!RequestOrigin.isSameOrigin(origin, request.headers[HttpHeaders.Host], config.publicUrl)) {
-        throw RejectedOriginException(origin, config.publicUrl)
-    }
-}
 
 internal fun Route.adminAuthRoutes(auth: AuthService) {
     route("/admin") {
@@ -283,7 +286,6 @@ internal fun Route.authenticatedAuthRoutes(
     auth: AuthService,
     webAuthn: WebAuthnService,
     deviceLink: DeviceLinkService,
-    config: AuthConfig,
     origins: PublicOrigin,
     clientIp: (ApplicationCall) -> String,
 ) {
@@ -292,9 +294,6 @@ internal fun Route.authenticatedAuthRoutes(
         post("/logout") {
             val request = call.receive<LogoutRequestDto>()
             auth.logout(call.actor, request.all)
-            call.response.cookies.append(
-                expiredSessionCookie(config, origins.secure(call)),
-            )
             call.respond(HttpStatusCode.NoContent)
         }
         post("/webauthn/add/options") {
@@ -305,8 +304,6 @@ internal fun Route.authenticatedAuthRoutes(
         post("/webauthn/add/complete") {
             call.respondAuth(
                 webAuthn.completeRegistration(call.receive(), clientIp(call)),
-                config,
-                origins,
             )
         }
         get("/webauthn/credentials") {
@@ -315,8 +312,6 @@ internal fun Route.authenticatedAuthRoutes(
         post("/webauthn/credentials/delete") {
             call.respondAuth(
                 webAuthn.deleteCredential(call.actor, call.receive()),
-                config,
-                origins,
             )
         }
         get("/totp/status") {
@@ -333,13 +328,11 @@ internal fun Route.authenticatedAuthRoutes(
                     call.receive(),
                     clientIp(call),
                 ),
-                config,
-                origins,
             )
         }
         post("/totp/delete") {
             call.receive<TotpDeleteRequestDto>()
-            call.respondAuth(auth.deleteTotp(call.actor), config, origins)
+            call.respondAuth(auth.deleteTotp(call.actor))
         }
         post("/link/lookup") {
             call.respond(deviceLink.lookup(call.actor, call.receive(), clientIp(call)))
@@ -353,36 +346,20 @@ internal fun Route.authenticatedAuthRoutes(
             call.respond(HttpStatusCode.NoContent)
         }
         post("/recovery/regenerate") {
-            call.respondAuth(auth.regenerateRecoveryCodes(call.actor), config, origins)
+            call.respondAuth(auth.regenerateRecoveryCodes(call.actor))
         }
         post("/password/change") {
-            call.respondAuth(auth.changePassword(call.actor, call.receive()), config, origins)
+            call.respondAuth(auth.changePassword(call.actor, call.receive()))
         }
-    }
-}
-
-internal fun interface SessionIssuer {
-    fun issue(call: ApplicationCall, token: String)
-}
-
-internal class BrowserCookieSessionIssuer(
-    private val config: AuthConfig,
-    private val secure: Boolean,
-) : SessionIssuer {
-    override fun issue(call: ApplicationCall, token: String) {
-        call.response.cookies.append(sessionCookie(token, config, secure))
     }
 }
 
 private suspend fun ApplicationCall.respondAuth(
     result: AuthResult,
-    config: AuthConfig,
-    origins: PublicOrigin,
-    issuer: SessionIssuer = BrowserCookieSessionIssuer(config, origins.secure(this)),
 ) {
-    result.sessionToken?.let { issuer.issue(this, it) }
     if (result.flow.status == "MFA_REQUIRED" ||
-        result.flow.status == "ENROLLMENT_REQUIRED"
+        result.flow.status == "ENROLLMENT_REQUIRED" ||
+        result.flow.status == "PENDING_APPROVAL"
     ) {
         respond(HttpStatusCode.Conflict, result.flow)
     } else {
@@ -390,27 +367,14 @@ private suspend fun ApplicationCall.respondAuth(
     }
 }
 
-internal fun sessionCookie(token: String, config: AuthConfig, secure: Boolean) = Cookie(
-    name = SESSION_COOKIE,
-    value = token,
-    encoding = CookieEncoding.RAW,
-    maxAge = (config.sessionAbsoluteMs / 1000).toInt(),
-    path = "/",
-    secure = secure,
-    httpOnly = true,
-    extensions = mapOf("SameSite" to "Lax"),
-)
+private fun ApplicationCall.clientKind(): String =
+    if (request.headers[CLIENT_KIND_HEADER].equals("native", ignoreCase = true)) {
+        ClientKind.NATIVE
+    } else {
+        ClientKind.BROWSER
+    }
 
-private fun expiredSessionCookie(config: AuthConfig, secure: Boolean) = Cookie(
-    name = SESSION_COOKIE,
-    value = "",
-    encoding = CookieEncoding.RAW,
-    maxAge = 0,
-    path = "/",
-    secure = secure,
-    httpOnly = true,
-    extensions = mapOf("SameSite" to "Lax"),
-)
+internal const val CLIENT_KIND_HEADER = "X-OpenTV-Client"
 
 internal const val OIDC_CALLBACK_PATH = "/api/v1/auth/oidc/callback"
 internal const val OIDC_TRANSACTION_COOKIE = "opentv_oidc_tx"

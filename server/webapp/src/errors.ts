@@ -26,8 +26,6 @@ const CODE_TEXT: Record<string, MessageKey> = {
   // Server contracts.
   unauthenticated: 'error.unauthenticated',
   forbidden: 'error.forbidden',
-  csrf_rejected: 'error.csrfRejected',
-  origin_rejected: 'error.originRejected',
   auth_rate_limited: 'error.rateLimited',
   invalid_credentials: 'error.invalidCredentials',
   challenge_invalid: 'error.challengeInvalid',

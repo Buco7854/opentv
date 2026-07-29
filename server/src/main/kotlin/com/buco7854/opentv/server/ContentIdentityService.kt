@@ -122,16 +122,23 @@ class ContentIdentityService(
         val identities = identitiesByContentId(contentIds)
         if (identities.isEmpty()) return emptyMap()
         val channels = loadChannels(
-            identities.values.mapNotNull { it.currentChannelId },
+            identities.values.filterNot(ContentIdentityRow::retired)
+                .mapNotNull { it.currentChannelId },
         ).associateBy(Channel::id)
         return identities.mapNotNull { (contentId, identity) ->
-            channels[identity.currentChannelId]?.let { contentId to it.name }
+            channels[identity.currentChannelId]
+                ?.takeIf { it.matches(identity) }
+                ?.let { contentId to it.name }
         }.toMap()
     }
 
     suspend fun resolve(contentId: String): Pair<ContentIdentityRow, Channel?> {
         val identity = identity(contentId)
-        return identity to identity.currentChannelId?.let { storage.channels.get(it) }
+        val channel = identity.currentChannelId
+            ?.takeUnless { identity.retired }
+            ?.let { storage.channels.get(it) }
+            ?.takeIf { it.matches(identity) }
+        return identity to channel
     }
 
     suspend fun requireChannel(contentId: String): Pair<ContentIdentityRow, Channel> {
@@ -143,7 +150,7 @@ class ContentIdentityService(
 
     /** Reconcile a refreshed catalog while retaining missing identities as retired. */
     suspend fun reconcilePlaylist(playlistId: Long) {
-        val seenAt = clock()
+        val observedAt = clock()
         val channels = mutableListOf<Channel>()
         listOf(ChannelKind.LIVE, ChannelKind.MOVIE, ChannelKind.SERIES).forEach { kind ->
             storage.channels.observeGroups(playlistId, kind).first().forEach { group ->
@@ -160,6 +167,14 @@ class ContentIdentityService(
         reconciliation.withLock {
             val existing = db.content().forPlaylist(playlistId)
                 .associateBy { IdentityKey(it.kind, it.providerFingerprint) }
+            // lastSeenAtMs is the reconciliation generation as well as a timestamp. Two
+            // refreshes can finish in one clock millisecond, so make the generation strictly
+            // increase or the second pass cannot distinguish its missing rows from its own.
+            val seenAt = maxOf(
+                observedAt,
+                (existing.values.maxOfOrNull(ContentIdentityRow::lastSeenAtMs) ?: Long.MIN_VALUE)
+                    .let { if (it == Long.MAX_VALUE) it else it + 1 },
+            )
             val pending = linkedMapOf<IdentityKey, ContentIdentityRow>()
             channels.forEach { channel ->
                 val key = IdentityKey(channel.kind, channelFingerprint(channel))
@@ -232,6 +247,11 @@ class ContentIdentityService(
     private fun channelFingerprint(channel: ChannelListing): String =
         channel.xtreamStreamId?.let { fingerprint("xtream:${channel.kind}:$it") }
             ?: fingerprint("m3u:${channel.kind}:${normalizeUrl(channel.url)}")
+
+    private fun Channel.matches(identity: ContentIdentityRow): Boolean =
+        playlistId == identity.playlistId &&
+            kind == identity.kind &&
+            channelFingerprint(this) == identity.providerFingerprint
 
     private fun xtreamSeriesKey(seriesId: Long) =
         IdentityKey(ChannelKind.SERIES, fingerprint("xtream:series:$seriesId"))

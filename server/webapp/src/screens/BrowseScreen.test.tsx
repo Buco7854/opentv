@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, ChannelKind, GroupCount, PlaylistDetail } from '../api';
 import { BrowseScreen } from './BrowseScreen';
 
-vi.mock('../auth/AuthProvider', () => ({ useAuth: () => ({ user: { role: 'USER' } }) }));
+vi.mock('../auth/AuthProvider', () => ({ useAuth: () => ({ user: { role: 'ADMIN' } }) }));
 vi.mock('../player/PlayerNavigation', () => ({
   usePlayer: () => ({ playChannel: vi.fn(), playCatchup: vi.fn() }),
 }));
@@ -62,8 +62,35 @@ describe('BrowseScreen', () => {
   });
 
   it('does not descend into the previous section category after a tab switch', async () => {
+    vi.mocked(api.channels).mockResolvedValue({
+      items: [{
+        contentId: 'live-1',
+        id: 1,
+        name: 'News',
+        logo: null,
+        tvgId: 'news',
+        kind: ChannelKind.LIVE,
+        xtreamStreamId: null,
+        catchupDays: 0,
+        hasCatchup: false,
+      }],
+      total: 1,
+      offset: 0,
+      limit: 50,
+    } as never);
+    vi.mocked(api.nowAiring).mockResolvedValue({
+      news: {
+        id: 9,
+        playlistId: 1,
+        tvgId: 'news',
+        title: 'Live bulletin',
+        description: null,
+        startMs: Date.now() - 1_000,
+        endMs: Date.now() + 1_000,
+      },
+    });
     const view = renderBrowse();
-    await act(async () => {});
+    expect(await view.findByText('Live bulletin')).toBeTruthy();
     expect(view.getByTestId('query').textContent).toBe('?t=0&g=All+channels');
 
     fireEvent.click(view.getByText('movies tab'));
@@ -71,6 +98,7 @@ describe('BrowseScreen', () => {
 
     expect(view.getByTestId('query').textContent).toBe('?t=1');
     expect(view.getByText('Action')).toBeTruthy();
+    expect(view.container.querySelector('button button')).toBeNull();
     expect(view.queryByText('Empty category')).toBeNull();
     view.unmount();
   });

@@ -231,22 +231,24 @@ class PlaylistRepository(
                     false
                 }
                 is ConditionalFetch.Success -> try {
-                    var epgFromFile: String? = null
-                    val overrides = storage.groupOverrides.forPlaylist(playlistId)
-                        .associate { it.groupTitle to it.kind }
-                    // Drop validators before wiping, else a mid-stream failure leaves a 304 over empty channels.
-                    storage.playlists.update(playlist.copy(etag = null, lastModified = null))
-                    storage.channels.deleteForPlaylist(playlistId)
-                    val count = ingest(playlistId, result.body.lines(), overrides) { epgFromFile = it }
-                    storage.playlists.update(
-                        playlist.copy(
-                            etag = result.etag,
-                            lastModified = result.lastModified,
-                            lastRefreshedMs = now,
-                            channelCount = count,
-                            epgUrl = playlist.epgUrl ?: epgFromFile,
+                    result.body.readLines { lines ->
+                        var epgFromFile: String? = null
+                        val overrides = storage.groupOverrides.forPlaylist(playlistId)
+                            .associate { it.groupTitle to it.kind }
+                        // Drop validators before wiping, else a mid-stream failure leaves a 304 over empty channels.
+                        storage.playlists.update(playlist.copy(etag = null, lastModified = null))
+                        storage.channels.deleteForPlaylist(playlistId)
+                        val count = ingest(playlistId, lines, overrides) { epgFromFile = it }
+                        storage.playlists.update(
+                            playlist.copy(
+                                etag = result.etag,
+                                lastModified = result.lastModified,
+                                lastRefreshedMs = now,
+                                channelCount = count,
+                                epgUrl = playlist.epgUrl ?: epgFromFile,
+                            )
                         )
-                    )
+                    }
                     true
                 } finally {
                     result.body.close()

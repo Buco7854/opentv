@@ -1,8 +1,8 @@
-import { PlaybackLease, downloadFileUrl } from '../api';
+import { PlaybackLease } from '../api';
 import { StreamKind, streamKind } from './playbackPolicy';
 import { replaceMediaGrant } from './mediaGrant';
 
-export type Transport = 'proxy' | 'relay' | 'transcode' | 'remux' | 'download';
+export type Transport = 'proxy' | 'shared-hls' | 'relay' | 'transcode' | 'remux' | 'download';
 
 export interface MediaSource {
   transport: Transport;
@@ -21,6 +21,8 @@ function leaseUrl(context: TransportContext, transport: Transport): string | nul
   switch (transport) {
     case 'proxy':
       return lease.streamUrl;
+    case 'shared-hls':
+      return lease.sharedHlsUrl;
     case 'relay':
       return lease.relayUrl;
     case 'transcode':
@@ -28,7 +30,7 @@ function leaseUrl(context: TransportContext, transport: Transport): string | nul
     case 'remux':
       return context.remuxPlaylistUrl ?? null;
     case 'download':
-      return context.downloadId ? downloadFileUrl(context.downloadId) : null;
+      return lease.downloadFileUrl;
   }
 }
 

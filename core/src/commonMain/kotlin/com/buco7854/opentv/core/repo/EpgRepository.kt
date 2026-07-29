@@ -55,37 +55,39 @@ class EpgRepository(
                     storage.playlists.update(playlist.copy(epgLastRefreshedMs = now))
                 }
                 is ConditionalFetch.Success -> try {
-                    // Invalidate validators before mutating so a failed ingest forces a re-download.
-                    storage.playlists.update(playlist.copy(epgEtag = null, epgLastModified = null))
-                    // Replace future rows; keep past rows so catch-up history survives short files.
-                    storage.epg.deleteFrom(playlistId, now)
-                    XmltvParser.parse(
-                        source = result.body.chars(),
-                        wantedChannelIds = wantedIds,
-                        windowStartMs = now - WINDOW_BACK_MS,
-                        windowEndMs = now + WINDOW_AHEAD_MS,
-                    ) { batch ->
-                        storage.epg.insertAll(
-                            batch.map {
-                                Programme(
-                                    playlistId = playlistId,
-                                    tvgId = it.channel,
-                                    title = it.title,
-                                    description = it.description,
-                                    startMs = it.startMs,
-                                    endMs = it.endMs,
-                                )
-                            }
+                    result.body.readChars { source ->
+                        // Invalidate validators before mutating so a failed ingest forces a re-download.
+                        storage.playlists.update(playlist.copy(epgEtag = null, epgLastModified = null))
+                        // Replace future rows; keep past rows so catch-up history survives short files.
+                        storage.epg.deleteFrom(playlistId, now)
+                        XmltvParser.parse(
+                            source = source,
+                            wantedChannelIds = wantedIds,
+                            windowStartMs = now - WINDOW_BACK_MS,
+                            windowEndMs = now + WINDOW_AHEAD_MS,
+                        ) { batch ->
+                            storage.epg.insertAll(
+                                batch.map {
+                                    Programme(
+                                        playlistId = playlistId,
+                                        tvgId = it.channel,
+                                        title = it.title,
+                                        description = it.description,
+                                        startMs = it.startMs,
+                                        endMs = it.endMs,
+                                    )
+                                }
+                            )
+                        }
+                        storage.epg.prune(playlistId, now - WINDOW_BACK_MS)
+                        storage.playlists.update(
+                            playlist.copy(
+                                epgEtag = result.etag,
+                                epgLastModified = result.lastModified,
+                                epgLastRefreshedMs = now,
+                            )
                         )
                     }
-                    storage.epg.prune(playlistId, now - WINDOW_BACK_MS)
-                    storage.playlists.update(
-                        playlist.copy(
-                            epgEtag = result.etag,
-                            epgLastModified = result.lastModified,
-                            epgLastRefreshedMs = now,
-                        )
-                    )
                 } finally {
                     result.body.close()
                 }

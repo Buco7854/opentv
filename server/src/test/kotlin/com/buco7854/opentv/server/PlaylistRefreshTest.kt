@@ -16,8 +16,13 @@ import com.buco7854.opentv.data.createRoomStorage
 import com.buco7854.opentv.serverdata.AuthMethod
 import com.buco7854.opentv.serverdata.ClientKind
 import com.buco7854.opentv.serverdata.UserRole
+import com.buco7854.opentv.serverdata.UserStatus
 import com.buco7854.opentv.serverdata.createServerUserDatabase
+import com.buco7854.opentv.serverdata.db.ContentIdentityRow
+import com.buco7854.opentv.serverdata.db.DefaultPlaylistRow
 import com.buco7854.opentv.serverdata.db.ServerUserDatabase
+import com.buco7854.opentv.serverdata.db.UserPlaylistGrantRow
+import com.buco7854.opentv.serverdata.db.UserRow
 import kotlinx.coroutines.test.runTest
 import java.net.URI
 import java.nio.file.Files
@@ -91,11 +96,63 @@ class PlaylistRefreshTest {
         assertEquals(2, fixture.fetches)
     }
 
+    @Test
+    fun `startup removes authorization state whose catalog playlist was destructively lost`() =
+        withService { fixture ->
+            fixture.userDatabase.users().insert(
+                UserRow(
+                    "viewer",
+                    "viewer",
+                    "viewer",
+                    "Viewer",
+                    UserStatus.ACTIVE,
+                    UserRole.USER,
+                    false,
+                    fixture.now,
+                    fixture.now,
+                    null,
+                ),
+            )
+            fixture.userDatabase.grants().addDefault(DefaultPlaylistRow(1))
+            fixture.userDatabase.grants().grant(
+                UserPlaylistGrantRow("viewer", 1, fixture.now),
+            )
+            fixture.userDatabase.content().insert(
+                ContentIdentityRow(
+                    "old-content",
+                    1,
+                    0,
+                    "old-fingerprint",
+                    null,
+                    fixture.now,
+                    false,
+                ),
+            )
+            assertTrue(fixture.storage.playlists.getAll().isEmpty())
+
+            fixture.service.reconcilePendingDeletions()
+
+            assertTrue(fixture.userDatabase.grants().defaults().isEmpty())
+            assertTrue(fixture.userDatabase.grants().forUser("viewer").isEmpty())
+            assertTrue(fixture.userDatabase.content().forPlaylist(1).isEmpty())
+
+            val reusedId = fixture.storage.playlists.insert(Playlist(name = "Unrelated", url = null))
+            assertEquals(1, reusedId)
+            val viewer = admin.copy(
+                userId = "viewer",
+                username = "viewer",
+                displayName = "Viewer",
+                roles = setOf(UserRole.USER),
+            )
+            assertFalse(fixture.auth.hasPlaylistAccess(viewer, reusedId))
+        }
+
     private class Fixture(
         val storage: Storage,
         val userDatabase: ServerUserDatabase,
         val playlists: PlaylistRepository,
         val service: PlaylistApplicationService,
+        val auth: AuthService,
     ) {
         var now = 1_000L
         var fetches = 0
@@ -142,7 +199,7 @@ class PlaylistRefreshTest {
                     connectionLimit = { Int.MAX_VALUE },
                 ),
             )
-            fixture = Fixture(storage, userDatabase, playlists, service)
+            fixture = Fixture(storage, userDatabase, playlists, service, auth)
             fixture.body = playlistLines
             block(fixture)
         } finally {
@@ -167,8 +224,12 @@ class PlaylistRefreshTest {
     )
 
     private class LineBody(private val lines: List<String>) : TextBody {
-        override fun lines(): Sequence<String> = lines.asSequence()
-        override fun chars(): TextSource = error("not used")
+        override suspend fun <T> readLines(block: suspend (Sequence<String>) -> T): T =
+            block(lines.asSequence())
+
+        override suspend fun <T> readChars(block: suspend (TextSource) -> T): T =
+            error("not used")
+
         override fun close() = Unit
     }
 }

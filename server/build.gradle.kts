@@ -6,11 +6,22 @@ plugins {
     application
 }
 
+version = providers.gradleProperty("opentvVersion")
+    .orElse(providers.environmentVariable("OPENTV_VERSION"))
+    .orElse("dev")
+    .get()
+
 application {
     mainClass = "com.buco7854.opentv.server.MainKt"
     // Room's bundled SQLite driver loads a native library. JDK 25 warns unless
     // the unnamed application modules are explicitly allowed to do so.
     applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
+}
+
+tasks.jar {
+    manifest {
+        attributes["Implementation-Version"] = project.version
+    }
 }
 
 java {
@@ -51,6 +62,7 @@ tasks.withType<Test>().configureEach {
 dependencies {
     implementation(project(":core"))
     implementation(project(":data"))
+    implementation(project(":server-contract"))
     implementation(project(":server-data"))
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.serialization.json)

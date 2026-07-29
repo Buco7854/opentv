@@ -2,6 +2,7 @@
 
 package com.buco7854.opentv.ui.player
 
+import android.view.KeyEvent
 import androidx.media3.ui.AspectRatioFrameLayout
 
 internal fun formatPlaybackClock(milliseconds: Long): String {
@@ -38,6 +39,59 @@ internal fun shouldApplyResume(
  */
 internal fun shouldPersistProgress(durationMs: Long, live: Boolean): Boolean =
     !live && durationMs > 0
+
+/**
+ * A navigation disposal ends the lease. An Activity recreation does not: the
+ * retained ViewModel still owns that same lease and resumes it after recreation.
+ */
+internal fun shouldClosePlayerOnDispose(isChangingConfigurations: Boolean): Boolean =
+    !isChangingConfigurations
+
+internal enum class PlayerBackAction {
+    DISMISS_NOTICE,
+    HIDE_CONTROLS,
+    EXIT,
+}
+
+/** Back peels transient player layers before it is allowed to leave playback. */
+internal fun playerBackAction(hasNotice: Boolean, controlsVisible: Boolean): PlayerBackAction =
+    when {
+        hasNotice -> PlayerBackAction.DISMISS_NOTICE
+        controlsVisible -> PlayerBackAction.HIDE_CONTROLS
+        else -> PlayerBackAction.EXIT
+    }
+
+internal enum class PlayerRemoteAction {
+    SHOW_CONTROLS,
+    SEEK_BACK,
+    SEEK_FORWARD,
+    NONE,
+}
+
+/** Key policy for the otherwise touch-only surface while player chrome is hidden. */
+internal fun playerRemoteAction(
+    enabled: Boolean,
+    keyCode: Int,
+    keyAction: Int,
+): PlayerRemoteAction {
+    if (!enabled || keyAction != KeyEvent.ACTION_DOWN) return PlayerRemoteAction.NONE
+    return when (keyCode) {
+        KeyEvent.KEYCODE_DPAD_CENTER,
+        KeyEvent.KEYCODE_DPAD_UP,
+        KeyEvent.KEYCODE_DPAD_DOWN,
+        KeyEvent.KEYCODE_ENTER,
+        KeyEvent.KEYCODE_NUMPAD_ENTER,
+        KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+        -> PlayerRemoteAction.SHOW_CONTROLS
+        KeyEvent.KEYCODE_DPAD_LEFT,
+        KeyEvent.KEYCODE_MEDIA_REWIND,
+        -> PlayerRemoteAction.SEEK_BACK
+        KeyEvent.KEYCODE_DPAD_RIGHT,
+        KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
+        -> PlayerRemoteAction.SEEK_FORWARD
+        else -> PlayerRemoteAction.NONE
+    }
+}
 
 internal fun pipAspectRatio(width: Int, height: Int): Float? {
     if (width <= 0 || height <= 0) return null

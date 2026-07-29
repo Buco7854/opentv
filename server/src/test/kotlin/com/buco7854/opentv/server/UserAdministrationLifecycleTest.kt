@@ -1,11 +1,16 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.contract.*
 import com.buco7854.opentv.serverdata.ChallengeKind
+import com.buco7854.opentv.serverdata.AuthMethod
 import com.buco7854.opentv.serverdata.UserStatus
 import com.buco7854.opentv.serverdata.createServerUserDatabase
 import com.buco7854.opentv.serverdata.db.ContentIdentityRow
+import com.buco7854.opentv.serverdata.db.DefaultPlaylistRow
+import com.buco7854.opentv.serverdata.db.PendingOidcIdentityRow
 import com.buco7854.opentv.serverdata.db.ServerUserDatabase
 import com.buco7854.opentv.serverdata.db.UserResumeRow
+import androidx.room.useWriterConnection
 import java.net.URI
 import java.nio.file.Files
 import kotlin.test.Test
@@ -21,6 +26,7 @@ class UserAdministrationLifecycleTest {
     fun createWithPasswordIsActiveAndHasNoActivationChallenge() = runTest {
         withAdmin { service, actor, db, _ ->
             val password = "a new sufficiently long password"
+            db.grants().addDefault(DefaultPlaylistRow(42))
             val created = service.adminCreateUser(
                 actor,
                 CreateUserRequestDto("viewer", "Viewer", password = password),
@@ -29,6 +35,7 @@ class UserAdministrationLifecycleTest {
             assertNull(created.activationToken)
             assertEquals(UserStatus.ACTIVE, created.user.status)
             assertEquals(listOf("password"), created.user.authMethods)
+            assertEquals(listOf(42L), created.user.playlistIds)
             assertEquals(listOf(UserStatus.ACTIVE, UserStatus.DISABLED), created.user.settableStatuses)
             assertEquals(0, db.challenges().activeCount(ChallengeKind.ACTIVATION, 1_700_000_000_000L))
             val credential = assertNotNull(db.credentials().password(created.user.id))
@@ -42,6 +49,30 @@ class UserAdministrationLifecycleTest {
                     credential.parallelism,
                 )
             )
+        }
+    }
+
+    @Test
+    fun invitationCreationRollsBackTheUserWhenItsChallengeCannotBeStored() = runTest {
+        withAdmin { service, actor, db, _ ->
+            db.useWriterConnection {
+                it.usePrepared(
+                    """
+                    CREATE TRIGGER reject_activation
+                    BEFORE INSERT ON auth_challenges
+                    WHEN NEW.kind = 'ACTIVATION'
+                    BEGIN
+                        SELECT RAISE(ABORT, 'activation rejected');
+                    END
+                    """.trimIndent(),
+                ) { statement -> statement.step() }
+            }
+
+            assertFailsWith<Exception> {
+                service.adminCreateUser(actor, CreateUserRequestDto("viewer", "Viewer"))
+            }
+
+            assertNull(db.users().byNormalizedUsername("viewer"))
         }
     }
 
@@ -159,6 +190,127 @@ class UserAdministrationLifecycleTest {
                 1,
                 db.challenges().activeCount(ChallengeKind.PASSWORD_RESET, 1_700_000_000_000L),
             )
+        }
+    }
+
+    @Test
+    fun credentialResetRollsBackWhenItsSetupChallengeCannotBeStored() = runTest {
+        withAdmin { service, actor, db, _ ->
+            val created = service.adminCreateUser(
+                actor,
+                CreateUserRequestDto(
+                    "viewer",
+                    "Viewer",
+                    password = "a new sufficiently long password",
+                ),
+            )
+            db.useWriterConnection {
+                it.usePrepared(
+                    """
+                    CREATE TRIGGER reject_password_reset
+                    BEFORE INSERT ON auth_challenges
+                    WHEN NEW.kind = 'PASSWORD_RESET'
+                    BEGIN
+                        SELECT RAISE(ABORT, 'reset rejected');
+                    END
+                    """.trimIndent(),
+                ) { statement -> statement.step() }
+            }
+
+            assertFailsWith<Exception> {
+                service.adminResetUser(actor, created.user.id)
+            }
+
+            assertNotNull(db.credentials().password(created.user.id))
+            assertEquals(
+                UserStatus.ACTIVE,
+                assertNotNull(db.users().get(created.user.id)).status,
+            )
+        }
+    }
+
+    @Test
+    fun disablingAUserRollsBackWhenTheirSessionsCannotBeRevoked() = runTest {
+        withAdmin { service, actor, db, _ ->
+            val created = service.adminCreateUser(
+                actor,
+                CreateUserRequestDto(
+                    "viewer",
+                    "Viewer",
+                    password = "a new sufficiently long password",
+                ),
+            )
+            val user = assertNotNull(db.users().get(created.user.id))
+            val session = PersistentSessionService(
+                db,
+                authConfig(passwordEnabled = true),
+                NoopUserStateCleanupCoordinator,
+                { 1_700_000_000_000L },
+            ).issue(user, AuthMethod.PASSWORD, mfa = true)
+            db.useWriterConnection {
+                it.usePrepared(
+                    """
+                    CREATE TRIGGER reject_session_revocation
+                    BEFORE UPDATE ON auth_sessions
+                    BEGIN
+                        SELECT RAISE(ABORT, 'revocation rejected');
+                    END
+                    """.trimIndent(),
+                ) { statement -> statement.step() }
+            }
+
+            assertFailsWith<Exception> {
+                service.adminUpdateUser(
+                    actor,
+                    user.id,
+                    UpdateUserRequestDto(status = UserStatus.DISABLED),
+                )
+            }
+
+            assertEquals(UserStatus.ACTIVE, assertNotNull(db.users().get(user.id)).status)
+            assertNull(assertNotNull(db.sessions().get(session.row.id)).revokedAtMs)
+        }
+    }
+
+    @Test
+    fun oidcApprovalRollsBackAProvisionedUserWhenTheIdentityCannotBeStored() = runTest {
+        withAdmin { service, actor, db, _ ->
+            db.oidc().upsertPending(
+                PendingOidcIdentityRow(
+                    issuer = "https://issuer.example",
+                    subject = "subject",
+                    usernameClaim = "sso-viewer",
+                    displayNameClaim = "SSO Viewer",
+                    groupsJson = "[]",
+                    adminMapped = false,
+                    createdAtMs = 1_700_000_000_000L,
+                    updatedAtMs = 1_700_000_000_000L,
+                ),
+            )
+            db.useWriterConnection {
+                it.usePrepared(
+                    """
+                    CREATE TRIGGER reject_oidc_identity
+                    BEFORE INSERT ON oidc_identities
+                    BEGIN
+                        SELECT RAISE(ABORT, 'identity rejected');
+                    END
+                    """.trimIndent(),
+                ) { statement -> statement.step() }
+            }
+
+            assertFailsWith<Exception> {
+                service.approveOidc(
+                    actor,
+                    ApproveOidcRequestDto(
+                        issuer = "https://issuer.example",
+                        subject = "subject",
+                    ),
+                )
+            }
+
+            assertNull(db.users().byNormalizedUsername("sso-viewer"))
+            assertNotNull(db.oidc().pending("https://issuer.example", "subject"))
         }
     }
 

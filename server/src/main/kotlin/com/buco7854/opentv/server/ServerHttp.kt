@@ -5,7 +5,18 @@ import com.buco7854.opentv.core.net.ConditionalFetch
 import com.buco7854.opentv.core.net.ConditionalFetcher
 import com.buco7854.opentv.core.net.HttpFetcher
 import com.buco7854.opentv.core.net.TextBody
+import java.io.BufferedReader
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.io.BufferedInputStream
 import java.io.IOException
@@ -15,6 +26,8 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
+import java.util.concurrent.CompletionException
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.zip.GZIPInputStream
 
 /**
@@ -64,43 +77,133 @@ class ServerHttp {
 
     /** :core's conditional-GET port (playlist and EPG downloads). */
     val conditionalFetcher = ConditionalFetcher { url, etag, lastModified ->
-        withContext(Dispatchers.IO) {
-            val builder = request(url).header("Accept-Encoding", "gzip")
-            if (etag != null) builder.header("If-None-Match", etag)
-            if (lastModified != null) builder.header("If-Modified-Since", lastModified)
+        val builder = request(url).header("Accept-Encoding", "gzip")
+        if (etag != null) builder.header("If-None-Match", etag)
+        if (lastModified != null) builder.header("If-Modified-Since", lastModified)
 
-            val response = client.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream())
-            if (response.statusCode() == 304) {
-                response.body().close()
-                return@withContext ConditionalFetch.NotModified
-            }
-            if (response.statusCode() !in 200..299) {
-                response.body().close()
-                // Strip the query string: it carries credentials and this message reaches the UI.
-                throw IOException("HTTP ${response.statusCode()} for ${url.substringBefore('?')}")
-            }
-            ConditionalFetch.Success(
-                body = textBody(bodyStream(response.body())),
-                etag = response.headers().firstValue("ETag").orElse(null),
-                lastModified = response.headers().firstValue("Last-Modified").orElse(null),
-            )
+        val response = sendStreaming(builder.build())
+        if (response.statusCode() == 304) {
+            response.body().close()
+            return@ConditionalFetcher ConditionalFetch.NotModified
         }
+        if (response.statusCode() !in 200..299) {
+            response.body().close()
+            // Strip the query string: it carries credentials and this message reaches the UI.
+            throw IOException("HTTP ${response.statusCode()} for ${url.substringBefore('?')}")
+        }
+        ConditionalFetch.Success(
+            body = textBody(response.body()),
+            etag = response.headers().firstValue("ETag").orElse(null),
+            lastModified = response.headers().firstValue("Last-Modified").orElse(null),
+        )
     }
 
-    private fun textBody(stream: InputStream): TextBody = object : TextBody {
-        private val reader = stream.bufferedReader()
-        override fun lines(): Sequence<String> = reader.lineSequence()
-        override fun chars(): TextSource = TextSource { reader.read() }
-        override fun close() = reader.close()
-    }
+    internal suspend fun sendStreaming(request: HttpRequest): HttpResponse<InputStream> =
+        suspendCancellableCoroutine { continuation ->
+            val future = client.sendAsync(request, HttpResponse.BodyHandlers.ofInputStream())
+            continuation.invokeOnCancellation {
+                future.cancel(true)
+                if (future.isDone && !future.isCancelled && !future.isCompletedExceptionally) {
+                    runCatching { future.getNow(null)?.body()?.close() }
+                }
+            }
+            future.whenComplete { response, failure ->
+                if (failure != null) {
+                    val cause = (failure as? CompletionException)?.cause ?: failure
+                    if (continuation.isActive) {
+                        continuation.resumeWith(Result.failure(cause))
+                    }
+                } else {
+                    if (continuation.isActive) {
+                        continuation.resumeWith(Result.success(response))
+                    } else {
+                        response.body().close()
+                    }
+                }
+            }
+        }
+
+    private fun textBody(stream: InputStream): TextBody =
+        StreamingTextBody(stream) { bodyStream(stream) }
 
     /** Unwraps gzip by magic bytes: covers .gz EPG files and encoded bodies alike. */
     private fun bodyStream(raw: InputStream): InputStream {
         val buffered = BufferedInputStream(raw)
-        buffered.mark(2)
-        val first = buffered.read()
-        val second = buffered.read()
-        buffered.reset()
-        return if (first == 0x1f && second == 0x8b) GZIPInputStream(buffered) else buffered
+        return try {
+            buffered.mark(2)
+            val first = buffered.read()
+            val second = buffered.read()
+            buffered.reset()
+            if (first == 0x1f && second == 0x8b) GZIPInputStream(buffered) else buffered
+        } catch (error: Throwable) {
+            try {
+                buffered.close()
+            } catch (closeError: Throwable) {
+                error.addSuppressed(closeError)
+            }
+            throw error
+        }
+    }
+}
+
+private class StreamingTextBody(
+    private val raw: InputStream,
+    private val open: () -> InputStream,
+) : TextBody {
+    private val consumed = AtomicBoolean()
+
+    override suspend fun <T> readLines(block: suspend (Sequence<String>) -> T): T =
+        consume { reader ->
+            val job = currentCoroutineContext()[Job]
+            block(reader.lineSequence().map { line ->
+                job?.ensureActive()
+                line
+            })
+        }
+
+    override suspend fun <T> readChars(block: suspend (TextSource) -> T): T =
+        consume { reader ->
+            val job = currentCoroutineContext()[Job]
+            block(
+                TextSource {
+                    job?.ensureActive()
+                    reader.read()
+                },
+            )
+        }
+
+    override fun close() {
+        raw.close()
+    }
+
+    private suspend fun <T> consume(block: suspend (BufferedReader) -> T): T {
+        check(consumed.compareAndSet(false, true)) { "TextBody can only be consumed once" }
+        return coroutineScope {
+            val finished = AtomicBoolean()
+            val cancellation = launch(
+                context = Dispatchers.Unconfined,
+                start = CoroutineStart.UNDISPATCHED,
+            ) {
+                try {
+                    awaitCancellation()
+                } finally {
+                    if (!finished.get()) raw.close()
+                }
+            }
+            try {
+                withContext(Dispatchers.IO) {
+                    open().bufferedReader().use { reader ->
+                        block(reader)
+                    }
+                }
+            } catch (error: Throwable) {
+                currentCoroutineContext().ensureActive()
+                throw error
+            } finally {
+                if (currentCoroutineContext().isActive) finished.set(true)
+                raw.close()
+                cancellation.cancelAndJoin()
+            }
+        }
     }
 }

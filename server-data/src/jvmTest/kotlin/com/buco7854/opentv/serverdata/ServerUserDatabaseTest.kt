@@ -160,6 +160,39 @@ class ServerUserDatabaseTest {
         }
     }
 
+    @Test
+    fun mfaCompletionCannotConsumeAnotherUsersRecoveryCode() = runTest {
+        withDatabase { db ->
+            db.users().insert(user())
+            db.users().insert(
+                user().copy(
+                    id = "u2",
+                    username = "Bob",
+                    normalizedUsername = "bob",
+                    displayName = "Bob",
+                ),
+            )
+            db.challenges().insert(challenge("child", byteArrayOf(1)))
+            db.credentials().insertRecoveryCodes(
+                listOf(RecoveryCodeRow("other-recovery", "u2", byteArrayOf(3), 1, null)),
+            )
+
+            val completed = db.completeMfa(
+                challengeId = "child",
+                recoveryCodeId = "other-recovery",
+                write = MfaCompletionWrite(session(), loginAtMs = 10),
+            )
+
+            assertTrue(!completed)
+            assertEquals(null, db.challenges().get("child")?.consumedAtMs)
+            assertEquals(
+                listOf("other-recovery"),
+                db.credentials().unusedRecoveryCodes("u2").map { it.id },
+            )
+            assertEquals(null, db.sessions().get("session"))
+        }
+    }
+
     private suspend fun withDatabase(
         block: suspend (com.buco7854.opentv.serverdata.db.ServerUserDatabase) -> Unit,
     ) {

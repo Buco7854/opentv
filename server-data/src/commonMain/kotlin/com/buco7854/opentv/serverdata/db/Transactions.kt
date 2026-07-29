@@ -57,7 +57,11 @@ suspend fun ServerUserDatabase.completeMfa(
                 throw MfaCompletionConflict()
             }
             if (recoveryCodeId != null &&
-                credentials().consumeRecoveryCode(recoveryCodeId, write.loginAtMs) != 1
+                credentials().consumeRecoveryCode(
+                    write.session.userId,
+                    recoveryCodeId,
+                    write.loginAtMs,
+                ) != 1
             ) {
                 throw MfaCompletionConflict()
             }

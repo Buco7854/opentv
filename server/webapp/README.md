@@ -2,8 +2,9 @@
 
 React + TypeScript + Vite + Tailwind v4 client for the OpenTV server. It talks
 to the REST API (`/api/v1/*`) and is compiled into `server/src/main/resources/web`,
-which the server ships as an SPA (any path falls back to `index.html`, so URLs
-like `/browse/3` are real paths).
+which the server ships as an SPA (unknown non-API client paths fall back to
+`index.html`, so URLs like `/browse/3` are real paths; `/api/v1` always
+terminates with JSON).
 
 - `npm run dev` — dev server on :5173, proxying `/api/v1` to a server on :8080.
 - `npm run build` — typecheck + production build into the server resources.
@@ -53,8 +54,13 @@ component in its block — nothing is styled inline in screens.
 Structure and boundaries:
 
 - `src/api.ts` is the typed `/api/v1` facade. `src/api/http.ts` owns HTTP,
-  structured errors, same-origin credentials, and the single future bearer
-  token seam. Keep authentication policy there rather than in screens.
+  structured errors, and the `localStorage`-backed bearer provider. It sends
+  `Authorization: Bearer` on protected calls, omits ambient credentials, and
+  has no cookie/CSRF seam. Keep authentication policy there rather than in
+  screens.
+- Provider-controlled numeric identities (`xtreamStreamId`, Xtream
+  `seriesId`/`xtreamSeriesId`, and metadata `sourceId`) are decimal strings on
+  the wire. Do not coerce them to JavaScript numbers.
 - `src/preferences.ts` is browser-local presentation state. Do not mix it with
   server-owned settings or API caching.
 - `src/hooks.ts` owns reusable server-state behavior. Downloads use one shared

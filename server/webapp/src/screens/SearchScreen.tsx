@@ -124,7 +124,7 @@ export function SearchScreen() {
                 isFavorite={favoriteContentIds.has(s.contentId)}
                 onToggleFavorite={() => toggleFavorite(s.contentId)}
                 onClick={() => s.xtreamSeriesId != null
-                  ? navigate(`/xseries/${playlistId}/${s.xtreamSeriesId}`)
+                  ? navigate(`/xseries/${playlistId}/${encodeURIComponent(s.xtreamSeriesId)}`)
                   : navigate(`/series/${playlistId}/${encodeURIComponent(s.seriesKey)}`)}
               />
             );

@@ -46,13 +46,9 @@ android {
             if (hasKeystore) signingConfig = signingConfigs.getByName("stable")
         }
         release {
-            // Code shrinking is left off: R8 is untested against this app's
-            // reflection-using libraries, and a broken sideloaded release is
-            // worse than a larger one. This is still a proper release build
-            // (not debuggable), just not minified.
-            isMinifyEnabled = false
+            isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            isShrinkResources = false
+            isShrinkResources = true
             // Stable key when available; debug key otherwise so the release
             // variant still assembles in CI / locally.
             signingConfig = if (hasKeystore) {
@@ -69,6 +65,9 @@ android {
     buildFeatures {
         compose = true
     }
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
 }
 
 kotlin {
@@ -80,6 +79,7 @@ kotlin {
 dependencies {
     implementation(project(":core"))
     implementation(project(":data"))
+    implementation(project(":hub-client"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
@@ -92,6 +92,8 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.icons)
     implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.browser)
+    implementation(libs.zxing.core)
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.exoplayer.hls)
     implementation(libs.media3.ui)
@@ -104,4 +106,8 @@ dependencies {
     implementation(libs.documentfile)
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.okhttp.mockwebserver)
+    testImplementation(libs.work.testing)
+    testImplementation(libs.androidx.test.core)
+    testImplementation(libs.robolectric)
 }

@@ -1,6 +1,7 @@
 package com.buco7854.opentv.server
 
 import com.buco7854.opentv.core.repo.AccountRepository
+import com.buco7854.opentv.core.net.Urls
 import com.buco7854.opentv.core.storage.Storage
 import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
@@ -37,7 +38,9 @@ internal class ProviderConnectionLimits(
         val playlist = storage.playlists.getAll().firstOrNull { candidate ->
             val base = candidate.xtreamBase
             val user = candidate.xtreamUser
-            base != null && user != null && url.startsWith(base) && url.contains(user)
+            val pass = candidate.xtreamPass
+            base != null && user != null && pass != null &&
+                isXtreamStreamFor(url, base, user, pass)
         } ?: return fallback
         val now = clock.nowMs()
         known[playlist.id]?.takeIf { now - it.atMs < LIMIT_TTL_MS }?.let { return it.limit }
@@ -56,6 +59,26 @@ internal class ProviderConnectionLimits(
         known[playlist.id] = Known(limit, now)
         slowUntilMs.remove(playlist.id)
         return limit
+    }
+
+    /**
+     * Match both credentials as the exact path segments emitted by Xtream, on the exact provider
+     * origin. A substring match makes `ann` claim `/live/joann/...`; ignoring the password makes
+     * a stale login claim a replacement account. Both apply the wrong connection allowance.
+     */
+    private fun isXtreamStreamFor(url: String, base: String, user: String, pass: String): Boolean {
+        val stream = Urls.parse(url) ?: return false
+        val provider = Urls.parse(base) ?: return false
+        if (stream.scheme != provider.scheme ||
+            !stream.host.equals(provider.host, ignoreCase = true) ||
+            stream.port != provider.port
+        ) return false
+        val basePath = provider.path.trimEnd('/')
+        val encodedUser = Urls.encodePathSegment(user)
+        val encodedPass = Urls.encodePathSegment(pass)
+        return listOf("live", "movie", "series", "timeshift").any { kind ->
+            stream.path.startsWith("$basePath/$kind/$encodedUser/$encodedPass/")
+        }
     }
 
     private companion object {

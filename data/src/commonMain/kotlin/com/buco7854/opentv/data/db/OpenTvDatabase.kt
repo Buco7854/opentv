@@ -16,8 +16,9 @@ import androidx.room.RoomDatabaseConstructor
         FavoriteRow::class,
         GroupOverrideRow::class,
         ResumePointRow::class,
+        HubSourceRow::class,
     ],
-    version = 10,
+    version = 12,
     exportSchema = true,
 )
 @ConstructedBy(OpenTvDatabaseConstructor::class)
@@ -31,6 +32,7 @@ abstract class OpenTvDatabase : RoomDatabase() {
     abstract fun favoriteDao(): FavoriteDao
     abstract fun groupOverrideDao(): GroupOverrideDao
     abstract fun resumeDao(): ResumeDao
+    abstract fun hubSourceDao(): HubSourceDao
 }
 
 // Room generates the per-platform actuals.

@@ -103,7 +103,7 @@ internal fun Route.playlistRoutes(service: PlaylistApplicationService) = route("
             )
         }
         get("/xseries/{seriesId}") {
-            call.respond(service.xtreamSeriesDetail(call.actor, call.id(), call.id("seriesId")))
+            call.respond(service.xtreamSeriesDetail(call.actor, call.id(), call.providerId("seriesId")))
         }
     }
 }

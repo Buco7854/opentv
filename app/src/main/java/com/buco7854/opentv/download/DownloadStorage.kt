@@ -3,15 +3,19 @@ package com.buco7854.opentv.download
 import android.content.Context
 import android.net.Uri
 import android.os.Environment
+import android.os.ParcelFileDescriptor
 import android.webkit.MimeTypeMap
 import androidx.documentfile.provider.DocumentFile
 import com.buco7854.opentv.diag.ErrorLog
 import java.io.Closeable
 import java.io.File
-import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.RandomAccessFile
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.runInterruptible
 
 /** Download storage: app-private filesystem paths (default) or SAF `content://` docs, chosen per item by path. Both resumable. */
 object DownloadStorage {
@@ -29,11 +33,7 @@ object DownloadStorage {
 
     fun delete(context: Context, path: String) {
         if (path.isEmpty()) return
-        if (isContentUri(path)) {
-            runCatching { DocumentFile.fromSingleUri(context, Uri.parse(path))?.delete() }
-        } else {
-            File(path).delete()
-        }
+        deleteConfirmed(context, path)
     }
 
     /** URI string ExoPlayer can play directly. */
@@ -49,22 +49,37 @@ object DownloadStorage {
         return if (isContentUri(path)) {
             val pfd = context.contentResolver.openFileDescriptor(Uri.parse(path), "rw")
                 ?: throw IOException("Cannot open download target")
-            val stream = FileOutputStream(pfd.fileDescriptor)
-            if (resumeAt > 0) stream.channel.position(resumeAt) else stream.channel.truncate(0)
+            val stream = ParcelFileDescriptor.AutoCloseOutputStream(pfd)
+            try {
+                if (resumeAt > 0) stream.channel.position(resumeAt) else stream.channel.truncate(0)
+            } catch (error: Throwable) {
+                try {
+                    stream.close()
+                } catch (closeError: Throwable) {
+                    error.addSuppressed(closeError)
+                }
+                throw error
+            }
             object : Sink {
                 override fun write(buffer: ByteArray, offset: Int, length: Int) =
                     stream.write(buffer, offset, length)
 
-                override fun close() {
-                    stream.close()
-                    pfd.close()
-                }
+                override fun close() = stream.close()
             }
         } else {
             val file = File(path)
             file.parentFile?.mkdirs()
             val raf = RandomAccessFile(file, "rw")
-            if (resumeAt > 0) raf.seek(resumeAt) else raf.setLength(0)
+            try {
+                if (resumeAt > 0) raf.seek(resumeAt) else raf.setLength(0)
+            } catch (error: Throwable) {
+                try {
+                    raf.close()
+                } catch (closeError: Throwable) {
+                    error.addSuppressed(closeError)
+                }
+                throw error
+            }
             object : Sink {
                 override fun write(buffer: ByteArray, offset: Int, length: Int) =
                     raf.write(buffer, offset, length)
@@ -72,6 +87,11 @@ object DownloadStorage {
                 override fun close() = raf.close()
             }
         }
+    }
+
+    fun truncate(context: Context, path: String) {
+        if (path.isEmpty()) return
+        openSink(context, path, resumeAt = 0).use { }
     }
 
     /** Creates the target and returns its stored path; falls back to app storage if the chosen folder is gone/revoked. */
@@ -140,7 +160,7 @@ object DownloadStorage {
         sourcePath.isNotEmpty() && !alreadyIn(treeUri, sourcePath)
 
     /** Moves a file into [treeUri]: copy then delete source; a partial target is cleaned up on failure. */
-    fun relocate(context: Context, treeUri: String, sourcePath: String): Relocation {
+    suspend fun relocate(context: Context, treeUri: String, sourcePath: String): Relocation {
         if (sourcePath.isEmpty()) return Relocation.Failed("no file")
         if (alreadyIn(treeUri, sourcePath)) return Relocation.AlreadyThere
 
@@ -154,20 +174,43 @@ object DownloadStorage {
         return try {
             openInput(context, sourcePath)?.use { input ->
                 openSink(context, targetPath, resumeAt = 0).use { sink ->
-                    val buffer = ByteArray(256 * 1024)
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read == -1) break
-                        sink.write(buffer, 0, read)
-                    }
+                    copyForRelocation(input, sink)
                 }
-            } ?: return Relocation.Failed("cannot read source")
-            delete(context, sourcePath)
+            } ?: throw IOException("Cannot read download source")
+            if (!deleteConfirmed(context, sourcePath)) {
+                delete(context, targetPath)
+                return Relocation.Failed("cannot delete source")
+            }
             Relocation.Moved(targetPath)
+        } catch (cancelled: CancellationException) {
+            delete(context, targetPath)
+            throw cancelled
         } catch (e: Exception) {
             ErrorLog.log("Move download", e)
             delete(context, targetPath) // remove the partial copy; source is intact
             Relocation.Failed(ErrorLog.describe(e))
         }
+    }
+
+    internal suspend fun copyForRelocation(input: InputStream, sink: Sink) {
+        val buffer = ByteArray(256 * 1024)
+        while (true) {
+            currentCoroutineContext().ensureActive()
+            val read = runInterruptible { input.read(buffer) }
+            if (read == -1) break
+            runInterruptible { sink.write(buffer, 0, read) }
+        }
+    }
+
+    private fun deleteConfirmed(context: Context, path: String): Boolean {
+        if (path.isEmpty()) return true
+        return runCatching {
+            if (isContentUri(path)) {
+                DocumentFile.fromSingleUri(context, Uri.parse(path))?.delete() == true
+            } else {
+                val file = File(path)
+                !file.exists() || file.delete()
+            }
+        }.getOrDefault(false)
     }
 }

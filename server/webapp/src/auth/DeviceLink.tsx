@@ -27,7 +27,10 @@ export function useDeviceLink() {
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const requested = useRef(-1);
+  const linkStart = useRef<{
+    attempt: number;
+    request: Promise<DeviceLinkStart>;
+  } | null>(null);
 
   const restart = useCallback(() => {
     setRequest(null);
@@ -38,14 +41,24 @@ export function useDeviceLink() {
   }, []);
 
   useEffect(() => {
-    if (requested.current === attempt) return;
-    requested.current = attempt;
+    let active = true;
     setRequest(null);
-    void authApi.linkStart(deviceLabel(navigator.userAgent))
-      .then(setRequest)
-      .catch((cause: unknown) => setError(
-        errorMessage(cause, { [GENERIC]: () => tx('linkStartFailed') }),
-      ));
+    if (linkStart.current?.attempt !== attempt) {
+      linkStart.current = {
+        attempt,
+        request: authApi.linkStart(deviceLabel(navigator.userAgent)),
+      };
+    }
+    // React replays effects in StrictMode. Re-attach to the same request so the replayed
+    // cleanup cannot discard its result, without minting a second device-link challenge.
+    void linkStart.current.request
+      .then((next) => { if (active) setRequest(next); })
+      .catch((cause: unknown) => {
+        if (active) {
+          setError(errorMessage(cause, { [GENERIC]: () => tx('linkStartFailed') }));
+        }
+      });
+    return () => { active = false; };
   }, [attempt]);
 
   useEffect(() => {
@@ -95,6 +108,7 @@ export function DeviceLinkScreen() {
   const [qrError, setQrError] = useState<string | null>(null);
 
   useEffect(() => {
+    let active = true;
     setQr(null);
     setQrError(null);
     if (!request) return;
@@ -103,10 +117,13 @@ export function DeviceLinkScreen() {
       margin: 0,
       color: { dark: '#000000', light: '#ffffff' },
     })
-      .then(setQr)
-      .catch((cause: unknown) => setQrError(
-        errorMessage(cause, { [GENERIC]: () => tx('linkQrFailed') }),
-      ));
+      .then((next) => { if (active) setQr(next); })
+      .catch((cause: unknown) => {
+        if (active) {
+          setQrError(errorMessage(cause, { [GENERIC]: () => tx('linkQrFailed') }));
+        }
+      });
+    return () => { active = false; };
   }, [request]);
 
   const footer = <Link className="link" to="/login">{tx('backToLogin')}</Link>;

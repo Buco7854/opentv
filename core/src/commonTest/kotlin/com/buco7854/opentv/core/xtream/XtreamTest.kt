@@ -93,4 +93,49 @@ class XtreamTest {
         assertEquals("Documentaire", entries[1].title)
         assertEquals("News", entries[1].description)
     }
+
+    @Test
+    fun provider_ids_above_javascript_safe_integer_are_preserved() = runTest {
+        val providerId = 9_007_199_254_740_993L
+        val api = XtreamApi {
+            """[{"stream_id":"$providerId","name":"Precise"}]"""
+        }
+
+        assertEquals(providerId, api.fetchLiveStreams(creds).single().streamId)
+    }
+
+    @Test
+    fun invalid_or_oversized_provider_ids_are_rejected_without_crashing() = runTest {
+        val api = XtreamApi {
+            """
+            [
+              {"stream_id":"42","name":"Valid"},
+              {"stream_id":"not-a-number","name":"Invalid"},
+              {"stream_id":"9223372036854775808","name":"Oversized"},
+              {"stream_id":"0","name":"Zero"},
+              {"stream_id":"-1","name":"Negative"}
+            ]
+            """.trimIndent()
+        }
+
+        assertEquals(listOf(42L), api.fetchLiveStreams(creds).map { it.streamId })
+    }
+
+    @Test
+    fun invalid_or_oversized_series_ids_are_rejected_without_crashing() = runTest {
+        val api = XtreamApi {
+            """
+            [
+              {"series_id":"9007199254740993","name":"Valid"},
+              {"series_id":"series/opaque","name":"Invalid"},
+              {"series_id":"9223372036854775808","name":"Oversized"}
+            ]
+            """.trimIndent()
+        }
+
+        assertEquals(
+            listOf(9_007_199_254_740_993L),
+            api.fetchSeriesList(creds).map { it.seriesId },
+        )
+    }
 }

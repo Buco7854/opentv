@@ -28,6 +28,8 @@ docs/.docusaurus/
 core/build
 data/build
 server/build
+hub-client/build
+server-contract/build
 
 # Web client: npm deps + compiled output (built from server/webapp sources)
 server/webapp/node_modules/

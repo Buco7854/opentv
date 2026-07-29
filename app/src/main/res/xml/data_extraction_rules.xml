@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup>
+        <!-- Room stores provider URLs and plaintext Xtream credentials. Its
+             journal and WAL sidecars can contain the same database pages. -->
+        <exclude domain="database" path="opentv.db" />
+        <exclude domain="database" path="opentv.db-journal" />
+        <exclude domain="database" path="opentv.db-shm" />
+        <exclude domain="database" path="opentv.db-wal" />
+
+        <!-- Keystore keys do not transfer, but their encrypted bearer-token
+             payloads are device-bound and should not leave this device. -->
+        <exclude domain="sharedpref" path="hub_sessions.xml" />
+
+        <!-- The app has one Preferences DataStore at this exact default path. -->
+        <exclude domain="file" path="datastore/player_prefs.preferences_pb" />
+    </cloud-backup>
+
+    <device-transfer>
+        <!-- Keep the Android 12+ D2D policy identical to cloud backup. -->
+        <exclude domain="database" path="opentv.db" />
+        <exclude domain="database" path="opentv.db-journal" />
+        <exclude domain="database" path="opentv.db-shm" />
+        <exclude domain="database" path="opentv.db-wal" />
+        <exclude domain="sharedpref" path="hub_sessions.xml" />
+        <exclude domain="file" path="datastore/player_prefs.preferences_pb" />
+    </device-transfer>
+</data-extraction-rules>

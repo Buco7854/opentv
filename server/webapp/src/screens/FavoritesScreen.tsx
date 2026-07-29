@@ -219,7 +219,7 @@ export function FavoritesScreen() {
                 selectable={selectMode} selected={selected.has(sk)}
                 onLongPress={selectMode ? undefined : () => startSelect(sk, { contentId: s.contentId })}
                 onClick={rowClick(sk, { contentId: s.contentId }, () => s.xtreamSeriesId != null
-                  ? navigate(`/xseries/${playlistId}/${s.xtreamSeriesId}`)
+                  ? navigate(`/xseries/${playlistId}/${encodeURIComponent(s.xtreamSeriesId)}`)
                   : navigate(`/series/${playlistId}/${encodeURIComponent(s.seriesKey)}`))}
               />
             );

@@ -10,10 +10,19 @@ import com.buco7854.opentv.R
 import com.buco7854.opentv.core.model.Playlist
 import com.buco7854.opentv.data.prefs.PlayerSettings
 import com.buco7854.opentv.diag.ErrorLog
+import com.buco7854.opentv.source.SourceId
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+
+data class CatalogSourceEntry(
+    val sourceId: SourceId,
+    val title: String,
+    val hubName: String? = null,
+)
 
 class HomeViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -33,11 +42,48 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     val playlists: Flow<List<Playlist>?> = graph.playlists.playlists
     val settings: Flow<PlayerSettings?> = graph.playerPrefs.settings
 
+    private val _catalogSources = MutableStateFlow<List<CatalogSourceEntry>>(emptyList())
+    val catalogSources: StateFlow<List<CatalogSourceEntry>> = _catalogSources
+    private val _catalogSourcesLoading = MutableStateFlow(true)
+    val catalogSourcesLoading: StateFlow<Boolean> = _catalogSourcesLoading
+
     private val _busy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = _busy
 
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message
+
+    init {
+        viewModelScope.launch {
+            combine(graph.playlists.playlists, graph.hubAccounts.sources) { local, hubs ->
+                local to hubs
+            }.collectLatest { (local, hubs) ->
+                _catalogSourcesLoading.value = true
+                val entries = local.map {
+                    CatalogSourceEntry(SourceId.LocalPlaylist(it.id), it.name)
+                }.toMutableList()
+                hubs.forEach { hub ->
+                    val client = graph.hubs.clientFor(hub.id) ?: return@forEach
+                    val playlists = try {
+                        client.call { playlists(it) }
+                    } catch (error: Exception) {
+                        error.rethrowCancellation()
+                        emptyList()
+                    }
+                    playlists
+                        .forEach { playlist ->
+                            entries += CatalogSourceEntry(
+                                sourceId = SourceId.Hub(hub.id, playlist.id),
+                                title = playlist.name,
+                                hubName = hub.name,
+                            )
+                        }
+                }
+                _catalogSources.value = entries
+                _catalogSourcesLoading.value = false
+            }
+        }
+    }
 
     fun consumeMessage() {
         _message.value = null

@@ -209,7 +209,7 @@ interface ChannelDao {
         limit: Int,
     ): List<ChannelRow>
 
-    /** FTS5 is a migration-managed sidecar because Room 2.x cannot declare FTS5 entities. */
+    /** FTS5 is a callback-managed sidecar because Room 2.x cannot declare FTS5 entities. */
     @RawQuery
     suspend fun searchIndexed(query: RoomRawQuery): List<ChannelRow>
 
@@ -466,8 +466,21 @@ interface DownloadDao {
     @Query("SELECT * FROM downloads WHERE status = :status")
     suspend fun getByStatus(status: Int): List<DownloadRow>
 
+    @Query("SELECT * FROM downloads WHERE status IN (:statuses)")
+    suspend fun getByStatuses(statuses: List<Int>): List<DownloadRow>
+
     @Query("SELECT * FROM downloads WHERE url = :url AND status IN (:statuses) LIMIT 1")
     suspend fun findByUrlWithStatus(url: String, statuses: List<Int>): DownloadRow?
+
+    @Query(
+        "SELECT * FROM downloads WHERE hubSourceId = :hubSourceId AND contentId = :contentId " +
+            "AND status IN (:statuses) LIMIT 1"
+    )
+    suspend fun findByHubContentWithStatus(
+        hubSourceId: Long,
+        contentId: String,
+        statuses: List<Int>,
+    ): DownloadRow?
 
     @Insert
     suspend fun insert(d: DownloadRow): Long
@@ -498,6 +511,46 @@ interface DownloadDao {
         error: String?,
     ): Int
 
+    @Query(
+        "UPDATE downloads SET url = :url, error = NULL " +
+            "WHERE id = :id AND status IN (:expectedStatuses)"
+    )
+    suspend fun updateUrlIfStatus(
+        id: Long,
+        url: String,
+        expectedStatuses: List<Int>,
+    ): Int
+
     @Query("DELETE FROM downloads WHERE id = :id")
     suspend fun delete(id: Long)
+}
+
+@Dao
+interface HubSourceDao {
+    @Query("SELECT * FROM hub_sources ORDER BY addedMs")
+    fun observeAll(): Flow<List<HubSourceRow>>
+
+    @Query("SELECT * FROM hub_sources ORDER BY addedMs")
+    suspend fun getAll(): List<HubSourceRow>
+
+    @Query("SELECT * FROM hub_sources WHERE id = :id")
+    suspend fun get(id: Long): HubSourceRow?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(source: HubSourceRow): Long
+
+    @Query("DELETE FROM hub_sources WHERE id = :id")
+    suspend fun delete(id: Long)
+
+    @Query(
+        "UPDATE hub_sources SET userId = :userId, username = :username, role = :role, " +
+            "lastSeenMs = :seenMs WHERE id = :id"
+    )
+    suspend fun updateIdentity(id: Long, userId: String?, username: String?, role: String?, seenMs: Long)
+
+    @Query(
+        "UPDATE hub_sources SET userId = NULL, username = NULL, role = NULL, " +
+            "lastSeenMs = NULL WHERE id = :id"
+    )
+    suspend fun clearIdentity(id: Long)
 }

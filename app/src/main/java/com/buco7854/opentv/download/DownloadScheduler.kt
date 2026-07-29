@@ -18,6 +18,7 @@ import java.util.concurrent.TimeUnit
  */
 interface DownloadScheduler {
     fun enqueue(downloadId: Long)
+    fun enqueuePreparation(downloadId: Long)
     fun cancel(downloadId: Long)
 }
 
@@ -47,9 +48,28 @@ class WorkManagerDownloadScheduler(
         )
     }
 
+    override fun enqueuePreparation(downloadId: Long) {
+        val request = OneTimeWorkRequestBuilder<HubDownloadPrepareWorker>()
+            .setInputData(workDataOf(DownloadWorker.KEY_DOWNLOAD_ID to downloadId))
+            .setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build(),
+            )
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
+            .build()
+        workManager.enqueueUniqueWork(
+            preparationWorkName(downloadId),
+            ExistingWorkPolicy.REPLACE,
+            request,
+        )
+    }
+
     override fun cancel(downloadId: Long) {
         workManager.cancelUniqueWork(workName(downloadId))
+        workManager.cancelUniqueWork(preparationWorkName(downloadId))
     }
 
     private fun workName(downloadId: Long) = "download-$downloadId"
+    private fun preparationWorkName(downloadId: Long) = "hub-download-prepare-$downloadId"
 }

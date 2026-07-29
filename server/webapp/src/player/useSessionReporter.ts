@@ -8,6 +8,7 @@ import {
 } from '../api';
 import { toast } from '../components/Primitives';
 import { isTerminalPlaybackStatus } from './mediaGrant';
+import { nextSessionCommandSequence } from './sessionProtocol';
 
 /** Live playback facts, read fresh on each heartbeat via a ref. */
 export interface PlaybackSnapshot {
@@ -56,10 +57,14 @@ export function useSessionReporter(
   useEffect(() => {
     const id = leaseId;
     let stopped = false;
+    let lastAppliedSequence = 0;
 
     let ws: WebSocket | null = null;
 
     const handle = (command: SessionCommand, el: HTMLVideoElement) => {
+      const nextSequence = nextSessionCommandSequence(lastAppliedSequence, command);
+      if (nextSequence == null) return;
+      lastAppliedSequence = nextSequence;
       applyCommand(command, el);
       cmdRef.current?.(command);
       // A pause/play changes what the dashboard should show: report it now instead of
@@ -107,26 +112,39 @@ export function useSessionReporter(
 
     // Push channel: commands arrive instantly; the client also sends heartbeat/sync over it.
     let wsRetry: ReturnType<typeof setTimeout> | undefined;
-    const connect = () => {
+    const connect = async () => {
       if (stopped) return;
-      ws = new WebSocket(api.playbackSocketUrl(id));
-      ws.onmessage = (ev) => {
+      let socketUrl: string;
+      try {
+        socketUrl = await api.playbackSocketUrl(id);
+      } catch {
+        if (!stopped) wsRetry = setTimeout(() => void connect(), HEARTBEAT_MS);
+        return;
+      }
+      if (stopped) return;
+      const socket = new WebSocket(socketUrl);
+      ws = socket;
+      socket.onmessage = (ev) => {
+        if (stopped || ws !== socket) return;
         const el = video.current;
         if (!el) return;
         try { handle(JSON.parse(ev.data as string) as SessionCommand, el); } catch { /* ignore */ }
       };
-      ws.onclose = (event) => {
-        if (stopped) return;
+      socket.onclose = (event) => {
+        if (stopped || ws !== socket) return;
+        ws = null;
         if (event.code === 1000 && /lease ended|revoked/i.test(event.reason)) {
           stopped = true;
           revokedRef.current?.();
           return;
         }
-        wsRetry = setTimeout(connect, HEARTBEAT_MS);
+        wsRetry = setTimeout(() => void connect(), HEARTBEAT_MS);
       };
-      ws.onerror = () => ws?.close();
+      // Close the socket that emitted the error, not whatever replacement has since been
+      // assigned to the shared ref.
+      socket.onerror = () => socket.close();
     };
-    connect();
+    void connect();
 
     beat();
     const timer = setInterval(beat, HEARTBEAT_MS);

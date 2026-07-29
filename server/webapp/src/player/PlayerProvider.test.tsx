@@ -22,9 +22,11 @@ const leaseNumbered = (n: number): PlaybackLease => ({
   mediaGrant: `grant-${n}`,
   mediaGrantExpiresAtMs: Date.now() + 600_000,
   streamUrl: `/api/v1/stream?u=t.token&sid=lease-${n}&g=grant-${n}`,
+  sharedHlsUrl: null,
   relayUrl: null,
   transcodeUrl: null,
   remuxStartUrl: `/api/v1/remux/start?u=t.token&sid=lease-${n}&g=grant-${n}`,
+  downloadFileUrl: null,
 });
 
 const request: PlayRequest = { contentId: 'content-1', title: 'Channel One', live: true };
@@ -60,6 +62,12 @@ describe('playback lease ownership', () => {
 
     await waitFor(() => expect(api.createPlayback).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(api.playbackHeartbeat).toHaveBeenCalled());
+    expect(api.createPlayback).toHaveBeenLastCalledWith(expect.objectContaining({
+      capabilities: {
+        videoCodecs: ['h264'],
+        audioCodecs: ['aac', 'mp3', 'opus', 'flac', 'vorbis'],
+      },
+    }));
     expect(endedLeases()).toEqual(['lease-1']);
 
     view.unmount();
@@ -86,5 +94,22 @@ describe('playback lease ownership', () => {
     await act(() => vi.advanceTimersByTimeAsync(3000));
     expect(rotate).toHaveBeenCalledTimes(2);
     expect(container.textContent).not.toContain('Network error');
+  });
+
+  it('rotates an already-expired media grant without another ten-second dead window', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(api.createPlayback).mockImplementation(async () => ({
+      ...leaseNumbered(1), mediaGrantExpiresAtMs: Date.now() - 1,
+    }));
+    const rotate = vi.spyOn(api, 'refreshMediaGrant').mockResolvedValue({
+      token: 'grant-next',
+      expiresAtMs: Date.now() + 600_000,
+    });
+    render(<PlayerSurface request={request} onClose={vi.fn()} onPlayCatchup={vi.fn()} />);
+
+    await waitFor(() => expect(api.playbackHeartbeat).toHaveBeenCalled());
+    await act(() => vi.advanceTimersByTimeAsync(1));
+
+    expect(rotate).toHaveBeenCalledOnce();
   });
 });

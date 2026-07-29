@@ -6,6 +6,7 @@ import com.buco7854.opentv.core.model.Download
 import com.buco7854.opentv.core.model.Favorite
 import com.buco7854.opentv.core.model.GroupCount
 import com.buco7854.opentv.core.model.GroupOverride
+import com.buco7854.opentv.core.model.HubSource
 import com.buco7854.opentv.core.model.Metadata
 import com.buco7854.opentv.core.model.Playlist
 import com.buco7854.opentv.core.model.Programme
@@ -17,6 +18,7 @@ import com.buco7854.opentv.core.storage.DownloadStore
 import com.buco7854.opentv.core.storage.EpgStore
 import com.buco7854.opentv.core.storage.FavoriteStore
 import com.buco7854.opentv.core.storage.GroupOverrideStore
+import com.buco7854.opentv.core.storage.HubSourceStore
 import com.buco7854.opentv.core.storage.ChannelListing
 import com.buco7854.opentv.core.storage.ListingPage
 import com.buco7854.opentv.core.storage.MetadataStore
@@ -342,8 +344,18 @@ class RoomStorage(private val db: OpenTvDatabase) : Storage {
         override suspend fun getByStatus(status: Int): List<Download> =
             db.downloadDao().getByStatus(status).map { it.toModel() }
 
+        override suspend fun getByStatuses(statuses: List<Int>): List<Download> =
+            db.downloadDao().getByStatuses(statuses).map { it.toModel() }
+
         override suspend fun findByUrlWithStatus(url: String, statuses: List<Int>): Download? =
             db.downloadDao().findByUrlWithStatus(url, statuses)?.toModel()
+
+        override suspend fun findByHubContentWithStatus(
+            hubSourceId: Long,
+            contentId: String,
+            statuses: List<Int>,
+        ): Download? =
+            db.downloadDao().findByHubContentWithStatus(hubSourceId, contentId, statuses)?.toModel()
 
         override suspend fun insert(download: Download): Long = db.downloadDao().insert(download.toRow())
         override suspend fun update(download: Download) = db.downloadDao().update(download.toRow())
@@ -367,7 +379,33 @@ class RoomStorage(private val db: OpenTvDatabase) : Storage {
             id, expectedStatuses, status, error
         ) > 0
 
+        override suspend fun updateUrlIfStatus(
+            id: Long,
+            url: String,
+            expectedStatuses: List<Int>,
+        ): Boolean = db.downloadDao().updateUrlIfStatus(id, url, expectedStatuses) > 0
+
         override suspend fun delete(id: Long) = db.downloadDao().delete(id)
+    }
+
+    override val hubSources = object : HubSourceStore {
+        override fun observeAll(): Flow<List<HubSource>> =
+            db.hubSourceDao().observeAll().map { rows -> rows.map { it.toModel() } }
+
+        override suspend fun getAll(): List<HubSource> = db.hubSourceDao().getAll().map { it.toModel() }
+        override suspend fun get(id: Long): HubSource? = db.hubSourceDao().get(id)?.toModel()
+        override suspend fun upsert(source: HubSource): Long = db.hubSourceDao().upsert(source.toRow())
+        override suspend fun delete(id: Long) = db.hubSourceDao().delete(id)
+
+        override suspend fun updateIdentity(
+            id: Long,
+            userId: String?,
+            username: String?,
+            role: String?,
+            seenMs: Long,
+        ) = db.hubSourceDao().updateIdentity(id, userId, username, role, seenMs)
+
+        override suspend fun clearIdentity(id: Long) = db.hubSourceDao().clearIdentity(id)
     }
 }
 

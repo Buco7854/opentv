@@ -13,7 +13,7 @@ import { EpisodeList, Poster } from './DetailScreens';
 export function XtreamSeriesScreen() {
   const { playlistId: pid, seriesId: sid } = useParams();
   const playlistId = Number(pid);
-  const seriesId = Number(sid);
+  const seriesId = sid ?? '';
   const navigate = useNavigate();
   const request = useAsync(() => api.xseries(playlistId, seriesId), [playlistId, seriesId]);
   const { favoriteContentIds, toggleFavorite } = useFavorites(playlistId);

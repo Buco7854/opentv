@@ -34,7 +34,7 @@ export function usePlaybackEngine(opts: {
   leaseRef: MutableRefObject<PlaybackLease>;
   live: boolean;
   catchup: boolean;
-  /** Watch-together live rides the room's shared relay instead of this viewer's own read. */
+  /** Watch-together live rides HLS sharing or the TS relay instead of this viewer's own read. */
   roomLive: boolean;
   /** Hold the engine off entirely (provider check, room transition, remux preparing). */
   hold: boolean;
@@ -48,11 +48,14 @@ export function usePlaybackEngine(opts: {
   remux: RemuxController;
   chosenTracks: MutableRefObject<{ audio: number; subs: number | null }>;
   actions: PlaybackStatusActions;
+  /** A 410 may mean only the short-lived grant expired; refresh it before ending the lease. */
+  recoverMediaGrant: () => Promise<boolean>;
   onTerminate: (status: number) => void;
 }): PlaybackEngine {
   const {
     lease, leaseRef, live, catchup, roomLive, hold, contentId, downloadId,
-    activeUrl, activeSourceKey, sourceKey, videoRef, remux, chosenTracks, actions, onTerminate,
+    activeUrl, activeSourceKey, sourceKey, videoRef, remux, chosenTracks, actions,
+    recoverMediaGrant, onTerminate,
   } = opts;
   const { setError, setBuffering, setBufferedEnd, setAudioTranscoded, setTracks } = actions;
 
@@ -62,7 +65,7 @@ export function usePlaybackEngine(opts: {
 
   const remuxRef = remux.ref;
   const remuxAvailableRef = remux.availableRef;
-  const { start: startRemux, markPlaying, forceTranscode } = remux;
+  const { start: startRemux, markPlaying } = remux;
 
   // Read fresh inside the engine's closures, so a reconnect picks up rotated URLs.
   const transportContextRef = useRef<() => TransportContext>(() => ({ lease }));
@@ -84,9 +87,12 @@ export function usePlaybackEngine(opts: {
     const video = videoRef.current;
     if (!video) return;
     const currentRemux = remuxRef.current;
+    const sourceKindNow = sourceKind(lease.streamUrl);
     const target = currentRemux
       ? replaceMediaGrant(currentRemux.playlistUrl, lease.mediaGrant)
-      : lease.streamUrl;
+      : roomLive && sourceKindNow === 'hls'
+        ? lease.sharedHlsUrl ?? lease.streamUrl
+        : lease.streamUrl;
     if (!target) return;
     const snapshot = captureMediaPosition(video);
     const hlsVariant = !currentRemux && sourceKind(lease.streamUrl) === 'livets';
@@ -102,13 +108,19 @@ export function usePlaybackEngine(opts: {
       hls.startLoad(live ? -1 : snapshot.position);
       return () => hls.off(Hls.Events.MANIFEST_PARSED, restore);
     }
+    if (mpegtsRef.current) {
+      mpegtsReload.current?.();
+      return;
+    }
     if (!mpegtsRef.current && video.currentSrc) {
       const restore = () => restoreMediaPosition(video, snapshot, live);
       video.addEventListener('loadedmetadata', restore, { once: true });
       video.src = authorizedUrl;
       return () => video.removeEventListener('loadedmetadata', restore);
     }
-  }, [lease.mediaGrant, lease.streamUrl, live, remuxRef, videoRef]);
+  }, [
+    lease.mediaGrant, lease.streamUrl, lease.sharedHlsUrl, live, roomLive, remuxRef, videoRef,
+  ]);
 
   // ---- engine wiring ----
   const lastSource = useRef<string | undefined>(undefined);
@@ -120,7 +132,11 @@ export function usePlaybackEngine(opts: {
     let resumeSeek: (() => void) | undefined;
     const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
     const schedule = (run: () => void, delayMs: number) => {
-      const timer = setTimeout(() => { pendingTimers.delete(timer); run(); }, delayMs);
+      if (cancelled) return;
+      const timer = setTimeout(() => {
+        pendingTimers.delete(timer);
+        if (!cancelled) run();
+      }, delayMs);
       pendingTimers.add(timer);
     };
     const cancelScheduled = () => {
@@ -217,10 +233,17 @@ export function usePlaybackEngine(opts: {
         toast(t('player.audioUnsupported'), { tone: 'error' });
       };
       player.on(mpegts.Events.ERROR, (type: string, _detail: string, info: unknown) => {
+        // destroy() can leave an already-queued demux callback behind. It belongs to the old
+        // attachment and must not start a rescue/reload after cleanup or an engine swap.
+        if (cancelled || mpegtsRef.current !== player) return;
         const response = info as { code?: number; status?: number; statusCode?: number } | null;
         const status = Number(response?.code ?? response?.status ?? response?.statusCode);
         if (type === mpegts.ErrorTypes.NETWORK_ERROR) {
           if (hasPicture()) return; // a frozen frame recovers via the watchdog
+          if (status === 410) {
+            void recoverMediaGrant();
+            return;
+          }
           if (isTerminalPlaybackStatus(status)) {
             onTerminate(status);
             return;
@@ -229,6 +252,7 @@ export function usePlaybackEngine(opts: {
           if (now - lastErr > 30_000) retries = 0;
           lastErr = now;
           if (retries < 3) { retries++; reload(); return; }
+          stopEngines();
           setError(t('player.codecFailed'));
           return;
         }
@@ -236,7 +260,13 @@ export function usePlaybackEngine(opts: {
         // decoding picture, else give a late demux a moment before covering the screen.
         if (rescueAudio()) return;
         if (hasPicture()) { noteAudio(); return; }
-        schedule(() => (hasPicture() ? noteAudio() : setError(t('player.codecFailed'))), 2000);
+        schedule(() => {
+          if (hasPicture()) noteAudio();
+          else {
+            stopEngines();
+            setError(t('player.codecFailed'));
+          }
+        }, 2000);
       });
     };
 
@@ -275,8 +305,13 @@ export function usePlaybackEngine(opts: {
       hls.loadSource(engineUrl(target, hlsVariant));
       hls.attachMedia(video);
       hls.on(Hls.Events.ERROR, (_e, data) => {
+        if (cancelled || hlsRef.current !== hls) return;
         if (!data.fatal) return;
         const status = data.response?.code;
+        if (status === 410) {
+          void recoverMediaGrant();
+          return;
+        }
         if (isTerminalPlaybackStatus(status)) {
           onTerminate(status);
           return;
@@ -284,13 +319,6 @@ export function usePlaybackEngine(opts: {
         const evictedRemux = status === 404 ? remuxRef.current : null;
         if (evictedRemux) {
           startRemux(evictedRemux.audio, video.currentTime);
-          return;
-        }
-        // A copied HEVC the browser claimed to support but can't actually decode: force a
-        // transcode and re-prepare the session at the current spot.
-        if (remuxRef.current?.nativeCopy && data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRecoveries < 1) {
-          forceTranscode.current = true;
-          startRemux(remuxRef.current.audio, video.currentTime);
           return;
         }
         // recoverMediaError, then (provider HLS only) swapAudioCodec and recover, then give up.
@@ -313,6 +341,7 @@ export function usePlaybackEngine(opts: {
           stopEngines();
           playMpegts('proxy');
         } else {
+          stopEngines();
           setError(t('player.failedDetail', { detail: data.details || data.type }));
         }
       });
@@ -336,10 +365,13 @@ export function usePlaybackEngine(opts: {
       hls.on(Hls.Events.SUBTITLE_TRACK_SWITCH, () => readHlsTracks(hls));
     };
 
-    // Watch-together live rides the room's shared upstream (one provider seat) via the relay,
-    // played as a transport stream; solo live keeps its own connection through the proxy. The
-    // relay tees raw TS, so a playlist-only (m3u8) channel can't use it and stays on HLS.
+    // HLS rooms share untouched manifests/segments through the server's explicit shared-HLS
+    // capability. Raw TS rooms keep using the byte tee relay; solo live stays on /stream.
+    const sharedHls = roomLive && kind === 'hls'
+      ? resolveSource(transportContext(), 'shared-hls')
+      : null;
     if (roomLive && kind !== 'hls') playMpegts('relay');
+    else if (sharedHls) playHls(sharedHls.url);
     else if (kind === 'hls') playHls(activeUrl);
     else if (kind === 'livets') playHls(activeUrl, true);
     else if (kind === 'ts') playMpegts('proxy');
@@ -414,8 +446,9 @@ export function usePlaybackEngine(opts: {
   }, [
     sourceKey, activeSourceKey, live, catchup, hold, roomLive, contentId,
     remux.session?.id, remux.session?.startAt, remuxRef, remuxAvailableRef,
-    leaseRef, videoRef, chosenTracks, transportContext, startRemux, markPlaying, forceTranscode,
-    onTerminate, setError, setBuffering, setBufferedEnd, setAudioTranscoded, setTracks,
+    leaseRef, videoRef, chosenTracks, transportContext, startRemux, markPlaying,
+    recoverMediaGrant, onTerminate,
+    setError, setBuffering, setBufferedEnd, setAudioTranscoded, setTracks,
   ]);
 
   // PiP/fullscreen end when the player closes, not on engine swaps.

@@ -1,5 +1,6 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.contract.*
 import com.buco7854.opentv.core.log.ProviderSecrets
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
@@ -16,16 +17,37 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
         val authorized = authorizedStream(media, call)
         media.proxy.handle(call, authorized.capability, authorized.grant, authorized.guard)
     }
+    get("/shared-hls") {
+        val authorized = authorizedStream(media, call)
+        val leaseId = authorized.capability.leaseId
+        val group = media.sessions.shareGroup(leaseId)
+        if (group == leaseId || !authorized.capability.hlsResource) {
+            call.respond(
+                HttpStatusCode.BadRequest,
+                ApiErrorDto("hls_sharing_unavailable", "Shared HLS is unavailable for this playback"),
+            )
+            return@get
+        }
+        val members = media.sessions.roomMembers(leaseId)
+        media.proxy.beginSharedHls(members)
+        media.proxy.handleSharedHls(
+            call = call,
+            capability = authorized.capability,
+            mediaGrant = authorized.grant,
+            group = group,
+            leaseGuard = authorized.guard,
+            membershipGuard = {
+                if (!media.sessions.isShareGroupMember(leaseId, group)) {
+                    throw PlaybackRevokedException()
+                }
+            },
+            groupStillActive = { media.sessions.hasShareGroup(group) },
+        )
+    }
     get("/img") {
         val capability = call.request.queryParameters["u"]
             ?.let(media.cipher::tryDecryptImage)
             ?: throw IllegalArgumentException("Invalid or missing image capability")
-        if (capability.userId != call.actor.userId) throw ForbiddenApiException()
-        if (capability.playlistId != null &&
-            !media.auth.hasPlaylistAccess(call.actor, capability.playlistId)
-        ) {
-            throw ForbiddenApiException()
-        }
         media.proxy.image(call, capability.url)
     }
 
@@ -34,6 +56,7 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
         val sessionId = capability.leaseId
         val url = capability.url
         val group = media.sessions.shareGroup(sessionId)
+        val capabilities = media.sessions.roomCapabilities(sessionId)
         (media.sessions.roomMembers(sessionId) + sessionId).forEach { media.streamGate.release(it) }
         media.liveRelay.stream(
             call,
@@ -42,6 +65,7 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
             providerKeyOf(url),
             media.connectionLimit(url),
             sessionId,
+            capabilities,
             guard,
         )
     }
@@ -50,15 +74,25 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
         if (!requireFfmpeg(media, call)) return@get
         val (capability, _, guard) = authorizedStream(media, call)
         val sessionId = capability.leaseId
+        val gateId = transcodeGateId(sessionId)
         val url = capability.url
-        if (!media.streamGate.admit(sessionId, providerKeyOf(url), media.connectionLimit(url))) {
+        if (!media.streamGate.admit(gateId, providerKeyOf(url), media.connectionLimit(url))) {
             call.respond(
                 HttpStatusCode.TooManyRequests,
                 ApiErrorDto("provider_capacity", "Provider connection limit reached"),
             )
             return@get
         }
-        media.transcoder.stream(url, call, sessionId, guard)
+        media.transcoder.stream(
+            url,
+            call,
+            sessionId,
+            media.sessions.roomCapabilities(sessionId),
+            {
+                guard()
+                media.streamGate.touch(gateId)
+            },
+        )
     }
 
     get("/remux/available") {
@@ -73,10 +107,7 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
         val rawGrant = call.request.queryParameters["g"]
         val group = media.sessions.shareGroup(sessionId)
         val audio = media.sessions.roomAudio(sessionId) ?: requestedAudio
-        val clientHevc = media.sessions.roomHevc(
-            sessionId,
-            call.request.queryParameters["hevc"] == "1",
-        )
+        val capabilities = media.sessions.roomCapabilities(sessionId)
         val supersededGroups = media.sessions.roomMembers(sessionId) + sessionId + group
         try {
             val connectionLimitStartedNs = System.nanoTime()
@@ -86,7 +117,7 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
                 media.remux.start(
                     source,
                     audio,
-                    clientHevc,
+                    capabilities,
                     timeshift,
                     connectionLimit,
                     group,
@@ -96,7 +127,7 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
                 )
             }
             try {
-                media.mediaGrants.bindResource(call.actor, sessionId, result.id)
+                media.mediaGrants.bindResource(sessionId, result.id)
             } catch (error: Exception) {
                 if (!media.mediaGrants.hasAttachments(result.id)) media.remux.stop(result.id)
                 throw error
@@ -130,7 +161,6 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
     delete("/remux/{id}") {
         val id = call.requiredParameter("id")
         val finalAttachment = media.mediaGrants.releaseResource(
-            call.actor,
             call.request.queryParameters["sid"],
             call.request.queryParameters["g"],
             id,
@@ -141,7 +171,6 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
     get("/remux/{id}/{file}") {
         val id = call.requiredParameter("id")
         media.mediaGrants.validateResource(
-            call.actor,
             call.request.queryParameters["sid"],
             call.request.queryParameters["g"],
             id,
@@ -197,7 +226,7 @@ private fun authorizedStream(
     val capability = requiredStreamCapability(media, call)
     val grant = call.request.queryParameters["g"]
     val guard = {
-        media.mediaGrants.validateCapability(call.actor, capability.leaseId, grant, capability)
+        media.mediaGrants.validateCapability(capability.leaseId, grant, capability)
     }
     guard()
     return AuthorizedStream(capability, grant, guard)
@@ -222,13 +251,15 @@ private suspend fun remuxTarget(
     val grant = call.request.queryParameters["g"]
     val downloadId = call.request.queryParameters["d"]
         ?: return requiredStreamCapability(media, call).let { capability ->
-            media.mediaGrants.validateCapability(call.actor, capability.leaseId, grant, capability)
+            media.mediaGrants.validateCapability(capability.leaseId, grant, capability)
             RemuxTarget(capability.url, capability.leaseId)
         }
     val leaseId = call.request.queryParameters["sid"]
-    val source = media.downloads.fileFor(call.actor.userId, downloadId)?.second?.toString()
+    val lease = leaseId?.let(media.sessions::lease)
         ?: throw IllegalArgumentException("Invalid or missing target url")
-    media.mediaGrants.validateSource(call.actor, leaseId, grant, source)
+    val source = media.downloads.fileFor(lease.userId, downloadId)?.second?.toString()
+        ?: throw IllegalArgumentException("Invalid or missing target url")
+    media.mediaGrants.validateSource(leaseId, grant, source)
     return RemuxTarget(source, requireNotNull(leaseId))
 }
 

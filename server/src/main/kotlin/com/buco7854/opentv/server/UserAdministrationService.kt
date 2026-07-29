@@ -1,5 +1,6 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.contract.*
 import androidx.room.immediateTransaction
 import androidx.room.useWriterConnection
 import com.buco7854.opentv.serverdata.ChallengeKind
@@ -111,32 +112,37 @@ internal class UserAdministrationService(
             val pending = db.oidc().pending(request.issuer, request.subject)
                 ?: throw ResourceNotFound("oidc identity")
             val now = clock()
-            val target = request.userId?.let {
-                db.users().get(it) ?: throw ResourceNotFound("user")
-            } ?: accounts.createUser(
-                accounts.availableOidcUsername(
-                    pending.usernameClaim ?: "oidc-user",
-                    request.issuer,
-                    request.subject,
-                ),
-                pending.displayNameClaim ?: pending.usernameClaim ?: "OIDC user",
-                UserStatus.ACTIVE,
-                UserRole.USER,
-                now,
-            ).also { accounts.copyDefaultGrants(it.id, now) }
-            db.oidc().upsert(
-                OidcIdentityRow(
-                    request.issuer, request.subject, target.id,
-                    pending.usernameClaim, pending.displayNameClaim,
-                    pending.groupsJson, pending.adminMapped, now,
-                ),
-            )
-            val updated = target.copy(
-                oidcAdmin = db.oidc().hasAdminMapping(target.id),
-                updatedAtMs = now,
-            )
-            db.users().update(updated)
-            db.oidc().deletePending(request.issuer, request.subject)
+            val updated = db.useWriterConnection { connection ->
+                connection.immediateTransaction {
+                    val target = request.userId?.let {
+                        db.users().get(it) ?: throw ResourceNotFound("user")
+                    } ?: accounts.createUser(
+                        accounts.availableOidcUsername(
+                            pending.usernameClaim ?: "oidc-user",
+                            request.issuer,
+                            request.subject,
+                        ),
+                        pending.displayNameClaim ?: pending.usernameClaim ?: "OIDC user",
+                        UserStatus.ACTIVE,
+                        UserRole.USER,
+                        now,
+                    ).also { accounts.copyDefaultGrants(it.id, now) }
+                    db.oidc().upsert(
+                        OidcIdentityRow(
+                            request.issuer, request.subject, target.id,
+                            pending.usernameClaim, pending.displayNameClaim,
+                            pending.groupsJson, pending.adminMapped, now,
+                        ),
+                    )
+                    val updatedTarget = target.copy(
+                        oidcAdmin = db.oidc().hasAdminMapping(target.id),
+                        updatedAtMs = now,
+                    )
+                    db.users().update(updatedTarget)
+                    db.oidc().deletePending(request.issuer, request.subject)
+                    updatedTarget
+                }
+            }
             accounts.adminUserDto(updated)
         }
 
@@ -174,7 +180,8 @@ internal class UserAdministrationService(
         ensureLocalAccountProvisioningAllowed()
         val role = request.role.uppercase()
         require(role == UserRole.USER || role == UserRole.ADMIN) { "Unknown role" }
-        request.password?.let {
+        val password = request.password
+        password?.let {
             // Validate before any user row exists. preparePassword validates again while hashing.
             AuthCrypto.validatePassword(it)
         }
@@ -182,26 +189,30 @@ internal class UserAdministrationService(
         val user = accounts.prepareUser(
             request.username,
             request.displayName.ifBlank { request.username },
-            if (request.password == null) UserStatus.INVITED else UserStatus.ACTIVE,
+            if (password == null) UserStatus.INVITED else UserStatus.ACTIVE,
             role,
             now,
         )
         val activationToken: String?
-        if (request.password != null) {
-            val password = request.password
+        if (password != null) {
             val credential = credentials.preparePassword(user.id, password, now)
             db.useWriterConnection { connection ->
                 connection.immediateTransaction {
                     accounts.insertPreparedUser(user)
                     credentials.storePreparedPassword(credential)
+                    accounts.copyDefaultGrants(user.id, now)
                 }
             }
             activationToken = null
         } else {
-            accounts.insertPreparedUser(user)
-            activationToken = accounts.issueChallenge(
-                user.id, ChallengeKind.ACTIVATION, "", 24 * 60 * 60_000L,
-            ).first
+            activationToken = db.useWriterConnection { connection ->
+                connection.immediateTransaction {
+                    accounts.insertPreparedUser(user)
+                    accounts.issueChallenge(
+                        user.id, ChallengeKind.ACTIVATION, "", 24 * 60 * 60_000L,
+                    ).first
+                }
+            }
         }
         CreatedUserDto(accounts.adminUserDto(user), activationToken)
     }
@@ -230,6 +241,7 @@ internal class UserAdministrationService(
         db.users().byNormalizedUsername(normalized)?.let {
             if (it.id != current.id) throw UsernameTakenException()
         }
+        val now = clock()
         val updated = current.copy(
             username = username,
             normalizedUsername = normalized,
@@ -240,12 +252,16 @@ internal class UserAdministrationService(
             } ?: current.displayName,
             status = status,
             manualRole = role,
-            updatedAtMs = clock(),
+            updatedAtMs = now,
         )
-        db.users().update(updated)
-        if (current.status != status || current.manualRole != role) {
-            sessions.revokeUser(userId, clock())
+        val accessChanged = current.status != status || current.manualRole != role
+        db.useWriterConnection { connection ->
+            connection.immediateTransaction {
+                db.users().update(updated)
+                if (accessChanged) db.sessions().revokeUser(userId, now)
+            }
         }
+        if (accessChanged) cleanup.sessionRevoked(userId, null)
         accounts.adminUserDto(updated)
     }
 
@@ -267,13 +283,19 @@ internal class UserAdministrationService(
                 user,
                 listOf(AdminAccountMutation.RESET_CREDENTIALS),
             )
-            sessions.revokeUser(userId, clock())
-            db.credentials().deletePassword(userId)
-            db.credentials().clearMfa(userId)
-            db.users().update(user.copy(status = UserStatus.INVITED, updatedAtMs = clock()))
-            val challenge = accounts.issueChallenge(
-                userId, ChallengeKind.PASSWORD_RESET, "", 24 * 60 * 60_000L,
-            )
+            val now = clock()
+            val challenge = db.useWriterConnection { connection ->
+                connection.immediateTransaction {
+                    db.sessions().revokeUser(userId, now)
+                    db.credentials().deletePassword(userId)
+                    db.credentials().clearMfa(userId)
+                    db.users().update(user.copy(status = UserStatus.INVITED, updatedAtMs = now))
+                    accounts.issueChallenge(
+                        userId, ChallengeKind.PASSWORD_RESET, "", 24 * 60 * 60_000L,
+                    )
+                }
+            }
+            cleanup.sessionRevoked(userId, null)
             ResetUserDto(challenge.first)
         }
 
@@ -303,7 +325,7 @@ internal class UserAdministrationService(
         return db.grants().defaults()
     }
 
-    suspend fun setDefaultPlaylists(actor: Actor, ids: List<Long>) {
+    suspend fun setDefaultPlaylists(actor: Actor, ids: List<Long>) = mutation.withLock {
         requireAdmin(actor)
         db.grants().replaceDefaults(accounts.validatePlaylistIds(ids))
     }

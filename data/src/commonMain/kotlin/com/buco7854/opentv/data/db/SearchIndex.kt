@@ -68,7 +68,7 @@ internal fun seriesIndexedSearchQuery(
 
 /**
  * SQLite's built-in lower() and LIKE are ASCII-case-insensitive. Mirroring that deliberately
- * keeps migrated rows and newly refreshed rows identical on both Android and bundled SQLite.
+ * keeps rows identical however they were written, on both Android and bundled SQLite.
  */
 private fun normalizeSearchText(value: String, maxCodePoints: Int): String {
     val lowered = buildString(value.length) {

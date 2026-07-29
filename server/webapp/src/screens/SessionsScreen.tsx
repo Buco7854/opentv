@@ -1,6 +1,7 @@
 // Viewer activity dashboard: who is watching what, with remote pause/resume,
 // a message channel, and on-the-fly stream diagnostics (direct / proxy / remux,
-// and why ffmpeg is copying or transcoding). Web-client sessions only.
+// and why ffmpeg is copying or transcoding). Covers every client that holds a
+// playback lease, including native Android ones.
 
 import { useEffect, useRef, useState } from 'react';
 import { api, RemuxDiag, Session } from '../api';

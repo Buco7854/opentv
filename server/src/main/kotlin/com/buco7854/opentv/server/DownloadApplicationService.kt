@@ -1,5 +1,8 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.contract.*
+import com.buco7854.opentv.serverdata.DownloadBlobStatus
+import java.nio.file.Files
 import java.nio.file.Path
 
 /** Per-user download use cases backed by shared physical blobs. */
@@ -7,6 +10,7 @@ class DownloadApplicationService(
     private val downloads: DownloadManager,
     private val content: ContentIdentityService,
     private val auth: AuthService,
+    private val cipher: StreamCipher,
 ) {
     suspend fun list(actor: Actor): List<DownloadDto> {
         val rows = downloads.list(actor.userId)
@@ -17,6 +21,16 @@ class DownloadApplicationService(
             if (user.suspended || identity == null || !access.allows(identity.playlistId)) {
                 null
             } else {
+                val fileCapability = if (
+                    (blob.status == DownloadBlobStatus.RUNNING && blob.downloadedBytes > 0) ||
+                    (blob.status == DownloadBlobStatus.DONE &&
+                        blob.totalBytes > 0 &&
+                        blob.downloadedBytes == blob.totalBytes)
+                ) {
+                    cipher.encryptDownloadFile(actor.userId, user.id)
+                } else {
+                    null
+                }
                 DownloadDto(
                     id = user.id,
                     contentId = blob.contentId,
@@ -28,6 +42,8 @@ class DownloadApplicationService(
                     downloadedBytes = blob.downloadedBytes,
                     error = blob.error,
                     createdMs = user.createdAtMs,
+                    fileToken = fileCapability?.token,
+                    fileTokenExpiresAtMs = fileCapability?.expiresAtMs,
                 )
             }
         }
@@ -57,10 +73,16 @@ class DownloadApplicationService(
         downloads.delete(actor.userId, id)
     }
 
-    suspend fun file(actor: Actor, id: String): DownloadFile {
-        requireEntitled(actor, id)
-        return downloads.fileFor(actor.userId, id)?.let { (download, path) ->
-            DownloadFile(download.title, path)
+    suspend fun file(id: String, rawToken: String?): DownloadFile {
+        val capability = rawToken?.let(cipher::tryDecryptDownloadFile)
+            ?.takeIf { it.downloadId == id }
+            ?: throw UnauthenticatedApiException()
+        return downloads.downloadFileFor(capability.userId, id)?.let { (download, path) ->
+            DownloadFile(
+                title = download.title,
+                path = path,
+                availableBytes = Files.size(path),
+            )
         } ?: throw ResourceNotFound("download", "Download not finished")
     }
 
@@ -90,4 +112,8 @@ class DownloadApplicationService(
     }
 }
 
-data class DownloadFile(val title: String, val path: Path)
+data class DownloadFile(
+    val title: String,
+    val path: Path,
+    val availableBytes: Long,
+)

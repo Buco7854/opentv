@@ -1,5 +1,6 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.contract.*
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
@@ -11,7 +12,13 @@ import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondOutputStream
 import io.ktor.server.response.respondText
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import java.io.IOException
@@ -40,6 +47,7 @@ class StreamProxy(
 ) {
     private val log = LoggerFactory.getLogger("opentv")
     private val activeBodies = ConcurrentHashMap<String, MutableSet<InputStream>>()
+    private val sharedHls = SharedHlsCache(http, gate, connectionLimit)
     /**
      * Disk tier for the posters too large to hold in heap. A filesystem that refuses it -
      * a read-only container, a full disk - must cost the tier, not the server: the memory
@@ -60,8 +68,14 @@ class StreamProxy(
     private var imageCacheBytes = 0L
     private var imageMemoryBytes = 0L
 
-    private fun proxied(absoluteUrl: String, leaseId: String, mediaGrant: String?): String =
-        "/api/v1/stream?u=${urlEncode(cipher.encryptStream(absoluteUrl, leaseId))}" +
+    private fun proxied(
+        absoluteUrl: String,
+        leaseId: String,
+        mediaGrant: String?,
+        shared: Boolean,
+    ): String =
+        (if (shared) "/api/v1/shared-hls" else "/api/v1/stream") +
+            "?u=${urlEncode(cipher.encryptHlsResource(absoluteUrl, leaseId))}" +
             "&sid=${urlEncode(leaseId)}&g=${urlEncode(mediaGrant.orEmpty())}"
 
     private val hlsContentTypes = listOf("mpegurl", "m3u8")
@@ -76,7 +90,13 @@ class StreamProxy(
         return contentType != null && hlsContentTypes.any { contentType.contains(it, ignoreCase = true) }
     }
 
-    internal fun rewriteHls(body: String, baseUri: URI, leaseId: String, mediaGrant: String? = null): String {
+    internal fun rewriteHls(
+        body: String,
+        baseUri: URI,
+        leaseId: String,
+        mediaGrant: String? = null,
+        shared: Boolean = false,
+    ): String {
         var rejected = 0
         fun child(raw: String): String {
             val resolved = runCatching { baseUri.resolve(raw) }.getOrNull()
@@ -84,19 +104,30 @@ class StreamProxy(
                 rejected++
                 return REJECTED_CHILD_URL
             }
-            return proxied(resolved.toString(), leaseId, mediaGrant)
+            return proxied(resolved.toString(), leaseId, mediaGrant, shared)
         }
         val rewritten = body.lineSequence().joinToString("\n") { line ->
             val trimmed = line.trim()
             when {
                 trimmed.isEmpty() -> line
-                trimmed.startsWith("#") ->
-                    URI_ATTRIBUTE.replace(line) { """URI="${child(it.groupValues[1])}"""" }
+                trimmed.startsWith("#") -> {
+                    val attributes = URI_ATTRIBUTE.replace(line) {
+                        """URI="${child(it.groupValues[1])}""""
+                    }
+                    // URI-bearing tags are standardized, but provider-controlled metadata and
+                    // extension tags can hide an absolute credentialed URL in another quoted
+                    // field. Make every such URL opaque rather than reflecting it to the client.
+                    ABSOLUTE_URL.replace(attributes) { child(it.value) }
+                }
                 else -> child(trimmed)
             }
         }
         if (rejected > 0) {
-            log.warn("Rejected {} off-origin URI(s) in the playlist at {}", rejected, baseUri)
+            log.warn(
+                "Rejected {} off-origin URI(s) in the playlist at {}",
+                rejected,
+                baseUri.host ?: "provider",
+            )
         }
         return rewritten
     }
@@ -414,6 +445,174 @@ class StreamProxy(
         else Files.deleteIfExists(path)
     }
 
+    /**
+     * A room changes from per-lease HLS reads to one room read. Close any in-flight solo segment
+     * fetches before returning their logical seats, so the accounting never claims sharing while
+     * an old physical read is still owned by a member.
+     */
+    fun beginSharedHls(memberIds: Set<String>) {
+        memberIds.forEach { memberId ->
+            drop(memberId)
+            gate.release(memberId)
+        }
+    }
+
+    suspend fun handleSharedHls(
+        call: ApplicationCall,
+        capability: StreamCapability,
+        mediaGrant: String?,
+        group: String,
+        leaseGuard: () -> Unit,
+        membershipGuard: () -> Unit,
+        groupStillActive: () -> Boolean,
+    ) {
+        if (!capability.hlsResource) {
+            call.respond(
+                HttpStatusCode.BadRequest,
+                ApiErrorDto("invalid_target", "Shared HLS requires an HLS capability"),
+            )
+            return
+        }
+        val uri = runCatching { URI(capability.url) }.getOrNull()
+        if (uri == null || uri.scheme !in listOf("http", "https")) {
+            call.respond(HttpStatusCode.BadRequest, ApiErrorDto("invalid_target", "Invalid or missing target url"))
+            return
+        }
+
+        val guard = {
+            leaseGuard()
+            membershipGuard()
+        }
+        guard()
+        val heartbeat = CoroutineScope(currentCoroutineContext()).launch {
+            while (isActive) {
+                delay(STREAM_GUARD_INTERVAL_MS)
+                guard()
+                gate.touch(group)
+            }
+        }
+        try {
+            val response = try {
+                sharedHls.read(
+                    group,
+                    uri,
+                    call.request.headers[HttpHeaders.Range],
+                    groupStillActive,
+                )
+            } catch (_: SharedHlsCapacityException) {
+                call.respond(
+                    HttpStatusCode.TooManyRequests,
+                    ApiErrorDto("provider_capacity", "Provider connection limit reached"),
+                )
+                return
+            } catch (error: SharedHlsTooLargeException) {
+                call.respond(
+                    HttpStatusCode.BadGateway,
+                    ApiErrorDto("upstream_failure", error.message.orEmpty()),
+                )
+                return
+            } catch (error: SharedHlsUpstreamException) {
+                log.warn(
+                    "Shared HLS upstream request failed for {}: {}",
+                    uri.host ?: "provider",
+                    redactProviderMediaText(
+                        error.cause?.message ?: error.cause?.javaClass?.simpleName ?: "Unknown error",
+                    ),
+                )
+                call.respond(
+                    HttpStatusCode.BadGateway,
+                    ApiErrorDto("upstream_failure", "Upstream request failed"),
+                )
+                return
+            }
+            guard()
+            if (response.statusCode == HttpStatusCode.RequestedRangeNotSatisfiable.value) {
+                response.contentRange?.let { call.response.header(HttpHeaders.ContentRange, it) }
+                call.response.header(HttpHeaders.CacheControl, "private, no-store")
+                call.respond(HttpStatusCode.RequestedRangeNotSatisfiable)
+                return
+            }
+            if (response.statusCode !in 200..299) {
+                call.respond(
+                    HttpStatusCode.BadGateway,
+                    ApiErrorDto("upstream_failure", "Upstream returned HTTP ${response.statusCode}"),
+                )
+                return
+            }
+
+            if (response.playlist) {
+                val text = response.bytes.decodeToString().removePrefix("\uFEFF")
+                if (!text.startsWith("#EXTM3U")) {
+                    call.respond(
+                        HttpStatusCode.BadGateway,
+                        ApiErrorDto("upstream_failure", "Upstream returned an invalid playlist"),
+                    )
+                    return
+                }
+                call.response.header(HttpHeaders.CacheControl, "no-store")
+                respondSharedBytes(
+                    call = call,
+                    bytes = rewriteHls(
+                        text,
+                        response.uri,
+                        capability.leaseId,
+                        mediaGrant,
+                        shared = true,
+                    ).encodeToByteArray(),
+                    type = ContentType.parse("application/vnd.apple.mpegurl"),
+                    status = HttpStatusCode.fromValue(response.statusCode),
+                    guard = guard,
+                )
+                return
+            }
+
+            response.contentRange?.let { call.response.header(HttpHeaders.ContentRange, it) }
+            response.acceptRanges?.let { call.response.header(HttpHeaders.AcceptRanges, it) }
+            response.etag?.let { call.response.header(HttpHeaders.ETag, it) }
+            response.lastModified?.let { call.response.header(HttpHeaders.LastModified, it) }
+            call.response.header(
+                HttpHeaders.CacheControl,
+                if (response.etag != null || response.lastModified != null) {
+                    "private, no-cache"
+                } else {
+                    "private, no-store"
+                },
+            )
+            val type = response.contentType
+                ?.let { runCatching { ContentType.parse(it) }.getOrNull() }
+                ?.takeUnless(::isCompressible)
+                ?: ContentType.Application.OctetStream
+            respondSharedBytes(
+                call,
+                response.bytes,
+                type,
+                HttpStatusCode.fromValue(response.statusCode),
+                guard,
+            )
+        } finally {
+            heartbeat.cancel()
+        }
+    }
+
+    private suspend fun respondSharedBytes(
+        call: ApplicationCall,
+        bytes: ByteArray,
+        type: ContentType,
+        status: HttpStatusCode,
+        guard: () -> Unit,
+    ) {
+        call.respondOutputStream(type, status, bytes.size.toLong()) {
+            var offset = 0
+            while (offset < bytes.size) {
+                guard()
+                val count = minOf(SHARED_RESPONSE_CHUNK_BYTES, bytes.size - offset)
+                this@respondOutputStream.write(bytes, offset, count)
+                offset += count
+            }
+            guard()
+        }
+    }
+
     suspend fun handle(
         call: ApplicationCall,
         capability: StreamCapability,
@@ -442,21 +641,46 @@ class StreamProxy(
             )
             return
         }
+        // Keep both authorization and provider accounting live even when the upstream parks
+        // between bytes. A grant expiry or lease revocation cancels this request and closes its
+        // tracked body; a quiet socket must not make the connection gate forget a physical read.
+        val heartbeat = CoroutineScope(currentCoroutineContext()).launch {
+            while (isActive) {
+                delay(STREAM_GUARD_INTERVAL_MS)
+                try {
+                    leaseGuard()
+                    gate.touch(leaseId)
+                } catch (error: Throwable) {
+                    drop(leaseId)
+                    throw error
+                }
+            }
+        }
 
-        val builder = HttpRequest.newBuilder(uri)
-            .timeout(Duration.ofSeconds(30))
-            .header("User-Agent", http.userAgent)
-        call.request.headers[HttpHeaders.Range]?.let { builder.header("Range", it) }
-        call.request.headers[HttpHeaders.IfNoneMatch]?.let { builder.header(HttpHeaders.IfNoneMatch, it) }
-        call.request.headers[HttpHeaders.IfModifiedSince]
-            ?.let { builder.header(HttpHeaders.IfModifiedSince, it) }
+        try {
+            val builder = HttpRequest.newBuilder(uri)
+                .timeout(Duration.ofSeconds(30))
+                .header("User-Agent", http.userAgent)
+            call.request.headers[HttpHeaders.Range]?.let { builder.header("Range", it) }
+            call.request.headers[HttpHeaders.IfNoneMatch]
+                ?.let { builder.header(HttpHeaders.IfNoneMatch, it) }
+            call.request.headers[HttpHeaders.IfModifiedSince]
+                ?.let { builder.header(HttpHeaders.IfModifiedSince, it) }
 
         val upstream = try {
             withContext(Dispatchers.IO) {
                 http.client.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream())
             }
         } catch (e: Exception) {
-            log.warn("Upstream request failed for {}: {}", providerKeyOf(streamUrl), e.message)
+            // URI.authority contains user-info, and transport exception messages may repeat the
+            // full Xtream path. Log the host plus a redacted failure, never the provider key.
+            log.warn(
+                "Upstream request failed for {}: {}",
+                uri.host ?: "provider",
+                redactProviderMediaText(
+                    e.message ?: e::class.simpleName ?: "Unknown error"
+                ),
+            )
             call.respond(
                 HttpStatusCode.BadGateway,
                 ApiErrorDto("upstream_failure", "Upstream request failed"),
@@ -489,6 +713,16 @@ class StreamProxy(
             return
         }
 
+        if (upstream.statusCode() == HttpStatusCode.RequestedRangeNotSatisfiable.value) {
+            body.close()
+            releaseBody(leaseId, body)
+            headers.firstValue(HttpHeaders.ContentRange).orElse(null)
+                ?.let { call.response.header(HttpHeaders.ContentRange, it) }
+            call.response.header(HttpHeaders.CacheControl, "private, no-store")
+            call.respond(HttpStatusCode.RequestedRangeNotSatisfiable)
+            return
+        }
+
         if (upstream.statusCode() !in 200..299) {
             body.close()
             releaseBody(leaseId, body)
@@ -515,7 +749,7 @@ class StreamProxy(
                 )
                 return
             }
-            val text = bytes.decodeToString()
+            val text = bytes.decodeToString().removePrefix("\uFEFF")
             call.response.header(HttpHeaders.CacheControl, "no-store")
             if (text.startsWith("#EXTM3U")) {
                 call.respondText(
@@ -524,7 +758,13 @@ class StreamProxy(
                 )
                 return
             }
-            call.respondText(text, contentType?.let { ContentType.parse(it) } ?: ContentType.Application.OctetStream)
+            // This response was identified as HLS by its URL/content type. Reflecting malformed
+            // provider-controlled text would bypass URI rewriting and can expose credentialed
+            // provider URLs verbatim.
+            call.respond(
+                HttpStatusCode.BadGateway,
+                ApiErrorDto("upstream_failure", "Upstream returned an invalid playlist"),
+            )
             return
         }
 
@@ -558,6 +798,7 @@ class StreamProxy(
                         while (true) {
                             val n = input.read(buffer)
                             if (n < 0) break
+                            leaseGuard()
                             this@respondOutputStream.write(buffer, 0, n)
                             val now = System.currentTimeMillis()
                             if (now - lastTouch > 4_000) { lastTouch = now; gate.touch(leaseId) }
@@ -567,6 +808,9 @@ class StreamProxy(
             }
         } finally {
             releaseBody(leaseId, body)
+        }
+        } finally {
+            heartbeat.cancel()
         }
     }
 
@@ -583,6 +827,16 @@ class StreamProxy(
 
     fun drop(leaseId: String) {
         activeBodies.remove(leaseId)?.forEach { runCatching { it.close() } }
+    }
+
+    fun dropShareGroup(group: String) {
+        sharedHls.drop(group)
+    }
+
+    internal fun sharedHlsStats(group: String): SharedHlsCacheStats = sharedHls.stats(group)
+
+    fun close() {
+        sharedHls.close()
     }
 
     private data class CachedImage(
@@ -617,7 +871,12 @@ class StreamProxy(
         const val IMAGE_CACHE_CONTROL = "private, max-age=86400"
         const val MAX_HLS_PLAYLIST_BYTES = 2 * 1024 * 1024
         val URI_ATTRIBUTE = Regex("""URI="([^"]+)"""")
+        // Include network-path references (`//host/path`): browsers resolve those to the
+        // manifest scheme, so they expose and can reach a provider URL just as an https URL can.
+        val ABSOLUTE_URL = Regex("""(?i)(?:https?:)?//[^\s"']+""")
         const val REJECTED_CHILD_URL = "/api/v1/stream"
+        const val STREAM_GUARD_INTERVAL_MS = 4_000L
+        const val SHARED_RESPONSE_CHUNK_BYTES = 64 * 1024
     }
 }
 

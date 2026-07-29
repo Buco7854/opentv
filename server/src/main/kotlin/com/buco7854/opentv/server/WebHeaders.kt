@@ -22,6 +22,8 @@ internal val CONTENT_SECURITY_POLICY = listOf(
     "frame-ancestors 'none'",
     "form-action 'self'",
     "script-src 'self'",
+    "script-src-elem 'self'",
+    "script-src-attr 'none'",
     "style-src 'self'",
     "img-src 'self' data: blob:",
     "media-src 'self' blob: data:",
@@ -29,6 +31,7 @@ internal val CONTENT_SECURITY_POLICY = listOf(
     "connect-src 'self'",
     "worker-src 'self' blob:",
     "child-src 'self' blob:",
+    "frame-src 'none'",
     "manifest-src 'self'",
 ).joinToString("; ")
 

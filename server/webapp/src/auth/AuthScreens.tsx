@@ -1,4 +1,6 @@
-import { FormEvent, ReactNode, useCallback, useEffect, useState } from 'react';
+import {
+  FormEvent, ReactNode, useCallback, useEffect, useRef, useState,
+} from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router';
 import { ApiError } from '../api/http';
 import { Icon, IconName } from '../components/Icons';
@@ -12,7 +14,7 @@ import { AuthLayout } from './AuthLayout';
 import { ChoiceRow, ErrorNotice, errorMessage, reportAuthError } from './AuthUi';
 import { useAuth } from './AuthProvider';
 import { authText as tx } from './copy';
-import { useFragmentToken } from './fragment';
+import { beginOidcHandoff, useFragmentToken } from './fragment';
 import { MfaStep, RecoveryCodesPanel, RecoveryCodesScreen, TotpSetup } from './TwoFactor';
 import { AuthFlow, TotpStatus, WebAuthnCredential } from './types';
 import {
@@ -105,7 +107,9 @@ export function LoginScreen() {
     if (auth.phase === 'authenticated' && !reauthenticate) navigate(returnTo, { replace: true });
   }, [auth.phase, navigate, reauthenticate, returnTo]);
 
-  useEffect(() => { sessionStorage.removeItem('auth.returnTo'); }, []);
+  useEffect(() => {
+    try { sessionStorage.removeItem('auth.returnTo'); } catch { /* storage unavailable */ }
+  }, []);
 
   if (!auth.capabilities) return <Spinner />;
 
@@ -132,8 +136,22 @@ export function LoginScreen() {
       }
     };
     const startOidc = () => {
-      sessionStorage.setItem('auth.returnTo', withoutFragment(returnTo) ?? '/');
-      window.location.assign(auth.capabilities?.oidcStartUrl ?? '/api/v1/auth/oidc/start');
+      const handoff = beginOidcHandoff();
+      if (!handoff) {
+        setError(tx('oidcError'));
+        return;
+      }
+      try {
+        sessionStorage.setItem('auth.returnTo', withoutFragment(returnTo) ?? '/');
+      } catch {
+        setError(tx('oidcError'));
+        return;
+      }
+      const startUrl = auth.capabilities?.oidcStartUrl ?? '/api/v1/auth/oidc/start';
+      const separator = startUrl.includes('?') ? '&' : '?';
+      window.location.assign(
+        `${startUrl}${separator}handoff=${encodeURIComponent(handoff)}`,
+      );
     };
     const passkey = async () => {
       const signal = beginCeremony();
@@ -402,6 +420,7 @@ export function SecurityScreen() {
   const [removingTotp, setRemovingTotp] = useState(false);
   const [signingOutEverywhere, setSigningOutEverywhere] = useState(false);
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
+  const factorRequest = useRef(0);
 
   const reportSecurityError = (requestError: unknown) => {
     if (requestError instanceof ApiError && requestError.status === 403) {
@@ -450,17 +469,26 @@ export function SecurityScreen() {
   // Both factor lists in one attempt: a server that is down fails them together and must
   // say so once, not twice, and not by quietly rendering "no passkeys".
   const loadFactors = useCallback(() => {
+    const request = ++factorRequest.current;
     void Promise.all([
-      authApi.webAuthnCredentials().then(setPasskeys),
-      authApi.totpStatus().then(setTotp),
-    ]).catch((requestError) => {
+      authApi.webAuthnCredentials(),
+      authApi.totpStatus(),
+    ]).then(([nextPasskeys, nextTotp]) => {
+      if (request !== factorRequest.current) return;
+      setPasskeys(nextPasskeys);
+      setTotp(nextTotp);
+    }).catch((requestError) => {
+      if (request !== factorRequest.current) return;
       setPasskeys((current) => current ?? []);
       setTotp((current) => current ?? { enrolled: false, confirmedAtMs: null });
       reportAuthError(requestError);
     });
   }, []);
 
-  useEffect(loadFactors, [loadFactors]);
+  useEffect(() => {
+    loadFactors();
+    return () => { factorRequest.current++; };
+  }, [loadFactors]);
 
   const addKey = async () => {
     const signal = beginCeremony();

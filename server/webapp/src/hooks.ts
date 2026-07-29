@@ -189,7 +189,9 @@ const same = (a: Download[], b: Download[]) =>
       && item.active === other.active
       && item.suspended === other.suspended
       && item.downloadedBytes === other.downloadedBytes
-      && item.totalBytes === other.totalBytes;
+      && item.totalBytes === other.totalBytes
+      && item.fileToken === other.fileToken
+      && item.fileTokenExpiresAtMs === other.fileTokenExpiresAtMs;
   });
 
 /**

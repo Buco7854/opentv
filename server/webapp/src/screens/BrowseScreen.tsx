@@ -189,7 +189,7 @@ export function BrowseScreen() {
               items={pagedXtream.pageItems.map((s) => ({
                 id: String(s.seriesId), image: s.cover, title: s.name, subtitle: s.genre,
               }))}
-              onClick={(id) => navigate(`/xseries/${playlistId}/${id}`)}
+              onClick={(id) => navigate(`/xseries/${playlistId}/${encodeURIComponent(id)}`)}
             />
           ) : (
             <div className="list">
@@ -201,7 +201,7 @@ export function BrowseScreen() {
                   logo={s.cover} kind={ChannelKind.SERIES} chevron
                   isFavorite={favoriteContentIds.has(s.contentId)}
                   onToggleFavorite={() => toggleFavorite(s.contentId)}
-                  onClick={() => navigate(`/xseries/${playlistId}/${s.seriesId}`)}
+                  onClick={() => navigate(`/xseries/${playlistId}/${encodeURIComponent(s.seriesId)}`)}
                 />
               ))}
             </div>
@@ -329,16 +329,24 @@ function GroupList({ groups, onCorrect, onSelect }: {
   return (
     <div className="list">
       {groups.map((g) => (
-        <button key={g.groupTitle} className="card" onClick={() => onSelect(g.groupTitle)}>
+        <div key={g.groupTitle} className="card interactive-card">
           <div className="group-row">
-            <Icon name="folder" className="folder" />
-            <span className="name">{g.groupTitle}</span>
-            <span className="count">{g.count}</span>
+            <button
+              type="button"
+              className="group-open"
+              aria-label={g.groupTitle}
+              onClick={() => onSelect(g.groupTitle)}
+            >
+              <Icon name="folder" className="folder" />
+              <span className="name">{g.groupTitle}</span>
+              <span className="count">{g.count}</span>
+              {!onCorrect && <Icon name="chevron" className="sm" />}
+            </button>
             {onCorrect
               ? <IconBtn name="more" label={t('browse.correctCategory')} className="muted" onClick={() => onCorrect(g.groupTitle)} />
-              : <Icon name="chevron" className="sm" />}
+              : null}
           </div>
-        </button>
+        </div>
       ))}
     </div>
   );

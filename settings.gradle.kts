@@ -24,5 +24,7 @@ rootProject.name = "OpenTV"
 include(":app")
 include(":core")
 include(":data")
+include(":hub-client")
 include(":server")
+include(":server-contract")
 include(":server-data")

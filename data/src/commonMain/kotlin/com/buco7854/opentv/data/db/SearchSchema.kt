@@ -6,9 +6,9 @@ import androidx.sqlite.execSQL
 
 /**
  * Room 2.x can query FTS5 through raw queries but cannot model an FTS5 entity. Keep the sidecar
- * DDL here, install it from both creation/open callbacks, and call the same code from migration
- * 9 -> 10. The catalog tables are external content; these triggers make every refresh atomic
- * with its search-index update.
+ * DDL in a creation/open callback so a freshly recreated database still has indexed search.
+ * The catalog tables are external content; these triggers make every refresh atomic with its
+ * search-index update.
  */
 internal val SEARCH_INDEX_CALLBACK = object : RoomDatabase.Callback() {
     override fun onCreate(connection: SQLiteConnection) {

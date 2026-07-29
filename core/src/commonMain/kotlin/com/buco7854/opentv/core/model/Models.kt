@@ -10,6 +10,11 @@ object DownloadStatus {
     const val FAILED = 3
     const val CANCELLED = 4
     const val PAUSED = 5
+    const val PREPARING = 6
+    const val HUB_SIGNED_OUT = 7
+    const val HUB_UNREACHABLE = 8
+    const val HUB_CAPACITY = 9
+    const val HUB_GONE = 10
 }
 
 data class Playlist(
@@ -30,6 +35,24 @@ data class Playlist(
     val xtreamUser: String? = null,
     val xtreamPass: String? = null,
     val channelCount: Int = 0,
+)
+
+/**
+ * A connection to a self-hosted OpenTV server ("hub"). This is the local
+ * connection record only: the session token lives in the platform vault, never
+ * here, and the hub's catalog/favorites/resume are never mirrored locally.
+ * Cached identity fields ([userId], [username], [role]) exist so menus can be
+ * gated while the server is unreachable; they refresh from `/auth/me`.
+ */
+data class HubSource(
+    val id: Long = 0,
+    val name: String,
+    val baseUrl: String,
+    val userId: String? = null,
+    val username: String? = null,
+    val role: String? = null,
+    val addedMs: Long,
+    val lastSeenMs: Long? = null,
 )
 
 data class Channel(
@@ -152,6 +175,9 @@ data class Download(
     val downloadedBytes: Long = 0,
     val error: String? = null,
     val createdMs: Long = nowMs(),
+    val hubSourceId: Long? = null,
+    val contentId: String? = null,
+    val serverDownloadId: String? = null,
 )
 
 // Query projections shared by both UIs.

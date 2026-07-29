@@ -30,6 +30,8 @@ class ProviderConnectionsTest {
 
         assertTrue(connections.tryOpenStream("viewer", "provider", "live", 2) {})
         assertEquals(listOf("old"), evicted)
+        assertFalse(connections.isOpen("old"))
+        assertTrue(connections.isOpen("new"))
         assertTrue(connections.isOpen("viewer"))
     }
 }

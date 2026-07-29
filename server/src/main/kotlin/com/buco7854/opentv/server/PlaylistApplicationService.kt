@@ -1,5 +1,6 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.contract.*
 import com.buco7854.opentv.core.log.ProviderSecrets
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.model.Playlist
@@ -85,6 +86,10 @@ class PlaylistApplicationService(
         userDatabase.maintenance().pendingPlaylistDeletions().forEach {
             completePlaylistDeletion(it.playlistId)
         }
+        val existing = storage.playlists.getAll().mapTo(mutableSetOf()) { it.id }
+        userDatabase.maintenance().referencedPlaylistIds()
+            .filterNot { it in existing }
+            .forEach { completePlaylistDeletion(it) }
     }
 
     suspend fun refresh(actor: Actor, id: Long, force: Boolean): PlaylistDto {
@@ -245,7 +250,7 @@ class PlaylistApplicationService(
                 0,
                 cipher.encryptOrNull(it.cover, actor.userId, id),
                 it.categoryName,
-                it.seriesId,
+                it.seriesId.toString(),
             )
         }
         return SearchResultsDto(
@@ -314,7 +319,7 @@ class PlaylistApplicationService(
             series += SeriesHitDto(
                 contentId, entry.name, 0,
                 cipher.encryptOrNull(entry.cover, actor.userId, id),
-                entry.categoryName, entry.seriesId,
+                entry.categoryName, entry.seriesId.toString(),
             )
         }
         val m3u = storage.channels.observeAllSeries(id).first()

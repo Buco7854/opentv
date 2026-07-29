@@ -18,19 +18,38 @@ class DownloadRepository(
     private val store: DownloadStore,
     private val prefs: PlayerPrefs,
     private val scheduler: DownloadScheduler,
+    private val hubDownloads: HubDownloadCoordinator,
 ) {
     val downloads = store.observeAll()
 
     private suspend fun targetPath(channel: Channel, downloadId: Long): String {
         val target = DownloadFileName.from(channel.name, channel.url, downloadId)
+        return targetPath(target)
+    }
+
+    private suspend fun hubTargetPath(title: String, contentId: String, downloadId: Long): String {
+        val target = DownloadFileName.from(title, "$contentId.mp4", downloadId)
+        return targetPath(target)
+    }
+
+    private suspend fun targetPath(target: DownloadFileName): String {
         val treeUri = prefs.settings.first().downloadDirUri
         return withContext(Dispatchers.IO) {
-            DownloadStorage.createTarget(
+            val path = DownloadStorage.createTarget(
                 context = context,
                 treeUri = treeUri,
                 baseName = target.baseName,
                 extension = target.extension,
             )
+            try {
+                // The catalog database is destructively recreated, but media files are not.
+                // Its row ids can therefore be reused for an old deterministic filename.
+                DownloadStorage.truncate(context, path)
+            } catch (error: Throwable) {
+                DownloadStorage.delete(context, path)
+                throw error
+            }
+            path
         }
     }
 
@@ -50,15 +69,40 @@ class DownloadRepository(
         val id = store.insert(
             Download(title = channel.name, url = channel.url, filePath = "")
         )
-        store.get(id)?.let {
-            store.update(it.copy(filePath = targetPath(channel, id)))
+        try {
+            val row = checkNotNull(store.get(id))
+            store.update(row.copy(filePath = targetPath(channel, id)))
+        } catch (error: Exception) {
+            withContext(NonCancellable) {
+                store.delete(id)
+            }
+            throw error
         }
         scheduler.enqueue(id)
         return null
     }
 
+    suspend fun enqueueHub(hubSourceId: Long, contentId: String, title: String): String? {
+        return when (
+            hubDownloads.enqueue(hubSourceId, contentId, title) { id ->
+                hubTargetPath(title, contentId, id)
+            }
+        ) {
+            "downloaded" -> context.getString(R.string.downloads_already_downloaded)
+            "paused" -> context.getString(R.string.downloads_paused_resume_hint)
+            "downloading" -> context.getString(R.string.downloads_already_downloading)
+            else -> null
+        }
+    }
+
+    fun setForeground(foreground: Boolean) = hubDownloads.setForeground(foreground)
+
     /** Pause keeps the partial file (resume uses a Range request). Written from a fresh row so progress isn't rolled back. */
     suspend fun pause(item: Download) {
+        if (item.hubSourceId != null) {
+            hubDownloads.pausePreparation(item)
+            return
+        }
         store.get(item.id)?.let { store.update(it.copy(status = DownloadStatus.PAUSED)) }
         scheduler.cancel(item.id)
     }
@@ -71,8 +115,23 @@ class DownloadRepository(
                 DownloadStatus.PAUSED,
                 DownloadStatus.FAILED,
                 DownloadStatus.CANCELLED,
+                DownloadStatus.HUB_SIGNED_OUT,
+                DownloadStatus.HUB_UNREACHABLE,
+                DownloadStatus.HUB_CAPACITY,
+                DownloadStatus.HUB_GONE,
             )
         ) return
+        if (current.hubSourceId != null) {
+            if (current.status == DownloadStatus.HUB_GONE &&
+                current.filePath.isNotEmpty()
+            ) {
+                withContext(Dispatchers.IO) {
+                    DownloadStorage.truncate(context, current.filePath)
+                }
+            }
+            hubDownloads.retryPreparation(current)
+            return
+        }
         store.update(current.copy(status = DownloadStatus.QUEUED, error = null))
         scheduler.enqueue(item.id)
     }
@@ -94,8 +153,8 @@ class DownloadRepository(
         }
     }
 
-    /** Moves all completed downloads into the current folder. Uncancellable so navigating away can't corrupt a file. */
-    suspend fun moveCompletedToCurrentFolder(): MoveResult = withContext(Dispatchers.IO + NonCancellable) {
+    /** Moves completed downloads with copy-then-delete so cancellation leaves every source intact. */
+    suspend fun moveCompletedToCurrentFolder(): MoveResult = withContext(Dispatchers.IO) {
         val treeUri = prefs.settings.first().downloadDirUri
         var moved = 0
         var already = 0

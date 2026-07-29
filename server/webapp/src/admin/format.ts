@@ -60,7 +60,6 @@ const ADMIN_TEXT: Record<string, AdminTextKey> = {
   not_found: 'errorNotFound',
   forbidden: 'errorForbidden',
   unauthenticated: 'errorUnauthenticated',
-  csrf_rejected: 'errorCsrf',
   auth_rate_limited: 'errorRateLimited',
   request_too_large: 'errorTooLarge',
   internal_error: 'errorServer',

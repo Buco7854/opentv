@@ -1,5 +1,6 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.contract.*
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
@@ -23,14 +24,30 @@ import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
+internal fun remuxSessionId(
+    url: String,
+    capabilities: MediaCapabilities,
+    audioIndex: Int,
+    group: String,
+    timeshift: Boolean = false,
+): String = shortSha1("$url@${capabilities.fingerprint}@$audioIndex@$group@timeshift:$timeshift")
+
+private val PROVIDER_USER_INFO = Regex("""(?i)(https?://)[^/@\s"'<>]+@""")
+
+/** [ProviderSecrets] covers Xtream path/query credentials; URI user-info needs masking too. */
+internal fun redactProviderMediaText(text: String): String =
+    ProviderSecrets.redact(
+        PROVIDER_USER_INFO.replace(text) { match -> "${match.groupValues[1]}•••@" }
+    )
+
 /**
  * ffmpeg-backed VOD playback for browsers.
  *
  * A file is served as a VOD HLS playlist (all segments listed up front from the known
  * duration) played by hls.js; one long ffmpeg produces segments on demand, and a
  * backward or far-forward seek kills it and restarts at the target segment. Video is
- * copied when the browser can decode it (H.264, HEVC where supported), transcoded to
- * H.264 otherwise; audio is always AAC.
+ * copied when the lease's client capabilities can decode it and transcoded to H.264
+ * otherwise; audio in an exposed remux is normalized to AAC.
  *
  * This class owns session lifetime, segment production and HTTP serving; the pipeline it
  * runs lives in [RemuxCommandBuilder], the documents it publishes in [RemuxPlaylists], and
@@ -142,8 +159,13 @@ class RemuxService(
     private fun killProcess(session: RemuxSession) {
         synchronized(launchLock) {
             session.process?.let { process ->
-                process.destroyForcibly()
-                runCatching { process.waitFor(3, TimeUnit.SECONDS) }
+                runCatching { process.destroyForcibly() }
+                runCatching {
+                    if (!process.waitFor(3, TimeUnit.SECONDS)) {
+                        process.destroyForcibly()
+                        process.waitFor(3, TimeUnit.SECONDS)
+                    }
+                }
             }
             session.process = null
             session.startNumber = -1
@@ -153,8 +175,11 @@ class RemuxService(
     /** Stop a session's read and release its provider connection (idle reap, close, or an
      *  eviction by another stream). */
     private fun stopReading(session: RemuxSession) {
-        killProcess(session)
-        connections.close(session.id)
+        try {
+            killProcess(session)
+        } finally {
+            connections.close(session.id)
+        }
     }
 
     // Under launchLock so it can't race a launch into a half-deleted dir.
@@ -220,10 +245,7 @@ class RemuxService(
      *  credentials - this line is served to the viewer and shown on the admin dashboard. */
     private fun lastLogLine(session: RemuxSession): String? = runCatching {
         Files.readString(session.logFile).trim().lines().lastOrNull { it.isNotBlank() }
-    }.getOrNull()?.let(ProviderSecrets::redact)
-
-    private fun sessionId(url: String, clientHevc: Boolean, audioIndex: Int, group: String): String =
-        shortSha1("$url@${if (clientHevc) "n" else "s"}@$audioIndex@$group")
+    }.getOrNull()?.let(::redactProviderMediaText)
 
     // ---- start / playlist ----
 
@@ -232,10 +254,10 @@ class RemuxService(
      * playlist. ffmpeg is not started until the first segment is fetched. [connectionLimit]
      * is how many concurrent reads the provider permits (its max_connections).
      */
-    fun start(
+    internal fun start(
         url: String,
         audioIndex: Int,
-        clientHevc: Boolean,
+        capabilities: MediaCapabilities,
         timeshift: Boolean,
         connectionLimit: Int,
         group: String,
@@ -243,8 +265,9 @@ class RemuxService(
         startupStartedNs: Long = System.nanoTime(),
         connectionLimitMs: Long = 0,
     ): StartResult {
-        val id = sessionId(url, clientHevc, audioIndex, group)
-        prepared(id)?.let { return it }
+        val cap = connectionLimit.coerceAtLeast(1)
+        val id = remuxSessionId(url, capabilities, audioIndex, group, timeshift)
+        prepared(id, cap)?.let { return it }
 
         // Refuse a new stream when the provider's other streams (live or other VOD) already
         // fill its connection allowance, so the viewer sees a clear message instead of bumping
@@ -252,7 +275,6 @@ class RemuxService(
         // the same room) share its one connection and don't count. Checked before probing, since
         // ffprobe itself opens one of the provider's connections.
         val providerKey = providerKeyOf(url)
-        val cap = connectionLimit.coerceAtLeast(1)
         if (connections.distinctStreams(providerKey, group) >= cap) {
             throw ConnectionLimitException(connectionLimit)
         }
@@ -264,21 +286,28 @@ class RemuxService(
         val audios = probed.streams.filter { it.type == "audio" }
         val subs = probed.streams.filter { it.type == "subtitle" && it.codec.lowercase() in TEXT_SUB_CODECS }
         val video = probed.streams.firstOrNull { it.type == "video" }
-        val decodableAudio = MediaCodecs.audioDecodable(audios.firstOrNull()?.codec)
-        val decodableVideo = MediaCodecs.videoDecodable(video?.codec)
-        if (!timeshift && audios.size <= 1 && subs.isEmpty() && decodableAudio && decodableVideo) {
+            ?: throw IllegalStateException("No video stream found")
+        if (audios.isEmpty()) throw IllegalStateException("No audio stream found")
+        val decodableVideo = capabilities.videoDecodable(video.codec)
+        val decodableAudio = if (capabilities.selectsTracksInBand) {
+            // An in-band player may select any language, so direct play is safe only when none
+            // of the source's audio choices would disappear behind an unsupported codec.
+            audios.all { capabilities.audioDecodable(it.codec) }
+        } else {
+            // Browser playback exposes only the first muxed audio stream without remuxing.
+            capabilities.audioDecodable(audios.firstOrNull()?.codec)
+        }
+        val tracksDirectlySelectable = capabilities.selectsTracksInBand ||
+            audios.size <= 1 && subs.isEmpty()
+        if (!timeshift && decodableVideo && decodableAudio && tracksDirectlySelectable) {
             throw NoExtraTracksException()
         }
-        if (video == null) throw IllegalStateException("No video stream found")
-        if (audios.isEmpty()) throw IllegalStateException("No audio stream found")
-        val duration = probed.durationSec?.takeIf { it > 0 }
+        val duration = probed.durationSec?.takeIf { it.isFinite() && it > 0 }
             ?: throw IllegalStateException("The source has no known duration")
 
-        // Copy HEVC the browser says it can decode; transcode anything else it can't, unless
-        // transcoding is turned off entirely.
-        val nativeCapable = MediaCodecs.isHevc(video.codec) && clientHevc
-        val transcode = !decodableVideo && !videoTranscodeOff && !nativeCapable
-        val nativeVideoCopy = !decodableVideo && !transcode
+        // Copy any video the client reported as decodable; transcode the rest unless disabled.
+        val transcode = !decodableVideo && !videoTranscodeOff
+        val nativeVideoCopy = !video.codec.equals("h264", ignoreCase = true) && !transcode
         // Transcoded video has keyframes forced on every boundary, so uniform segments are
         // exact. For a copied local file, reading its keyframes lists each segment's true
         // length cheaply. Reading them off a remote stream means downloading the whole file
@@ -306,8 +335,13 @@ class RemuxService(
         // Publish the viable replacement before retiring old reads. Preparation failures leave
         // existing viewers untouched.
         return synchronized(launchLock) {
-            prepared(id)?.let { return@synchronized it }
-            Files.writeString(session.playlistFile, RemuxPlaylists.media(session))
+            prepared(id, cap)?.let { return@synchronized it }
+            try {
+                Files.writeString(session.playlistFile, RemuxPlaylists.media(session))
+            } catch (error: Throwable) {
+                runCatching { deleteTree(session.dir) }
+                throw error
+            }
             session.playlistPreparationMs = elapsedMs(probeFinishedNs)
             sessions[id] = session
             sessions.values.filter { it.id != id && it.shareKey in supersede }.forEach { evict(it) }
@@ -335,17 +369,19 @@ class RemuxService(
         return AutoCloseable { connections.close(probeId) }
     }
 
-    private fun prepared(id: String): StartResult? = sessions[id]?.let { session ->
-        session.lastAccessMs = System.currentTimeMillis()
-        StartResult(
-            id,
-            playlistUrl(id, session.subLabels.isNotEmpty()),
-            session.durationSec.takeIf { duration -> duration > 0 },
-            session.audioLabels,
-            session.subLabels,
-            session.nativeVideoCopy,
-        )
-    }
+    private fun prepared(id: String, connectionLimit: Int? = null): StartResult? =
+        sessions[id]?.let { session ->
+            connectionLimit?.let { session.connectionLimit = it }
+            session.lastAccessMs = System.currentTimeMillis()
+            StartResult(
+                id,
+                playlistUrl(id, session.subLabels.isNotEmpty()),
+                session.durationSec.takeIf { duration -> duration > 0 },
+                session.audioLabels,
+                session.subLabels,
+                session.nativeVideoCopy,
+            )
+        }
 
     // Subtitles live in a master playlist as WebVTT renditions; without them the media playlist serves directly.
     private fun playlistUrl(id: String, hasSubs: Boolean) =
@@ -375,18 +411,40 @@ class RemuxService(
         if (session.firstLaunchStartedNs.compareAndSet(0, launchStartedNs)) {
             session.firstLaunchSegment.set(startNumber.toLong())
         }
-        val process = processRunner.start(
-            MediaProcessRequest(
-                command = commands.build(session, startNumber),
-                // Bare fMP4 init filenames land in the session directory on every OS.
-                workingDirectory = session.dir,
-                appendStderrFile = session.logFile,
+        val process = try {
+            processRunner.start(
+                MediaProcessRequest(
+                    command = commands.build(session, startNumber),
+                    // Bare fMP4 init filenames land in the session directory on every OS.
+                    workingDirectory = session.dir,
+                    appendStderrFile = session.logFile,
+                    // This pipeline writes only files. Never leave an unread child pipe.
+                    discardStdout = true,
+                )
             )
-        )
+        } catch (error: Throwable) {
+            // Command construction and ProcessBuilder.start both happen after reservation.
+            // Without a process, no later request or reaper could release this seat.
+            connections.close(session.id)
+            throw error
+        }
         session.firstLaunchFinishedNs.compareAndSet(0, System.nanoTime())
         session.process = process
         session.startNumber = startNumber
         session.writtenHead = startNumber - 1
+        // Reap natural completion immediately. Waiting only for a later segment request or the
+        // 30-second idle sweep leaves a finished ffmpeg's provider seat artificially occupied.
+        scope.launch {
+            runCatching { process.waitFor() }
+            synchronized(launchLock) {
+                if (session.process === process) {
+                    // Close while holding the same lock used by relaunch: an old completion
+                    // must not decide to close, lose the lock to a replacement launch, and
+                    // then remove the replacement process's newly registered provider seat.
+                    connections.close(session.id)
+                }
+            }
+        }
         log.debug("remux {}: ffmpeg from segment {} ({})", session.id, startNumber,
             if (session.transcodeVideo) "transcode" else "copy")
     }
@@ -539,6 +597,7 @@ class RemuxService(
 
     suspend fun subtitlePlaylist(id: String, index: Int, call: ApplicationCall, mediaQuery: String = "") {
         val session = touched(id) ?: return notFound(call)
+        if (index !in session.subs.indices) return notFound(call)
         respondPlaylist(call, RemuxPlaylists.subtitles(session, index, mediaQuery))
     }
 
@@ -558,6 +617,7 @@ class RemuxService(
 
     suspend fun segment(id: String, n: Int, call: ApplicationCall) {
         val session = touched(id) ?: return notFound(call)
+        if (n !in session.starts.indices) return notFound(call)
         connections.touch(id)
         val segment = session.segmentFile(n)
         if (!withContext(Dispatchers.IO) { Files.exists(segment) } &&
@@ -571,6 +631,7 @@ class RemuxService(
     /** One subtitle segment: the store's cues overlapping this video segment, timestamp-mapped. */
     suspend fun subtitleSegment(id: String, index: Int, n: Int, call: ApplicationCall) {
         val session = touched(id) ?: return notFound(call)
+        if (index !in session.subs.indices || n !in session.starts.indices) return notFound(call)
         val window = session.segmentWindow(n)
         val body = withContext(Dispatchers.IO) {
             // Wait until the matching video segment is written before serving, so hls.js (which

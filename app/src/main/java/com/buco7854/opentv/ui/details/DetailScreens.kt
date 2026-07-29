@@ -24,6 +24,7 @@ import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -57,11 +58,17 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.buco7854.opentv.R
-import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.core.model.Download
 import com.buco7854.opentv.core.model.DownloadStatus
 import com.buco7854.opentv.core.model.Metadata
 import com.buco7854.opentv.core.meta.decodeCast
+import com.buco7854.opentv.download.downloadFor
+import com.buco7854.opentv.download.downloadIdentityKey
+import com.buco7854.opentv.source.CatalogItem
+import com.buco7854.opentv.source.CatalogLoadError
+import com.buco7854.opentv.source.ContentRef
+import com.buco7854.opentv.source.SourceId
+import com.buco7854.opentv.source.encode
 import com.buco7854.opentv.ui.components.BadgeRow
 import com.buco7854.opentv.ui.components.CastRow
 import com.buco7854.opentv.ui.components.ChannelLogo
@@ -70,8 +77,12 @@ import com.buco7854.opentv.ui.components.ExpandableText
 import com.buco7854.opentv.ui.components.FavoriteIcon
 import com.buco7854.opentv.ui.components.OtvButton
 import com.buco7854.opentv.ui.components.OtvMenuDefaults
+import com.buco7854.opentv.ui.components.OtvProgressBar
 import com.buco7854.opentv.ui.components.Pill
 import com.buco7854.opentv.ui.components.WatchProgressBar
+import com.buco7854.opentv.ui.components.SourceLoadFailed
+import com.buco7854.opentv.ui.components.SourceSignedOut
+import com.buco7854.opentv.ui.components.SourceUnreachable
 import com.buco7854.opentv.ui.components.focusHighlight
 import com.buco7854.opentv.ui.components.mediaTags
 import kotlinx.coroutines.launch
@@ -80,9 +91,9 @@ private val YEAR_TAG = Regex("""\b(19|20)\d{2}\b""")
 private val QUALITY_TAG = Regex("""(?i)\b(4K|UHD|2160p|1080p|FHD|720p|HEVC|HD|SD)\b""")
 
 /** Playlist facts plus any enrichment. */
-private fun metaChips(channel: Channel, meta: Metadata?): List<String> = buildList {
-    add(channel.groupTitle)
-    (meta?.year ?: YEAR_TAG.find(channel.name)?.value)?.let { add(it) }
+private fun metaChips(channel: CatalogItem, meta: Metadata?): List<String> = buildList {
+    channel.group?.let(::add)
+    (meta?.year ?: YEAR_TAG.find(channel.title)?.value)?.let { add(it) }
     meta?.rating?.let { add("★ %.1f".format(it)) }
     meta?.infoLine?.split(" · ")?.take(2)?.forEach { add(it) }
 }
@@ -149,17 +160,19 @@ internal fun MetadataBlock(meta: Metadata?) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MovieDetailScreen(
-    channelId: Long,
+    sourceId: SourceId,
+    ref: ContentRef,
     onBack: () -> Unit,
-    onPlay: (url: String, title: String) -> Unit,
+    onPlay: (item: CatalogItem) -> Unit,
+    onSignIn: () -> Unit,
 ) {
-    val viewModel = detailViewModel("MovieDetail-$channelId") {
-        MovieDetailViewModel(it, channelId)
+    val viewModel = detailViewModel<MovieDetailViewModel>(sourceId, ref) {
+        MovieDetailViewModel(it, sourceId, ref)
     }
     val state by viewModel.state.collectAsStateWithLifecycle()
     val downloads by viewModel.downloads.collectAsStateWithLifecycle()
     val progressByUrl by viewModel.progressByUrl.collectAsStateWithLifecycle()
-    val channel = state.channel
+    val channel = state.detail?.item
     val meta = state.metadata
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -188,29 +201,49 @@ fun MovieDetailScreen(
         },
         contentWindowInsets = WindowInsets(0.dp),
     ) { padding ->
-        val movie = channel ?: return@Scaffold
-        val downloadState = downloads.firstOrNull {
-            it.url == movie.url && it.status != DownloadStatus.CANCELLED && it.status != DownloadStatus.FAILED
+        when (state.error) {
+            CatalogLoadError.SignedOut -> {
+                SourceSignedOut(onSignIn, Modifier.padding(padding))
+                return@Scaffold
+            }
+            CatalogLoadError.Unreachable -> {
+                SourceUnreachable(viewModel::retry, Modifier.padding(padding))
+                return@Scaffold
+            }
+            is CatalogLoadError.Failed -> {
+                SourceLoadFailed(null, viewModel::retry, Modifier.padding(padding))
+                return@Scaffold
+            }
+            null -> Unit
         }
+        if (state.loading && channel == null) {
+            Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.onSurface)
+            }
+            return@Scaffold
+        }
+        val movie = channel ?: return@Scaffold
+        val localUrl = (movie.ref as? ContentRef.LocalUrl)?.url
+        val downloadState = downloads.downloadFor(sourceId, movie.ref)
         LazyColumn(
             Modifier.padding(padding).fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp),
         ) {
             item {
-                Poster(meta?.posterUrl ?: movie.logo, Icons.Outlined.Movie)
+                Poster(meta?.posterUrl ?: movie.imageUrl, Icons.Outlined.Movie)
                 Spacer(Modifier.height(18.dp))
-                Text(movie.name, style = MaterialTheme.typography.headlineMedium)
+                Text(movie.title, style = MaterialTheme.typography.headlineMedium)
                 Spacer(Modifier.height(10.dp))
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     metaChips(movie, meta).take(3).forEach { Pill(it) }
-                    BadgeRow(mediaTags(movie.name))
+                    BadgeRow(mediaTags(movie.title))
                 }
                 MetadataBlock(meta)
                 Spacer(Modifier.height(24.dp))
-                val progress = progressByUrl[movie.url]
+                val progress = movie.progress ?: localUrl?.let { progressByUrl[it] }
                 if (progress != null) {
                     WatchProgressBar(progress, Modifier.fillMaxWidth())
                     Spacer(Modifier.height(6.dp))
@@ -226,24 +259,29 @@ fun MovieDetailScreen(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     OtvButton(
-                        onClick = { onPlay(movie.url, movie.name) },
+                        onClick = { onPlay(movie) },
                         modifier = Modifier.weight(1f).height(48.dp),
                     ) {
                         Icon(Icons.Rounded.PlayArrow, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
                         Text(stringResource(if (progress != null) R.string.common_resume else R.string.common_play))
                     }
-                    DownloadSlot(
-                        state = downloadState,
-                        onDownload = {
-                            scope.launch {
-                                val blocked = viewModel.enqueue(movie)
-                                snackbar.showSnackbar(
-                                    blocked ?: resources.getString(R.string.downloads_started_generic),
-                                )
-                            }
-                        },
-                    )
+                    if (sourceId is SourceId.LocalPlaylist || sourceId is SourceId.Hub) {
+                        DownloadSlot(
+                            state = downloadState,
+                            onDownload = {
+                                scope.launch {
+                                    val blocked = viewModel.enqueue(movie)
+                                    snackbar.showSnackbar(
+                                        blocked
+                                            ?: resources.getString(
+                                                R.string.downloads_started_generic,
+                                            ),
+                                    )
+                                }
+                            },
+                        )
+                    }
                 }
                 Spacer(Modifier.height(24.dp))
             }
@@ -268,28 +306,34 @@ private fun DownloadSlot(state: Download?, onDownload: () -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SeriesDetailScreen(
-    playlistId: Long,
-    seriesKey: String,
+    sourceId: SourceId,
+    ref: ContentRef,
+    seriesKey: String?,
     onBack: () -> Unit,
-    onOpenEpisode: (channelId: Long) -> Unit,
+    onOpenEpisode: (ContentRef) -> Unit,
+    onSignIn: () -> Unit,
 ) {
-    val viewModel = detailViewModel("SeriesDetail-$playlistId-${seriesKey.hashCode()}") {
-        SeriesDetailViewModel(it, playlistId, seriesKey)
+    val viewModel = detailViewModel<SeriesDetailViewModel>(sourceId, ref) {
+        SeriesDetailViewModel(it, sourceId, ref, seriesKey)
     }
     val state by viewModel.state.collectAsStateWithLifecycle()
     val episodes by viewModel.episodes.collectAsStateWithLifecycle()
     val downloads by viewModel.downloads.collectAsStateWithLifecycle()
     val meta = state.metadata
+    val detail = state.detail
+    val seriesTitle = detail?.item?.title.orEmpty()
     val downloadsByUrl = remember(downloads) {
         downloads.filter { it.status != DownloadStatus.CANCELLED && it.status != DownloadStatus.FAILED }
-            .associateBy { it.url }
+            .associateBy { it.downloadIdentityKey() }
     }
     val progressByUrl by viewModel.progressByUrl.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val resources = LocalResources.current
 
-    val seasons = remember(episodes) { episodes.mapNotNull { it.season }.distinct().sorted() }
+    val seasons = state.seasons.ifEmpty {
+        episodes.mapNotNull { it.season }.distinct().sorted()
+    }
     var selectedSeason by remember { mutableStateOf<Int?>(null) } // null = all seasons
     val shown = remember(episodes, selectedSeason) {
         selectedSeason?.let { s -> episodes.filter { it.season == s } } ?: episodes
@@ -316,21 +360,49 @@ fun SeriesDetailScreen(
         },
         contentWindowInsets = WindowInsets(0.dp),
     ) { padding ->
+        when (state.error) {
+            CatalogLoadError.SignedOut -> {
+                SourceSignedOut(onSignIn, Modifier.padding(padding))
+                return@Scaffold
+            }
+            CatalogLoadError.Unreachable -> {
+                SourceUnreachable(viewModel::retry, Modifier.padding(padding))
+                return@Scaffold
+            }
+            is CatalogLoadError.Failed -> {
+                SourceLoadFailed(null, viewModel::retry, Modifier.padding(padding))
+                return@Scaffold
+            }
+            null -> Unit
+        }
+        if (state.loading && detail == null) {
+            Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.onSurface)
+            }
+            return@Scaffold
+        }
         LazyColumn(
             Modifier.padding(padding).fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp),
         ) {
             item {
                 Poster(
-                    meta?.posterUrl ?: episodes.firstOrNull { it.logo != null }?.logo,
+                    meta?.posterUrl ?: detail?.item?.imageUrl
+                    ?: episodes.firstOrNull { it.imageUrl != null }?.imageUrl,
                     Icons.Outlined.VideoLibrary,
                 )
                 Spacer(Modifier.height(18.dp))
-                Text(seriesKey, style = MaterialTheme.typography.headlineMedium)
+                Text(seriesTitle, style = MaterialTheme.typography.headlineMedium)
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    episodes.firstOrNull()?.let { Pill(it.groupTitle) }
-                    Pill(pluralStringResource(R.plurals.details_episode_count, episodes.size, episodes.size))
+                    (detail?.item?.group ?: episodes.firstOrNull()?.group)?.let { Pill(it) }
+                    Pill(
+                        pluralStringResource(
+                            R.plurals.details_episode_count,
+                            state.episodeTotal,
+                            state.episodeTotal,
+                        ),
+                    )
                     if (seasons.size > 1) Pill("${seasons.size} seasons")
                     meta?.rating?.let { Pill("★ %.1f".format(it)) }
                 }
@@ -351,21 +423,38 @@ fun SeriesDetailScreen(
                     Spacer(Modifier.height(10.dp))
                 }
             }
-            items(shown, key = { it.id }) { episode ->
+            items(shown, key = { it.ref.encode() }) { episode ->
+                val localUrl = (episode.ref as? ContentRef.LocalUrl)?.url
                 EpisodeRow(
                     episode = episode,
-                    downloadState = downloadsByUrl[episode.url],
-                    onOpen = { onOpenEpisode(episode.id) },
-                    onDownload = {
-                        scope.launch {
-                            val blocked = viewModel.enqueue(episode)
-                            snackbar.showSnackbar(
-                                blocked ?: resources.getString(R.string.downloads_started, episode.name),
-                            )
+                    downloadState = downloadIdentityKey(sourceId, episode.ref)
+                        ?.let { downloadsByUrl[it] },
+                    onOpen = { onOpenEpisode(episode.ref) },
+                    onDownload = if (
+                        sourceId is SourceId.LocalPlaylist || sourceId is SourceId.Hub
+                    ) {
+                        {
+                            scope.launch {
+                                val blocked = viewModel.enqueue(episode)
+                                snackbar.showSnackbar(
+                                    blocked ?: resources.getString(
+                                        R.string.downloads_started,
+                                        episode.title,
+                                    ),
+                                )
+                            }
                         }
-                    },
-                    progress = progressByUrl[episode.url],
+                    } else null,
+                    progress = episode.progress ?: localUrl?.let { progressByUrl[it] },
                 )
+            }
+            if (sourceId is SourceId.Hub && episodes.size < state.episodeTotal) {
+                item(key = "episode-page-${episodes.size}") {
+                    androidx.compose.runtime.LaunchedEffect(episodes.size, state.loading) {
+                        if (!state.loading) viewModel.loadMore()
+                    }
+                    OtvProgressBar(Modifier.fillMaxWidth().padding(vertical = 8.dp))
+                }
             }
         }
     }
@@ -407,7 +496,7 @@ internal fun SeasonPicker(seasons: List<Int>, selected: Int?, onSelect: (Int?) -
     }
 }
 
-internal fun episodeTag(episode: Channel): String? = when {
+internal fun episodeTag(episode: CatalogItem): String? = when {
     episode.season != null && episode.episode != null ->
         "S%02dE%02d".format(episode.season, episode.episode)
     episode.episode != null -> "EP %d".format(episode.episode)
@@ -460,10 +549,10 @@ private fun EpisodeThumb(image: String?, progress: Float? = null, modifier: Modi
 
 @Composable
 internal fun EpisodeRow(
-    episode: Channel,
+    episode: CatalogItem,
     downloadState: Download?,
     onOpen: () -> Unit,
-    onDownload: () -> Unit,
+    onDownload: (() -> Unit)?,
     progress: Float? = null,
 ) {
     Card(
@@ -473,14 +562,14 @@ internal fun EpisodeRow(
         modifier = Modifier.padding(vertical = 4.dp).focusHighlight(),
     ) {
         Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            EpisodeThumb(episode.logo, progress = progress)
+            EpisodeThumb(episode.imageUrl, progress = progress)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 episodeTag(episode)?.let {
                     Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Text(
-                    episode.name,
+                    episode.title,
                     style = MaterialTheme.typography.titleSmall,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
@@ -499,7 +588,9 @@ internal fun EpisodeRow(
                     )
                 }
             }
-            DownloadStateIcon(state = downloadState, onDownload = onDownload)
+            if (onDownload != null) {
+                DownloadStateIcon(state = downloadState, onDownload = onDownload)
+            }
         }
     }
 }
@@ -508,17 +599,19 @@ internal fun EpisodeRow(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EpisodeDetailScreen(
-    channelId: Long,
+    sourceId: SourceId,
+    ref: ContentRef,
     onBack: () -> Unit,
-    onPlay: (url: String, title: String) -> Unit,
+    onPlay: (item: CatalogItem) -> Unit,
+    onSignIn: () -> Unit,
 ) {
-    val viewModel = detailViewModel("EpisodeDetail-$channelId") {
-        EpisodeDetailViewModel(it, channelId)
+    val viewModel = detailViewModel<EpisodeDetailViewModel>(sourceId, ref) {
+        EpisodeDetailViewModel(it, sourceId, ref)
     }
     val state by viewModel.state.collectAsStateWithLifecycle()
     val downloads by viewModel.downloads.collectAsStateWithLifecycle()
     val progressByUrl by viewModel.progressByUrl.collectAsStateWithLifecycle()
-    val episode = state.episode
+    val episode = state.detail?.item
     val seriesTitle = state.seriesTitle
     val info = state.metadata
     val seriesCast = state.seriesCast
@@ -541,12 +634,32 @@ fun EpisodeDetailScreen(
         },
         contentWindowInsets = WindowInsets(0.dp),
     ) { padding ->
-        val ep = episode ?: return@Scaffold
-        val downloadState = downloads.firstOrNull {
-            it.url == ep.url && it.status != DownloadStatus.CANCELLED && it.status != DownloadStatus.FAILED
+        when (state.error) {
+            CatalogLoadError.SignedOut -> {
+                SourceSignedOut(onSignIn, Modifier.padding(padding))
+                return@Scaffold
+            }
+            CatalogLoadError.Unreachable -> {
+                SourceUnreachable(viewModel::retry, Modifier.padding(padding))
+                return@Scaffold
+            }
+            is CatalogLoadError.Failed -> {
+                SourceLoadFailed(null, viewModel::retry, Modifier.padding(padding))
+                return@Scaffold
+            }
+            null -> Unit
         }
-        val image = info?.posterUrl ?: ep.logo
-        val plot = ep.description ?: info?.overview
+        if (state.loading && episode == null) {
+            Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.onSurface)
+            }
+            return@Scaffold
+        }
+        val ep = episode ?: return@Scaffold
+        val localUrl = (ep.ref as? ContentRef.LocalUrl)?.url
+        val downloadState = downloads.downloadFor(sourceId, ep.ref)
+        val image = info?.posterUrl ?: ep.imageUrl
+        val plot = state.detail?.description ?: info?.overview
 
         LazyColumn(
             Modifier.padding(padding).fillMaxSize(),
@@ -585,7 +698,7 @@ fun EpisodeDetailScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                Text(info?.title ?: ep.name, style = MaterialTheme.typography.headlineMedium)
+                Text(info?.title ?: ep.title, style = MaterialTheme.typography.headlineMedium)
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     episodeTag(ep)?.let { Pill(it) }
@@ -612,7 +725,7 @@ fun EpisodeDetailScreen(
                     CastRow(seriesCast)
                 }
                 Spacer(Modifier.height(24.dp))
-                val progress = progressByUrl[ep.url]
+                val progress = ep.progress ?: localUrl?.let { progressByUrl[it] }
                 if (progress != null) {
                     WatchProgressBar(progress, Modifier.fillMaxWidth())
                     Spacer(Modifier.height(6.dp))
@@ -628,24 +741,29 @@ fun EpisodeDetailScreen(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     OtvButton(
-                        onClick = { onPlay(ep.url, ep.name) },
+                        onClick = { onPlay(ep) },
                         modifier = Modifier.weight(1f).height(48.dp),
                     ) {
                         Icon(Icons.Rounded.PlayArrow, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
                         Text(stringResource(if (progress != null) R.string.common_resume else R.string.common_play))
                     }
-                    DownloadSlot(
-                        state = downloadState,
-                        onDownload = {
-                            scope.launch {
-                                val blocked = viewModel.enqueue(ep)
-                                snackbar.showSnackbar(
-                                    blocked ?: resources.getString(R.string.downloads_started_generic),
-                                )
-                            }
-                        },
-                    )
+                    if (sourceId is SourceId.LocalPlaylist || sourceId is SourceId.Hub) {
+                        DownloadSlot(
+                            state = downloadState,
+                            onDownload = {
+                                scope.launch {
+                                    val blocked = viewModel.enqueue(ep)
+                                    snackbar.showSnackbar(
+                                        blocked
+                                            ?: resources.getString(
+                                                R.string.downloads_started_generic,
+                                            ),
+                                    )
+                                }
+                            },
+                        )
+                    }
                 }
                 Spacer(Modifier.height(24.dp))
             }

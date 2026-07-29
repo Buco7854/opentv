@@ -1,5 +1,6 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.contract.*
 import com.buco7854.opentv.core.storage.Storage
 import com.buco7854.opentv.core.repo.XtreamRepository
 import kotlinx.coroutines.channels.ReceiveChannel
@@ -38,7 +39,8 @@ class SessionApplicationService(
         require(client.userAgent.length <= 2_048) { "User-Agent is too long" }
         require(client.ip.length <= 128) { "Client address is too long" }
         require(request.contentId.length in 1..128) { "Invalid content id" }
-        require(request.downloadId == null || request.downloadId.length <= 128) {
+        val requestedDownloadId = request.downloadId
+        require(requestedDownloadId == null || requestedDownloadId.length <= 128) {
             "Invalid download id"
         }
         require(request.mode in setOf("play", "catchup", "download")) { "Unknown playback mode" }
@@ -47,14 +49,16 @@ class SessionApplicationService(
             else throw ResourceNotFound("content", "Content is unavailable")
         if (!auth.hasPlaylistAccess(actor, identity.playlistId)) throw ResourceNotFound("content")
         val sourceUrl = if (request.mode == "catchup") {
-            require(request.catchupStartMs != null && request.catchupDurationMs != null) {
+            val catchupStartMs = request.catchupStartMs
+            val catchupDurationMs = request.catchupDurationMs
+            require(catchupStartMs != null && catchupDurationMs != null) {
                 "Catch-up start and duration are required"
             }
-            require(request.catchupDurationMs > 0) { "Catch-up duration must be positive" }
+            require(catchupDurationMs > 0) { "Catch-up duration must be positive" }
             xtream.catchupUrlFor(
                 requireNotNull(channel),
-                request.catchupStartMs,
-                request.catchupStartMs + request.catchupDurationMs,
+                catchupStartMs,
+                catchupStartMs + catchupDurationMs,
             ) ?: throw ResourceNotFound("catchup", "Catch-up is unavailable")
         } else if (request.mode == "download") {
             val downloadId = request.downloadId ?: throw IllegalArgumentException("Download id is required")
@@ -65,10 +69,14 @@ class SessionApplicationService(
         } else requireNotNull(channel).url
         val lease = sessions.create(
             actor, identity.playlistId, identity.contentId, sourceUrl, client.ip, client.userAgent,
+            MediaCapabilities.from(request.capabilities),
         )
         val grant = mediaGrants.issue(actor, lease.id)
         val remote = sourceUrl.startsWith("http://") || sourceUrl.startsWith("https://")
         val source = if (remote) cipher.encryptStream(sourceUrl, lease.id) else null
+        val downloadFile = request.downloadId?.let {
+            cipher.encryptDownloadFile(actor.userId, it)
+        }
         val remuxStart = source?.let { mediaUrl("/api/v1/remux/start", it, lease.id, grant.token) }
             ?: ("/api/v1/remux/start?d=${urlEncode(requireNotNull(request.downloadId))}" +
                 "&sid=${urlEncode(lease.id)}&g=${urlEncode(grant.token)}")
@@ -79,15 +87,29 @@ class SessionApplicationService(
             mediaGrant = grant.token,
             mediaGrantExpiresAtMs = grant.expiresAtMs,
             streamUrl = source?.let { mediaUrl("/api/v1/stream", it, lease.id, grant.token) },
+            sharedHlsUrl = source
+                ?.takeIf { it.startsWith("h.") }
+                ?.let { mediaUrl("/api/v1/shared-hls", it, lease.id, grant.token) },
             relayUrl = source?.let { mediaUrl("/api/v1/relay", it, lease.id, grant.token) },
             transcodeUrl = source?.let { mediaUrl("/api/v1/transcode", it, lease.id, grant.token) },
             remuxStartUrl = remuxStart,
+            downloadFileUrl = downloadFile?.let {
+                "/api/v1/downloads/${urlEncode(requireNotNull(request.downloadId))}/file" +
+                    "?token=${urlEncode(it.token)}"
+            },
         )
     }
 
-    suspend fun refreshMediaGrant(actor: Actor, id: String): IssuedMediaGrant {
+    suspend fun webSocketAccess(actor: Actor, id: String): WebSocketAccessDto {
         validateLeaseActor(actor, id)
-        return mediaGrants.issue(actor, id)
+        return cipher.encryptWebSocket(actor.authSessionId, id).let {
+            WebSocketAccessDto(it.token, it.expiresAtMs)
+        }
+    }
+
+    suspend fun refreshMediaGrant(actor: Actor, id: String): MediaGrantDto {
+        validateLeaseActor(actor, id)
+        return mediaGrants.issue(actor, id).let { MediaGrantDto(it.token, it.expiresAtMs) }
     }
 
     suspend fun active(actor: Actor): List<SessionDto> {
@@ -196,9 +218,10 @@ class SessionApplicationService(
         if (!sessions.setRoomAudio(id, request.audioIndex.coerceAtLeast(0))) throw ResourceNotFound("room")
     }
 
-    fun ready(actor: Actor, id: String) {
+    fun ready(actor: Actor, id: String, request: ReadyBody) {
         sessions.owned(actor, id)
-        sessions.markReady(id)
+        require(request.generation > 0) { "Invalid room barrier generation" }
+        sessions.markReady(id, request.generation)
     }
 
     fun leave(actor: Actor, id: String) {
@@ -209,7 +232,8 @@ class SessionApplicationService(
     fun command(actor: Actor, id: String, command: SessionCommandDto) {
         requireAdmin(actor)
         require(command.type in setOf("pause", "play", "message")) { "Unknown command" }
-        require(command.text == null || command.text.length <= 1_000) { "Message is too long" }
+        val text = command.text
+        require(text == null || text.length <= 1_000) { "Message is too long" }
         if (!sessions.command(id, command)) throw ResourceNotFound("playback")
     }
 
@@ -232,7 +256,8 @@ class SessionApplicationService(
         require(client.userAgent.length <= 2_048) { "User-Agent is too long" }
         require(client.ip.length <= 128) { "Client address is too long" }
         require(request.title.length <= 512) { "Playback title is too long" }
-        require(request.logo == null || request.logo.length <= 8_192) { "Playback logo is too large" }
+        val logo = request.logo
+        require(logo == null || logo.length <= 8_192) { "Playback logo is too large" }
         require(request.positionMs >= 0 && request.durationMs >= 0) { "Playback times must be positive" }
         require(request.kind in setOf("live", "movie", "series", "catchup", "download")) {
             "Unknown playback kind"

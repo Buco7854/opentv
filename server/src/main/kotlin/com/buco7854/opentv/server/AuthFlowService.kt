@@ -1,7 +1,9 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.contract.*
 import com.buco7854.opentv.serverdata.AuthMethod
 import com.buco7854.opentv.serverdata.ChallengeKind
+import com.buco7854.opentv.serverdata.ClientKind
 import com.buco7854.opentv.serverdata.UserRole
 import com.buco7854.opentv.serverdata.UserStatus
 import com.buco7854.opentv.serverdata.db.MfaCompletionWrite
@@ -54,7 +56,11 @@ internal class AuthFlowService(
         oidcStartUrl = config.oidc?.let { "/api/v1/auth/oidc/start" },
     )
 
-    suspend fun bootstrap(request: BootstrapRequestDto, clientIp: String): AuthResult =
+    suspend fun bootstrap(
+        request: BootstrapRequestDto,
+        clientIp: String,
+        clientKind: String = ClientKind.BROWSER,
+    ): AuthResult =
         mutation.withLock {
             require(config.passwordEnabled) { "Password authentication is disabled" }
             val normalized = runCatching { AuthCrypto.normalizeUsername(request.username) }
@@ -80,10 +86,14 @@ internal class AuthFlowService(
             accounts.copyDefaultGrants(user.id, now)
             Files.deleteIfExists(bootstrapFile)
             limiter.success(*keys)
-            beginPostPassword(user, now)
+            beginPostPassword(user, now, clientKind)
         }
 
-    suspend fun password(request: PasswordLoginRequestDto, clientIp: String): AuthResult {
+    suspend fun password(
+        request: PasswordLoginRequestDto,
+        clientIp: String,
+        clientKind: String = ClientKind.BROWSER,
+    ): AuthResult {
         require(config.passwordEnabled) { "Password authentication is disabled" }
         val normalized = runCatching { AuthCrypto.normalizeUsername(request.username) }.getOrNull()
             ?: "__invalid__"
@@ -117,10 +127,14 @@ internal class AuthFlowService(
         }
         limiter.success(*keys)
         credentials.maybeRehash(user.id, request.password, requireNotNull(credential))
-        return beginPostPassword(user, clock())
+        return beginPostPassword(user, clock(), clientKind)
     }
 
-    suspend fun activate(request: ActivationRequestDto, clientIp: String): AuthResult =
+    suspend fun activate(
+        request: ActivationRequestDto,
+        clientIp: String,
+        clientKind: String = ClientKind.BROWSER,
+    ): AuthResult =
         mutation.withLock {
             require(config.passwordEnabled) { "Password authentication is disabled" }
             val keys = arrayOf("ip:$clientIp", "activation:${request.token.take(CHALLENGE_KEY_LENGTH)}")
@@ -151,7 +165,7 @@ internal class AuthFlowService(
                 accounts.copyDefaultGrants(activated.id, clock())
             }
             limiter.success(*keys)
-            beginPostPassword(activated, clock())
+            beginPostPassword(activated, clock(), clientKind)
         }
 
     suspend fun startTotpEnrollment(
@@ -195,6 +209,7 @@ internal class AuthFlowService(
     suspend fun completeTotpEnrollment(
         request: TotpCompleteRequestDto,
         clientIp: String,
+        clientKind: String = ClientKind.BROWSER,
     ): AuthResult = mutation.withLock {
         val keys = arrayOf("ip:$clientIp", "challenge:${request.challenge.take(CHALLENGE_KEY_LENGTH)}")
         limiter.check(*keys)
@@ -231,7 +246,12 @@ internal class AuthFlowService(
             throw InvalidCredentialsException()
         }
         val codes = credentials.newRecoveryCodes(credential.userId)
-        val session = sessions.prepare(user, AuthMethod.PASSWORD, mfa = true)
+        val session = sessions.prepare(
+            user,
+            AuthMethod.PASSWORD,
+            mfa = true,
+            clientKind = clientKind,
+        )
         if (!db.completeMfa(
                 challengeId = challenge.id,
                 parentChallengeId = parent.id,
@@ -252,6 +272,7 @@ internal class AuthFlowService(
     suspend fun completeTotp(
         request: TotpCompleteRequestDto,
         clientIp: String,
+        clientKind: String = ClientKind.BROWSER,
     ): AuthResult = mutation.withLock {
         val keys = arrayOf("ip:$clientIp", "challenge:${request.challenge.take(CHALLENGE_KEY_LENGTH)}")
         limiter.check(*keys)
@@ -276,7 +297,12 @@ internal class AuthFlowService(
             throw InvalidCredentialsException()
         }
         val now = clock()
-        val session = sessions.prepare(user, AuthMethod.PASSWORD, mfa = true)
+        val session = sessions.prepare(
+            user,
+            AuthMethod.PASSWORD,
+            mfa = true,
+            clientKind = clientKind,
+        )
         if (!db.completeMfa(
                 challengeId = challenge.id,
                 write = MfaCompletionWrite(
@@ -295,6 +321,7 @@ internal class AuthFlowService(
     suspend fun completeRecovery(
         request: RecoveryCompleteRequestDto,
         clientIp: String,
+        clientKind: String = ClientKind.BROWSER,
     ): AuthResult = mutation.withLock {
         val keys = arrayOf("ip:$clientIp", "challenge:${request.challenge.take(CHALLENGE_KEY_LENGTH)}")
         limiter.check(*keys)
@@ -319,7 +346,12 @@ internal class AuthFlowService(
             throw InvalidCredentialsException()
         }
         val now = clock()
-        val session = sessions.prepare(user, AuthMethod.PASSWORD, mfa = true)
+        val session = sessions.prepare(
+            user,
+            AuthMethod.PASSWORD,
+            mfa = true,
+            clientKind = clientKind,
+        )
         if (!db.completeMfa(
                 challengeId = challenge.id,
                 recoveryCodeId = row.id,
@@ -335,6 +367,7 @@ internal class AuthFlowService(
     private suspend fun beginPostPassword(
         user: com.buco7854.opentv.serverdata.db.UserRow,
         now: Long,
+        clientKind: String,
     ): AuthResult {
         val methods = buildList {
             if (db.credentials().confirmedTotp(user.id).isNotEmpty()) add("totp")
@@ -362,7 +395,12 @@ internal class AuthFlowService(
                 ),
             )
         }
-        val session = sessions.issue(user, AuthMethod.PASSWORD, mfa = false)
+        val session = sessions.issue(
+            user,
+            AuthMethod.PASSWORD,
+            mfa = false,
+            clientKind = clientKind,
+        )
         db.users().markLogin(user.id, now)
         return authenticated(session)
     }
@@ -376,16 +414,14 @@ internal class AuthFlowService(
             session.row.authMethod,
             session.row.clientKind,
             session.row.id,
-            session.row.csrfToken,
         )
         return AuthResult(
             AuthFlowDto(
                 status = "AUTHENTICATED",
                 user = user,
-                csrfToken = session.row.csrfToken,
+                sessionToken = session.token,
                 recoveryCodes = recoveryCodes,
             ),
-            session.token,
         )
     }
 

@@ -2,7 +2,14 @@ import {
   createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState,
 } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router';
-import { ApiError, browserApiHttp, isTransportError } from '../api/http';
+import {
+  ACCESS_TOKEN_STORAGE_KEY,
+  ApiError,
+  browserAccessToken,
+  browserApiHttp,
+  isTransportError,
+  setBrowserAccessToken,
+} from '../api/http';
 import { Spinner } from '../components/Primitives';
 import { clearUserActivitySnapshots, setServerSettingsAllowed } from '../hooks';
 import { authApi } from './api';
@@ -10,6 +17,7 @@ import { AuthLayout } from './AuthLayout';
 import { errorMessage } from './AuthUi';
 import { AuthCapabilities, AuthFlow, CurrentUser } from './types';
 import { authText as tx } from './copy';
+import { consumeOidcSessionToken } from './fragment';
 
 type AuthPhase = 'loading' | 'authenticated' | 'unauthenticated' | 'error';
 
@@ -30,18 +38,27 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [phase, setPhase] = useState<AuthPhase>('loading');
+  const [phase, setPhase] = useState<AuthPhase>(() => {
+    const returnedToken = consumeOidcSessionToken();
+    if (returnedToken) setBrowserAccessToken(returnedToken);
+    return 'loading';
+  });
   const [capabilities, setCapabilities] = useState<AuthCapabilities | null>(null);
   const [user, setUser] = useState<CurrentUser | null>(null);
   const [error, setError] = useState<string | null>(null);
   const session = useRef<CurrentUser | null>(null);
   const offlineRetry = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const refreshGeneration = useRef(0);
 
   const clearSession = useCallback(() => {
+    refreshGeneration.current++;
+    clearTimeout(offlineRetry.current);
     clearUserActivitySnapshots();
     setServerSettingsAllowed(false);
+    setBrowserAccessToken(null);
     session.current = null;
     setUser(null);
+    setError(null);
     setPhase('unauthenticated');
   }, []);
 
@@ -55,17 +72,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refresh: () => Promise<void> = useCallback(async () => {
+    const generation = ++refreshGeneration.current;
+    const attemptedToken = browserAccessToken();
     clearTimeout(offlineRetry.current);
     try {
-      installUser(await authApi.me());
+      const next = await authApi.me();
+      if (generation !== refreshGeneration.current) return;
+      if (browserAccessToken() !== attemptedToken) {
+        void refresh();
+        return;
+      }
+      installUser(next);
     } catch (requestError) {
+      if (generation !== refreshGeneration.current) return;
+      if (browserAccessToken() !== attemptedToken) {
+        void refresh();
+        return;
+      }
       if (isTransportError(requestError) && session.current) {
         offlineRetry.current = setTimeout(() => void refresh(), OFFLINE_RETRY_INTERVAL_MS);
         return;
       }
-      if (!isTransportError(requestError)) clearSession();
       // An unauthenticated /auth/me is the normal signed-out state.
-      if (requestError instanceof ApiError && requestError.status === 401) return;
+      if (requestError instanceof ApiError && requestError.status === 401) {
+        clearSession();
+        return;
+      }
       setError(errorMessage(requestError));
       setPhase('error');
     }
@@ -105,17 +137,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [initialize]);
 
   useEffect(() => {
-    browserApiHttp.setCsrfTokenProvider(() => session.current?.csrfToken ?? null);
     const unsubscribe = browserApiHttp.onUnauthorized(clearSession);
     const unsubscribeForbidden = browserApiHttp.onForbidden(refreshAuthority);
+    const onStorage = (event: StorageEvent) => {
+      // localStorage.clear() is reported with a null key and removes the bearer too.
+      if (event.key !== ACCESS_TOKEN_STORAGE_KEY && event.key !== null) return;
+      if (event.key === null || event.newValue == null) {
+        clearSession();
+        return;
+      }
+      // Do not render one account's protected state while requests already carry another
+      // account's bearer. The replacement user is installed only after /auth/me confirms it.
+      refreshGeneration.current++;
+      clearTimeout(offlineRetry.current);
+      clearUserActivitySnapshots();
+      setServerSettingsAllowed(false);
+      session.current = null;
+      setUser(null);
+      setError(null);
+      setPhase('loading');
+      void refresh();
+    };
     let active = true;
+    window.addEventListener('storage', onStorage);
     void initialize(() => active);
     return () => {
       active = false;
+      refreshGeneration.current++;
       clearTimeout(offlineRetry.current);
+      window.removeEventListener('storage', onStorage);
       unsubscribe();
       unsubscribeForbidden();
-      browserApiHttp.setCsrfTokenProvider(undefined);
     };
   }, [clearSession, initialize, refreshAuthority]);
 
@@ -123,10 +175,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (flow.status !== 'AUTHENTICATED' || !flow.user) {
       throw new Error(tx('authIncomplete'));
     }
-    installUser({
-      ...flow.user,
-      csrfToken: flow.csrfToken ?? flow.user.csrfToken,
-    });
+    if (!flow.sessionToken) throw new Error(tx('authIncomplete'));
+    refreshGeneration.current++;
+    clearTimeout(offlineRetry.current);
+    setBrowserAccessToken(flow.sessionToken);
+    installUser(flow.user);
   }, [installUser]);
 
   const logout = useCallback(async (all = false) => {
@@ -194,9 +247,15 @@ export function AuthReturnHandler() {
   const navigate = useNavigate();
   useEffect(() => {
     if (phase !== 'authenticated') return;
-    const saved = sessionStorage.getItem('auth.returnTo');
+    let saved: string | null;
+    try {
+      saved = sessionStorage.getItem('auth.returnTo');
+      if (saved) sessionStorage.removeItem('auth.returnTo');
+    } catch {
+      // Password/passkey/device-link sessions do not depend on OIDC return storage.
+      return;
+    }
     if (!saved) return;
-    sessionStorage.removeItem('auth.returnTo');
     if (saved.startsWith('/')
         && !saved.startsWith('//')
         && !saved.includes('\\')

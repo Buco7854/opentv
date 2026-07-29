@@ -33,16 +33,21 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.buco7854.opentv.R
+import com.buco7854.opentv.core.model.Playlist
+import com.buco7854.opentv.source.SourceId
 import com.buco7854.opentv.ui.components.PlaylistDialog
 
 /** Forwards into the active (or first) playlist, or greets a fresh install. */
 @Composable
 fun HomeScreen(
-    onOpenPlaylist: (Long) -> Unit,
+    onOpenSource: (SourceId) -> Unit,
+    onConnectHub: () -> Unit,
     viewModel: HomeViewModel = viewModel(),
 ) {
     val playlists by viewModel.playlists.collectAsStateWithLifecycle(initialValue = null)
     val settings by viewModel.settings.collectAsStateWithLifecycle(initialValue = null)
+    val catalogSources by viewModel.catalogSources.collectAsStateWithLifecycle()
+    val catalogSourcesLoading by viewModel.catalogSourcesLoading.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     var showAdd by remember { mutableStateOf(false) }
@@ -55,21 +60,22 @@ fun HomeScreen(
     }
 
     // Forward once both the list and the saved active id are known.
-    LaunchedEffect(playlists, settings) {
-        val list = playlists ?: return@LaunchedEffect
-        val active = settings?.activePlaylistId ?: return@LaunchedEffect
-        if (list.isNotEmpty()) {
-            onOpenPlaylist(list.firstOrNull { it.id == active }?.id ?: list.first().id)
-        }
+    LaunchedEffect(playlists, settings, catalogSources, catalogSourcesLoading) {
+        homeSource(
+            playlists = playlists,
+            activePlaylistId = settings?.activePlaylistId,
+            catalogSources = catalogSources,
+            catalogSourcesLoading = catalogSourcesLoading,
+        )?.let(onOpenSource)
     }
 
     Box(Modifier.fillMaxSize()) {
         when {
-            playlists == null -> CircularProgressIndicator(
+            playlists == null || catalogSourcesLoading -> CircularProgressIndicator(
                 Modifier.align(Alignment.Center),
                 color = MaterialTheme.colorScheme.onSurface,
             )
-            playlists!!.isEmpty() -> Column(
+            playlists!!.isEmpty() && catalogSources.isEmpty() -> Column(
                 modifier = Modifier.fillMaxSize().padding(32.dp),
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -117,6 +123,21 @@ fun HomeScreen(
             },
             onSubmitFile = { _, name, uri -> showAdd = false; viewModel.addFromFile(name, uri) },
             onRename = { _, _ -> },
+            onConnectHub = { showAdd = false; onConnectHub() },
         )
     }
+}
+
+internal fun homeSource(
+    playlists: List<Playlist>?,
+    activePlaylistId: Long?,
+    catalogSources: List<CatalogSourceEntry>,
+    catalogSourcesLoading: Boolean,
+): SourceId? {
+    val local = playlists ?: return null
+    val active = activePlaylistId ?: return null
+    if (local.isNotEmpty()) {
+        return SourceId.LocalPlaylist(local.firstOrNull { it.id == active }?.id ?: local.first().id)
+    }
+    return if (catalogSourcesLoading) null else catalogSources.firstOrNull()?.sourceId
 }

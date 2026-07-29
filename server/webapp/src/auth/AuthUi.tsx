@@ -16,7 +16,6 @@ const AUTH_OVERRIDES: ErrorOverrides = {
   invalid_credentials: () => tx('invalidCredentials'),
   forbidden: () => tx('recentAuthRequired'),
   totp_exists: () => tx('authenticatorExists'),
-  csrf_rejected: () => tx('csrfRejected'),
   unauthenticated: () => tx('sessionEnded'),
   last_factor: () => tx('passkeyLastFactor'),
   webauthn_unavailable: () => tx('passkeyAddressUnsupported'),

@@ -12,6 +12,7 @@ import {
 import { Select, Sheet, toast } from '../components/Primitives';
 import { GENERIC, reportError, reportSuccess } from '../errors';
 import { t } from '../i18n';
+import { sessionCommandGeneration } from './sessionProtocol';
 
 // The driver's state is pushed the instant it plays/pauses/seeks, plus this tick to catch a
 // fresh joiner up and re-align after buffering.
@@ -75,6 +76,8 @@ export function useWatchTogether(opts: {
   live: boolean;
   /** This content is served through the remux, so a same-content viewer shares its connection. */
   remuxEligible: boolean;
+  /** The active source has a real room transport, so a room may clear provider-full. */
+  sharesRoomRead: boolean;
   contentId: string;
   /** Sends a frame over the live socket (false when it's down); sync falls back to a POST. */
   send: MutableRefObject<((command: SessionCommandInput) => boolean) | null>;
@@ -82,7 +85,7 @@ export function useWatchTogether(opts: {
   onRoomAudio?: (index: number) => void;
 }): WatchTogether {
   const {
-    selfId, video, active, live, remuxEligible, contentId, send,
+    selfId, video, active, live, remuxEligible, sharesRoomRead, contentId, send,
   } = opts;
   const roomAudioRef = useRef(opts.onRoomAudio); roomAudioRef.current = opts.onRoomAudio;
 
@@ -101,7 +104,9 @@ export function useWatchTogether(opts: {
   // resumes once every member has reloaded (or a safety timeout fires), so no one runs ahead.
   const [loading, setLoading] = useState(false);
   const [transitioning, setTransitioning] = useState(false);
+  const [barrierGeneration, setBarrierGeneration] = useState<number | null>(null);
   const loadingRef = useRef(false);
+  const barrierGenerationRef = useRef<number | null>(null);
 
   const self = members.find((m) => m.id === selfId);
   const isHost = !!self?.host;
@@ -134,6 +139,8 @@ export function useWatchTogether(opts: {
   const resetRoom = useCallback(() => {
     roomContent.current = null;
     loadingRef.current = false;
+    barrierGenerationRef.current = null;
+    setBarrierGeneration(null);
     setLoading(false);
     // Dropped back to solo (left or kicked): re-check the provider - if it's full now, this viewer
     // gets the limit error instead of quietly holding a seat it no longer shares.
@@ -280,22 +287,30 @@ export function useWatchTogether(opts: {
       roomContent.current = contentId;
       setInRoom(true);
       setMembers(roster);
-      // Now watching together: the choice is settled and the room shares one read (a movie through
-      // the remux, live through the relay), so a full provider no longer blocks a member.
+      // Clear provider-full only when this lease advertised a transport that genuinely shares the
+      // read. This keeps a newer client honest when connected to an older server without shared HLS.
       setChoice('decided');
-      setBlocked(false);
+      if (sharesRoomRead) setBlocked(false);
       // Anyone now in the room no longer has a pending request to answer.
       setJoinRequests((list) => list.filter((r) => !ids.has(r.peerId)));
       setControlRequests((list) => list.filter((r) => !ids.has(r.peerId)));
     } else if (command.type === 'sync' && command.sync) {
       applySync(command.sync);
     } else if (command.type === 'room-audio' && command.audioIndex != null) {
+      const generation = sessionCommandGeneration(command);
+      if (generation == null || barrierGenerationRef.current === generation) return;
       // Enter the reload barrier: hold here, reload the shared track, report in when ready.
+      barrierGenerationRef.current = generation;
+      setBarrierGeneration(generation);
       loadingRef.current = true;
       setLoading(true);
       video.current?.pause();
       roomAudioRef.current?.(command.audioIndex);
     } else if (command.type === 'room-go') {
+      const generation = sessionCommandGeneration(command);
+      if (generation == null || generation !== barrierGenerationRef.current) return;
+      barrierGenerationRef.current = null;
+      setBarrierGeneration(null);
       loadingRef.current = false;
       setLoading(false);
       video.current?.play().catch(() => {});
@@ -303,7 +318,7 @@ export function useWatchTogether(opts: {
       if (roomContent.current) toast(t('watch.ended'));
       resetRoom();
     }
-  }, [applySync, contentId, resetRoom, video]);
+  }, [applySync, contentId, resetRoom, sharesRoomRead, video]);
 
   // New content: clear stale prompts, and drop a room that belonged to the old content.
   useEffect(() => {
@@ -312,6 +327,8 @@ export function useWatchTogether(opts: {
     setChecking(true);
     setChoice('decided');
     loadingRef.current = false;
+    barrierGenerationRef.current = null;
+    setBarrierGeneration(null);
     setLoading(false);
     if (roomContent.current && roomContent.current !== contentId) {
       void leave().catch(() => {});
@@ -325,10 +342,16 @@ export function useWatchTogether(opts: {
     if (!active || !contentId || inRoom || checked.current === contentId) return;
     checked.current = contentId;
     let cancelled = false;
+    let timedOut = false;
     // Never hold playback on the check for long: fail open if it's slow.
-    const failOpen = setTimeout(() => { if (!cancelled) setChecking(false); }, 4000);
+    const failOpen = setTimeout(() => {
+      if (!cancelled) {
+        timedOut = true;
+        setChecking(false);
+      }
+    }, 4000);
     api.playbackIntent(selfId).then((intent) => {
-      if (cancelled) return;
+      if (cancelled || timedOut) return;
       clearTimeout(failOpen);
       setPeers(intent.sameContent);
       // A solo viewer needs its own connection even on the same content: sharing only happens
@@ -339,7 +362,12 @@ export function useWatchTogether(opts: {
       // Someone's already here: don't just start streaming (and maybe take the last seat) - hold
       // and ask whether to watch alone or together.
       if (intent.sameContent.length > 0) setChoice('pending');
-    }).catch(() => { if (!cancelled) { clearTimeout(failOpen); setChecking(false); } });
+    }).catch(() => {
+      if (!cancelled && !timedOut) {
+        clearTimeout(failOpen);
+        setChecking(false);
+      }
+    });
     return () => { cancelled = true; clearTimeout(failOpen); };
   }, [active, contentId, inRoom, selfId, recheckNonce]);
 
@@ -358,17 +386,28 @@ export function useWatchTogether(opts: {
   // room resumes together. A floor covers a missed event; a longer timeout fails open so one
   // stuck member can't freeze everyone.
   useEffect(() => {
-    if (!loading) return;
+    if (!loading || barrierGeneration == null) return;
     const v = video.current;
     if (!v) return;
     let done = false;
-    const report = () => { if (done) return; done = true; api.sessionReady(selfId); };
+    const report = () => {
+      if (done || barrierGenerationRef.current !== barrierGeneration) return;
+      done = true;
+      api.sessionReady(selfId, barrierGeneration);
+    };
     const onReady = () => { v.pause(); report(); };
     v.addEventListener('canplay', onReady);
     const floor = setTimeout(report, 4000);
-    const failOpen = setTimeout(() => { loadingRef.current = false; setLoading(false); v.play().catch(() => {}); }, 12000);
+    const failOpen = setTimeout(() => {
+      if (barrierGenerationRef.current !== barrierGeneration) return;
+      barrierGenerationRef.current = null;
+      setBarrierGeneration(null);
+      loadingRef.current = false;
+      setLoading(false);
+      v.play().catch(() => {});
+    }, 12000);
     return () => { v.removeEventListener('canplay', onReady); clearTimeout(floor); clearTimeout(failOpen); };
-  }, [loading, selfId, video]);
+  }, [barrierGeneration, loading, selfId, video]);
 
   // Anyone with control drives: their play/pause/seek/rate reaches the rest of the room at once.
   // A seek is flagged so receivers apply it exactly instead of treating it as drift.

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -15,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.VideoLibrary
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -38,43 +40,55 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.buco7854.opentv.R
 import com.buco7854.opentv.core.model.DownloadStatus
+import com.buco7854.opentv.download.downloadIdentityKey
 import com.buco7854.opentv.core.meta.castFromNames
-import com.buco7854.opentv.diag.ErrorLog
+import com.buco7854.opentv.source.CatalogItem
+import com.buco7854.opentv.source.CatalogLoadError
+import com.buco7854.opentv.source.ContentRef
+import com.buco7854.opentv.source.SourceId
+import com.buco7854.opentv.source.encode
 import com.buco7854.opentv.ui.components.CastRow
 import com.buco7854.opentv.ui.components.ExpandableText
 import com.buco7854.opentv.ui.components.FavoriteIcon
+import com.buco7854.opentv.ui.components.OtvProgressBar
 import com.buco7854.opentv.ui.components.Pill
+import com.buco7854.opentv.ui.components.SourceLoadFailed
+import com.buco7854.opentv.ui.components.SourceSignedOut
+import com.buco7854.opentv.ui.components.SourceUnreachable
 import kotlinx.coroutines.launch
 
 /** Series page for native Xtream playlists; episodes fetched on first open (cached for a day). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun XtreamSeriesScreen(
-    playlistId: Long,
-    seriesId: Long,
+    sourceId: SourceId,
+    ref: ContentRef,
+    seriesKey: String?,
+    seriesId: String?,
     onBack: () -> Unit,
-    onOpenEpisode: (channelId: Long) -> Unit,
+    onOpenEpisode: (ContentRef) -> Unit,
+    onSignIn: () -> Unit,
 ) {
-    val viewModel = detailViewModel("XtreamSeries-$playlistId-$seriesId") {
-        XtreamSeriesViewModel(it, playlistId, seriesId)
+    val viewModel = detailViewModel<XtreamSeriesViewModel>(sourceId, ref) {
+        XtreamSeriesViewModel(it, sourceId, ref, seriesKey, seriesId)
     }
     val state by viewModel.state.collectAsStateWithLifecycle()
     val episodes by viewModel.episodes.collectAsStateWithLifecycle()
     val downloads by viewModel.downloads.collectAsStateWithLifecycle()
     val downloadsByUrl = remember(downloads) {
         downloads.filter { it.status != DownloadStatus.CANCELLED && it.status != DownloadStatus.FAILED }
-            .associateBy { it.url }
+            .associateBy { it.downloadIdentityKey() }
     }
     val progressByUrl by viewModel.progressByUrl.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val resources = LocalResources.current
-    val series = state.series
-    val error = state.error?.let {
-        resources.getString(R.string.details_episodes_error, ErrorLog.describe(it))
-    }
+    val detail = state.detail
+    val series = detail?.item
 
-    val seasons = remember(episodes) { episodes.mapNotNull { it.season }.distinct().sorted() }
+    val seasons = state.seasons.ifEmpty {
+        episodes.mapNotNull { it.season }.distinct().sorted()
+    }
     var selectedSeason by remember { mutableStateOf<Int?>(null) }
     val shown = remember(episodes, selectedSeason) {
         selectedSeason?.let { s -> episodes.filter { it.season == s } } ?: episodes
@@ -101,20 +115,50 @@ fun XtreamSeriesScreen(
         },
         contentWindowInsets = WindowInsets(0.dp),
     ) { padding ->
+        when (state.error) {
+            CatalogLoadError.SignedOut -> {
+                SourceSignedOut(onSignIn, Modifier.padding(padding))
+                return@Scaffold
+            }
+            CatalogLoadError.Unreachable -> {
+                SourceUnreachable(viewModel::retry, Modifier.padding(padding))
+                return@Scaffold
+            }
+            is CatalogLoadError.Failed -> {
+                SourceLoadFailed(null, viewModel::retry, Modifier.padding(padding))
+                return@Scaffold
+            }
+            null -> Unit
+        }
+        if (state.loading && detail == null) {
+            androidx.compose.foundation.layout.Box(
+                Modifier.padding(padding).fillMaxSize(),
+                contentAlignment = androidx.compose.ui.Alignment.Center,
+            ) {
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.onSurface)
+            }
+            return@Scaffold
+        }
         LazyColumn(
             Modifier.padding(padding).fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp),
         ) {
             item {
-                Poster(series?.cover, Icons.Outlined.VideoLibrary)
+                Poster(series?.imageUrl, Icons.Outlined.VideoLibrary)
                 Spacer(Modifier.height(18.dp))
-                Text(series?.name.orEmpty(), style = MaterialTheme.typography.headlineMedium)
+                Text(series?.title.orEmpty(), style = MaterialTheme.typography.headlineMedium)
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    series?.categoryName?.let { Pill(it) }
+                    series?.group?.let { Pill(it) }
                     series?.rating?.let { Pill("★ %.1f".format(it)) }
                     if (episodes.isNotEmpty()) {
-                        Pill(pluralStringResource(R.plurals.details_episode_count, episodes.size, episodes.size))
+                        Pill(
+                            pluralStringResource(
+                                R.plurals.details_episode_count,
+                                state.episodeTotal,
+                                state.episodeTotal,
+                            ),
+                        )
                     }
                 }
                 series?.genre?.let {
@@ -125,11 +169,11 @@ fun XtreamSeriesScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                series?.plot?.let {
+                detail?.description?.let {
                     Spacer(Modifier.height(12.dp))
                     ExpandableText(it)
                 }
-                val cast = castFromNames(series?.castNames)
+                val cast = castFromNames(detail?.cast)
                 if (cast.isNotEmpty()) {
                     Spacer(Modifier.height(14.dp))
                     Text(
@@ -147,11 +191,6 @@ fun XtreamSeriesScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    error != null && episodes.isEmpty() -> Text(
-                        error,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.error,
-                    )
                     seasons.isNotEmpty() -> {
                         SeasonPicker(
                             seasons = seasons,
@@ -162,21 +201,38 @@ fun XtreamSeriesScreen(
                     }
                 }
             }
-            items(shown, key = { it.id }) { episode ->
+            items(shown, key = { it.ref.encode() }) { episode ->
+                val localUrl = (episode.ref as? ContentRef.LocalUrl)?.url
                 EpisodeRow(
                     episode = episode,
-                    downloadState = downloadsByUrl[episode.url],
-                    onOpen = { onOpenEpisode(episode.id) },
-                    onDownload = {
-                        scope.launch {
-                            val blocked = viewModel.enqueue(episode)
-                            snackbar.showSnackbar(
-                                blocked ?: resources.getString(R.string.downloads_started, episode.name),
-                            )
+                    downloadState = downloadIdentityKey(sourceId, episode.ref)
+                        ?.let { downloadsByUrl[it] },
+                    onOpen = { onOpenEpisode(episode.ref) },
+                    onDownload = if (
+                        sourceId is SourceId.LocalPlaylist || sourceId is SourceId.Hub
+                    ) {
+                        {
+                            scope.launch {
+                                val blocked = viewModel.enqueue(episode)
+                                snackbar.showSnackbar(
+                                    blocked ?: resources.getString(
+                                        R.string.downloads_started,
+                                        episode.title,
+                                    ),
+                                )
+                            }
                         }
-                    },
-                    progress = progressByUrl[episode.url],
+                    } else null,
+                    progress = episode.progress ?: localUrl?.let { progressByUrl[it] },
                 )
+            }
+            if (sourceId is SourceId.Hub && episodes.size < state.episodeTotal) {
+                item(key = "episode-page-${episodes.size}") {
+                    androidx.compose.runtime.LaunchedEffect(episodes.size, state.loading) {
+                        if (!state.loading) viewModel.loadMore()
+                    }
+                    OtvProgressBar(Modifier.fillMaxWidth().padding(vertical = 8.dp))
+                }
             }
         }
     }

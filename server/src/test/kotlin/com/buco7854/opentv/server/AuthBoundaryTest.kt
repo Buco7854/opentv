@@ -1,6 +1,6 @@
 package com.buco7854.opentv.server
 
-import io.ktor.http.CookieEncoding
+import com.buco7854.opentv.contract.*
 import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -208,19 +208,6 @@ class AuthBoundaryTest {
         assertEquals(null, parseIpLiteral("localhost"))
         assertEquals(null, parseIpLiteral("attacker.example"))
         assertEquals(null, IpRange.parse("localhost"))
-    }
-
-    @Test
-    fun browserSessionCookieHasTheRequiredSecurityAttributes() {
-        val cookie = sessionCookie("opaque-token", authConfig(secure = true), secure = true)
-
-        assertEquals(SESSION_COOKIE, cookie.name)
-        assertEquals("opaque-token", cookie.value)
-        assertEquals("/", cookie.path)
-        assertTrue(cookie.httpOnly)
-        assertTrue(cookie.secure)
-        assertEquals("Lax", cookie.extensions["SameSite"])
-        assertEquals(CookieEncoding.RAW, cookie.encoding)
     }
 
     @Test

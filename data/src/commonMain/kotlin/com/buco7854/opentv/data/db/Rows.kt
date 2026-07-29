@@ -149,4 +149,19 @@ data class DownloadRow(
     val downloadedBytes: Long = 0,
     val error: String? = null,
     val createdMs: Long,
+    val hubSourceId: Long? = null,
+    val contentId: String? = null,
+    val serverDownloadId: String? = null,
+)
+
+@Entity(tableName = "hub_sources")
+data class HubSourceRow(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val baseUrl: String,
+    val userId: String? = null,
+    val username: String? = null,
+    val role: String? = null,
+    val addedMs: Long,
+    val lastSeenMs: Long? = null,
 )

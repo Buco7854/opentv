@@ -1,5 +1,6 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.contract.*
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
@@ -8,10 +9,12 @@ import io.ktor.server.response.header
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondOutputStream
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -23,7 +26,9 @@ import java.io.InputStream
 import java.net.URI
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.nio.file.Files
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 
 /**
  * Shares one upstream live connection across a watch-together room. The channel is read from the
@@ -51,6 +56,7 @@ class LiveRelay(
         val group: String,
         val providerKey: String,
         val limit: Int,
+        val capabilities: MediaCapabilities,
     ) {
         // Each member (keyed by its session id) gets a bounded channel; a member that can't keep
         // up drops the oldest bytes and resyncs on the next transport-stream keyframe rather than
@@ -60,10 +66,11 @@ class LiveRelay(
         @Volatile private var reader: Job? = null
         @Volatile private var closer: Job? = null
         @Volatile private var upstream: InputStream? = null
+        @Volatile private var probe: Process? = null
         @Volatile private var ffmpeg: Process? = null
         @Volatile private var dead = false
-        // The audio codec to output: "copy" when browsers can already decode the source, "aac"
-        // when they can't (AC3/E-AC3/DTS...). Probed once and reused across reconnects.
+        // The audio codec to output: "copy" when every room member can decode the source, "aac"
+        // otherwise. Probed once and reused across reconnects.
         @Volatile private var audioCodec: String? = null
 
         /** Attach [member], starting the single upstream read if this is the first member.
@@ -80,30 +87,38 @@ class LiveRelay(
                     }
                     reader = scope.launch { pump() }
                 }
-                members.put(sid, member)?.close() // a reconnecting session replaces its old channel
+                members.put(sid, member)?.cancel() // reconnect cuts buffered bytes from the old response
                 return Attach.ATTACHED
             }
         }
 
         fun detach(sid: String, member: Channel<ByteArray>) {
-            member.close()
+            member.cancel()
             synchronized(lifecycle) {
                 // Only clear the map entry if it's still this channel (not a newer reconnect).
                 if (members[sid] === member) members.remove(sid)
-                // Keep the upstream briefly so a channel hop or a quick reconnect reuses it.
-                if (members.isEmpty() && closer == null && !dead) {
-                    closer = scope.launch {
-                        delay(IDLE_KEEP_MS)
-                        synchronized(lifecycle) { if (members.isEmpty()) stop() }
-                    }
-                }
+                closeWhenIdle()
             }
         }
 
         /** Cut a member's stream (left or kicked); its response ends and the client falls back to
          *  solo. No-op if this relay doesn't hold that session. */
         fun drop(sid: String) {
-            synchronized(lifecycle) { members.remove(sid)?.close() }
+            synchronized(lifecycle) {
+                members.remove(sid)?.cancel()
+                closeWhenIdle()
+            }
+        }
+
+        // Always called under [lifecycle].
+        private fun closeWhenIdle() {
+            // Keep the upstream briefly so a channel hop or a quick reconnect reuses it.
+            if (members.isEmpty() && closer == null && !dead) {
+                closer = scope.launch {
+                    delay(IDLE_KEEP_MS)
+                    synchronized(lifecycle) { if (members.isEmpty()) stop() }
+                }
+            }
         }
 
         private fun evicted() {
@@ -117,12 +132,14 @@ class LiveRelay(
             reader?.cancel(); reader = null
             closer?.cancel(); closer = null
             runCatching { upstream?.close() } // unblock a read parked on the socket
-            runCatching { ffmpeg?.destroyForcibly() }
+            probe?.let(::terminate)
+            ffmpeg?.let(::terminate)
             upstream = null
+            probe = null
             ffmpeg = null
             relays.remove(key, this)
             connections.close(key)
-            members.values.forEach { it.close() }
+            members.values.forEach { it.cancel() }
             members.clear()
         }
 
@@ -149,7 +166,7 @@ class LiveRelay(
                     // Providers drop long transfers; fall through and reconnect.
                 } finally {
                     runCatching { stream.close() }
-                    runCatching { ffmpeg?.destroyForcibly() }
+                    ffmpeg?.let(::terminate)
                     upstream = null
                     ffmpeg = null
                 }
@@ -159,7 +176,7 @@ class LiveRelay(
 
         private fun open(): InputStream {
             // One ffmpeg reads the provider (the room's single connection), copies the video, and
-            // transcodes the audio to AAC only when browsers can't decode the source codec -
+            // transcodes the audio to AAC only when the room can't decode the source codec -
             // otherwise it's copied too. Remuxed back to a transport stream we tee; resent headers
             // let a member that joins mid-stream sync.
             if (ffmpegAvailable()) {
@@ -168,13 +185,21 @@ class LiveRelay(
                 if (url.startsWith("http")) cmd += listOf(
                     "-user_agent", http.userAgent,
                     "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "10")
-                cmd += listOf("-i", url, "-c:v", "copy", "-c:a", audio)
+                // Probe and encode the same first audio stream. ffmpeg's automatic "best"
+                // selection can otherwise choose a different, unsupported language/codec.
+                cmd += listOf(
+                    "-i", url,
+                    "-map", "0:v:0?", "-map", "0:a:0?",
+                    "-c:v", "copy", "-c:a", audio,
+                )
                 if (audio == "aac") cmd += listOf("-b:a", "192k")
                 cmd += listOf("-f", "mpegts", "-mpegts_flags", "+resend_headers", "-flush_packets", "1", "pipe:1")
-                val process = processRunner.start(
-                    MediaProcessRequest(cmd, discardStderr = true)
-                )
-                ffmpeg = process
+                val process = synchronized(lifecycle) {
+                    if (dead) throw CancellationException("Relay was retired")
+                    processRunner.start(
+                        MediaProcessRequest(cmd, discardStderr = true)
+                    ).also { ffmpeg = it }
+                }
                 return process.inputStream
             }
             val request = HttpRequest.newBuilder(URI(url))
@@ -189,47 +214,91 @@ class LiveRelay(
             return response.body()
         }
 
-        /** "copy" when the source audio is browser-decodable, "aac" when it isn't. Falls back to
-         *  "copy" if the codec can't be read, so a transient probe failure never forces a needless
-         *  transcode. */
+        /** "copy" when the source audio is room-decodable, "aac" when it isn't. Unknown is
+         *  normalized to AAC: copying an unknown codec could publish a stream no room member can
+         *  decode. */
         private fun probeAudioCodec(): String {
+            val output = Files.createTempFile("opentv-relay-probe", ".txt")
             val cmd = mutableListOf("ffprobe", "-v", "error")
             if (url.startsWith("http")) cmd += listOf("-user_agent", http.userAgent)
             cmd += listOf("-select_streams", "a:0", "-show_entries", "stream=codec_name",
                 "-of", "default=nokey=1:noprint_wrappers=1", url)
-            return runCatching {
-                val process = processRunner.start(
-                    MediaProcessRequest(cmd, discardStderr = true)
-                )
-                if (!process.waitFor(15, java.util.concurrent.TimeUnit.SECONDS)) {
-                    process.destroyForcibly()
-                    process.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)
-                    return@runCatching "copy"
+            var process: Process? = null
+            return try {
+                val started = synchronized(lifecycle) {
+                    if (dead) throw CancellationException("Relay was retired")
+                    processRunner.start(
+                        MediaProcessRequest(cmd, stdoutFile = output, discardStderr = true)
+                    ).also { probe = it }
                 }
-                val codec = process.inputStream.bufferedReader().use { it.readText() }.trim().lowercase()
-                if (codec.isNotEmpty() && !MediaCodecs.audioDecodable(codec)) "aac" else "copy"
-            }.getOrDefault("copy")
+                process = started
+                if (!started.waitFor(PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                    terminate(started)
+                    "aac"
+                } else if (started.exitValue() != 0) {
+                    "aac"
+                } else {
+                    val codec = Files.readString(output).trim().lowercase()
+                    if (codec.isNotEmpty() && capabilities.audioDecodable(codec)) "copy" else "aac"
+                }
+            } catch (error: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw error
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                "aac"
+            } finally {
+                process?.takeIf(Process::isAlive)?.let(::terminate)
+                process?.let { completed ->
+                    synchronized(lifecycle) {
+                        if (probe === completed) probe = null
+                    }
+                }
+                Files.deleteIfExists(output)
+            }
+        }
+
+        private fun terminate(process: Process) {
+            runCatching { process.destroyForcibly() }
+            runCatching {
+                if (!process.waitFor(PROCESS_EXIT_WAIT_SECONDS, TimeUnit.SECONDS)) {
+                    process.destroyForcibly()
+                    process.waitFor(PROCESS_EXIT_WAIT_SECONDS, TimeUnit.SECONDS)
+                }
+            }
         }
     }
 
     /** Serve [url] to the room member [sid], sharing the room's single upstream read. */
-    suspend fun stream(
+    internal suspend fun stream(
         call: ApplicationCall,
         url: String,
         group: String,
         providerKey: String,
         limit: Int,
         sid: String,
+        capabilities: MediaCapabilities,
         leaseGuard: () -> Unit,
     ) {
-        val key = "$group|$url"
+        val key = "$group|${capabilities.fingerprint}|$url"
         val member = Channel<ByteArray>(
             capacity = RELAY_QUEUE_CHUNKS,
             onBufferOverflow = BufferOverflow.DROP_OLDEST,
         )
         while (true) {
-            val relay = relays.computeIfAbsent(key) { Relay(key, url, group, providerKey, limit) }
-            when (relay.attach(sid, member)) {
+            val (relay, attached) = synchronized(relays) {
+                // A capability/source change is a replacement physical pipeline, not another
+                // connection that may hide behind the room's shared accounting key.
+                relays.values.filter { it.group == group && it.key != key }.forEach { old ->
+                    synchronized(old.lifecycle) { old.stop() }
+                }
+                val current = relays.computeIfAbsent(key) {
+                    Relay(key, url, group, providerKey, limit, capabilities)
+                }
+                current to current.attach(sid, member)
+            }
+            when (attached) {
                 Attach.REFUSED -> {
                     call.respond(
                         HttpStatusCode.TooManyRequests,
@@ -240,13 +309,26 @@ class LiveRelay(
                 Attach.DEAD -> continue // retired as we grabbed it; computeIfAbsent makes a fresh one
                 Attach.ATTACHED -> {
                     try {
-                        leaseGuard()
-                        call.response.header(HttpHeaders.CacheControl, "no-store")
-                        call.respondOutputStream(ContentType.parse("video/mp2t")) {
-                            withContext(Dispatchers.IO) {
-                                for (chunk in member) {
-                                    write(chunk)
+                        coroutineScope {
+                            leaseGuard()
+                            val heartbeat = launch {
+                                while (isActive) {
+                                    delay(STREAM_GUARD_INTERVAL_MS)
+                                    leaseGuard()
                                 }
+                            }
+                            try {
+                                call.response.header(HttpHeaders.CacheControl, "no-store")
+                                call.respondOutputStream(ContentType.parse("video/mp2t")) {
+                                    withContext(Dispatchers.IO) {
+                                        for (chunk in member) {
+                                            leaseGuard()
+                                            write(chunk)
+                                        }
+                                    }
+                                }
+                            } finally {
+                                heartbeat.cancel()
                             }
                         }
                     } finally {
@@ -280,5 +362,8 @@ class LiveRelay(
         /** 4 MiB per slow member at the 64 KiB pump size; enough to absorb jitter without
          *  retaining the previous 16 MiB while DROP_OLDEST waits to take effect. */
         private const val RELAY_QUEUE_CHUNKS = 64
+        private const val STREAM_GUARD_INTERVAL_MS = 4_000L
+        private const val PROBE_TIMEOUT_SECONDS = 15L
+        private const val PROCESS_EXIT_WAIT_SECONDS = 3L
     }
 }

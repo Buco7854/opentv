@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.FavoriteBorder
@@ -57,21 +58,29 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.R
 import com.buco7854.opentv.core.model.ChannelKind
+import com.buco7854.opentv.core.model.HubSource
 import com.buco7854.opentv.core.model.Playlist
 import com.buco7854.opentv.ui.components.ConfirmDeletePlaylistDialog
+import com.buco7854.opentv.ui.components.RequestInitialFocusOnTv
 import com.buco7854.opentv.ui.components.OtvMenuDefaults
 import com.buco7854.opentv.ui.components.OtvTextButton
 import com.buco7854.opentv.ui.components.OtvProgressBar
 import com.buco7854.opentv.ui.components.PlaylistDialog
+import com.buco7854.opentv.ui.components.focusHighlight
 import com.buco7854.opentv.ui.home.HomeViewModel
+import com.buco7854.opentv.source.SourceId
+import com.buco7854.opentv.ui.home.CatalogSourceEntry
 import java.text.DateFormat
 import java.util.Date
 
@@ -197,19 +206,25 @@ private fun Modifier.pressablePill(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlaylistsPanel(
-    activePlaylistId: Long,
+    activeSourceId: SourceId?,
     onDismiss: () -> Unit,
-    onOpenPlaylist: (Long) -> Unit,
+    onOpenSource: (SourceId) -> Unit,
     onOpenAccount: (Long) -> Unit,
     onOpenDownloads: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenLog: () -> Unit,
+    onConnectHub: () -> Unit,
+    onOpenHub: (Long) -> Unit,
     viewModel: HomeViewModel = viewModel(),
 ) {
     val playlists by viewModel.playlists.collectAsStateWithLifecycle(initialValue = null)
+    val catalogSources by viewModel.catalogSources.collectAsStateWithLifecycle()
+    val hubs by OpenTvApp.graph.hubAccounts.sources.collectAsStateWithLifecycle(initialValue = emptyList())
     val busy by viewModel.busy.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
+    val addFocusRequester = remember { FocusRequester() }
+    RequestInitialFocusOnTv(addFocusRequester)
 
     LaunchedEffect(message) {
         message?.let {
@@ -232,7 +247,12 @@ fun PlaylistsPanel(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(stringResource(R.string.shell_playlists), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-            IconButton(onClick = { showAdd = true }) {
+            IconButton(
+                onClick = { showAdd = true },
+                modifier = Modifier
+                    .focusRequester(addFocusRequester)
+                    .focusHighlight(),
+            ) {
                 Icon(Icons.Outlined.Add, contentDescription = stringResource(R.string.shell_add_playlist))
             }
         }
@@ -241,15 +261,36 @@ fun PlaylistsPanel(
             items(playlists.orEmpty(), key = { it.id }) { playlist ->
                 PanelPlaylistRow(
                     playlist = playlist,
-                    selected = playlist.id == activePlaylistId,
+                    selected = SourceId.LocalPlaylist(playlist.id) == activeSourceId,
                     refreshEnabled = !busy,
-                    onClick = { onOpenPlaylist(playlist.id) },
+                    onClick = { onOpenSource(SourceId.LocalPlaylist(playlist.id)) },
                     onRefresh = { viewModel.refresh(playlist.id) },
                     onOpenAccount = { onOpenAccount(playlist.id) },
                     onEdit = { editing = playlist },
                     onClearProgress = { pendingClearProgress = playlist },
                     onDelete = { pendingDelete = playlist },
                 )
+            }
+            item {
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                )
+            }
+            items(hubs, key = { "hub-${it.id}" }) { hub ->
+                PanelHubRow(hub = hub, onClick = { onOpenHub(hub.id) })
+                catalogSources.filter {
+                    (it.sourceId as? SourceId.Hub)?.hubId == hub.id
+                }.forEach { source ->
+                    PanelHubPlaylistRow(
+                        source = source,
+                        selected = source.sourceId == activeSourceId,
+                        onClick = { onOpenSource(source.sourceId) },
+                    )
+                }
+            }
+            item {
+                PanelActionRow(Icons.Outlined.Dns, stringResource(R.string.hub_add_title), onConnectHub)
             }
             item {
                 HorizontalDivider(
@@ -292,6 +333,7 @@ fun PlaylistsPanel(
                 showAdd = false; editing = null
                 viewModel.rename(id, name)
             },
+            onConnectHub = { showAdd = false; editing = null; onConnectHub() },
         )
     }
 
@@ -426,6 +468,67 @@ private fun PanelPlaylistRow(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun PanelHubRow(hub: HubSource, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .focusHighlight(RoundedCornerShape(10.dp))
+            .pressablePill(active = false, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Outlined.Dns,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(hub.name, style = MaterialTheme.typography.titleSmall)
+            hub.username?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PanelHubPlaylistRow(
+    source: CatalogSourceEntry,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 24.dp, top = 2.dp, bottom = 2.dp)
+            .focusHighlight(RoundedCornerShape(10.dp))
+            .pressablePill(active = selected, activeAlpha = 0.12f, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.AutoMirrored.Outlined.PlaylistPlay,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        Text(
+            source.title,
+            style = MaterialTheme.typography.titleSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

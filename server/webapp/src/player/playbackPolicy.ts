@@ -1,3 +1,5 @@
+import type { ClientCapabilities } from '../api';
+
 export type StreamKind = 'hls' | 'livets' | 'ts' | 'direct';
 
 /**
@@ -26,11 +28,32 @@ export type PlaybackEngineName = 'hls' | 'mpegts' | 'native' | 'remux';
 
 export const engineForKind = (kind: StreamKind): PlaybackEngineName => ENGINE_BY_KIND[kind];
 
+/** What the activity dashboard should say for the transport the player actually mounted. */
+export function reportedEngine(
+  kind: StreamKind,
+  roomLive: boolean,
+  remuxed: boolean,
+): PlaybackEngineName {
+  if (remuxed) return 'remux';
+  if (roomLive && kind !== 'hls') return 'mpegts';
+  return engineForKind(kind);
+}
+
 /** Browser capability used to choose copy vs transcode during remux setup. */
 export function supportsHevc(mediaSource: typeof MediaSource | undefined): boolean {
   return mediaSource != null
     && ['hvc1.1.6.L120.90', 'hvc1.1.6.L93.90', 'hev1.1.6.L93.90']
       .some((codec) => mediaSource.isTypeSupported(`video/mp4; codecs="${codec}"`));
+}
+
+/** The server's browser baseline, extended only by codecs this browser positively reports. */
+export function playbackCapabilities(
+  mediaSource: typeof MediaSource | undefined,
+): ClientCapabilities {
+  return {
+    videoCodecs: supportsHevc(mediaSource) ? ['h264', 'hevc'] : ['h264'],
+    audioCodecs: ['aac', 'mp3', 'opus', 'flac', 'vorbis'],
+  };
 }
 
 export function formatPlaybackTime(seconds: number): string {

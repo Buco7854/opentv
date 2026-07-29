@@ -1,5 +1,6 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.contract.*
 import io.ktor.client.request.get
 import io.ktor.client.statement.HttpResponse
 import io.ktor.http.HttpHeaders
@@ -20,6 +21,24 @@ import kotlin.test.assertTrue
  * every cookie is appended before the handler responds.
  */
 class OidcCallbackRouteTest {
+    @Test
+    fun `a successful callback returns the bearer token in a fragment`() {
+        assertEquals(
+            "/#session=opaque-token",
+            oidcResultRedirect(AuthFlowDto("AUTHENTICATED", sessionToken = "opaque-token")),
+        )
+        assertEquals(
+            "/#session=opaque-token&handoff=${"h".repeat(32)}",
+            oidcResultRedirect(
+                AuthFlowDto("AUTHENTICATED", sessionToken = "opaque-token"),
+                "h".repeat(32),
+            ),
+        )
+        assertEquals(
+            "/?auth=pending",
+            oidcResultRedirect(AuthFlowDto("PENDING_APPROVAL")),
+        )
+    }
 
     @Test
     fun `a rejected callback still clears the transaction cookie`() = withPublicAuthServer {

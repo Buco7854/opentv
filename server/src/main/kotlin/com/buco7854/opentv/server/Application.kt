@@ -1,5 +1,6 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.contract.*
 import com.buco7854.opentv.core.log.CoreLog
 import com.buco7854.opentv.core.log.ProviderSecrets
 import com.buco7854.opentv.core.repo.AccountRepository
@@ -67,6 +68,7 @@ class ServerRuntime(
         graph.downloads.close()
         graph.liveRelay.close()
         graph.remux.close()
+        graph.proxy.close()
         graph.streamGate.close()
         connections.closeAll()
         userDatabase.close()
@@ -162,7 +164,7 @@ object ServerBootstrap {
                 contentIdentities,
                 userActivity,
             ),
-            downloads = DownloadApplicationService(downloads, contentIdentities, auth),
+            downloads = DownloadApplicationService(downloads, contentIdentities, auth, cipher),
             sessions = SessionApplicationService(
                 storage,
                 sessions,
@@ -189,7 +191,6 @@ object ServerBootstrap {
             remux,
             mediaGrants,
             connectionLimit,
-            auth,
         )
         val graph = ServerGraph(
             apiServices = apiServices,
@@ -242,7 +243,7 @@ object ServerBootstrap {
 fun Application.openTvModule(
     graph: ServerGraph,
     runtime: ServerRuntime,
-    apiSecurity: ApiSecurity = ApiSecurity.authenticated(graph.auth, graph.authConfig),
+    apiSecurity: ApiSecurity = ApiSecurity.authenticated(graph.auth, graph.cipher),
 ) {
     val origins = PublicOrigin(graph.authConfig, graph.trustedProxies::trustsPeer)
     install(ContentNegotiation) {
@@ -284,31 +285,6 @@ internal fun Application.installOpenTvErrorResponses() {
             call.respond(
                 HttpStatusCode.Forbidden,
                 ApiErrorDto("forbidden", "You are not allowed to perform this action"),
-            )
-        }
-        exception<CsrfException> { call, _ ->
-            call.respond(
-                HttpStatusCode.Forbidden,
-                ApiErrorDto("csrf_rejected", "The CSRF token was missing or stale"),
-            )
-        }
-        // Almost always a deployment detail rather than an attack, and invisible from the
-        // browser: log both sides so the operator can see which address to configure.
-        exception<RejectedOriginException> { call, cause ->
-            LoggerFactory.getLogger("opentv").warn(
-                "Rejected origin {} on {}: it is neither the requested host {} nor OPENTV_PUBLIC_URL {}",
-                cause.received ?: "(absent)",
-                call.request.path(),
-                call.request.headers[HttpHeaders.Host] ?: "(absent)",
-                RequestOrigin.expected(cause.publicUrl),
-            )
-            call.respond(
-                HttpStatusCode.Forbidden,
-                ApiErrorDto(
-                    "origin_rejected",
-                    "This request's origin is not served by this OpenTV instance. " +
-                        "Set OPENTV_PUBLIC_URL to the address browsers use.",
-                ),
             )
         }
         exception<WebAuthnUnavailableException> { call, cause ->

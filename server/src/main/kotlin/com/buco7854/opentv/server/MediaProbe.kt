@@ -1,5 +1,6 @@
 package com.buco7854.opentv.server
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -8,6 +9,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import kotlin.math.ceil
 
 internal data class MediaStreamInfo(
     val index: Int,
@@ -78,12 +80,18 @@ internal class MediaProbe(
         val output = Files.createTempFile(workDirectory, "kf", ".csv")
         val command = ffprobeCommand(url) +
             listOf("-select_streams", "v:0", "-show_entries", "packet=pts_time,flags", "-of", "csv=p=0", url)
+        var process: Process? = null
         val result = try {
-            val process = processRunner.start(
+            val started = processRunner.start(
                 MediaProcessRequest(command, stdoutFile = output, discardStderr = true)
             )
-            if (!process.waitFor(30, TimeUnit.SECONDS)) {
-                process.destroyForcibly()
+            process = started
+            if (!started.waitFor(30, TimeUnit.SECONDS)) {
+                terminate(started)
+                null
+            } else if (started.exitValue() != 0 ||
+                Files.size(output) > MAX_KEYFRAME_OUTPUT_BYTES
+            ) {
                 null
             } else {
                 val times = Files.readString(output).lineSequence().mapNotNull { line ->
@@ -94,9 +102,15 @@ internal class MediaProbe(
                     values.map { it - values.first() }
                 }
             }
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw error
+        } catch (error: CancellationException) {
+            throw error
         } catch (_: Exception) {
             null
         } finally {
+            process?.takeIf(Process::isAlive)?.let(::terminate)
             Files.deleteIfExists(output)
         }
         if (keyframes.size > MAX_KEYFRAME_ENTRIES) keyframes.clear()
@@ -105,6 +119,9 @@ internal class MediaProbe(
     }
 
     fun segmentStarts(keyframes: List<Double>?, targetLength: Double, duration: Double): List<Double> {
+        require(targetLength.isFinite() && targetLength > 0) { "Invalid segment target" }
+        require(duration.isFinite() && duration > 0) { "Invalid media duration" }
+        require(ceil(duration / targetLength) <= MAX_SEGMENTS) { "Media has too many segments" }
         if (keyframes == null) {
             return generateSequence(0.0) { it + targetLength }
                 .takeWhile { it < duration - 0.1 }
@@ -115,6 +132,7 @@ internal class MediaProbe(
         for (keyframe in keyframes) {
             if (keyframe >= target && keyframe < duration - 0.1) {
                 starts += keyframe
+                require(starts.size <= MAX_SEGMENTS) { "Media has too many segments" }
                 target += targetLength
             }
         }
@@ -132,7 +150,16 @@ internal class MediaProbe(
      */
     private fun runProbe(url: String): MediaProbeResult {
         if (!url.startsWith("http")) return runProbe(url, bounded = false)
-        val quick = runCatching { runProbe(url, bounded = true) }.getOrNull()
+        val quick = try {
+            runProbe(url, bounded = true)
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw error
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            null
+        }
         if (quick != null && quick.durationSec != null &&
             quick.streams.any { it.type == "audio" } && quick.streams.any { it.type == "video" }
         ) {
@@ -145,19 +172,25 @@ internal class MediaProbe(
         val output = Files.createTempFile(workDirectory, "probe", ".json")
         val command = ffprobeCommand(url, bounded) +
             listOf("-print_format", "json", "-show_streams", "-show_format", url)
+        var process: Process? = null
         val document = try {
-            val process = processRunner.start(
+            val started = processRunner.start(
                 MediaProcessRequest(command, stdoutFile = output, discardStderr = true)
             )
-            if (!process.waitFor(45, TimeUnit.SECONDS)) {
-                process.destroyForcibly()
+            process = started
+            if (!started.waitFor(45, TimeUnit.SECONDS)) {
+                terminate(started)
                 throw IllegalStateException("ffprobe timed out reading the stream")
             }
-            if (process.exitValue() != 0) {
+            if (started.exitValue() != 0) {
                 throw IllegalStateException("ffprobe could not read the stream")
+            }
+            if (Files.size(output) > MAX_PROBE_OUTPUT_BYTES) {
+                throw IllegalStateException("ffprobe returned too much stream info")
             }
             Files.readString(output)
         } finally {
+            process?.takeIf(Process::isAlive)?.let(::terminate)
             Files.deleteIfExists(output)
         }
         val json = Json.parseToJsonElement(document) as? JsonObject
@@ -169,18 +202,28 @@ internal class MediaProbe(
             fun tag(key: String) = (tags?.get(key) as? JsonPrimitive)?.content
             val disposition = stream["disposition"] as? JsonObject
             MediaStreamInfo(
-                index = text("index")?.toIntOrNull() ?: return@mapNotNull null,
+                index = text("index")?.toIntOrNull()?.takeIf { it >= 0 } ?: return@mapNotNull null,
                 type = text("codec_type") ?: return@mapNotNull null,
                 codec = text("codec_name") ?: "",
                 language = tag("language")?.takeIf { it.isNotBlank() && it != "und" },
                 title = tag("title")?.takeIf(String::isNotBlank),
-                channels = text("channels")?.toIntOrNull(),
+                channels = text("channels")?.toIntOrNull()?.takeIf { it in 1..MAX_AUDIO_CHANNELS },
                 forced = (disposition?.get("forced") as? JsonPrimitive)?.content == "1",
             )
         }
         val duration = ((json["format"] as? JsonObject)?.get("duration") as? JsonPrimitive)
-            ?.content?.toDoubleOrNull()
+            ?.content?.toDoubleOrNull()?.takeIf { it.isFinite() && it > 0 }
         return MediaProbeResult(streams, duration)
+    }
+
+    private fun terminate(process: Process) {
+        runCatching { process.destroyForcibly() }
+        runCatching {
+            if (!process.waitFor(PROCESS_EXIT_WAIT_SECONDS, TimeUnit.SECONDS)) {
+                process.destroyForcibly()
+                process.waitFor(PROCESS_EXIT_WAIT_SECONDS, TimeUnit.SECONDS)
+            }
+        }
     }
 
     private fun ffprobeCommand(url: String, bounded: Boolean = false): List<String> = buildList {
@@ -197,5 +240,10 @@ internal class MediaProbe(
         const val PROBE_SIZE_BYTES = "8000000"
         const val MAX_PROBES = 128
         const val MAX_KEYFRAME_ENTRIES = 64
+        const val MAX_SEGMENTS = 100_000
+        const val MAX_AUDIO_CHANNELS = 64
+        const val MAX_PROBE_OUTPUT_BYTES = 4L * 1024 * 1024
+        const val MAX_KEYFRAME_OUTPUT_BYTES = 32L * 1024 * 1024
+        const val PROCESS_EXIT_WAIT_SECONDS = 3L
     }
 }

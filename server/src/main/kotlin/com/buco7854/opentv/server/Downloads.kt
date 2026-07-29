@@ -170,19 +170,44 @@ class DownloadManager(
     }
 
     suspend fun fileFor(userId: String, userDownloadId: String): Pair<DownloadBlobRow, Path>? {
+        val result = downloadFileFor(userId, userDownloadId) ?: return null
+        return result.takeIf { (blob) -> blob.status == DownloadBlobStatus.DONE }
+    }
+
+    suspend fun downloadFileFor(
+        userId: String,
+        userDownloadId: String,
+    ): Pair<DownloadBlobRow, Path>? {
         val row = owned(userId, userDownloadId)
         if (row.suspended) return null
         val blob = db.downloads().blob(row.blobId) ?: return null
-        if (blob.status != DownloadBlobStatus.DONE) return null
         val path = safePath(blob.filePath) ?: return null
-        return if (Files.exists(path)) blob to path else null
+        if (!Files.exists(path)) return null
+        val size = Files.size(path)
+        val readable = when (blob.status) {
+            DownloadBlobStatus.RUNNING -> blob.downloadedBytes > 0 && size > 0
+            DownloadBlobStatus.DONE ->
+                blob.totalBytes > 0 &&
+                    blob.downloadedBytes == blob.totalBytes &&
+                    size == blob.totalBytes
+            else -> false
+        }
+        return if (readable) blob to path else null
     }
 
     suspend fun blobFile(blobId: String): Pair<DownloadBlobRow, Path>? {
         val blob = db.downloads().blob(blobId) ?: return null
-        if (blob.status != DownloadBlobStatus.DONE) return null
         val path = safePath(blob.filePath) ?: return null
-        return if (Files.exists(path)) blob to path else null
+        return if (blob.status == DownloadBlobStatus.DONE &&
+            blob.totalBytes > 0 &&
+            blob.downloadedBytes == blob.totalBytes &&
+            Files.exists(path) &&
+            Files.size(path) == blob.totalBytes
+        ) {
+            blob to path
+        } else {
+            null
+        }
     }
 
     suspend fun deletePlaylist(playlistId: Long) {
@@ -270,6 +295,8 @@ class DownloadManager(
     }
 
     private class HttpStatusException(code: Int) : IOException("HTTP $code")
+    private class InvalidDownloadResponseException(message: String) : IOException(message)
+    private class IncompleteDownloadResponseException : IOException()
 
     private companion object {
         /** A transfer that is running or waiting its turn. */
@@ -278,6 +305,8 @@ class DownloadManager(
         val RESUMABLE = setOf(
             DownloadBlobStatus.PAUSED, DownloadBlobStatus.FAILED, DownloadBlobStatus.CANCELLED,
         )
+        val CONTENT_RANGE = Regex("""bytes (\d+)-(\d+)/(\d+)""", RegexOption.IGNORE_CASE)
+        val UNSATISFIED_RANGE = Regex("""bytes \*/(\d+)""", RegexOption.IGNORE_CASE)
     }
 
     private suspend fun run(id: String) {
@@ -323,6 +352,11 @@ class DownloadManager(
                     throw e
                 } catch (e: HttpStatusException) {
                     throw e
+                } catch (e: InvalidDownloadResponseException) {
+                    throw e
+                } catch (_: IncompleteDownloadResponseException) {
+                    stalled = 0
+                    continue
                 } catch (e: Exception) {
                     val after = if (Files.exists(target)) Files.size(target) else 0
                     stalled = if (after > before) 0 else stalled + 1
@@ -357,26 +391,69 @@ class DownloadManager(
             .build()
         val response = http.client.send(request, HttpResponse.BodyHandlers.ofInputStream())
         if (response.statusCode() !in 200..299) {
+            val recordedTotal = db.downloads().blob(id)?.totalBytes ?: 0
+            val completeAfterCrash = response.statusCode() == 416 &&
+                existing > 0 &&
+                (recordedTotal <= 0 || recordedTotal == existing) &&
+                UNSATISFIED_RANGE.matchEntire(
+                    response.headers().firstValue("Content-Range").orElse(""),
+                )?.groupValues?.get(1)?.toLongOrNull() == existing
             response.body().close()
+            if (completeAfterCrash) {
+                updateProgress(id, existing, existing, DownloadBlobStatus.DONE)
+                return
+            }
             throw HttpStatusException(response.statusCode())
         }
         val resumed = response.statusCode() == 206
-        if (!resumed) from = 0
+        if (existing > 0 && !resumed) {
+            response.body().close()
+            throw InvalidDownloadResponseException(
+                "Provider ignored the resume request; restart the download",
+            )
+        }
         val length = response.headers().firstValue("Content-Length").orElse(null)?.toLongOrNull()
-        val total = if (resumed) response.headers().firstValue("Content-Range").orElse(null)
-            ?.substringAfter('/')?.toLongOrNull() ?: length?.plus(from) ?: 0 else length ?: 0
+        val range = if (resumed) {
+            try {
+                parseContentRange(
+                    response.headers().firstValue("Content-Range").orElse(null),
+                    expectedStart = existing,
+                )
+            } catch (error: InvalidDownloadResponseException) {
+                response.body().close()
+                throw error
+            }
+        } else {
+            from = 0
+            null
+        }
+        val expectedResponseBytes = range?.let { it.end - it.start + 1 }
+        if (length != null && expectedResponseBytes != null && length != expectedResponseBytes) {
+            response.body().close()
+            throw InvalidDownloadResponseException("Provider returned an inconsistent Content-Length")
+        }
+        val total = range?.total ?: length ?: 0
         var downloaded = from
         updateProgress(id, downloaded, total, DownloadBlobStatus.RUNNING)
         response.body().use { input ->
             FileOutputStream(target.toFile(), resumed).use { out ->
                 val buffer = ByteArray(256 * 1024)
                 var lastWrite = 0L
+                var responseBytes = 0L
                 while (true) {
                     coroutineContext.ensureActive()
                     val count = input.read(buffer)
                     if (count < 0) break
+                    if (expectedResponseBytes != null &&
+                        responseBytes + count > expectedResponseBytes
+                    ) {
+                        throw InvalidDownloadResponseException(
+                            "Provider returned more bytes than its Content-Range",
+                        )
+                    }
                     out.write(buffer, 0, count)
                     downloaded += count
+                    responseBytes += count
                     val now = clock()
                     if (now - lastWrite > 500) {
                         lastWrite = now
@@ -384,9 +461,41 @@ class DownloadManager(
                         updateProgress(id, downloaded, total, DownloadBlobStatus.RUNNING)
                     }
                 }
+                if (expectedResponseBytes != null && responseBytes != expectedResponseBytes) {
+                    throw InvalidDownloadResponseException(
+                        "Provider returned fewer bytes than its Content-Range",
+                    )
+                }
             }
         }
-        updateProgress(id, downloaded, total.takeIf { it > 0 } ?: downloaded, DownloadBlobStatus.DONE)
+        if (downloaded <= 0) {
+            throw InvalidDownloadResponseException("Provider returned an empty media file")
+        }
+        if (total > 0 && downloaded > total) {
+            throw InvalidDownloadResponseException("Provider returned more than the declared media size")
+        }
+        if (total > 0 && downloaded < total) {
+            updateProgress(id, downloaded, total, DownloadBlobStatus.RUNNING)
+            throw IncompleteDownloadResponseException()
+        }
+        updateProgress(id, downloaded, downloaded, DownloadBlobStatus.DONE)
+    }
+
+    private data class ContentRange(val start: Long, val end: Long, val total: Long)
+
+    private fun parseContentRange(raw: String?, expectedStart: Long): ContentRange {
+        val match = CONTENT_RANGE.matchEntire(raw.orEmpty())
+            ?: throw InvalidDownloadResponseException("Provider returned an invalid Content-Range")
+        val start = match.groupValues[1].toLongOrNull()
+            ?: throw InvalidDownloadResponseException("Provider returned an invalid range start")
+        val end = match.groupValues[2].toLongOrNull()
+            ?: throw InvalidDownloadResponseException("Provider returned an invalid range end")
+        val total = match.groupValues[3].toLongOrNull()
+            ?: throw InvalidDownloadResponseException("Provider returned an unknown ranged media size")
+        if (start != expectedStart || end < start || total <= end) {
+            throw InvalidDownloadResponseException("Provider returned an inconsistent Content-Range")
+        }
+        return ContentRange(start, end, total)
     }
 
     private suspend fun updateProgress(id: String, downloaded: Long, total: Long, status: String) {
@@ -400,4 +509,5 @@ class DownloadManager(
             ) != 1
         ) throw CancellationException("Download is no longer running")
     }
+
 }

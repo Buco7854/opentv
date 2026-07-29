@@ -13,8 +13,16 @@ object ProviderSecrets {
 
     private const val MASK = "•••"
 
-    // Credentials as query parameters: get.php?username=U&password=P, api_key=...
-    private val QUERY = Regex("""(?i)\b(username|password|token|pass|api_key)=[^&\s"'<>]+""")
+    // Credentials and capabilities in URLs: provider queries, device-link
+    // fragments, media grants, WebSocket tickets and download-file tokens.
+    private val URL_SECRET =
+        Regex("""(?i)\b(username|password|token|pass|api_key|ws_token|u|g|sid|t)=[^&\s"'<>]+""")
+
+    // The same values after a request/DTO has been rendered as JSON or a map.
+    private val STRUCTURED_SECRET =
+        Regex(
+            """(?i)(["']?\b(?:username|password|pass|api_key|token|sessionToken|pollToken|linkToken|ws_token)["']?\s*[:=]\s*[\[{"']*\s*)[^&\s"'<> ,;}\]]+""",
+        )
 
     // Xtream path credentials: /live|movie(s)|series|timeshift/USER/PASS/...
     private val KIND_PATH =
@@ -22,10 +30,16 @@ object ProviderSecrets {
 
     // Bare Xtream stream paths: http://host/USER/PASS/1234.ts
     private val BARE_PATH =
-        Regex("""(://[^/\s"'<>]+)/[^/\s"'<>]+/[^/\s"'<>]+/(\d+(?:\.\w{1,5})?)(?=[\s"'<>,)\]}]|$)""")
+        Regex("""(://[^/\s"'<>]+)/[^/\s"'<>]+/[^/\s"'<>]+/(\d+(?:\.\w{1,5})?)(?=[:;.!?#\s"'<>,)\]}]|$)""")
+
+    // Hub bearer sessions in an Authorization header echoed into an error/log line.
+    private val AUTHORIZATION =
+        Regex("""(?i)\bauthorization["']?\s*[:=]\s*[\[{"']*\s*(?:Bearer\s+)?[^\s"'<> ,;}\]]+""")
 
     fun redact(text: String): String {
-        var result = QUERY.replace(text) { "${it.groupValues[1]}=$MASK" }
+        var result = URL_SECRET.replace(text) { "${it.groupValues[1]}=$MASK" }
+        result = STRUCTURED_SECRET.replace(result) { "${it.groupValues[1]}$MASK" }
+        result = AUTHORIZATION.replace(result) { "authorization: $MASK" }
         result = BARE_PATH.replace(result) { "${it.groupValues[1]}/$MASK/$MASK/${it.groupValues[2]}" }
         result = KIND_PATH.replace(result) { "/${it.groupValues[1]}/$MASK/$MASK/" }
         return result

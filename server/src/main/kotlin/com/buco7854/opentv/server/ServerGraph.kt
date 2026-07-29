@@ -60,5 +60,4 @@ data class MediaRouteDependencies(
     val remux: RemuxService,
     val mediaGrants: PlaybackMediaGrants,
     val connectionLimit: suspend (String) -> Int,
-    val auth: AuthService,
 )

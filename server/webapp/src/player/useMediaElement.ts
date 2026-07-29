@@ -91,7 +91,9 @@ export function useMediaElement(opts: {
         },
         subs: {
           names: text.map((track, i) => track.label || track.language || t('player.subtitlesN', { n: i + 1 })),
-          current: text.findIndex((track) => track.mode === 'showing'),
+          // Tracks are deliberately hidden so cues reach our styled overlay without the
+          // browser painting a second copy. Hidden therefore means selected, not off.
+          current: text.findIndex((track) => track.mode !== 'disabled'),
         },
       });
     };

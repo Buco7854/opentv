@@ -9,15 +9,20 @@ import com.buco7854.opentv.serverdata.db.ServerUserDatabase
 import com.buco7854.opentv.serverdata.db.UserRow
 import java.util.UUID
 
-/** Persistent, revocable session storage independent from HTTP cookie delivery. */
+/** Persistent, revocable session storage independent from HTTP delivery. */
 internal class PersistentSessionService(
     private val db: ServerUserDatabase,
     private val config: AuthConfig,
     private val cleanup: UserStateCleanupCoordinator,
     private val clock: () -> Long,
 ) {
-    suspend fun issue(user: UserRow, method: String, mfa: Boolean): IssuedSession {
-        val issued = prepare(user, method, mfa)
+    suspend fun issue(
+        user: UserRow,
+        method: String,
+        mfa: Boolean,
+        clientKind: String = ClientKind.BROWSER,
+    ): IssuedSession {
+        val issued = prepare(user, method, mfa, clientKind = clientKind)
         db.sessions().insert(issued.row)
         return issued
     }
@@ -35,7 +40,7 @@ internal class PersistentSessionService(
             id = UUID.randomUUID().toString(),
             userId = user.id,
             tokenHash = AuthCrypto.hashToken(token),
-            csrfToken = AuthCrypto.token(),
+            csrfToken = "",
             authMethod = method,
             clientKind = clientKind,
             tokenFamilyId = UUID.randomUUID().toString(),
@@ -54,8 +59,18 @@ internal class PersistentSessionService(
 
     suspend fun authenticate(rawToken: String?): Pair<Actor, AuthSessionRow>? {
         if (rawToken.isNullOrBlank() || rawToken.length > 512) return null
-        val now = clock()
         val session = db.sessions().byTokenHash(AuthCrypto.hashToken(rawToken)) ?: return null
+        return authenticate(session)
+    }
+
+    suspend fun authenticateSession(sessionId: String): Pair<Actor, AuthSessionRow>? {
+        if (sessionId.isBlank() || sessionId.length > 128) return null
+        val session = db.sessions().get(sessionId) ?: return null
+        return authenticate(session)
+    }
+
+    private suspend fun authenticate(session: AuthSessionRow): Pair<Actor, AuthSessionRow>? {
+        val now = clock()
         if (session.revokedAtMs != null ||
             session.idleExpiresAtMs <= now ||
             session.absoluteExpiresAtMs <= now ||
@@ -86,11 +101,6 @@ internal class PersistentSessionService(
         }
         return actor(user, session) to session
     }
-
-    suspend fun csrf(actor: Actor): String =
-        db.sessions().get(actor.authSessionId)
-            ?.takeIf { it.userId == actor.userId && it.revokedAtMs == null }
-            ?.csrfToken ?: throw UnauthenticatedApiException()
 
     suspend fun recentlyAuthenticated(actor: Actor): AuthSessionRow =
         db.sessions().get(actor.authSessionId)

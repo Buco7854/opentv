@@ -69,6 +69,7 @@ fun MediaListRow(
         ),
         modifier = modifier
             .focusHighlight(RoundedCornerShape(16.dp))
+            .dpadLongClick(onLongClick)
             // Clip before the clickable so the ripple stays inside the rounded corners.
             .clip(RoundedCornerShape(16.dp))
             .combinedClickable(onClick = onClick, onLongClick = onLongClick),
@@ -127,7 +128,7 @@ fun MediaListRow(
                     FavoriteIcon(isFavorite = isFavorite, onToggle = onToggleFavorite)
                 }
                 if (onGuide != null) {
-                    IconButton(onClick = onGuide) {
+                    IconButton(onClick = onGuide, modifier = Modifier.focusHighlight(CircleShape)) {
                         Icon(
                             Icons.Outlined.CalendarMonth,
                             contentDescription = if (guideHighlight) {

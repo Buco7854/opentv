@@ -17,6 +17,20 @@ data class ImageCapability(
 data class StreamCapability(
     val url: String,
     val leaseId: String,
+    /** True only for an HLS root or a child capability minted by the HLS rewriter. */
+    val hlsResource: Boolean = false,
+)
+
+data class WebSocketCapability(
+    val sessionId: String,
+    val leaseId: String,
+    val expiresAtMs: Long,
+)
+
+data class DownloadFileCapability(
+    val userId: String,
+    val downloadId: String,
+    val expiresAtMs: Long,
 )
 
 class StreamCipher(
@@ -56,6 +70,18 @@ class StreamCipher(
         return encryptValue(classify(url), "$leaseId\n$url", STREAM_PURPOSE)
     }
 
+    /**
+     * Keep HLS provenance inside the authenticated capability even when a child is a `.ts`, key,
+     * or extensionless URI. The clear tag drives no authorization decision; GCM protects the URL
+     * and lease payload, and [tryDecryptStream] rejects any tag/payload tampering.
+     */
+    fun encryptHlsResource(url: String, leaseId: String): String {
+        require(leaseId.isNotBlank() && leaseId.length <= 128 && '\n' !in leaseId) {
+            "Invalid stream capability lease"
+        }
+        return encryptValue('h', "$leaseId\n$url", STREAM_PURPOSE)
+    }
+
     fun encryptImage(url: String, userId: String, playlistId: Long? = null): String {
         require(userId.isNotBlank() && userId.length <= 128) { "Invalid image capability user" }
         val expiresAtMs = clock() + IMAGE_CAPABILITY_TTL_MS
@@ -63,6 +89,30 @@ class StreamCipher(
             'i',
             "$expiresAtMs\n$userId\n${playlistId ?: "-"}\n$url",
             IMAGE_PURPOSE,
+        )
+    }
+
+    fun encryptWebSocket(sessionId: String, leaseId: String): WebSocketCapabilityToken {
+        require(sessionId.isNotBlank() && sessionId.length <= 128) {
+            "Invalid WebSocket session"
+        }
+        require(leaseId.isNotBlank() && leaseId.length <= 128) {
+            "Invalid WebSocket lease"
+        }
+        val expiresAtMs = clock() + WEB_SOCKET_CAPABILITY_TTL_MS
+        return WebSocketCapabilityToken(
+            encryptValue('w', "$expiresAtMs\n$sessionId\n$leaseId", WEB_SOCKET_PURPOSE),
+            expiresAtMs,
+        )
+    }
+
+    fun encryptDownloadFile(userId: String, downloadId: String): DownloadFileCapabilityToken {
+        require(userId.isNotBlank() && userId.length <= 128) { "Invalid download owner" }
+        require(downloadId.isNotBlank() && downloadId.length <= 128) { "Invalid download id" }
+        val expiresAtMs = clock() + DOWNLOAD_FILE_CAPABILITY_TTL_MS
+        return DownloadFileCapabilityToken(
+            encryptValue('f', "$expiresAtMs\n$userId\n$downloadId", DOWNLOAD_FILE_PURPOSE),
+            expiresAtMs,
         )
     }
 
@@ -88,7 +138,11 @@ class StreamCipher(
         val separator = payload.indexOf('\n')
         if (separator <= 0) return null
         val url = payload.substring(separator + 1).takeIf { it.isNotBlank() } ?: return null
-        return StreamCapability(url, payload.substring(0, separator))
+        return StreamCapability(
+            url = url,
+            leaseId = payload.substring(0, separator),
+            hlsResource = token[0] == 'h',
+        )
     }
 
     fun tryDecryptImage(token: String): ImageCapability? {
@@ -106,6 +160,35 @@ class StreamCipher(
         return ImageCapability(url, userId, playlistId, expiresAtMs)
     }
 
+    fun tryDecryptWebSocket(token: String): WebSocketCapability? {
+        val fields = decryptExpiringFields(token, 'w', WEB_SOCKET_PURPOSE) ?: return null
+        if (fields.size != 3) return null
+        val sessionId = fields[1].takeIf { it.isNotBlank() && it.length <= 128 } ?: return null
+        val leaseId = fields[2].takeIf { it.isNotBlank() && it.length <= 128 } ?: return null
+        return WebSocketCapability(sessionId, leaseId, fields[0].toLong())
+    }
+
+    fun tryDecryptDownloadFile(token: String): DownloadFileCapability? {
+        val fields = decryptExpiringFields(token, 'f', DOWNLOAD_FILE_PURPOSE) ?: return null
+        if (fields.size != 3) return null
+        val userId = fields[1].takeIf { it.isNotBlank() && it.length <= 128 } ?: return null
+        val downloadId = fields[2].takeIf { it.isNotBlank() && it.length <= 128 } ?: return null
+        return DownloadFileCapability(userId, downloadId, fields[0].toLong())
+    }
+
+    private fun decryptExpiringFields(
+        token: String,
+        tag: Char,
+        purpose: ByteArray,
+    ): List<String>? {
+        if (token.length !in 3..MAX_CAPABILITY_LENGTH || token[1] != '.' || token[0] != tag) {
+            return null
+        }
+        val fields = decryptValue(token, purpose)?.split('\n') ?: return null
+        fields.firstOrNull()?.toLongOrNull()?.takeIf { it > clock() } ?: return null
+        return fields
+    }
+
     private fun decryptValue(token: String, purpose: ByteArray): String? {
         return runCatching {
             val body = Base64.getUrlDecoder().decode(token.substring(2))
@@ -121,8 +204,15 @@ class StreamCipher(
 
     private companion object {
         const val IMAGE_CAPABILITY_TTL_MS = 24 * 60 * 60_000L
+        const val WEB_SOCKET_CAPABILITY_TTL_MS = 30_000L
+        const val DOWNLOAD_FILE_CAPABILITY_TTL_MS = 10 * 60_000L
         const val MAX_CAPABILITY_LENGTH = 8_192
         val STREAM_PURPOSE = "opentv-stream-v3".toByteArray()
         val IMAGE_PURPOSE = "opentv-image-v1".toByteArray()
+        val WEB_SOCKET_PURPOSE = "opentv-websocket-v1".toByteArray()
+        val DOWNLOAD_FILE_PURPOSE = "opentv-download-file-v1".toByteArray()
     }
 }
+
+data class WebSocketCapabilityToken(val token: String, val expiresAtMs: Long)
+data class DownloadFileCapabilityToken(val token: String, val expiresAtMs: Long)

@@ -8,7 +8,7 @@ import { RemuxController, RemuxSession } from './useRemuxSession';
 type ErrorData = { fatal: boolean; type: string; details?: string; response?: { code: number } };
 type Handler = (event: string, data: ErrorData) => void;
 
-const { FakeHls } = vi.hoisted(() => {
+const { FakeHls, FakeMpegtsPlayer, createMpegtsPlayer } = vi.hoisted(() => {
   class FakeHls {
     static isSupported = () => true;
     static Events = {
@@ -51,14 +51,31 @@ const { FakeHls } = vi.hoisted(() => {
       this.handlers.get(FakeHls.Events.ERROR)?.forEach((handler) => handler(FakeHls.Events.ERROR, data));
     }
   }
-  return { FakeHls };
+  class FakeMpegtsPlayer {
+    attachMediaElement = vi.fn();
+    load = vi.fn();
+    unload = vi.fn();
+    play = vi.fn(() => Promise.resolve());
+    destroy = vi.fn();
+    private handlers = new Map<string, ((type: string, detail: string, info: unknown) => void)[]>();
+
+    on(event: string, handler: (type: string, detail: string, info: unknown) => void) {
+      this.handlers.set(event, [...(this.handlers.get(event) ?? []), handler]);
+    }
+
+    emitError(type: string, info: unknown = {}) {
+      this.handlers.get('error')?.forEach((handler) => handler(type, '', info));
+    }
+  }
+  const createMpegtsPlayer = vi.fn(() => new FakeMpegtsPlayer());
+  return { FakeHls, FakeMpegtsPlayer, createMpegtsPlayer };
 });
 
 vi.mock('hls.js', () => ({ default: FakeHls }));
 vi.mock('mpegts.js', () => ({
   default: {
     getFeatureList: () => ({ mseLivePlayback: true }),
-    createPlayer: vi.fn(),
+    createPlayer: createMpegtsPlayer,
     Events: { ERROR: 'error' },
     ErrorTypes: { NETWORK_ERROR: 'NetworkError', MEDIA_ERROR: 'MediaError' },
   },
@@ -71,9 +88,11 @@ const lease: PlaybackLease = {
   mediaGrant: 'grant-1',
   mediaGrantExpiresAtMs: Date.now() + 600_000,
   streamUrl: '/api/v1/stream?u=d.token&sid=lease-1&g=grant-1',
+  sharedHlsUrl: null,
   relayUrl: null,
   transcodeUrl: null,
   remuxStartUrl: '/api/v1/remux/start?u=d.token&sid=lease-1&g=grant-1',
+  downloadFileUrl: null,
 };
 
 const session: RemuxSession = {
@@ -85,7 +104,11 @@ const session: RemuxSession = {
   audio: 2,
 };
 
-function mountEngine(remuxed: RemuxSession | null = session) {
+function mountEngine(
+  remuxed: RemuxSession | null = session,
+  engineLease: PlaybackLease = lease,
+  roomLive = false,
+) {
   const video = document.createElement('video');
   const start = vi.fn();
   const remux: RemuxController = {
@@ -94,7 +117,6 @@ function mountEngine(remuxed: RemuxSession | null = session) {
     available: true,
     ref: { current: remuxed },
     availableRef: { current: true },
-    forceTranscode: { current: false },
     start,
     markPlaying: vi.fn(),
     markDied: vi.fn(),
@@ -109,31 +131,43 @@ function mountEngine(remuxed: RemuxSession | null = session) {
     setTracks: vi.fn(),
     setCueText: vi.fn(),
   };
+  const recoverMediaGrant = vi.fn().mockResolvedValue(true);
+  const onTerminate = vi.fn();
   const opts = {
-    lease,
-    leaseRef: { current: lease },
-    live: false,
+    lease: engineLease,
+    leaseRef: { current: engineLease },
+    live: roomLive,
     catchup: false,
-    roomLive: false,
+    roomLive,
     hold: false,
-    contentId: lease.contentId,
+    contentId: engineLease.contentId,
     downloadId: null,
-    activeUrl: remuxed ? remuxed.playlistUrl : lease.streamUrl!,
+    activeUrl: remuxed ? remuxed.playlistUrl : engineLease.streamUrl!,
     activeSourceKey: '/api/v1/remux/remux-1/main.m3u8?sid=lease-1',
     sourceKey: '/api/v1/stream?u=d.token&sid=lease-1',
     videoRef: { current: video },
     remux,
     chosenTracks: { current: { audio: -1, subs: null } },
     actions,
-    onTerminate: vi.fn(),
+    recoverMediaGrant,
+    onTerminate,
   };
   const view = renderHook(() => usePlaybackEngine(opts));
-  return { ...view, video, actions, start, hls: FakeHls.last as InstanceType<typeof FakeHls> };
+  return {
+    ...view,
+    video,
+    actions,
+    start,
+    recoverMediaGrant,
+    onTerminate,
+    hls: FakeHls.last as InstanceType<typeof FakeHls>,
+  };
 }
 
 describe('hls playback engine', () => {
   beforeEach(() => {
     FakeHls.last = null;
+    createMpegtsPlayer.mockClear();
     vi.spyOn(api, 'resumeAll').mockResolvedValue([]);
     vi.spyOn(api, 'saveResume').mockResolvedValue(null);
   });
@@ -167,6 +201,63 @@ describe('hls playback engine', () => {
     expect(hls.startLoad).not.toHaveBeenCalled();
   });
 
+  it('refreshes an expired media grant instead of treating the lease as gone', () => {
+    const { hls, recoverMediaGrant, onTerminate } = mountEngine();
+
+    hls.emitError({
+      fatal: true,
+      type: FakeHls.ErrorTypes.NETWORK_ERROR,
+      response: { code: 410 },
+    });
+
+    expect(recoverMediaGrant).toHaveBeenCalledOnce();
+    expect(onTerminate).not.toHaveBeenCalled();
+  });
+
+  it('destroys hls.js after its fatal network recovery budget is exhausted', () => {
+    const { hls, actions } = mountEngine();
+    const failure = {
+      fatal: true,
+      type: FakeHls.ErrorTypes.NETWORK_ERROR,
+      response: { code: 500 },
+    };
+
+    for (let attempt = 0; attempt < 5; attempt += 1) hls.emitError(failure);
+
+    expect(hls.destroy).toHaveBeenCalledOnce();
+    expect(actions.setError).toHaveBeenLastCalledWith(expect.stringContaining('Playback failed'));
+  });
+
+  it('keeps HLS direct and loads the advertised shared room path', () => {
+    const hlsLease = {
+      ...lease,
+      streamUrl: '/api/v1/stream?u=h.token&sid=lease-1&g=grant-1',
+      sharedHlsUrl: '/api/v1/shared-hls?u=h.token&sid=lease-1&g=grant-1',
+    };
+
+    const { hls } = mountEngine(null, hlsLease, true);
+
+    expect(hls.loadSource).toHaveBeenCalledWith(hlsLease.sharedHlsUrl);
+    expect(createMpegtsPlayer).not.toHaveBeenCalled();
+  });
+
+  it('destroys mpegts.js after its fatal network recovery budget is exhausted', () => {
+    const tsLease = {
+      ...lease,
+      streamUrl: '/api/v1/stream?u=t.token&sid=lease-1&g=grant-1',
+      transcodeUrl: '/api/v1/transcode?u=t.token&sid=lease-1&g=grant-1',
+    };
+    const { actions } = mountEngine(null, tsLease);
+    const player = createMpegtsPlayer.mock.results[0]?.value as InstanceType<typeof FakeMpegtsPlayer>;
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      player.emitError('NetworkError', { status: 500 });
+    }
+
+    expect(player.destroy).toHaveBeenCalledOnce();
+    expect(actions.setError).toHaveBeenLastCalledWith(expect.stringContaining('Playback failed'));
+  });
+
   it('never seeks a torn-down source to a resume point that arrived late', async () => {
     let resolveResume: (points: ResumePoint[]) => void = () => {};
     vi.spyOn(api, 'resumeAll').mockReturnValue(new Promise((resolve) => { resolveResume = resolve; }));
@@ -180,5 +271,21 @@ describe('hls playback engine', () => {
     video.dispatchEvent(new Event('loadedmetadata'));
 
     expect(video.currentTime).toBe(0);
+  });
+
+  it('does not resurrect a destroyed mpegts engine from a queued error callback', () => {
+    const tsLease = {
+      ...lease,
+      streamUrl: '/api/v1/stream?u=t.token&sid=lease-1&g=grant-1',
+      transcodeUrl: '/api/v1/transcode?u=t.token&sid=lease-1&g=grant-1',
+    };
+    const { unmount } = mountEngine(null, tsLease);
+    const player = createMpegtsPlayer.mock.results[0]?.value as InstanceType<typeof FakeMpegtsPlayer>;
+    expect(createMpegtsPlayer).toHaveBeenCalledOnce();
+
+    unmount();
+    player.emitError('MediaError');
+
+    expect(createMpegtsPlayer).toHaveBeenCalledOnce();
   });
 });

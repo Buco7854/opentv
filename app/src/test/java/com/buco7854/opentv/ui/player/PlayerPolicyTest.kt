@@ -1,5 +1,6 @@
 package com.buco7854.opentv.ui.player
 
+import android.view.KeyEvent
 import androidx.media3.ui.AspectRatioFrameLayout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -54,5 +55,55 @@ class PlayerPolicyTest {
         assertEquals(2.39f, pipAspectRatio(4_000, 1_000)!!, 0.001f)
         assertEquals(0.42f, pipAspectRatio(1_000, 4_000)!!, 0.001f)
         assertEquals(16f / 9f, pipAspectRatio(1920, 1080)!!, 0.001f)
+    }
+
+    @Test
+    fun `configuration disposal retains the hub lease but real navigation ends it`() {
+        assertFalse(shouldClosePlayerOnDispose(isChangingConfigurations = true))
+        assertTrue(shouldClosePlayerOnDispose(isChangingConfigurations = false))
+    }
+
+    @Test
+    fun `back peels notice then controls before exiting playback`() {
+        assertEquals(
+            PlayerBackAction.DISMISS_NOTICE,
+            playerBackAction(hasNotice = true, controlsVisible = true),
+        )
+        assertEquals(
+            PlayerBackAction.HIDE_CONTROLS,
+            playerBackAction(hasNotice = false, controlsVisible = true),
+        )
+        assertEquals(
+            PlayerBackAction.EXIT,
+            playerBackAction(hasNotice = false, controlsVisible = false),
+        )
+    }
+
+    @Test
+    fun `hidden chrome is reachable from remote keys`() {
+        assertEquals(
+            PlayerRemoteAction.SHOW_CONTROLS,
+            playerRemoteAction(true, KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.ACTION_DOWN),
+        )
+        assertEquals(
+            PlayerRemoteAction.SHOW_CONTROLS,
+            playerRemoteAction(true, KeyEvent.KEYCODE_DPAD_UP, KeyEvent.ACTION_DOWN),
+        )
+        assertEquals(
+            PlayerRemoteAction.SEEK_BACK,
+            playerRemoteAction(true, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.ACTION_DOWN),
+        )
+        assertEquals(
+            PlayerRemoteAction.SEEK_FORWARD,
+            playerRemoteAction(true, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.ACTION_DOWN),
+        )
+        assertEquals(
+            PlayerRemoteAction.NONE,
+            playerRemoteAction(false, KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.ACTION_DOWN),
+        )
+        assertEquals(
+            PlayerRemoteAction.NONE,
+            playerRemoteAction(true, KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.ACTION_UP),
+        )
     }
 }

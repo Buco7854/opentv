@@ -48,7 +48,9 @@ import com.buco7854.opentv.core.model.DownloadStatus
 import com.buco7854.opentv.download.DownloadStorage
 import com.buco7854.opentv.ui.components.EmptyState
 import com.buco7854.opentv.ui.components.OtvProgressBar
+import com.buco7854.opentv.ui.components.focusHighlight
 import com.buco7854.opentv.ui.components.combinedPadding
+import com.buco7854.opentv.ui.components.rememberDownloadWithNotificationPermission
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -80,6 +82,7 @@ fun DownloadsScreen(
     viewModel: DownloadsViewModel = viewModel(),
 ) {
     val downloads by viewModel.downloads.collectAsStateWithLifecycle()
+    val launchDownload = rememberDownloadWithNotificationPermission()
 
     Scaffold(
         topBar = {
@@ -114,8 +117,8 @@ fun DownloadsScreen(
                     item = item,
                     onPlay = { onPlay(DownloadStorage.playableUri(item.filePath), item.title) },
                     onPause = { viewModel.pause(item) },
-                    onResume = { viewModel.resume(item) },
-                    onRetry = { viewModel.retry(item) },
+                    onResume = { launchDownload { viewModel.resume(item) } },
+                    onRetry = { launchDownload { viewModel.retry(item) } },
                     onDelete = { viewModel.delete(item) },
                 )
             }
@@ -156,9 +159,25 @@ private fun DownloadCard(
                     }
                     val statusText = when (item.status) {
                         DownloadStatus.QUEUED -> stringResource(R.string.downloads_queued)
+                        DownloadStatus.PREPARING -> if (item.totalBytes > 0) {
+                            stringResource(
+                                R.string.downloads_preparing_percent,
+                                ((item.downloadedBytes * 100) / item.totalBytes).toInt(),
+                            )
+                        } else {
+                            stringResource(R.string.downloads_preparing)
+                        }
                         DownloadStatus.RUNNING -> progressText
                         DownloadStatus.PAUSED -> stringResource(R.string.downloads_paused, progressText)
                         DownloadStatus.DONE -> stringResource(R.string.downloads_saved, formatBytes(item.totalBytes))
+                        DownloadStatus.HUB_SIGNED_OUT ->
+                            stringResource(R.string.downloads_hub_signed_out)
+                        DownloadStatus.HUB_UNREACHABLE ->
+                            stringResource(R.string.downloads_hub_unreachable)
+                        DownloadStatus.HUB_CAPACITY ->
+                            stringResource(R.string.downloads_hub_capacity)
+                        DownloadStatus.HUB_GONE ->
+                            stringResource(R.string.downloads_hub_gone)
                         DownloadStatus.FAILED -> item.error
                             ?.let { stringResource(R.string.downloads_failed_reason, it) }
                             ?: stringResource(R.string.downloads_failed)
@@ -169,7 +188,9 @@ private fun DownloadCard(
                         style = MaterialTheme.typography.bodySmall,
                         color = when (item.status) {
                             DownloadStatus.DONE -> MaterialTheme.colorScheme.onSurfaceVariant
-                            DownloadStatus.FAILED -> MaterialTheme.colorScheme.error
+                            DownloadStatus.FAILED,
+                            DownloadStatus.HUB_SIGNED_OUT,
+                            DownloadStatus.HUB_GONE -> MaterialTheme.colorScheme.error
                             else -> MaterialTheme.colorScheme.onSurfaceVariant
                         },
                         maxLines = 1,
@@ -180,7 +201,14 @@ private fun DownloadCard(
                     DownloadStatus.DONE -> IconButton(onClick = onPlay) {
                         Icon(Icons.Rounded.PlayArrow, contentDescription = stringResource(R.string.common_play), tint = MaterialTheme.colorScheme.onSurface)
                     }
-                    DownloadStatus.QUEUED, DownloadStatus.RUNNING -> IconButton(onClick = onPause) {
+                    DownloadStatus.QUEUED,
+                    DownloadStatus.RUNNING -> IconButton(onClick = onPause) {
+                        Icon(Icons.Rounded.Pause, contentDescription = stringResource(R.string.common_pause))
+                    }
+                    DownloadStatus.PREPARING -> IconButton(
+                        onClick = onPause,
+                        modifier = Modifier.focusHighlight(),
+                    ) {
                         Icon(Icons.Rounded.Pause, contentDescription = stringResource(R.string.common_pause))
                     }
                     DownloadStatus.PAUSED -> IconButton(onClick = onResume) {
@@ -202,7 +230,9 @@ private fun DownloadCard(
                     )
                 }
             }
-            if ((item.status == DownloadStatus.RUNNING || item.status == DownloadStatus.PAUSED) &&
+            if ((item.status == DownloadStatus.RUNNING ||
+                    item.status == DownloadStatus.PREPARING ||
+                    item.status == DownloadStatus.PAUSED) &&
                 item.totalBytes > 0
             ) {
                 Spacer(Modifier.height(10.dp))

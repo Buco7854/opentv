@@ -1,5 +1,6 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.contract.*
 import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.core.model.ResumePoint
 import com.buco7854.opentv.core.repo.MetadataRepository
@@ -97,8 +98,8 @@ class LibraryApplicationService(
     }
 
     private suspend fun channelByContentModel(actor: Actor, contentId: String): Channel {
-        val (_, channel) = content.requireChannel(contentId)
-        if (!auth.hasPlaylistAccess(actor, channel.playlistId)) throw ForbiddenApiException()
+        val (identity, channel) = content.requireChannel(contentId)
+        if (!auth.hasPlaylistAccess(actor, identity.playlistId)) throw ForbiddenApiException()
         return channel
     }
 }

@@ -301,7 +301,7 @@ export function EpisodeDetailScreen() {
     let seriesTitle: string | null = null;
     let seriesCast: CastMember[] = [];
     if (ep.seriesKey?.startsWith('xs:')) {
-      const detail = await api.xseries(ep.playlistId, Number(ep.seriesKey.slice(3))).catch(() => null);
+      const detail = await api.xseries(ep.playlistId, ep.seriesKey.slice(3)).catch(() => null);
       seriesTitle = detail?.series.name ?? null;
       seriesCast = castFromNames(detail?.series.castNames ?? null);
     } else {

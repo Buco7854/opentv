@@ -2,6 +2,7 @@ package com.buco7854.opentv.ui.player
 
 import android.graphics.Typeface
 import androidx.annotation.OptIn
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -9,6 +10,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -27,7 +30,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.C
 import androidx.media3.common.Format
@@ -42,7 +48,9 @@ import com.buco7854.opentv.core.repo.GuideEntry
 import com.buco7854.opentv.data.prefs.SubtitleStyle
 import com.buco7854.opentv.ui.components.GuideEntryContent
 import com.buco7854.opentv.ui.components.GuideHint
+import com.buco7854.opentv.ui.components.RequestInitialFocusOnTv
 import com.buco7854.opentv.ui.components.SubtitleStyleControls
+import com.buco7854.opentv.ui.components.focusHighlight
 import com.buco7854.opentv.ui.components.guideSheetHeight
 import java.util.Locale
 
@@ -95,6 +103,20 @@ internal fun TrackSheet(
     }
 
     val groups = tracks.groups.filter { it.type == trackType }
+    val initialFocusRequester = remember { FocusRequester() }
+    val hasOption = allowOff || groups.any { group ->
+        (0 until group.length).any(group::isTrackSupported)
+    }
+    if (hasOption) RequestInitialFocusOnTv(initialFocusRequester, trackType)
+    var initialFocusAssigned = false
+    fun nextTrackModifier(): Modifier =
+        if (!initialFocusAssigned) {
+            initialFocusAssigned = true
+            Modifier.focusRequester(initialFocusRequester)
+        } else {
+            Modifier
+        }
+
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
             Modifier
@@ -108,6 +130,7 @@ internal fun TrackSheet(
                 TrackOption(
                     label = stringResource(R.string.player_track_off),
                     selected = !anySelected,
+                    modifier = nextTrackModifier(),
                 ) {
                     disableSubtitles(player)
                 }
@@ -126,12 +149,60 @@ internal fun TrackSheet(
                         label = trackLabel(group.getTrackFormat(trackIndex))
                             ?: stringResource(R.string.player_track_n, trackIndex + 1),
                         selected = group.isTrackSelected(trackIndex),
+                        modifier = nextTrackModifier(),
                     ) {
                         selectTrack(player, group, trackIndex)
                     }
                 }
             }
             extraContent?.invoke()
+        }
+    }
+}
+
+@kotlin.OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun HubAudioTrackSheet(
+    tracks: HubAudioTracks,
+    heading: String,
+    emptyText: String,
+    onSelect: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val initialFocusRequester = remember { FocusRequester() }
+    if (tracks.names.isNotEmpty()) {
+        RequestInitialFocusOnTv(initialFocusRequester, tracks.names)
+    }
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp),
+        ) {
+            SheetHeading(heading)
+            if (tracks.names.isEmpty()) {
+                Text(
+                    emptyText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            tracks.names.forEachIndexed { index, name ->
+                TrackOption(
+                    label = name.ifBlank {
+                        stringResource(R.string.player_track_n, index + 1)
+                    },
+                    selected = index == tracks.selectedIndex,
+                    modifier = if (index == 0) {
+                        Modifier.focusRequester(initialFocusRequester)
+                    } else {
+                        Modifier
+                    },
+                ) {
+                    onSelect(index)
+                }
+            }
         }
     }
 }
@@ -167,11 +238,17 @@ internal fun SubtitleTrackSheet(
 internal fun SpeedSheet(player: Player, onDismiss: () -> Unit) {
     val speeds = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
     var currentSpeed by remember { mutableFloatStateOf(player.playbackParameters.speed) }
+    val initialFocusRequester = remember { FocusRequester() }
+    RequestInitialFocusOnTv(initialFocusRequester)
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
             SheetHeading(stringResource(R.string.player_speed))
-            Row(Modifier.fillMaxWidth()) {
-                speeds.forEach { speed ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+            ) {
+                speeds.forEachIndexed { index, speed ->
                     FilterChip(
                         selected = currentSpeed == speed,
                         onClick = {
@@ -179,7 +256,16 @@ internal fun SpeedSheet(player: Player, onDismiss: () -> Unit) {
                             currentSpeed = speed
                         },
                         label = { Text(if (speed == 1f) "1×" else "${speed}×") },
-                        modifier = Modifier.padding(end = 6.dp),
+                        modifier = Modifier
+                            .padding(end = 6.dp)
+                            .then(
+                                if (index == 0) {
+                                    Modifier.focusRequester(initialFocusRequester)
+                                } else {
+                                    Modifier
+                                },
+                            )
+                            .focusHighlight(),
                     )
                 }
             }
@@ -232,13 +318,22 @@ private fun SheetHeading(text: String) {
 private fun TrackOption(
     label: String,
     selected: Boolean,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        modifier
+            .fillMaxWidth()
+            .focusHighlight(RoundedCornerShape(10.dp))
+            .selectable(
+                selected = selected,
+                onClick = onClick,
+                role = Role.RadioButton,
+            )
+            .padding(vertical = 8.dp, horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        RadioButton(selected = selected, onClick = onClick)
+        RadioButton(selected = selected, onClick = null)
         Text(label, style = MaterialTheme.typography.bodyMedium)
     }
 }

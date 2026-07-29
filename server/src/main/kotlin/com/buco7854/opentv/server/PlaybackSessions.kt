@@ -1,5 +1,6 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.contract.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.CoroutineScope
@@ -14,30 +15,39 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.UUID
 
 /**
- * In-memory registry of active web-client playback sessions. A player heartbeats
+ * In-memory registry of active server-client playback sessions. A player heartbeats
  * every few seconds; sessions with no recent heartbeat are dropped. Commands the
  * admin enqueues are delivered on the session's next heartbeat.
  *
- * Web sessions only: the Android app plays through the shared core layer, not this
- * server, so it never appears here.
+ * Each lease owns its client's codec report. Watch-together rooms reduce those reports
+ * to one intersection because every member consumes the same shared media format.
  */
 class PlaybackSessionRegistry(
     private val clock: ServerClock = ServerClock.SYSTEM,
     private val staleMs: Long = DEFAULT_STALE_MS,
     private val cleanup: PlaybackLeaseCleanup = NoopPlaybackLeaseCleanup,
+    private val kickNoticeGraceMs: Long = DEFAULT_KICK_NOTICE_GRACE_MS,
+    /**
+     * The background reaper sweeps on the wall clock, independently of [clock].
+     * Tests that drive a fake clock must leave it off, or a sweep landing mid-test
+     * reaps their leases and fails an unrelated assertion at random.
+     */
+    reapInBackground: Boolean = true,
 ) : AutoCloseable {
     private val reaperScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     init {
-        reaperScope.launch {
-            while (isActive) {
-                delay(staleMs.coerceAtLeast(1_000L))
-                active()
+        if (reapInBackground) {
+            reaperScope.launch {
+                while (isActive) {
+                    delay(staleMs.coerceAtLeast(1_000L))
+                    active()
+                }
             }
         }
     }
 
-    class Live(
+    class Live internal constructor(
         val id: String,
         val userId: String,
         val authSessionId: String,
@@ -52,8 +62,11 @@ class PlaybackSessionRegistry(
         @Volatile var state: SessionHeartbeatDto,
         val startedAtMs: Long,
         @Volatile var lastSeenMs: Long,
+        internal val capabilities: MediaCapabilities,
         val commands: ConcurrentLinkedQueue<SessionCommandDto> = ConcurrentLinkedQueue(),
-    )
+    ) {
+        internal var commandSequence: Long = 0
+    }
 
     /** A watch-together room. The host owns it and can grant playback control to guests;
      *  everyone in [controllers] (the host plus whoever it allowed) can drive, the rest mirror. */
@@ -65,9 +78,12 @@ class PlaybackSessionRegistry(
         // Members that have finished reloading after a track change; when it covers everyone the
         // room resumes together, so no one plays ahead while another is still buffering the switch.
         val ready: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
-        // Members whose browser can't decode HEVC. While any are present the shared read must
-        // transcode to H.264; empty means everyone can decode it and it's copied.
-        val noHevc: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+        @Volatile var reloading: Boolean = false
+        // A room's reload barriers are ordered independently of command delivery. A ready or
+        // room-go from an older generation can never complete/release the current barrier.
+        @Volatile var barrierGeneration: Long = 0
+        // Fixed per-lease reports. The shared read uses their intersection.
+        val capabilities = ConcurrentHashMap<String, MediaCapabilities>()
     }
 
     private val sessions = ConcurrentHashMap<String, Live>()
@@ -93,13 +109,14 @@ class PlaybackSessionRegistry(
 
     /** Upsert session state from a heartbeat. Commands are drained separately - the HTTP
      *  heartbeat returns them, the WebSocket pushes them as they're queued. */
-    fun create(
+    internal fun create(
         actor: Actor,
         playlistId: Long,
         contentId: String,
         sourceUrl: String,
         ip: String,
         userAgent: String,
+        capabilities: MediaCapabilities = MediaCapabilities.BROWSER,
     ): Live {
         val now = clock.nowMs()
         val id = UUID.randomUUID().toString()
@@ -107,6 +124,7 @@ class PlaybackSessionRegistry(
         return Live(
             id, actor.userId, actor.authSessionId, actor.username, actor.displayName,
             actor.clientKind, playlistId, contentId, sourceUrl, ip, userAgent, heartbeat, now, now,
+            capabilities,
         ).also { sessions[id] = it }
     }
 
@@ -117,6 +135,8 @@ class PlaybackSessionRegistry(
         }
         return live
     }
+
+    fun lease(id: String): Live = sessions[id] ?: throw PlaybackRevokedException()
 
     fun update(actor: Actor, ip: String, userAgent: String, dto: SessionHeartbeatDto) {
         owned(actor, dto.id)
@@ -140,7 +160,11 @@ class PlaybackSessionRegistry(
     /** Queue a command for [id]; false when no such live session. */
     fun enqueue(id: String, command: SessionCommandDto): Boolean {
         val live = sessions[id] ?: return false
-        live.commands.add(command)
+        synchronized(live) {
+            check(live.commandSequence < Long.MAX_VALUE) { "Playback command sequence exhausted" }
+            live.commandSequence++
+            live.commands.add(command.copy(sequence = live.commandSequence))
+        }
         wake(id).trySend(Unit)
         return true
     }
@@ -228,16 +252,22 @@ class PlaybackSessionRegistry(
         val room = targetRoom ?: Room("r-$targetId", targetId).also {
             it.members.add(targetId)
             it.controllers.add(targetId)
+            it.capabilities[targetId] = target.capabilities
             rooms[it.id] = it
             memberRoom[targetId] = it.id
         }
         room.members.add(request.requesterId)
+        room.capabilities[request.requesterId] = requester.capabilities
         memberRoom[request.requesterId] = room.id
         enqueue(
             request.requesterId,
             SessionCommandDto(type = "join-response", accepted = true, requestId = requestId),
         )
         pushRoomState(room)
+        // Membership always changes the share group used by a remux. Even when
+        // capabilities are identical, every member must reopen onto the room's
+        // shared read instead of keeping its previous solo provider connection.
+        startReload(room)
         return true
     }
 
@@ -277,8 +307,15 @@ class PlaybackSessionRegistry(
     fun kick(hostId: String, targetId: String): Boolean {
         val room = roomFor(hostId) ?: return false
         if (room.hostId != hostId || targetId == hostId || targetId !in room.members) return false
+        // Membership and access to the shared read end immediately. Keep the lease's command
+        // channel alive only for a short bounded grace so room-ended can be pushed (or drained
+        // by the HTTP fallback); the server-owned timer revokes the lease even if the client stalls.
+        removeFromRoom(room, targetId)
         enqueue(targetId, SessionCommandDto(type = "room-ended"))
-        terminate(targetId)
+        reaperScope.launch {
+            delay(kickNoticeGraceMs.coerceAtLeast(0))
+            terminate(targetId)
+        }
         return true
     }
 
@@ -301,22 +338,23 @@ class PlaybackSessionRegistry(
     fun roomMembers(id: String): Set<String> =
         roomFor(id)?.members?.toSet() ?: emptySet()
 
+    /** The shared media route pins the room it entered; leaving or moving rooms revokes that use. */
+    @Synchronized
+    fun isShareGroupMember(id: String, group: String): Boolean =
+        memberRoom[id] == group && rooms[group]?.members?.contains(id) == true
+
+    /** Used by a room-owned upstream fetch, which may outlive the member that triggered it. */
+    @Synchronized
+    fun hasShareGroup(group: String): Boolean = rooms[group]?.members?.isNotEmpty() == true
+
     /** The audio track a room member must remux with, so everyone shares one read. Null when solo. */
     @Synchronized
     fun roomAudio(id: String): Int? = roomFor(id)?.audioIndex
 
-    /** Whether [id]'s shared read may copy HEVC: true only while every member can decode it.
-     *  Records this member's own [clientCanHevc]; when that flips the room's answer, everyone
-     *  reloads onto the new format. Solo viewers just get their own capability back. */
+    /** The format every member can decode. A solo lease keeps its complete report. */
     @Synchronized
-    fun roomHevc(id: String, clientCanHevc: Boolean): Boolean {
-        val room = roomFor(id) ?: return clientCanHevc
-        val before = room.noHevc.isEmpty()
-        if (clientCanHevc) room.noHevc.remove(id) else room.noHevc.add(id)
-        val after = room.noHevc.isEmpty()
-        if (after != before) startReload(room)
-        return after
-    }
+    internal fun roomCapabilities(id: String): MediaCapabilities =
+        roomFor(id)?.let(::effectiveCapabilities) ?: lease(id).capabilities
 
     /** A controller picks the room's shared audio track; every member re-requests the remux with
      *  it, so the room stays on one provider connection. Ignored from a non-controller. */
@@ -332,13 +370,12 @@ class PlaybackSessionRegistry(
     /** A member finished reloading the shared track; once every member has, release the room to
      *  play again in step. Best-effort - a client also fails open on its own timeout. */
     @Synchronized
-    fun markReady(sid: String): Boolean {
+    fun markReady(sid: String, generation: Long): Boolean {
         val room = roomFor(sid) ?: return false
+        if (generation != room.barrierGeneration) return false
+        if (!room.reloading) return true
         room.ready.add(sid)
-        if (room.ready.containsAll(room.members)) {
-            room.ready.clear()
-            broadcast(room, SessionCommandDto(type = "room-go"))
-        }
+        finishReloadIfReady(room)
         return true
     }
 
@@ -357,8 +394,25 @@ class PlaybackSessionRegistry(
     /** Start a reload barrier: reset the ready set and have every member re-request the shared read
      *  (its audio track rides along), so nobody resumes until all are back. */
     private fun startReload(room: Room) {
+        check(room.barrierGeneration < Long.MAX_VALUE) { "Room barrier generation exhausted" }
+        room.barrierGeneration++
+        room.reloading = true
         room.ready.clear()
-        broadcast(room, SessionCommandDto(type = "room-audio", audioIndex = room.audioIndex))
+        broadcast(
+            room,
+            SessionCommandDto(
+                type = "room-audio",
+                audioIndex = room.audioIndex,
+                generation = room.barrierGeneration,
+            ),
+        )
+    }
+
+    private fun finishReloadIfReady(room: Room) {
+        if (!room.reloading || !room.ready.containsAll(room.members)) return
+        room.reloading = false
+        room.ready.clear()
+        broadcast(room, SessionCommandDto(type = "room-go", generation = room.barrierGeneration))
     }
 
     /** Push the current roster to every member, so each renders who's in and their rights. */
@@ -368,7 +422,27 @@ class PlaybackSessionRegistry(
      *  - after a page refresh - picks its watch-together session back up instead of dropping out. */
     @Synchronized
     fun resendRoomState(id: String) {
-        roomFor(id)?.let { enqueue(id, SessionCommandDto(type = "room-state", members = roster(it))) }
+        roomFor(id)?.let { room ->
+            enqueue(id, SessionCommandDto(type = "room-state", members = roster(room)))
+            if (room.reloading) {
+                enqueue(
+                    id,
+                    SessionCommandDto(
+                        type = "room-audio",
+                        audioIndex = room.audioIndex,
+                        generation = room.barrierGeneration,
+                    ),
+                )
+            } else if (room.barrierGeneration > 0) {
+                // A delayed HTTP fallback may still hold the original room-go while this
+                // reconnect's newer roster advances the client's sequence high-water mark.
+                // Replaying the completed generation makes that delivery inversion harmless.
+                enqueue(
+                    id,
+                    SessionCommandDto(type = "room-go", generation = room.barrierGeneration),
+                )
+            }
+        }
     }
 
     /** Mirror a controller's [state] to the room's other members (non-controllers can't drive). */
@@ -394,24 +468,39 @@ class PlaybackSessionRegistry(
     // The room lives as long as anyone is in it - even a lone host, who can then admit someone
     // back - and only dissolves once empty. A departing host hands off to whoever remains.
     private fun removeFromRoom(room: Room, id: String) {
+        val capabilitiesBefore = effectiveCapabilities(room)
         memberRoom.remove(id)
         room.members.remove(id)
         room.controllers.remove(id)
         room.ready.remove(id)
-        room.noHevc.remove(id)
+        room.capabilities.remove(id)
         // Cut any shared live connection this viewer was riding, now that it's no longer a member.
         runCatching { cleanup.memberLeaving(id) }
-        if (room.members.isEmpty()) { rooms.remove(room.id); return }
+        if (room.members.isEmpty()) {
+            rooms.remove(room.id)
+            runCatching { cleanup.shareGroupUnused(room.id) }
+            return
+        }
         if (room.hostId == id) {
             room.hostId = room.members.first()
             room.controllers.add(room.hostId)
         }
         pushRoomState(room)
+        if (effectiveCapabilities(room) != capabilitiesBefore) {
+            startReload(room)
+        } else {
+            finishReloadIfReady(room)
+        }
     }
+
+    private fun effectiveCapabilities(room: Room): MediaCapabilities =
+        room.capabilities.values.reduceOrNull(MediaCapabilities::intersect)
+            ?: MediaCapabilities.BROWSER
 
     /** Fires whenever a command is queued for [id]; the WebSocket drains on each signal. */
     fun commandSignal(id: String): ReceiveChannel<Unit> = wake(id)
 
+    @Synchronized
     fun drainCommands(id: String): List<SessionCommandDto> {
         val live = sessions[id] ?: return emptyList()
         val out = ArrayList<SessionCommandDto>()
@@ -465,6 +554,8 @@ class PlaybackSessionRegistry(
     companion object {
         /** Drop a session this long after its last heartbeat (client beats ~every 3s). */
         private const val DEFAULT_STALE_MS = 12_000L
+        /** Enough for a live socket/heartbeat drain, while keeping kick revocation tightly bounded. */
+        private const val DEFAULT_KICK_NOTICE_GRACE_MS = 750L
         // Must outlive every media grant so stale lease-scoped URLs consistently return 410.
         private const val JOIN_REQUEST_TTL_MS = 60_000L
     }

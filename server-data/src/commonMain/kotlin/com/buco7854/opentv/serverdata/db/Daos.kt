@@ -84,8 +84,11 @@ interface CredentialDao {
     @Insert
     suspend fun insertRecoveryCodes(rows: List<RecoveryCodeRow>)
 
-    @Query("UPDATE recovery_codes SET usedAtMs = :usedAtMs WHERE id = :id AND usedAtMs IS NULL")
-    suspend fun consumeRecoveryCode(id: String, usedAtMs: Long): Int
+    @Query("""
+        UPDATE recovery_codes SET usedAtMs = :usedAtMs
+        WHERE id = :id AND userId = :userId AND usedAtMs IS NULL
+    """)
+    suspend fun consumeRecoveryCode(userId: String, id: String, usedAtMs: Long): Int
 
     @Query("DELETE FROM recovery_codes WHERE userId = :userId")
     suspend fun deleteRecoveryCodes(userId: String)
@@ -343,7 +346,10 @@ interface ContentDao {
         if (insert(row) == -1L) update(row)
     }
 
-    @Query("UPDATE content_identities SET retired = 1 WHERE playlistId = :playlistId AND lastSeenAtMs < :seenAtMs")
+    @Query("""
+        UPDATE content_identities SET retired = 1, currentChannelId = NULL
+        WHERE playlistId = :playlistId AND lastSeenAtMs < :seenAtMs
+    """)
     suspend fun retireNotSeen(playlistId: Long, seenAtMs: Long)
 
     @Query("DELETE FROM content_identities WHERE playlistId = :playlistId")
@@ -500,6 +506,18 @@ interface MaintenanceDao {
 
     @Query("SELECT * FROM playlist_deletions ORDER BY requestedAtMs")
     suspend fun pendingPlaylistDeletions(): List<PlaylistDeletionRow>
+
+    @Query("""
+        SELECT playlistId FROM default_playlist_template
+        UNION
+        SELECT playlistId FROM user_playlist_grants
+        UNION
+        SELECT playlistId FROM content_identities
+        UNION
+        SELECT playlistId FROM playlist_deletions
+        ORDER BY playlistId
+    """)
+    suspend fun referencedPlaylistIds(): List<Long>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun beginPlaylistDeletion(row: PlaylistDeletionRow)

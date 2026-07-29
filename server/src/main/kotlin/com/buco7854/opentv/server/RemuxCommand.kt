@@ -83,7 +83,7 @@ internal class RemuxCommandBuilder(
         !session.transcodeVideo -> buildList {
             addAll(listOf("-c:v", "copy"))
             // Copied HEVC in fMP4 must be tagged hvc1, not hev1, or Safari/browsers refuse it.
-            if (MediaCodecs.isHevc(session.videoCodec)) addAll(listOf("-tag:v", "hvc1"))
+            if (session.videoCodec.equals("hevc", ignoreCase = true)) addAll(listOf("-tag:v", "hvc1"))
         }
         videoEncoder == "libx264" -> listOf(
             "-c:v", "libx264", "-preset", x264Preset, "-crf", "23", "-pix_fmt", "yuv420p",

@@ -5,6 +5,7 @@
 import {
   API_PREFIX, PROVIDER_TIMEOUT_MS, RequestBehavior, browserApiHttp, post, put,
 } from './api/http';
+import type { ClientKind } from './auth/types';
 
 export { ApiError } from './api/http';
 
@@ -45,9 +46,9 @@ export interface Channel {
   season: number | null;
   episode: number | null;
   position: number;
-  xtreamStreamId: number | null;
+  xtreamStreamId: string | null;
   catchupDays: number;
-  catchupSource: string | null;
+  hasCatchup: boolean;
   description: string | null;
   durationSecs: number | null;
   airDate: string | null;
@@ -60,9 +61,9 @@ export interface ChannelListItem {
   logo: string | null;
   tvgId: string | null;
   kind: number;
-  xtreamStreamId: number | null;
+  xtreamStreamId: string | null;
   catchupDays: number;
-  catchupSource: string | null;
+  hasCatchup: boolean;
 }
 
 export interface EpisodeListItem {
@@ -81,8 +82,8 @@ export interface EpisodeListItem {
 }
 
 export const hasCatchup = (
-  c: Pick<Channel, 'catchupSource' | 'catchupDays'>,
-) => c.catchupSource != null || c.catchupDays > 0;
+  c: Pick<Channel, 'hasCatchup'>,
+) => c.hasCatchup;
 
 /** Xtream channels have a per-channel panel guide; M3U needs stored programme rows. */
 export const canShowGuide = (
@@ -103,7 +104,7 @@ export interface SeriesGroup {
 export interface XtreamSeries {
   contentId: string;
   playlistId: number;
-  seriesId: number;
+  seriesId: string;
   name: string;
   categoryName: string;
   cover: string | null;
@@ -116,7 +117,7 @@ export interface XtreamSeries {
 
 export interface XtreamSeriesListItem {
   contentId: string;
-  seriesId: number;
+  seriesId: string;
   name: string;
   cover: string | null;
   genre: string | null;
@@ -152,7 +153,6 @@ export interface AccountInfo {
   maxConnections: number;
   status: string;
   expiresAtMs: number | null;
-  username: string | null;
   isTrial: boolean;
   createdAtMs: number | null;
   timezone: string | null;
@@ -168,7 +168,7 @@ export interface Metadata {
   castJson: string | null;
   posterUrl: string | null;
   infoLine: string | null;
-  sourceId: number | null;
+  sourceId: string | null;
   fetchedAtMs: number;
 }
 
@@ -192,7 +192,7 @@ export interface SeriesHit {
   count: number;
   logo: string | null;
   groupTitle: string;
-  xtreamSeriesId: number | null;
+  xtreamSeriesId: string | null;
 }
 
 export interface SearchResults { live: Channel[]; movies: Channel[]; series: SeriesHit[] }
@@ -227,6 +227,8 @@ export interface Download {
   downloadedBytes: number;
   error: string | null;
   createdMs: number;
+  fileToken: string | null;
+  fileTokenExpiresAtMs: number | null;
 }
 
 export interface PlaybackCreateRequest {
@@ -235,6 +237,13 @@ export interface PlaybackCreateRequest {
   catchupStartMs?: number;
   catchupDurationMs?: number;
   downloadId?: string;
+  capabilities?: ClientCapabilities;
+}
+
+export interface ClientCapabilities {
+  videoCodecs: string[];
+  audioCodecs: string[];
+  selectsTracksInBand?: boolean;
 }
 
 export interface PlaybackLease {
@@ -244,15 +253,25 @@ export interface PlaybackLease {
   mediaGrant: string;
   mediaGrantExpiresAtMs: number;
   streamUrl: string | null;
+  sharedHlsUrl: string | null;
   relayUrl: string | null;
   transcodeUrl: string | null;
   remuxStartUrl: string;
+  downloadFileUrl: string | null;
+}
+
+export interface ServerInfoDto {
+  product: 'opentv';
+  apiVersion: 1;
+  version: string;
 }
 
 export interface MediaGrant {
   token: string;
   expiresAtMs: number;
 }
+
+export interface RemuxAvailable { available: boolean }
 
 export interface RemuxStart {
   id: string;
@@ -274,7 +293,9 @@ export interface SessionHeartbeat {
   durationMs: number;
   paused: boolean;
   live: boolean;
-  engine: 'hls' | 'mpegts' | 'native' | 'remux';
+  // The Kotlin contract accepts a free-form engine label. The web emits hls/mpegts/native/remux;
+  // Android emits exoplayer, so this cannot truthfully be a web-only literal union.
+  engine: string;
   direct: boolean;
   audioTranscoded: boolean;
   /** Server is still probing the file to choose remux vs transcode; mode is undecided. */
@@ -297,6 +318,7 @@ export type SessionCommandType =
 /** Complete server-to-client command shape; Kotlin serialization emits every defaulted field. */
 export interface SessionCommand {
   type: SessionCommandType;
+  sequence: number | null;
   text: string | null;
   peerId: string | null;
   peerName: string | null;
@@ -306,6 +328,7 @@ export interface SessionCommand {
   sync: SyncState | null;
   members: RoomMember[] | null;
   audioIndex: number | null;
+  generation: number | null;
 }
 
 /** Sparse client-to-server command; omitted fields use the Kotlin DTO defaults. */
@@ -314,6 +337,10 @@ export interface SessionCommandInput {
   text?: string;
   sync?: SyncState;
 }
+
+export interface HeartbeatResponse { commands: SessionCommand[] }
+
+export interface Message { message: string }
 
 /** A viewer already on this content, offered as someone to watch together with. */
 export interface WatchIntentPeer { id: string; name: string }
@@ -339,7 +366,8 @@ export interface RemuxDiag {
 }
 
 export interface SessionStream {
-  engine: 'hls' | 'mpegts' | 'native' | 'remux';
+  /** Stored from the client's free-form heartbeat engine report. */
+  engine: string;
   direct: boolean;
   audioTranscoded: boolean;
   preparing: boolean;
@@ -352,7 +380,7 @@ export interface Session {
   userId: string;
   username: string;
   displayName: string;
-  clientKind: string;
+  clientKind: ClientKind;
   ip: string;
   userAgent: string;
   playlistName: string | null;
@@ -439,6 +467,7 @@ function listXtreamSeries(
 }
 
 export const api = {
+  serverInfo: () => j<ServerInfoDto>('/server-info'),
   playlists: () => j<Playlist[]>('/playlists'),
   addPlaylist: (req: PlaylistUpsertRequest) => j<Playlist>('/playlists', post(req)),
   updatePlaylist: (id: number, req: PlaylistUpsertRequest) => j<Playlist>(`/playlists/${id}`, put(req)),
@@ -470,7 +499,8 @@ export const api = {
       `/playlists/${id}/series/${encodeURIComponent(seriesKey)}/episodes`
       + `?offset=${offset}&limit=${limit}${season == null ? '' : `&season=${season}`}`,
     ),
-  xseries: (id: number, seriesId: number) => j<XtreamSeriesDetail>(`/playlists/${id}/xseries/${seriesId}`),
+  xseries: (id: number, seriesId: string) =>
+    j<XtreamSeriesDetail>(`/playlists/${id}/xseries/${encodeURIComponent(seriesId)}`),
   channel: (ref: ContentRef) => j<Channel>(contentPath(ref)),
   guide: (ref: ContentRef) => j<GuideEntry[]>(`${contentPath(ref)}/guide`),
   vodInfo: (ref: ContentRef) => j<Metadata>(`${contentPath(ref)}/vod-info`),
@@ -478,12 +508,11 @@ export const api = {
     j<Metadata>(`/meta?type=${type}&title=${encodeURIComponent(title)}`),
   metaEpisode: (series: string, season: number, episode: number) =>
     j<Metadata>(`/meta/episode?series=${encodeURIComponent(series)}&season=${season}&episode=${episode}`),
-  remuxAvailable: () => j<{ available: boolean }>('/remux/available'),
-  remuxStart: (startUrl: string, audio = 0, timeshift = false, hevc = false) => {
+  remuxAvailable: () => j<RemuxAvailable>('/remux/available'),
+  remuxStart: (startUrl: string, audio = 0, timeshift = false) => {
     const url = new URL(startUrl, window.location.origin);
     url.searchParams.set('audio', String(audio));
     if (timeshift) url.searchParams.set('timeshift', '1'); else url.searchParams.delete('timeshift');
-    if (hevc) url.searchParams.set('hevc', '1'); else url.searchParams.delete('hevc');
     const path = url.pathname.startsWith(API_PREFIX)
       ? url.pathname.slice(API_PREFIX.length) : url.pathname;
     return j<RemuxStart>(path + url.search, { method: 'POST' });
@@ -495,11 +524,16 @@ export const api = {
       { method: 'DELETE', keepalive: true },
     ).catch(() => {}),
   createPlayback: (request: PlaybackCreateRequest) => j<PlaybackLease>('/playback', post(request)),
-  playbackSocketUrl: (id: string) =>
-    browserApiHttp.socketUrl(`/playback/${encodeURIComponent(id)}/ws`),
+  playbackSocketUrl: async (id: string) => {
+    const access = await j<MediaGrant>(
+      `/playback/${encodeURIComponent(id)}/ws-token`,
+      { method: 'POST' },
+    );
+    return browserApiHttp.socketUrl(`/playback/${encodeURIComponent(id)}/ws`, access.token);
+  },
   /** keepalive so a heartbeat still fires from the player's unmount/unload. */
   playbackHeartbeat: (id: string, body: SessionHeartbeat) =>
-    j<{ commands: SessionCommand[] }>(
+    j<HeartbeatResponse>(
       `/playback/${encodeURIComponent(id)}/heartbeat`,
       { ...post(body), keepalive: true },
     ),
@@ -532,8 +566,11 @@ export const api = {
   roomAudio: (id: string, audioIndex: number) =>
     j<null>(`/playback/${encodeURIComponent(id)}/room-audio`, post({ audioIndex })),
   /** A member reports it finished reloading after a track change; the room resumes once all have. */
-  sessionReady: (id: string) =>
-    apiFetch(`/playback/${encodeURIComponent(id)}/ready`, { method: 'POST', keepalive: true }).catch(() => {}),
+  sessionReady: (id: string, generation: number) =>
+    apiFetch(
+      `/playback/${encodeURIComponent(id)}/ready`,
+      { ...post({ generation }), keepalive: true },
+    ).catch(() => {}),
   /** Host removes a member from the room. */
   kick: (hostId: string, targetId: string) =>
     j<null>(`/playback/${encodeURIComponent(hostId)}/kick`, post({ targetId })),
@@ -553,7 +590,7 @@ export const api = {
   saveSettings: (s: Settings, keepalive = false) =>
     j<null>('/settings', { ...put(s), keepalive }),
   downloads: () => j<Download[]>('/downloads'),
-  enqueueDownload: (contentId: string) => j<{ message: string }>('/downloads', post({ contentId })),
+  enqueueDownload: (contentId: string) => j<Message>('/downloads', post({ contentId })),
   pauseDownload: (id: string) => j<null>(`/downloads/${encodeURIComponent(id)}/pause`, { method: 'POST' }),
   resumeDownload: (id: string) => j<null>(`/downloads/${encodeURIComponent(id)}/resume`, { method: 'POST' }),
   retryDownload: (id: string) => j<null>(`/downloads/${encodeURIComponent(id)}/retry`, { method: 'POST' }),
@@ -561,5 +598,8 @@ export const api = {
 };
 
 export const imgUrl = (u: string) => `${API_PREFIX}/img?u=${encodeURIComponent(u)}`;
-export const downloadFileUrl = (id: string, save = false) =>
-  `${API_PREFIX}/downloads/${encodeURIComponent(id)}/file${save ? '?save=1' : ''}`;
+export const downloadFileUrl = (id: string, token: string, save = false) => {
+  const params = new URLSearchParams({ token });
+  if (save) params.set('save', '1');
+  return `${API_PREFIX}/downloads/${encodeURIComponent(id)}/file?${params}`;
+};

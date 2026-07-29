@@ -2,7 +2,6 @@ package com.buco7854.opentv.server
 
 import java.nio.file.Files
 import java.nio.file.Path
-import java.util.concurrent.ConcurrentHashMap
 
 internal class SubtitleCue(val start: Double, val end: Double, val block: String)
 
@@ -16,7 +15,10 @@ internal class SubtitleCue(val start: Double, val end: Double, val block: String
  */
 internal class SubtitleCueStore(root: Path) {
     private val directory: Path = Files.createDirectories(root.resolve("subs"))
-    private val locks = ConcurrentHashMap<String, Any>()
+    // A lock per source leaked forever even after its bounded file was pruned. Fixed stripes
+    // preserve per-key exclusion while bounding synchronization state independently of catalog
+    // size and playback history.
+    private val locks = Array(LOCK_STRIPES) { Any() }
 
     /** Fold [fresh] into the store for [url]'s track [index] (both on the same clock) and return
      *  the union, ordered by start time. */
@@ -24,7 +26,7 @@ internal class SubtitleCueStore(root: Path) {
         // Subtitles are per URL, not per share group or audio track.
         val key = "${shortSha1(url)}_$index"
         val file = directory.resolve("$key.vtt")
-        synchronized(locks.computeIfAbsent(key) { Any() }) {
+        synchronized(locks[Math.floorMod(key.hashCode(), locks.size)]) {
             val stored = runCatching { Files.readString(file) }.getOrNull()
             val cues = LinkedHashMap<String, SubtitleCue>()
             parse(stored).forEach { cues.putIfAbsent(it.block, it) }
@@ -81,6 +83,7 @@ internal class SubtitleCueStore(root: Path) {
 
     private companion object {
         const val MAX_FILES = 512
+        const val LOCK_STRIPES = 64
         val BLANK_LINE = Regex("\\r?\\n\\r?\\n")
     }
 }

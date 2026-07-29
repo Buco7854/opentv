@@ -9,7 +9,7 @@ import {
   ReactNode, useCallback, useEffect, useMemo, useRef, useState,
 } from 'react';
 import {
-  api, ApiError, Channel, PlaybackLease, SessionCommandInput,
+  api, ApiError, Channel, MediaGrant, PlaybackLease, SessionCommandInput,
 } from '../api';
 import { browserApiHttp } from '../api/http';
 import { GuideSheet } from '../components/GuideSheet';
@@ -20,7 +20,7 @@ import { useWatchTogether, WatchTogetherSheet } from './WatchTogether';
 import { t } from '../i18n';
 import { prefs } from '../preferences';
 import { MenuSheet, SubtitleStyle, SubtitleStyleSheet } from './PlaybackSheets';
-import { engineForKind } from './playbackPolicy';
+import { playbackCapabilities, reportedEngine } from './playbackPolicy';
 import { playbackSource, sourceKind } from './mediaSource';
 import { isTerminalPlaybackStatus, mediaSourceIdentity, replaceMediaGrant } from './mediaGrant';
 import { usePlaybackStatus } from './playbackStatus';
@@ -37,6 +37,20 @@ const SCALE_MODES = ['fit', 'zoom', 'stretch'] as const;
 const GRANT_ROTATION_ATTEMPTS = 5;
 const GRANT_RETRY_MS = 2000;
 const PENDING_SEEK_TIMEOUT_MS = 8000;
+const CLIENT_CAPABILITIES = playbackCapabilities(
+  typeof MediaSource === 'undefined' ? undefined : MediaSource,
+);
+
+const withMediaGrant = (lease: PlaybackLease, issued: MediaGrant): PlaybackLease => ({
+  ...lease,
+  mediaGrant: issued.token,
+  mediaGrantExpiresAtMs: issued.expiresAtMs,
+  streamUrl: replaceMediaGrant(lease.streamUrl, issued.token),
+  sharedHlsUrl: replaceMediaGrant(lease.sharedHlsUrl, issued.token),
+  relayUrl: replaceMediaGrant(lease.relayUrl, issued.token),
+  transcodeUrl: replaceMediaGrant(lease.transcodeUrl, issued.token),
+  remuxStartUrl: replaceMediaGrant(lease.remuxStartUrl, issued.token)!,
+});
 
 export interface PlayRequest {
   contentId: string;
@@ -78,6 +92,32 @@ export function PlayerSurface(props: {
   const { request, onClose } = props;
   const [lease, setLease] = useState<PlaybackLease | null>(null);
   const [leaseError, setLeaseError] = useState<string | null>(null);
+  const leaseRef = useRef<PlaybackLease | null>(lease);
+  leaseRef.current = lease;
+  const grantRefresh = useRef<{ leaseId: string; request: Promise<MediaGrant> } | null>(null);
+
+  const requestMediaGrant = useCallback((leaseId: string): Promise<MediaGrant> => {
+    const existing = grantRefresh.current;
+    if (existing?.leaseId === leaseId) return existing.request;
+    const request = api.refreshMediaGrant(leaseId).then((issued) => {
+      const current = leaseRef.current;
+      if (current?.id === leaseId) leaseRef.current = withMediaGrant(current, issued);
+      setLease((value) => value?.id === leaseId ? withMediaGrant(value, issued) : value);
+      return issued;
+    });
+    const tracked = request.finally(() => {
+      if (grantRefresh.current?.request === tracked) grantRefresh.current = null;
+    });
+    grantRefresh.current = { leaseId, request: tracked };
+    return tracked;
+  }, []);
+
+  const refreshCurrentMediaGrant = useCallback(() => {
+    const current = leaseRef.current;
+    return current
+      ? requestMediaGrant(current.id)
+      : Promise.reject(new Error('Playback lease is no longer active'));
+  }, [requestMediaGrant]);
 
   useEffect(() => {
     let cancelled = false;
@@ -90,6 +130,7 @@ export function PlayerSurface(props: {
       catchupStartMs: request.catchupStartMs,
       catchupDurationMs: request.catchupDurationMs,
       downloadId: request.downloadId,
+      capabilities: CLIENT_CAPABILITIES,
     }).then((next) => {
       created = next;
       if (cancelled) api.playbackEnd(next.id);
@@ -117,18 +158,10 @@ export function PlayerSurface(props: {
     if (!lease) return;
     let timer = 0;
     let attempt = 0;
+    let active = true;
     const rotate = () => {
-      api.refreshMediaGrant(lease.id).then((issued) => {
-        setLease((current) => current?.id === lease.id ? {
-          ...current,
-          mediaGrant: issued.token,
-          mediaGrantExpiresAtMs: issued.expiresAtMs,
-          streamUrl: replaceMediaGrant(current.streamUrl, issued.token),
-          relayUrl: replaceMediaGrant(current.relayUrl, issued.token),
-          transcodeUrl: replaceMediaGrant(current.transcodeUrl, issued.token),
-          remuxStartUrl: replaceMediaGrant(current.remuxStartUrl, issued.token)!,
-        } : current);
-      }).catch((cause: unknown) => {
+      requestMediaGrant(lease.id).catch((cause: unknown) => {
+        if (!active) return;
         const error = cause as ApiError;
         if (isTerminalPlaybackStatus(error.status)) {
           onClose();
@@ -140,9 +173,15 @@ export function PlayerSurface(props: {
         else timer = window.setTimeout(rotate, GRANT_RETRY_MS * 2 ** (attempt - 1));
       });
     };
-    timer = window.setTimeout(rotate, Math.max(10_000, lease.mediaGrantExpiresAtMs - Date.now() - 60_000));
-    return () => window.clearTimeout(timer);
-  }, [lease, onClose]);
+    timer = window.setTimeout(
+      rotate,
+      Math.max(0, lease.mediaGrantExpiresAtMs - Date.now() - 60_000),
+    );
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [lease, onClose, requestMediaGrant]);
 
   if (leaseError) {
     return (
@@ -156,14 +195,23 @@ export function PlayerSurface(props: {
     );
   }
   if (!lease) return <div className="player-frame"><div className="player-spinner" aria-hidden /></div>;
-  return <LeasedPlayerSurface {...props} lease={lease} />;
+  return (
+    <LeasedPlayerSurface
+      {...props}
+      lease={lease}
+      refreshMediaGrant={refreshCurrentMediaGrant}
+    />
+  );
 }
 
-function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
+function LeasedPlayerSurface({
+  request, lease, onClose, onPlayCatchup, refreshMediaGrant,
+}: {
   request: PlayRequest;
   lease: PlaybackLease;
   onClose: () => void;
   onPlayCatchup: (channelId: number, startMs: number, endMs: number) => void;
+  refreshMediaGrant: () => Promise<MediaGrant>;
 }) {
   const { title, channelId, live = false, tvgId, hasGuide } = request;
   const catchup = request.mode === 'catchup';
@@ -200,17 +248,48 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
   const chosenTracks = useRef<{ audio: number; subs: number | null }>({ audio: -1, subs: null });
   useEffect(() => { chosenTracks.current = { audio: -1, subs: null }; }, [sourceKey]);
 
-  const terminatePlayback = useCallback((httpStatus: number) => {
+  const finishPlayback = useCallback((httpStatus: number) => {
     toast(httpStatus === 403 ? t('player.forbidden') : t('player.revoked'), { tone: 'error' });
     if (httpStatus === 401) browserApiHttp.notifyUnauthorized();
     onClose();
   }, [onClose]);
+  const grantRecovery = useRef<Promise<boolean> | null>(null);
+  const recoverMediaGrant = useCallback((): Promise<boolean> => {
+    if (grantRecovery.current) return grantRecovery.current;
+    const attempt = refreshMediaGrant()
+      .then((issued) => {
+        leaseRef.current = withMediaGrant(leaseRef.current, issued);
+        return true;
+      })
+      .catch((cause: unknown) => {
+        finishPlayback((cause as ApiError).status ?? 410);
+        return false;
+      })
+      .finally(() => {
+        if (grantRecovery.current === attempt) grantRecovery.current = null;
+      });
+    grantRecovery.current = attempt;
+    return attempt;
+  }, [finishPlayback, leaseRef, refreshMediaGrant]);
+  const terminatePlayback = useCallback((httpStatus: number) => {
+    if (httpStatus === 410) {
+      void recoverMediaGrant();
+      return;
+    }
+    finishPlayback(httpStatus);
+  }, [finishPlayback, recoverMediaGrant]);
 
   // Non-live files (VOD, downloads, raw-TS VOD) and catch-up go through the remux; live `.ts`
   // is excluded. Watch-together needs the same fact: a same-content viewer shares its read.
   const remuxEligible = !live;
   // Whether this stream draws on the provider at all (downloads are local).
   const providerBacked = !direct;
+  const liveKind = sourceKind(lease.streamUrl);
+  // A room may clear a provider-full result only when the server advertised the transport that
+  // really shares this source. HLS uses untouched cached resources; TS uses the tee relay.
+  const sharesRoomRead = remuxEligible || (
+    liveKind === 'hls' ? lease.sharedHlsUrl != null : lease.relayUrl != null
+  );
 
   // Filled by useSessionReporter with a sender over its live socket, so watch-together sync
   // rides that socket in real time (with a POST fallback) instead of a request per event.
@@ -223,10 +302,12 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
     active: !status.error,
     live,
     remuxEligible,
+    sharesRoomRead,
     contentId: request.contentId,
     send: wsSend,
     // A controller changed the room's shared track: re-request the remux with it.
     onRoomAudio: (index) => {
+      if (!remuxEligible) return;
       chosenTracks.current.audio = index;
       startRemuxRef.current(index, videoRef.current?.currentTime ?? 0);
     },
@@ -234,8 +315,8 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
   // Room rights read from inside pickAudio without rebuilding it each roster change.
   const wtRef = useRef({ inRoom: false, canControl: false });
   wtRef.current = { inRoom: wt.inRoom, canControl: wt.canControl };
-  // Live watched together goes through the shared relay (one seat for the room); joining or
-  // leaving flips this and re-inits the engine onto (or off) the relay.
+  // Live watched together uses the source-appropriate shared transport: untouched HLS resources
+  // for an HLS channel, or the byte tee relay for raw TS.
   const roomLive = live && wt.inRoom;
 
   const remux = useRemuxSession({
@@ -252,6 +333,7 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
     videoRef,
     chosenTracks,
     actions,
+    recoverMediaGrant,
     onTerminate: terminatePlayback,
   });
   startRemuxRef.current = remux.start;
@@ -322,6 +404,7 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
     remux,
     chosenTracks,
     actions,
+    recoverMediaGrant,
     onTerminate: terminatePlayback,
   });
 
@@ -450,9 +533,7 @@ function LeasedPlayerSurface({ request, lease, onClose, onPlayCatchup }: {
 
   // Report playback to the activity dashboard. Engine mirrors the wiring module's choice;
   // remux takes precedence since it re-serves the source as HLS.
-  const reportEngine = roomLive ? 'mpegts'
-    : remux.session ? 'remux'
-      : engineForKind(sourceKind(lease.streamUrl));
+  const reportEngine = reportedEngine(liveKind, roomLive, remux.session != null);
   useSessionReporter(lease.id, {
     title,
     kind: request.kind ?? (catchup ? 'catchup' : live ? 'live' : 'movie'),

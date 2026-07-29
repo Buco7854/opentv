@@ -2,6 +2,7 @@ package com.buco7854.opentv.ui.player
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,7 +23,10 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.ScreenRotation
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -34,9 +38,13 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -50,6 +58,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.buco7854.opentv.R
 import com.buco7854.opentv.ui.components.OtvButtonShape
+import com.buco7854.opentv.ui.components.RequestInitialFocusOnTv
+import com.buco7854.opentv.ui.components.focusHighlight
 
 internal data class PlayerChromeState(
     val title: String,
@@ -61,18 +71,22 @@ internal data class PlayerChromeState(
     val durationMs: Long,
     val scrubFraction: Float?,
     val showGuide: Boolean,
+    val showWatchTogether: Boolean,
+    val watchTogetherPending: Boolean,
     val pipSupported: Boolean,
 )
 
 internal data class PlayerChromeActions(
     val onBack: () -> Unit,
     val onInteraction: () -> Unit,
+    val onChromeFocusChanged: (Boolean) -> Unit,
     val onTogglePlayback: () -> Unit,
     val onSeekBack: () -> Unit,
     val onSeekForward: () -> Unit,
     val onScrub: (Float) -> Unit,
     val onScrubFinished: () -> Unit,
     val onOpenGuide: () -> Unit,
+    val onOpenWatchTogether: () -> Unit,
     val onOpenAudio: () -> Unit,
     val onOpenSubtitles: () -> Unit,
     val onOpenSpeed: () -> Unit,
@@ -86,13 +100,23 @@ internal fun PlayerChrome(
     state: PlayerChromeState,
     actions: PlayerChromeActions,
 ) {
-    Box(Modifier.fillMaxSize()) {
+    val playFocusRequester = remember { FocusRequester() }
+    RequestInitialFocusOnTv(playFocusRequester)
+    Box(
+        Modifier
+            .fillMaxSize()
+            .onFocusChanged { actions.onChromeFocusChanged(it.hasFocus) }
+            .focusGroup(),
+    ) {
         PlayerTopBar(
             title = state.title,
             subtitleLine = state.subtitleLine,
             showGuide = state.showGuide,
+            showWatchTogether = state.showWatchTogether,
+            watchTogetherPending = state.watchTogetherPending,
             onBack = actions.onBack,
             onOpenGuide = actions.onOpenGuide,
+            onOpenWatchTogether = actions.onOpenWatchTogether,
             onInteraction = actions.onInteraction,
             modifier = Modifier.align(Alignment.TopStart),
         )
@@ -103,6 +127,7 @@ internal fun PlayerChrome(
             onTogglePlayback = actions.onTogglePlayback,
             onSeekBack = actions.onSeekBack,
             onSeekForward = actions.onSeekForward,
+            playFocusRequester = playFocusRequester,
             modifier = Modifier.align(Alignment.Center),
         )
         PlayerBottomBar(
@@ -118,8 +143,11 @@ private fun PlayerTopBar(
     title: String,
     subtitleLine: String?,
     showGuide: Boolean,
+    showWatchTogether: Boolean,
+    watchTogetherPending: Boolean,
     onBack: () -> Unit,
     onOpenGuide: () -> Unit,
+    onOpenWatchTogether: () -> Unit,
     onInteraction: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -163,6 +191,19 @@ private fun PlayerTopBar(
                 onOpenGuide,
             )
         }
+        if (showWatchTogether) {
+            BadgedBox(
+                badge = {
+                    if (watchTogetherPending) Badge()
+                },
+            ) {
+                PlayerIconButton(
+                    Icons.Outlined.Groups,
+                    stringResource(R.string.watch_together_open),
+                    onOpenWatchTogether,
+                )
+            }
+        }
         PlayerIconButton(PlayerGlyphs.Close, stringResource(R.string.player_stop), onBack)
     }
 }
@@ -175,6 +216,7 @@ private fun PlayerTransportControls(
     onTogglePlayback: () -> Unit,
     onSeekBack: () -> Unit,
     onSeekForward: () -> Unit,
+    playFocusRequester: FocusRequester,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -185,7 +227,13 @@ private fun PlayerTransportControls(
         if (!isLive) {
             TransportButton(PlayerGlyphs.Replay, stringResource(R.string.player_rewind), onSeekBack)
         }
-        IconButton(onClick = onTogglePlayback, modifier = Modifier.size(68.dp)) {
+        IconButton(
+            onClick = onTogglePlayback,
+            modifier = Modifier
+                .size(68.dp)
+                .focusRequester(playFocusRequester)
+                .focusHighlight(CircleShape),
+        ) {
             if (buffering) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(40.dp),
@@ -326,7 +374,10 @@ private fun PlayerSeekBar(
                     drawStopIndicator = null,
                 )
             },
-            modifier = Modifier.weight(1f).padding(horizontal = 10.dp),
+            modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = 10.dp)
+                .focusHighlight(RoundedCornerShape(8.dp)),
         )
         Text(
             formatPlaybackClock(durationMs),
@@ -340,7 +391,15 @@ private fun PlayerSeekBar(
 internal fun PlayerErrorOverlay(
     message: String,
     onClose: () -> Unit,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
 ) {
+    val actionFocusRequester = remember { FocusRequester() }
+    val closeFocusRequester = remember { FocusRequester() }
+    RequestInitialFocusOnTv(
+        if (actionLabel != null && onAction != null) actionFocusRequester else closeFocusRequester,
+        message,
+    )
     Column(
         Modifier
             .fillMaxSize()
@@ -365,9 +424,24 @@ internal fun PlayerErrorOverlay(
             modifier = Modifier.widthIn(max = 460.dp),
         )
         Spacer(Modifier.height(20.dp))
+        if (actionLabel != null && onAction != null) {
+            Button(
+                onClick = onAction,
+                shape = OtvButtonShape,
+                modifier = Modifier
+                    .focusRequester(actionFocusRequester)
+                    .focusHighlight(OtvButtonShape),
+            ) {
+                Text(actionLabel)
+            }
+            Spacer(Modifier.height(8.dp))
+        }
         Button(
             onClick = onClose,
             shape = OtvButtonShape,
+            modifier = Modifier
+                .focusRequester(closeFocusRequester)
+                .focusHighlight(OtvButtonShape),
             colors = ButtonDefaults.buttonColors(
                 containerColor = Color.White.copy(alpha = 0.12f),
                 contentColor = Color.White,
@@ -384,7 +458,10 @@ private fun TransportButton(
     contentDescription: String,
     onClick: () -> Unit,
 ) {
-    IconButton(onClick = onClick, modifier = Modifier.size(68.dp)) {
+    IconButton(
+        onClick = onClick,
+        modifier = Modifier.size(68.dp).focusHighlight(CircleShape),
+    ) {
         Icon(
             icon,
             contentDescription = contentDescription,
@@ -400,7 +477,10 @@ private fun PlayerIconButton(
     contentDescription: String,
     onClick: () -> Unit,
 ) {
-    IconButton(onClick = onClick, modifier = Modifier.size(44.dp)) {
+    IconButton(
+        onClick = onClick,
+        modifier = Modifier.size(44.dp).focusHighlight(CircleShape),
+    ) {
         Icon(
             icon,
             contentDescription = contentDescription,

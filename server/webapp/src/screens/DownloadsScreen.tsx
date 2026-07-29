@@ -75,7 +75,7 @@ function DownloadCard({ item, onPlay, onChanged }: {
       ? (
         <>
           <IconBtn name="play" label={t('common.play')} className="primary" onClick={onPlay} />
-          <a className="icon-btn muted" href={downloadFileUrl(item.id, true)} download
+          <a className="icon-btn muted" href={downloadFileUrl(item.id, item.fileToken!, true)} download
              title={t('downloads.saveToDevice')} aria-label={t('downloads.saveToDevice')}>
             <Icon name="save" />
           </a>

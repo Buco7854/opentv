@@ -10,12 +10,7 @@ import { api, ApiError, PlaybackLease, ResumePoint } from '../api';
 import { reportError } from '../errors';
 import { t } from '../i18n';
 import { isTerminalPlaybackStatus } from './mediaGrant';
-import { supportsHevc } from './playbackPolicy';
 import { PlaybackStatusActions } from './playbackStatus';
-
-// Browser can decode HEVC in fMP4 via MediaSource -> server copies instead of
-// transcoding to H.264. Probed once.
-const hevcCapable = supportsHevc(typeof MediaSource === 'undefined' ? undefined : MediaSource);
 
 /** Automatic retries after a failed prepare, then one more per track-menu opening. */
 const MAX_AUTOMATIC_RETRIES = 3;
@@ -42,8 +37,6 @@ export interface RemuxController {
   /** Both readable from inside the engine's closures. */
   ref: MutableRefObject<RemuxSession | null>;
   availableRef: MutableRefObject<boolean | null>;
-  /** Set when a copied-HEVC remux fails: the browser claimed support but couldn't play it. */
-  forceTranscode: MutableRefObject<boolean>;
   /** Prepare (or re-request) the session with [audio], opening at [startAt] seconds. */
   start: (audio: number, startAt: number) => void;
   /** The remux is producing frames: never leave the menus stuck on "preparing". */
@@ -71,11 +64,12 @@ export function useRemuxSession(opts: {
   videoRef: RefObject<HTMLVideoElement | null>;
   chosenTracks: MutableRefObject<{ audio: number; subs: number | null }>;
   actions: PlaybackStatusActions;
+  recoverMediaGrant: () => Promise<boolean>;
   onTerminate: (status: number) => void;
 }): RemuxController {
   const {
     lease, leaseRef, contentId, sourceKey, catchup, eligible, checking, blocked, inRoom,
-    trackMenuOpen, videoRef, chosenTracks, actions, onTerminate,
+    trackMenuOpen, videoRef, chosenTracks, actions, recoverMediaGrant, onTerminate,
   } = opts;
   const { setError, setTracks } = actions;
 
@@ -84,9 +78,9 @@ export function useRemuxSession(opts: {
   const [available, setAvailable] = useState<boolean | null>(null);
   const ref = useRef(session);
   useEffect(() => { ref.current = session; }, [session]);
+  const requestSequence = useRef(0);
   const availableRef = useRef(available);
   useEffect(() => { availableRef.current = available; }, [available]);
-  const forceTranscode = useRef(false);
   const lastStartAt = useRef(0);
   const reopenAt = useCallback(
     () => videoRef.current?.currentTime || lastStartAt.current,
@@ -100,55 +94,85 @@ export function useRemuxSession(opts: {
 
   useEffect(() => {
     // Switching files: release the old session (frees its provider connection).
+    requestSequence.current++;
     const previous = ref.current;
     if (previous) release(previous.id);
+    ref.current = null;
     setSession(null);
     setState('idle');
-    forceTranscode.current = false;
     lastStartAt.current = 0;
     setError(null);
   }, [sourceKey, lease.id, release, setError]);
 
   useEffect(() => {
-    api.remuxAvailable().then((r) => setAvailable(r.available)).catch(() => setAvailable(false));
+    let active = true;
+    api.remuxAvailable()
+      .then((r) => { if (active) setAvailable(r.available); })
+      .catch(() => { if (active) setAvailable(false); });
+    return () => { active = false; };
   }, []);
 
   // Closing releases the session so nothing keeps reading the provider.
   useEffect(() => () => {
-    if (ref.current) release(ref.current.id);
-  }, [lease.id, release]);
+    requestSequence.current++;
+    const current = ref.current;
+    ref.current = null;
+    if (current) release(current.id);
+  }, [release]);
 
   const startRemux = useCallback(async (audio: number, startAt: number) => {
+    const request = ++requestSequence.current;
     const audioIndex = Math.max(0, audio);
     const previousId = ref.current?.id;
+    const requestLease = leaseRef.current;
     lastStartAt.current = startAt;
     setState('loading');
     try {
-      // Copy (not transcode) HEVC when the browser can decode it, unless a prior copy failed.
-      const hevc = hevcCapable && !forceTranscode.current;
       // The tab id lets the server group this read: alone it's ours, in a room it's shared, and
       // there the room's audio track overrides what we asked - result.audio is what it used.
+      const result = await api.remuxStart(requestLease.remuxStartUrl, audioIndex, catchup);
       const currentLease = leaseRef.current;
-      const result = await api.remuxStart(currentLease.remuxStartUrl, audioIndex, catchup, hevc);
+      if (request !== requestSequence.current || currentLease.id !== requestLease.id) {
+        if (ref.current?.id !== result.id) {
+          api.remuxStop(
+            result.id,
+            requestLease.id,
+            currentLease.id === requestLease.id
+              ? currentLease.mediaGrant
+              : requestLease.mediaGrant,
+          );
+        }
+        return;
+      }
       // Switching audio or share group makes a new session; release the old one so this viewer
       // never holds two of the provider's connections at once.
       if (previousId && previousId !== result.id) {
         api.remuxStop(previousId, currentLease.id, currentLease.mediaGrant);
       }
       chosenTracks.current.audio = result.audio;
-      setSession({
+      const next = {
         id: result.id,
         playlistUrl: result.playlistUrl,
         duration: result.duration ?? ref.current?.duration ?? null,
         startAt,
         nativeCopy: result.nativeVideoCopy,
         audio: result.audio,
-      });
+      };
+      ref.current = next;
+      setSession(next);
       setTracks({
         audio: { names: result.audioTracks, current: result.audio },
         subs: { names: result.subtitleTracks ?? [], current: chosenTracks.current.subs ?? -1 },
       });
     } catch (cause) {
+      if (request !== requestSequence.current) return;
+      if (cause instanceof ApiError && cause.status === 410) {
+        const recovered = await recoverMediaGrant();
+        if (recovered && request === requestSequence.current) {
+          void startRemux(audio, startAt);
+        }
+        return;
+      }
       if (cause instanceof ApiError && isTerminalPlaybackStatus(cause.status)) {
         onTerminate(cause.status);
         return;
@@ -167,7 +191,9 @@ export function useRemuxSession(opts: {
       setSession(null);
       if (!noTracks) reportError(cause);
     }
-  }, [catchup, chosenTracks, leaseRef, onTerminate, setError, setTracks]);
+  }, [
+    catchup, chosenTracks, leaseRef, onTerminate, recoverMediaGrant, setError, setTracks,
+  ]);
 
   // Engine closures re-request the session without re-running on every prepare.
   const startRef = useRef(startRemux);
@@ -216,6 +242,7 @@ export function useRemuxSession(opts: {
       // effect starts our own solo read.
       lastStartAt.current = reopenAt();
       release(ref.current.id);
+      ref.current = null;
       setSession(null);
       setState('idle');
     }
@@ -252,14 +279,13 @@ export function useRemuxSession(opts: {
   }, []);
 
   const markDied = useCallback(() => {
-    // The remux stream died, or the browser couldn't decode a copied HEVC it claimed to
-    // support: force a transcode on the retry and re-anchor.
-    if (ref.current?.nativeCopy) forceTranscode.current = true;
+    requestSequence.current++;
+    ref.current = null;
     setSession(null);
     setState('failed');
   }, []);
 
   return {
-    session, state, available, ref, availableRef, forceTranscode, start, markPlaying, markDied,
+    session, state, available, ref, availableRef, start, markPlaying, markDied,
   };
 }

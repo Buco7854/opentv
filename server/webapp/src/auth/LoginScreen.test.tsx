@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LoginScreen } from './AuthScreens';
@@ -6,6 +6,7 @@ import { AuthCapabilities } from './types';
 
 const capabilities = vi.fn();
 const supported = vi.fn();
+const beginHandoff = vi.fn();
 
 vi.mock('./AuthProvider', () => ({
   useAuth: () => ({ phase: 'unauthenticated', capabilities: capabilities(), acceptFlow: vi.fn() }),
@@ -13,6 +14,10 @@ vi.mock('./AuthProvider', () => ({
 vi.mock('./webauthn', async (importOriginal) => ({
   ...await importOriginal<typeof import('./webauthn')>(),
   webAuthnSupported: () => supported(),
+}));
+vi.mock('./fragment', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./fragment')>(),
+  beginOidcHandoff: () => beginHandoff(),
 }));
 
 const caps = (overrides: Partial<AuthCapabilities> = {}): AuthCapabilities => ({
@@ -34,6 +39,7 @@ describe('LoginScreen', () => {
   beforeEach(() => {
     capabilities.mockReturnValue(caps());
     supported.mockReturnValue(true);
+    beginHandoff.mockReturnValue('handoff-correlation');
   });
 
   afterEach(cleanup);
@@ -67,5 +73,31 @@ describe('LoginScreen', () => {
   it('does not offer it once the server has an administrator', () => {
     renderLogin();
     expect(screen.queryByRole('button', { name: /Create the first administrator/ })).toBeNull();
+  });
+
+  it('fails closed when this tab cannot persist the OIDC handoff correlation', () => {
+    capabilities.mockReturnValue(caps({
+      passwordEnabled: false,
+      oidcEnabled: true,
+      passkeyLoginEnabled: false,
+    }));
+    beginHandoff.mockReturnValue(null);
+    renderLogin();
+
+    fireEvent.click(screen.getByRole('button', { name: /single sign-on/ }));
+
+    expect(screen.getByRole('alert').textContent)
+      .toContain('Single sign-on could not be completed');
+  });
+
+  it('still renders password sign-in when session storage is unavailable', () => {
+    const remove = vi.spyOn(Storage.prototype, 'removeItem')
+      .mockImplementation(() => { throw new DOMException('blocked', 'SecurityError'); });
+    try {
+      renderLogin();
+      expect(screen.getByRole('button', { name: 'Sign in' })).toBeTruthy();
+    } finally {
+      remove.mockRestore();
+    }
   });
 });

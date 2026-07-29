@@ -5,6 +5,7 @@ import com.buco7854.opentv.core.model.Download
 import com.buco7854.opentv.core.model.Favorite
 import com.buco7854.opentv.core.model.GroupCount
 import com.buco7854.opentv.core.model.GroupOverride
+import com.buco7854.opentv.core.model.HubSource
 import com.buco7854.opentv.core.model.Metadata
 import com.buco7854.opentv.core.model.Playlist
 import com.buco7854.opentv.core.model.Programme
@@ -27,6 +28,7 @@ interface Storage {
     val resume: ResumeStore
     val metadata: MetadataStore
     val downloads: DownloadStore
+    val hubSources: HubSourceStore
 
     /** Releases platform storage resources. Android keeps this open for its process lifetime. */
     fun close() = Unit
@@ -221,6 +223,19 @@ interface ResumeStore {
     suspend fun prune(before: Long)
 }
 
+interface HubSourceStore {
+    fun observeAll(): Flow<List<HubSource>>
+    suspend fun getAll(): List<HubSource>
+    suspend fun get(id: Long): HubSource?
+    /** Returns the row id (the new id on insert). */
+    suspend fun upsert(source: HubSource): Long
+    suspend fun delete(id: Long)
+    /** Refreshes the cached `/auth/me` identity used for offline menu gating. */
+    suspend fun updateIdentity(id: Long, userId: String?, username: String?, role: String?, seenMs: Long)
+    /** Drops identity cached for an old session before a hub is re-authenticated. */
+    suspend fun clearIdentity(id: Long)
+}
+
 interface MetadataStore {
     suspend fun get(cacheKey: String): Metadata?
     suspend fun upsert(metadata: Metadata)
@@ -230,7 +245,13 @@ interface DownloadStore {
     fun observeAll(): Flow<List<Download>>
     suspend fun get(id: Long): Download?
     suspend fun getByStatus(status: Int): List<Download>
+    suspend fun getByStatuses(statuses: List<Int>): List<Download>
     suspend fun findByUrlWithStatus(url: String, statuses: List<Int>): Download?
+    suspend fun findByHubContentWithStatus(
+        hubSourceId: Long,
+        contentId: String,
+        statuses: List<Int>,
+    ): Download?
     suspend fun insert(download: Download): Long
     suspend fun update(download: Download)
     /**
@@ -250,6 +271,12 @@ interface DownloadStore {
         expectedStatuses: List<Int>,
         status: Int,
         error: String? = null,
+    ): Boolean
+    /** Persists a rotated capability without resurrecting a concurrently paused row. */
+    suspend fun updateUrlIfStatus(
+        id: Long,
+        url: String,
+        expectedStatuses: List<Int>,
     ): Boolean
     suspend fun delete(id: Long)
 }

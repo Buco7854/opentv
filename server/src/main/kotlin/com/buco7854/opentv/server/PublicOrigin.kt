@@ -24,7 +24,8 @@ internal data class WebAuthnRelyingParty(val rpId: String, val origin: String) {
 /**
  * The address a browser used to reach this server, for the four things that must be
  * absolute: the OIDC callback, the device-link URL, WebAuthn's relying party, and the
- * session cookie's `Secure` flag.
+ * `Secure` flag on the short-lived OIDC transaction cookie (sessions are bearer
+ * tokens now, so no session cookie is issued).
  *
  * `OPENTV_PUBLIC_URL` wins whenever it is set. A proxied deployment needs one predictable
  * identity - the OIDC callback has to be registered at the provider, and a passkey belongs

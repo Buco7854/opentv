@@ -1,5 +1,6 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.contract.*
 import com.buco7854.opentv.core.model.Playlist
 import kotlin.test.Test
 import kotlin.test.assertEquals

@@ -101,7 +101,8 @@ class OidcServiceTest {
             // The flow is started on the address the browser used, and the token exchange
             // has to repeat that exact redirect URI - so it travels with the flow.
             val callback = URI("https://tv.example.com/api/v1/auth/oidc/callback")
-            val start = oidc.start("127.0.0.1", callback)
+            val handoff = "browser-handoff-correlation-value-1"
+            val start = oidc.start("127.0.0.1", callback, handoff)
             val query = query(start.authorizationUrl)
             nonce = query.getValue("nonce")
             assertEquals(callback.toString(), query["redirect_uri"])
@@ -116,6 +117,7 @@ class OidcServiceTest {
             )
 
             assertEquals("AUTHENTICATED", result.flow.status)
+            assertEquals(handoff, result.oidcHandoff)
             val user = assertNotNull(result.flow.user)
             assertEquals("ADMIN", user.role)
             assertEquals("oidc-admin", user.username)

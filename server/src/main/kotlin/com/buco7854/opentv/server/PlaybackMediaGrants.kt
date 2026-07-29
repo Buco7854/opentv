@@ -4,9 +4,7 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
-import kotlinx.serialization.Serializable
 
-@Serializable
 data class IssuedMediaGrant(val token: String, val expiresAtMs: Long)
 
 /**
@@ -38,45 +36,44 @@ class PlaybackMediaGrants(
         return IssuedMediaGrant(raw, expires)
     }
 
-    fun validate(actor: Actor, leaseId: String?, rawGrant: String?) {
+    fun validate(leaseId: String?, rawGrant: String?): PlaybackSessionRegistry.Live {
         if (leaseId.isNullOrBlank() || rawGrant.isNullOrBlank()) throw PlaybackRevokedException()
-        sessions.owned(actor, leaseId)
+        val lease = sessions.lease(leaseId)
         val grant = grants[key(rawGrant)] ?: throw PlaybackRevokedException()
         if (grant.leaseId != leaseId ||
-            grant.authSessionId != actor.authSessionId ||
+            grant.authSessionId != lease.authSessionId ||
             grant.expiresAtMs <= clock()
         ) {
             grants.remove(key(rawGrant))
             throw PlaybackRevokedException()
         }
+        return lease
     }
 
     fun validateCapability(
-        actor: Actor,
         leaseId: String?,
         rawGrant: String?,
         capability: StreamCapability,
     ) {
-        validate(actor, leaseId, rawGrant)
+        validate(leaseId, rawGrant)
         if (capability.leaseId != leaseId) throw PlaybackRevokedException()
     }
 
-    fun validateSource(actor: Actor, leaseId: String?, rawGrant: String?, source: String) {
-        validate(actor, leaseId, rawGrant)
-        if (sessions.owned(actor, requireNotNull(leaseId)).sourceUrl != source) {
+    fun validateSource(leaseId: String?, rawGrant: String?, source: String) {
+        if (validate(leaseId, rawGrant).sourceUrl != source) {
             throw PlaybackRevokedException()
         }
     }
 
-    fun bindResource(actor: Actor, leaseId: String, resourceId: String) {
-        sessions.owned(actor, leaseId)
+    fun bindResource(leaseId: String, resourceId: String) {
+        sessions.lease(leaseId)
         synchronized(resourceLock) {
             resources.computeIfAbsent(resourceId) { ConcurrentHashMap.newKeySet() }.add(leaseId)
         }
     }
 
-    fun validateResource(actor: Actor, leaseId: String?, rawGrant: String?, resourceId: String) {
-        validate(actor, leaseId, rawGrant)
+    fun validateResource(leaseId: String?, rawGrant: String?, resourceId: String) {
+        validate(leaseId, rawGrant)
         if (resources[resourceId]?.contains(leaseId) != true) throw PlaybackRevokedException()
     }
 
@@ -86,12 +83,11 @@ class PlaybackMediaGrants(
      * @return true when the caller released the final attachment and the physical resource may stop.
      */
     fun releaseResource(
-        actor: Actor,
         leaseId: String?,
         rawGrant: String?,
         resourceId: String,
     ): Boolean {
-        validateResource(actor, leaseId, rawGrant, resourceId)
+        validateResource(leaseId, rawGrant, resourceId)
         return synchronized(resourceLock) {
             var finalAttachment = false
             resources.computeIfPresent(resourceId) { _, leases ->

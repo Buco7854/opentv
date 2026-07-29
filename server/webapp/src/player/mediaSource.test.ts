@@ -9,16 +9,18 @@ const lease = (overrides: Partial<PlaybackLease> = {}): PlaybackLease => ({
   mediaGrant: 'grant-2',
   mediaGrantExpiresAtMs: 0,
   streamUrl: '/api/v1/stream?u=l.token&sid=lease-1&g=grant-1',
+  sharedHlsUrl: '/api/v1/shared-hls?u=h.token&sid=lease-1&g=grant-1',
   relayUrl: '/api/v1/relay?u=l.token&sid=lease-1&g=grant-1',
   transcodeUrl: '/api/v1/transcode?u=l.token&sid=lease-1&g=grant-1',
   remuxStartUrl: '/api/v1/remux/start?u=l.token&sid=lease-1&g=grant-1',
+  downloadFileUrl: null,
   ...overrides,
 });
 
 describe('media source resolution', () => {
   it('applies the current grant to every proxied transport', () => {
     const context = { lease: lease() };
-    (['proxy', 'relay', 'transcode'] as const).forEach((transport) => {
+    (['proxy', 'shared-hls', 'relay', 'transcode'] as const).forEach((transport) => {
       const source = resolveSource(context, transport);
       expect(source?.url).toContain('g=grant-2');
       expect(source?.url).not.toContain('g=grant-1');
@@ -41,7 +43,12 @@ describe('media source resolution', () => {
     expect(playbackSource({ lease: lease() })?.transport).toBe('proxy');
 
     const download = playbackSource({
-      lease: lease({ streamUrl: null, relayUrl: null, transcodeUrl: null }),
+      lease: lease({
+        streamUrl: null,
+        relayUrl: null,
+        transcodeUrl: null,
+        downloadFileUrl: '/api/v1/downloads/download-9/file?token=f.signed',
+      }),
       downloadId: 'download-9',
     });
     expect(download?.transport).toBe('download');

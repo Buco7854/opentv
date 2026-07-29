@@ -4,6 +4,7 @@ import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.core.model.Download
 import com.buco7854.opentv.core.model.Favorite
 import com.buco7854.opentv.core.model.GroupOverride
+import com.buco7854.opentv.core.model.HubSource
 import com.buco7854.opentv.core.model.Metadata
 import com.buco7854.opentv.core.model.Playlist
 import com.buco7854.opentv.core.model.Programme
@@ -13,6 +14,7 @@ import com.buco7854.opentv.data.db.ChannelRow
 import com.buco7854.opentv.data.db.DownloadRow
 import com.buco7854.opentv.data.db.FavoriteRow
 import com.buco7854.opentv.data.db.GroupOverrideRow
+import com.buco7854.opentv.data.db.HubSourceRow
 import com.buco7854.opentv.data.db.MetadataRow
 import com.buco7854.opentv.data.db.PlaylistRow
 import com.buco7854.opentv.data.db.ProgrammeRow
@@ -65,6 +67,12 @@ internal fun Programme.toRow() = ProgrammeRow(id, playlistId, tvgId, title, desc
 internal fun GroupOverrideRow.toModel() = GroupOverride(playlistId, groupTitle, kind)
 internal fun GroupOverride.toRow() = GroupOverrideRow(playlistId, groupTitle, kind)
 
+internal fun HubSourceRow.toModel() =
+    HubSource(id, name, baseUrl, userId, username, role, addedMs, lastSeenMs)
+
+internal fun HubSource.toRow() =
+    HubSourceRow(id, name, baseUrl, userId, username, role, addedMs, lastSeenMs)
+
 internal fun FavoriteRow.toModel() = Favorite(playlistId, key, kind, addedMs)
 internal fun Favorite.toRow() = FavoriteRow(playlistId, key, kind, addedMs)
 
@@ -80,9 +88,31 @@ internal fun Metadata.toRow() = MetadataRow(
 )
 
 internal fun DownloadRow.toModel() = Download(
-    id, title, url, filePath, status, totalBytes, downloadedBytes, error, createdMs,
+    id = id,
+    title = title,
+    url = url,
+    filePath = filePath,
+    status = status,
+    totalBytes = totalBytes,
+    downloadedBytes = downloadedBytes,
+    error = error,
+    createdMs = createdMs,
+    hubSourceId = hubSourceId,
+    contentId = contentId,
+    serverDownloadId = serverDownloadId,
 )
 
 internal fun Download.toRow() = DownloadRow(
-    id, title, url, filePath, status, totalBytes, downloadedBytes, error, createdMs,
+    id = id,
+    title = title,
+    url = url,
+    filePath = filePath,
+    status = status,
+    totalBytes = totalBytes,
+    downloadedBytes = downloadedBytes,
+    error = error,
+    createdMs = createdMs,
+    hubSourceId = hubSourceId,
+    contentId = contentId,
+    serverDownloadId = serverDownloadId,
 )

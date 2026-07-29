@@ -13,8 +13,8 @@ afterEach(() => { document.getElementById('toast-root')?.remove(); });
 
 describe('errorMessage', () => {
   it('prefers its own copy for a known code over the server sentence', () => {
-    const message = errorMessage(new ApiError('Origin rejected', 403, 'origin_rejected'));
-    expect(message).toContain('OPENTV_PUBLIC_URL');
+    const message = errorMessage(new ApiError('No', 401, 'unauthenticated'));
+    expect(message).toContain('Sign in');
   });
 
   it('reads a transport failure as a connection problem', () => {
