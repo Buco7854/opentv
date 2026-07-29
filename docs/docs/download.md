@@ -25,7 +25,12 @@ Rebuilt automatically from the latest commit on the main branch. New features an
 | Stability | Higher | Newest, less tested |
 | Best for | Everyday viewing | Trying new features early |
 
-Both builds are signed with the same key, so you can move between them and install one over the other without uninstalling. The first time you switch from an older, differently signed build you may need a single uninstall. After that, updates install in place and keep your playlists, favorites and settings. See [Updating the app](/guide/updating).
+Both published builds are signed with the same key, so you can move between
+them and install one over the other without uninstalling. The first time you
+switch from an older, differently signed build you may need a single uninstall.
+Installing in place is separate from data migration: an update that changes the
+catalog schema deliberately recreates the catalog database and loses
+catalog-backed state. See [Updating the app](/guide/updating) before switching.
 
 ## System requirements
 

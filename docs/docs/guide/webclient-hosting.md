@@ -21,8 +21,9 @@ docker run -d \
 
 Generate the value with `openssl rand -base64 32` or `openssl rand -hex 32`,
 then open `http://localhost:8080`. Reaching the container on another address -
-`127.0.0.1`, a LAN IP, a published port - needs no further configuration: sessions,
-the device-linking QR and the sign-in origin all follow the address you used.
+`127.0.0.1`, a LAN IP, a published port - needs no further configuration:
+device-linking URLs and unpinned OIDC/WebAuthn addresses follow the address you
+used.
 
 Set `OPENTV_PUBLIC_URL` once a reverse proxy sits in front, or when you configure
 OIDC or passkeys, since those want one fixed address:
@@ -44,6 +45,17 @@ mkdir -p ./opentv-data && sudo chown 10001:10001 ./opentv-data
 Playlists and guide data use the catalog database;
 users, grants, favorites, resume points, and downloads use
 `/data/server-users.db`.
+
+:::caution Catalog upgrades
+
+The catalog database (`/data/opentv.db`) uses destructive recreation when its
+Room schema version changes. Such an upgrade removes every server-side playlist
+and its catalog/guide data; add and refresh the playlists again afterwards.
+`server-users.db` keeps explicit migrations, so users, sessions, grants,
+favorites, resume points, and download associations are not recreated with the
+catalog. Back up the entire `/data` volume before upgrading.
+
+:::
 
 ## docker-compose, behind Caddy TLS
 
@@ -89,16 +101,16 @@ tv.example.com {
 | `OPENTV_X264_PRESET`       | `veryfast` | Software encode speed vs size (`ultrafast` to `slow`); only used by the default `libx264` encoder                                    |
 | `OPENTV_PROVIDER_CONNECTIONS` | `1`     | How many concurrent provider reads to allow when a panel does not report its own `max_connections`. Playback and downloads share this budget |
 | `OPENTV_TRUSTED_PROXIES`   | (unset)    | Comma-separated proxy IPs and CIDRs (e.g. `127.0.0.1,10.0.0.0/8`). When a request comes from one of these, the real viewer IP is read from `X-Forwarded-For` for the [Now watching](/guide/webclient-now-watching) page |
-| `OPENTV_PUBLIC_URL`        | derived per request | External browser origin, including a non-default port. Cookies, WebAuthn and the OIDC callback come from it when set, and follow the address of each request when not. Set it behind a reverse proxy, and for OIDC (the callback must be registered at the provider) |
-| `OPENTV_ALLOW_INSECURE_HTTP` | `false` | Development-only escape hatch for non-loopback HTTP. It does not make credentials or cookies safe on an untrusted network. |
+| `OPENTV_PUBLIC_URL`        | derived per request | External browser address, including a non-default port. Device-link URLs, WebAuthn, the OIDC callback, HSTS, and the OIDC transaction cookie derive from it when set and otherwise follow each request. Set it behind a reverse proxy, and for OIDC (the callback must be registered at the provider) |
+| `OPENTV_ALLOW_INSECURE_HTTP` | `false` | Development-only escape hatch for non-loopback HTTP. It does not make bearer tokens or credentials safe on an untrusted network. |
 
 Authentication, OIDC, WebAuthn, initial administrator, and recovery variables
 are documented in [Server authentication and user data](/guide/server-authentication).
 Your reverse proxy must serve HTTPS at exactly `OPENTV_PUBLIC_URL`. Set it whenever
-the proxy rewrites `Host` to its upstream, or unsafe requests answer
-`403 origin_rejected` (the server logs the origin it received next to the one it
-expected). `X-Forwarded-Proto` and `X-Forwarded-Host` are read only from peers listed
-in `OPENTV_TRUSTED_PROXIES`. Register
+the proxy rewrites `Host` to its upstream, so generated OIDC, device-link, and
+WebAuthn addresses remain the public ones. `X-Forwarded-Proto` and
+`X-Forwarded-Host` are read only from peers listed in
+`OPENTV_TRUSTED_PROXIES`. Register
 `${OPENTV_PUBLIC_URL}/api/v1/auth/oidc/callback` exactly at the identity
 provider.
 
@@ -134,24 +146,48 @@ caches for metadata.
 
 ## Limitations vs the Android app
 
-- **Codecs**: browsers decode less than ExoPlayer, so for movies, series and
-  catch-up the server remuxes through ffmpeg into fMP4 HLS, exposing every audio
-  and subtitle track. Non-browser audio (AC3, E-AC3, DTS) is always transcoded to
-  AAC. Video is copied when the browser can play it (H.264 everywhere, HEVC where
-  the browser decodes it natively, which the client detects per session) and
-  transcoded to H.264 only for browsers that cannot, such as Firefox with HEVC.
-  Copying is cheap; transcoding video is CPU heavy. On a box without a GPU, lower
-  the cost with `OPENTV_X264_PRESET` or turn it off with
-  `OPENTV_VIDEO_ENCODER=copy` (non-H.264 then plays only where the browser
-  decodes it natively). With a GPU, point `OPENTV_VIDEO_ENCODER` at a hardware
-  encoder (`h264_qsv`, `h264_nvenc`) for near-free transcoding. Live channels
+- **Codecs and tracks**: each playback lease reports the codecs that client can
+  decode. The web client reports the browser baseline (H.264 plus common browser
+  audio codecs) and adds HEVC only when that browser's `MediaSource` says it can
+  play it. There is no `hevc=1` URL switch or server-side browser table.
+  Browsers cannot select every muxed track in band, so multi-audio or subtitled
+  VOD is remuxed into fMP4 HLS even when its codecs are otherwise playable.
+  Unsupported selected audio is converted to AAC; unsupported video is
+  transcoded to H.264. Copying or direct play is cheap, while video transcoding
+  is CPU heavy. On a box without a GPU, lower the cost with
+  `OPENTV_X264_PRESET` or turn it off with `OPENTV_VIDEO_ENCODER=copy`. With a
+  GPU, use a hardware encoder such as `h264_qsv` or `h264_nvenc`. Live channels
   rely on the browser plus an on-demand audio-only transcode, so an unusual live
-  video codec may still not play. Those streams still play in the Android app.
+  video codec may still fail there.
 - **Downloads** are stored on the server (the `/data` volume), not on the
   browser's device. Use the save button on a finished download to copy it to the
   device you are browsing from.
 - The **User-Agent** and download settings are server-wide (they affect how the
   server talks to your provider), not per-browser.
+
+The limits above are browser limits, not server ones. The Android app can
+connect to this server as a client. It reports the device's actual decoders and
+that ExoPlayer selects audio and subtitle tracks in band. When the video and
+every audio stream are decodable, Android direct-plays multi-audio and subtitled
+content that a browser still has remuxed. A server used mainly from Android
+therefore needs far less CPU than the same server used from browsers. A
+watch-together room uses the intersection of all members' reports, so a mixed
+room uses a common remux only while a member needs one; a fully capable native
+room direct-plays and creates no room remux. See
+[Android app with your server](./android-with-server.md).
+
+For raw-TS live channels, a watch-together room uses one server relay and one
+upstream read. Playlist-only `.m3u8` rooms use a bounded shared-HLS cache:
+manifests and media resources are fetched once for the room's share group and
+then rewritten with each viewer's lease capability. Neither path opens a
+separate provider read for every viewer.
+
+Android clients also store their downloads on the device. The server starts the
+provider fetch, and the app begins pulling fixed snapshots as soon as the
+growing server file has bytes, so the two transfers are pipelined. A per-server
+option can remove the Android user's server download association after the
+local file completes; it is off by default, and a blob shared by another user
+is retained.
 
 ## Running without Docker
 

@@ -20,6 +20,23 @@ Yes. The full source code is on [GitHub](https://github.com/Buco7854/opentv) und
 
 Android 8.0 (API 26) and newer, including Android TV.
 
+## Can the Android app connect to my OpenTV server?
+
+Yes. A server is an additional source alongside your local M3U and Xtream
+playlists, which keep working unchanged. Connecting gives you the playlists your
+account is granted, favorites and watch progress synced across your devices,
+watch together, and downloads saved to the device. See
+[Android app with your server](/guide/android-with-server).
+
+## Will an app update keep my playlists and downloads?
+
+Not when that release changes the catalog schema. OpenTV deliberately recreates
+`opentv.db` instead of running hand-written Room migrations, which removes local
+playlists, connected servers, favorites, resume points, download records, and
+other catalog-backed state. The APK still installs in place, and downloaded
+files may remain without records. Check [Updating the app](/guide/updating)
+before installing.
+
 ## Why is OpenTV not on the Play Store?
 
 It is distributed as an APK you install yourself. This keeps it free and open without store policies, and lets you choose between the release and dev channels.

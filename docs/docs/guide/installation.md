@@ -26,7 +26,8 @@ Tap the downloaded file and confirm the install. You may see a warning that the 
 
 ## Installing on Android TV
 
-Android TV does not have a browser, so use a sideload helper:
+Many Android TV devices do not include a practical browser, so use a sideload
+helper:
 
 1. Install a file manager such as X-plore or a tool such as Downloader from the Play Store on the TV.
 2. Open one of the download links above inside that app.

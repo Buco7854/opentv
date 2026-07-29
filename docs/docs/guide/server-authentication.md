@@ -1,17 +1,22 @@
 # Server authentication and user data
 
 OpenTV's server uses its own user database at
-`$OPENTV_DATA/server-users.db`. Browser sessions are opaque, revocable
-server-side sessions in an `HttpOnly` cookie. The browser keeps the CSRF token
-returned by `/api/v1/auth/me` in memory and sends it as `X-CSRF-Token` on every
-unsafe request.
+`$OPENTV_DATA/server-users.db`. Sessions are opaque and revocable. Every client
+sends the same session token as `Authorization: Bearer` on protected HTTP
+requests.
+
+The bundled web client stores its bearer in `localStorage`. There are no
+session cookies, CSRF tokens, or auth-route Origin checks. Because JavaScript
+can read the token, the server's Content Security Policy allows scripts only
+from the OpenTV origin and forbids inline script attributes. Android stores
+each server token AES-GCM encrypted under a non-exportable Android Keystore
+key; it never puts the token in the catalog database.
 
 Android and the server share platform-neutral catalog/domain modules (`:core`)
 and Room catalog adapters (`:data`). The Android application remains a
-standalone local IPTV reader and does not include `:server-data`, share
-`server-users.db`, or use server user records. A future OpenTV-server provider
-can use the same `contentId`, playback-lease, and actor-oriented API without
-changing Android's existing local M3U/Xtream storage.
+standalone local IPTV reader and does not include `:server-data` or share
+`server-users.db`. Connecting an OpenTV server adds an optional source alongside
+the app's existing local M3U/Xtream sources.
 
 ## Required configuration
 
@@ -33,8 +38,8 @@ openssl rand -hex 32
 | `OPENTV_MFA_REQUIRED_ROLES` | `USER,ADMIN` | Comma-separated local-password roles that must complete TOTP or WebAuthn. Accepts `USER`, `ADMIN`, or both; an empty value is ignored and the default applies on every login. |
 | `OPENTV_INITIAL_ADMIN_USERNAME` | none | Optional one-time initial administrator username. Must be supplied with its password. |
 | `OPENTV_INITIAL_ADMIN_PASSWORD` | none | Optional one-time initial administrator password. Ignored after any administrator exists. |
-| `OPENTV_SESSION_IDLE_HOURS` | `24` | Browser session idle lifetime. |
-| `OPENTV_SESSION_ABSOLUTE_DAYS` | `30` | Browser session maximum lifetime. |
+| `OPENTV_SESSION_IDLE_HOURS` | `24` | Session idle lifetime. |
+| `OPENTV_SESSION_ABSOLUTE_DAYS` | `30` | Session maximum lifetime. |
 | `OPENTV_WEBAUTHN_RP_ID` | public URL host | Exact WebAuthn relying-party ID. |
 | `OPENTV_WEBAUTHN_ORIGIN` | public URL origin | Exact WebAuthn browser origin. HTTPS is required except on localhost. |
 
@@ -56,9 +61,9 @@ download associations that require reconciliation.
 
 ## Addresses
 
-Four things need to know where browsers reach this server: the OIDC callback, the
-device-linking QR, the WebAuthn relying party, and whether the session cookie may
-be marked `Secure`.
+Four things need to know where browsers reach this server: the OIDC callback,
+the device-linking QR, the WebAuthn relying party, and whether the short-lived
+OIDC transaction cookie and HSTS may use HTTPS-only behavior.
 
 `OPENTV_PUBLIC_URL` answers all four when it is set, and a deployment with a fixed
 address should set it: the OIDC callback has to be registered at the identity
@@ -81,11 +86,9 @@ Two consequences worth knowing:
 - `OPENTV_WEBAUTHN_RP_ID` and `OPENTV_WEBAUTHN_ORIGIN` still pin the relying party on
   their own, even with `OPENTV_PUBLIC_URL` unset.
 
-Independently of all this, every unsafe request must carry an `Origin` naming either
-the host it was addressed to or `OPENTV_PUBLIC_URL`; a browser sets both headers
-itself, so that stays a same-origin check. A rejected origin answers
-`403 origin_rejected` and logs the received origin, the requested host and the
-configured URL side by side.
+`OPENTV_PUBLIC_URL` does not authorize requests. Protected routes authenticate
+the bearer token; public authentication routes do not apply a separate Origin
+guard.
 
 ## OIDC
 
@@ -127,6 +130,15 @@ the provider never saw. Non-loopback HTTP is rejected unless
 `OPENTV_ALLOW_INSECURE_HTTP=true`, which is for isolated development only and provides
 no transport security.
 
+The OIDC transaction uses one short-lived, callback-only `HttpOnly` cookie to
+bind the callback to the authorization request. This is not a login session
+cookie. After a successful exchange, the server redirects with the OpenTV
+session in `/#session=...` and echoes a random `handoff` value that the initiating
+tab stored in `sessionStorage`. The web client accepts only a recent exact
+correlation match, saves the bearer, and removes both values from the address
+before loading the account. An unsolicited or mismatched session fragment is
+discarded.
+
 ## Passkeys
 
 Passkeys can be used either as the WebAuthn step after a password or as the
@@ -160,14 +172,14 @@ rotation as passkey removal. Any unfinished TOTP enrollment is invalidated.
 
 ## Linking a device
 
-A browser can start a five-minute device-link request. It receives an opaque
+A client can start a five-minute device-link request. It receives an opaque
 polling token held only in memory and a QR link whose secret is in the URL
 fragment. The new device polls no faster than the interval returned by the
 server; faster polling returns `429` and `Retry-After`.
 
 Scanning the QR claims the request for the signed-in phone user and moves it
 from `PENDING` to `SCANNED`. The phone shows the requesting device name, user
-agent, and IP address. The requesting browser shows the claiming account's
+agent, and IP address. The requesting client shows the claiming account's
 display name and username, but no account identity is returned before the scan.
 A second account cannot take over a claimed request, while rescanning from the
 same account is idempotent.
@@ -176,7 +188,7 @@ Approval requires an active session that has satisfied MFA and is accepted
 only after that same account claimed the request. Claim, approval, and denial
 are conditional database updates. Polling an approved request atomically
 consumes it while inserting the linked session, so decision races and poll
-replays cannot mint multiple sessions. Denial and expiry never issue a cookie.
+replays cannot mint multiple sessions. Denial and expiry never issue a session.
 
 The linked session inherits the approving session's authentication method and
 is marked `LINKED_DEVICE`. This preserves password-disable revocation policy.
@@ -206,11 +218,24 @@ Removing a playlist grant hides and suspends its user associations. Removing
 the final association removes the physical transfer/file.
 
 Playback begins with `POST /api/v1/playback`. The response contains a
-server-issued lease and short-lived, lease-scoped media URLs. Room kicks,
-logout, session revocation, user disable/reset/delete, and playlist grant
+server-issued lease and lease-scoped media URLs. Media, image, download-file,
+and WebSocket URLs use purpose-limited capabilities instead of
+the bearer. In particular, the browser first authenticates
+`POST /playback/{id}/ws-token`, then puts only that 30-second, session-and-lease
+bound capability in the socket's `ws_token` query parameter.
+
+Logout, session revocation, user disable/reset/delete, and playlist grant
 removal terminate the applicable leases and close their proxy body, relay
 attachment, transcoder, remux attachment, provider reservation, and WebSocket.
+A room kick first removes the viewer from the room and shared read, delivers
+`room-ended`, and revokes the lease after a server-owned 750 ms notice grace.
 Stale leases return `410 playback_revoked`.
+
+Watch-together commands have a positive per-lease monotonic `sequence`, so
+clients discard missing, duplicate, or older delivery that races between the
+WebSocket and HTTP heartbeat fallback. A room reload barrier has its own
+positive `generation`; `room-audio`, `ready`, and `room-go` must refer to that
+generation, so a late acknowledgement cannot release a newer barrier.
 
 ## Web client behavior
 
@@ -219,9 +244,12 @@ contracts:
 
 - It provides bootstrap/activation, password, TOTP, WebAuthn, recovery-code,
   OIDC callback, pending-approval, and account-security states.
-- It loads `/api/v1/auth/me`, retains its CSRF token only in memory, sends
-  `X-CSRF-Token` on unsafe calls, and treats `401`, `403`, and `410` as terminal
-  auth/authorization/playback states.
+- It keeps the bearer in `localStorage`, sends it as `Authorization: Bearer` on
+  every protected HTTP request, sends no ambient credentials, and has no CSRF
+  transport.
+- It treats `401` as an authentication outcome, `403` as an authorization
+  outcome, and `410 playback_revoked` as a playback-lease outcome. Network,
+  timeout, and cancellation failures do not clear the session.
 - Favorites, resume, downloads, and playback use `contentId`; ordinary user
   requests never submit a user ID.
 - Playback begins with `POST /api/v1/playback`, uses only lease-scoped media
@@ -232,9 +260,10 @@ contracts:
   now-watching, user management, pending OIDC identities, templates, and grants
   are visible only to administrators.
 
-Browser cookie delivery and browser-to-browser device linking are implemented
-now. Native access/refresh-token and mobile-OIDC handoff remain deferred behind
-the existing auth-flow, session-issuer, and actor seams.
+Android uses the same bearer-protected API, reports itself as a native client,
+and supports password/MFA sign-in plus QR device linking. OIDC and passkey
+sign-in use the device-link flow in a browser, so no provider refresh token is
+stored on Android.
 
 ## Account recovery
 

@@ -5,7 +5,7 @@ title: Now watching
 # Now watching
 
 The playlists panel has a **Now watching** page that lists everyone currently
-watching through the web client, one card per viewer. It doubles as a
+watching through this OpenTV server, one card per viewer. It doubles as a
 debugging tool: each card can tell you exactly what the server is doing for that
 stream, and why.
 
@@ -76,8 +76,9 @@ on the spot, without opening a shell on the server.
 
 ## Scope and identity
 
-This covers web-client viewers only. The Android app plays through the shared
-core, not this server, so it does not show up here.
+This covers every viewer playing through this server, including connected
+Android clients. A local M3U or Xtream stream played directly by the standalone
+Android source does not involve the server and therefore does not appear.
 
 Viewers are keyed by an authenticated, server-issued playback lease. IP is
 diagnostic metadata. Set `OPENTV_TRUSTED_PROXIES` to your proxy's address (see
@@ -86,6 +87,8 @@ real client IP from `X-Forwarded-For`.
 
 :::caution
 Now watching and remote controls are administrator-only. A room host may also
-control or kick members of that room; a kick revokes only the target playback
-lease and closes its server-side media transports.
+control or kick members of that room. A kick removes the target from the room
+and shared read immediately, sends `room-ended`, then revokes only that playback
+lease after a bounded 750 ms notice grace and closes its server-side media
+transports.
 :::

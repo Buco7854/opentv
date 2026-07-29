@@ -31,6 +31,7 @@ const sidebars: SidebarsConfig = {
         'guide/webclient-now-watching',
         'guide/server-authentication',
         'guide/webclient-hosting',
+        'guide/android-with-server',
       ],
     },
     { type: 'doc', id: 'download', label: 'Download the app' },

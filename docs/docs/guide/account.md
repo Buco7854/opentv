@@ -12,9 +12,17 @@ OpenTV keeps an in-app error log with full stack traces, including crashes from 
 
 ## Privacy
 
-OpenTV has no servers, no accounts, no analytics and no ads. Your credentials and data stay on your device. The app only talks to:
+The OpenTV project runs no hosted service and includes no analytics or ads.
+With standalone sources, your provider credentials and viewing state stay on
+your device. The app talks to:
 
 - your provider, to fetch playlists, the guide and streams, and
 - optional keyless metadata sources, to show posters, synopsis and cast.
 
-Because there is no backend, nothing about your viewing leaves your device except the requests you make to your own provider. The full source code is available on [GitHub](https://github.com/Buco7854/opentv).
+If you add your own OpenTV server as a source, the app also talks to that
+server. The server holds the account, granted playlists, favorites, progress,
+playback leases, and server-side part of hub downloads; its provider credentials
+remain on the server. The Android session token is encrypted under Android
+Keystore and excluded from backup and device-to-device transfer.
+
+The full source code is available on [GitHub](https://github.com/Buco7854/opentv).

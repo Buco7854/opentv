@@ -1,0 +1,130 @@
+---
+title: Android app with your server
+---
+
+# Using the Android app with your server
+
+The Android app works on its own with M3U playlists and Xtream logins, and it
+can also connect to your OpenTV server. Connecting is optional and additive: a
+server becomes another source alongside whatever you already have, and your
+local playlists keep working exactly as before.
+
+Connecting gets you the playlists your account is granted on the server, your
+watch progress and favorites synced across every device signed in to it, watch
+together with other viewers, and downloads saved to the device.
+
+## Connecting
+
+Open the sources panel and choose **OpenTV server**, or pick it when adding a
+source, then enter the server address (for example `https://tv.example.com`).
+The app checks the address before asking for anything else, so a typo tells you
+straight away rather than failing at sign-in.
+
+The app then offers only the sign-in methods your server actually enables:
+
+- **Username and password** — including two-factor codes and recovery codes. If
+  your server requires two-factor authentication and you have not set it up yet,
+  the app walks you through enrolling, showing a QR code for your authenticator
+  app.
+- **Link this device** — approve from a device that is already signed in. The
+  app shows a QR code; scan it with the signed-in device and approve. On a phone
+  you can also tap **Open on this device** to approve in your own browser.
+- **Sign in with a browser** — for single sign-on and passkeys, which complete in
+  a browser. The app shows a code to scan; once you finish in the browser the app
+  signs itself in.
+
+On Android TV, device linking is the easy path: the TV displays the code and you
+scan it with your phone. Nothing needs typing on a remote, and the sign-in,
+source, browsing, player, and settings controls all support D-pad focus.
+
+The resulting server session is stored in an encrypted vault backed by Android
+Keystore, not in the catalog database. OpenTV excludes that vault, the catalog,
+and player preferences from Android backup and Android 12+ device-to-device
+transfer; after moving to another device, connect and sign in again.
+
+## Your account and administration
+
+Account settings and server administration are not rebuilt inside the app. They
+open your server's own pages in a browser instead, so there is one place to
+manage them and nothing to keep in step. The app opens only pages on that
+server's own origin. On Android 11 and newer it checks browser availability
+before offering the handoff; the app declares HTTP and HTTPS browser intents for
+Android's package-visibility rules.
+
+From the server's entry in the sources panel you get **Account and security**
+(password, two-factor, sessions), and, if your account is an administrator,
+**Administration** and **Now watching**. On a TV, where a browser is awkward or
+absent, the app shows a QR code to open the page on your phone.
+
+## Watching
+
+Playback works the same as any other source, with one difference in your favour.
+Browsers can only play a narrow set of formats and cannot select every muxed
+track directly. Android tells the server which codecs this device actually
+decodes and that ExoPlayer selects tracks in band. When the video and all audio
+tracks are decodable, the app direct-plays the original even when it has several
+audio tracks or subtitles — no remux, less work for your server, and no quality
+loss.
+
+Where a file does need converting — a codec your device lacks, or catch-up — the
+server prepares it and the app plays that instead. Audio track and subtitle
+selection work either way.
+
+## Watch together
+
+If someone else is watching the same thing, the player offers to watch together.
+The host approves who joins and can hand out control, so anyone with control can
+play, pause and seek for everyone.
+
+Everyone stays in sync automatically. If one person's device cannot play the
+original stream, the whole room switches to a converted one so nobody is left
+behind; if everyone's device can, the room plays the original and no conversion
+happens at all.
+
+For fully capable Android viewers, movies and episodes direct-play and the room
+creates no shared remux. Raw-TS live channels use one shared server relay and
+one upstream read. Playlist-only `.m3u8` rooms use the server's bounded
+shared-HLS cache: each manifest or media resource is fetched once for the
+room's share group and rewritten separately with each viewer's lease
+capability. Both paths avoid one provider read per viewer.
+
+Administrators can pause a stream or send a message to a viewer, and those
+arrive in the app as they do in a browser.
+
+## Favorites and progress
+
+Favorites and watch progress for a server live **on that server**, so they follow
+you to every device signed in to it. Local playlists keep their favorites and
+progress on the device, as they always have.
+
+The favorites screen shows everything together, grouped by source. If a server
+is unreachable its section says so and offers a retry, while your other
+favorites still appear.
+
+## Downloads
+
+Downloads from a server are saved **on your device**, so they play offline like
+any other download.
+
+Because your provider's details never leave the server, a download happens in
+two pipelined transfers. The server starts fetching from the provider; as soon
+as the growing server file has usable bytes, your device begins pulling fixed
+snapshots while the server continues. The downloads screen presents the whole
+operation as one continuous entry, not separate preparation and device phases.
+
+By default your download association stays on the server afterwards. You can
+turn on **Remove from server after download** per server to delete that
+association after the local copy is verified; the shared server file is deleted
+only when no other user refers to it.
+
+## If something goes wrong
+
+- **"Couldn't reach the server"** — the app could not contact it. Check the
+  address and that your device is on a network that can reach it. Server sources
+  are not cached, so nothing from that server appears until it is reachable.
+- **"Signed out"** — your session ended or was revoked. Sign in again from the
+  server's entry in the sources panel.
+- **"Playback capacity"** — your provider's connection limit is reached; try
+  again shortly.
+- **Playback stopped with "Playback ended"** — an administrator ended the
+  stream, or your session was revoked.

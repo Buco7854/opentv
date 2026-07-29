@@ -4,14 +4,31 @@ OpenTV does not auto-update, since it is not on the Play Store. You update it by
 
 ## How updates work
 
-Every build is signed with the same key. Android lets a new APK replace an existing app only when the signatures match, so installing a newer OpenTV over your current one keeps all of your data: playlists, favorites, downloads and settings.
+Published builds use the same signing key, so Android can install a newer APK
+over the existing app instead of requiring an uninstall.
+
+:::caution Catalog schema changes
+
+OpenTV deliberately recreates its catalog database when an update changes the
+Room schema version; it does not run hand-written migrations. That recreation
+removes local playlists, connected-server entries, favorites, resume points,
+download records, and other catalog-backed state. Downloaded files may remain
+in storage, but OpenTV no longer has their records. Connected-server sessions
+are excluded from backup and transfer, so connect and sign in again.
+Preferences outside the catalog database remain.
+
+Back up or record source details before installing an update that announces a
+catalog schema change.
+
+:::
 
 To update:
 
 1. Download a newer APK from the [release](https://github.com/Buco7854/opentv/releases/latest/download/app-release.apk) or [dev](https://github.com/Buco7854/opentv/releases/download/dev/app-release.apk) channel.
 2. Open it and confirm. Android will show an update prompt instead of a fresh install.
 
-Your playlists and settings are preserved.
+Android installs the package in place; whether catalog data survives depends on
+whether that release changed the catalog schema as described above.
 
 ## Switching channels
 

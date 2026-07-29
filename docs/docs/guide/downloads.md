@@ -19,3 +19,15 @@ If you change the folder later, you can move existing completed downloads into t
 ## Connection-aware transfers
 
 Downloads respect your provider's limits. In automatic mode, OpenTV uses your plan's maximum connections minus one, keeping a slot free for watching, and pauses a download if you start streaming from the same provider. You can also set a fixed number of simultaneous transfers in Settings.
+
+## Downloads from an OpenTV server
+
+Server-source downloads are still stored on this Android device. The server
+starts fetching from the provider, and the device starts pulling as soon as the
+growing server file has usable bytes; both transfers continue as one pipelined
+operation and one progress entry.
+
+The server copy is kept by default because another user may share it. Each
+connected server has a **Remove from server after download** option; turn it on
+only if you want the app to delete your server association after the local byte
+counts and server `DONE` state agree.
