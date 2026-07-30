@@ -291,19 +291,31 @@ refresh token is stored on Android. The in-app password form remains for a
 password-only server, or a device with no browser, and QR device linking remains
 for approving from a second device.
 
-Playlists reached through a server offer the same operations as local ones, but
-the server decides which. Clearing your watch progress is yours to do from the
-app, because it is your own. Everything else edits what other people see and is
-therefore administrative: refreshing, editing and deleting open the server's own
-pages rather than being rebuilt in the app, and correcting a category's type is
-administrator-only too — the override is stored on the playlist and re-applied at
-every refresh, so it changes the catalog for everyone who can see it. Native
-Xtream categories cannot be reclassified at all; the provider owns them.
+Playlists reached through a server offer the same operations as local ones, and
+the app performs them itself: refresh, edit, delete and provider account are all
+native. What differs is who may use them. Clearing your watch progress is yours,
+because it is your own. Everything else edits what other people see and is
+administrative — including correcting a category's type, since the override is
+stored on the playlist and re-applied at every refresh, so it changes the catalog
+for everyone who can see it. Native Xtream categories cannot be reclassified at
+all; the provider owns them.
+
+Editing a playlist never brings its provider credentials to the device. The form
+prefills only the name; server, username, password and URLs stay blank, and the
+server reports merely *that* a stored value exists. A field left blank keeps what
+is stored, which is why an administrator can retype a provider password from a
+phone that has never held the old one.
 
 The app asks the server which operations apply to *you*, and never decides from a
 cached role. That is a display concern only: the server enforces each operation
-independently, rechecking current status and role, so a client that draws a
-button it should not have still cannot use it.
+independently, rechecking current status and role at the moment it runs, so a
+client that draws a button it should not have still cannot use it, and an
+administrator demoted mid-request is refused.
+
+A refresh is a server-owned job the app polls rather than one long request, so it
+survives a mobile connection dropping. Deletion's confirmation text comes from
+the server, so what you are warned about cannot drift from what the machine
+performing it will actually remove.
 
 ## Account recovery
 
