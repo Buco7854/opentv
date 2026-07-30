@@ -42,18 +42,22 @@ mkdir -p ./opentv-data && sudo chown 10001:10001 ./opentv-data
 
 :::
 
-Playlists and guide data use the catalog database;
-users, grants, favorites, resume points, and downloads use
-`/data/server-users.db`.
+Playlists, guide data, users, grants, favorites, resume points and downloads all
+live in one database at `/data/opentv.db`.
 
-:::caution Catalog upgrades
+:::danger Schema upgrades currently reset accounts too
 
-The catalog database (`/data/opentv.db`) uses destructive recreation when its
-Room schema version changes. Such an upgrade removes every server-side playlist
-and its catalog/guide data; add and refresh the playlists again afterwards.
-`server-users.db` keeps explicit migrations, so users, sessions, grants,
-favorites, resume points, and download associations are not recreated with the
-catalog. Back up the entire `/data` volume before upgrading.
+`/data/opentv.db` uses destructive recreation when its Room schema version
+changes. Because accounts and catalog now share that file, such an upgrade
+removes **everything**: playlists and guide data as before, and also users,
+sessions, grants, favorites, resume points and download associations. You would
+bootstrap a new administrator and re-add playlists afterwards.
+
+Back up the entire `/data` volume before upgrading, and treat a version bump as
+a re-provisioning event rather than a migration. This is a deliberate
+pre-1.0 choice while the schema is still moving; the database exports its
+schema, so real migrations can replace destructive recreation without another
+redesign.
 
 :::
 

@@ -1,9 +1,15 @@
 # Server authentication and user data
 
-OpenTV's server uses its own user database at
-`$OPENTV_DATA/server-users.db`. Sessions are opaque and revocable. Every client
-sends the same session token as `Authorization: Bearer` on protected HTTP
-requests.
+OpenTV's server keeps everything in one database at `$OPENTV_DATA/opentv.db`:
+the catalog it fetches from your providers and the accounts, sessions, grants
+and user state it owns. Sessions are opaque and revocable. Every client sends
+the same session token as `Authorization: Bearer` on protected HTTP requests.
+
+One file rather than two is what lets the server enforce, in the database
+itself, that a grant or a content identity cannot outlive the playlist it
+refers to: deleting a playlist cascades to its grants and identities in a
+single transaction. It also means the file is *not* disposable — see
+[account recovery](#account-recovery) before moving it aside.
 
 The bundled web client stores its bearer in `localStorage`. There are no
 session cookies, CSRF tokens, or auth-route Origin checks. Because JavaScript
@@ -14,9 +20,11 @@ key; it never puts the token in the catalog database.
 
 Android and the server share platform-neutral catalog/domain modules (`:core`)
 and Room catalog adapters (`:data`). The Android application remains a
-standalone local IPTV reader and does not include `:server-data` or share
-`server-users.db`. Connecting an OpenTV server adds an optional source alongside
-the app's existing local M3U/Xtream sources.
+standalone local IPTV reader and does not include `:server-data`. Its own
+`opentv.db` holds the catalog tables only; the account, credential, session and
+grant tables exist solely in the server's build and are absent from the released
+APK. Connecting an OpenTV server adds an optional source alongside the app's
+existing local M3U/Xtream sources.
 
 ## Required configuration
 
@@ -54,7 +62,7 @@ Back up the auth encryption key separately from the database. Losing it makes
 encrypted TOTP credentials unrecoverable; rotate affected accounts through an
 administrator credential reset.
 
-Back up `server-users.db`, the auth encryption key, and the server download
+Back up `opentv.db`, the auth encryption key, and the server download
 directory together. A database restore without the matching key cannot decrypt
 TOTP secrets; a database/file snapshot taken at different times may leave
 download associations that require reconciliation.
@@ -206,12 +214,17 @@ alter existing accounts.
 
 Server favorites, resume points, downloads, and playback use immutable
 server-issued `contentId` values. They no longer use the shared Android
-favorites/resume/download stores. Existing global server rows in the older
-catalog database are intentionally not imported; after confirming the new
-deployment, an operator may remove obsolete favorite, resume, and download rows
-from `opentv.db` during an offline maintenance window. Back up both databases
-first. OpenTV never interprets those rows as web-user state, so leaving them in
-place is safe.
+favorites/resume/download stores. Those Android-shaped `favorites`, `resume` and
+`downloads` tables still exist in the file — they are part of the shared catalog
+schema — but the server never reads or writes them, so an operator may leave
+them alone. Removing their rows during an offline maintenance window is
+optional; back up `opentv.db` first.
+
+A grant or content identity cannot refer to a playlist that no longer exists:
+both are declared with `ON DELETE CASCADE` against the playlist row, so
+deleting a playlist removes its grants and identities in the same transaction.
+A recreated playlist therefore cannot inherit access from a deleted one, even if
+SQLite reuses the numeric row id.
 
 Downloads are private user associations over a shared physical content blob.
 Removing a playlist grant hides and suspends its user associations. Removing
@@ -272,13 +285,17 @@ Use recovery options in this order:
 1. Sign in with one of the account's one-time recovery codes.
 2. Ask another administrator to reset the account's password and MFA. This
    revokes its sessions and playback leases and produces a one-time setup token.
-3. Stop OpenTV and restore a consistent backup of `server-users.db`, the
-   matching auth encryption key, and download data.
-4. Only as a destructive last resort, stop OpenTV, move
-   `server-users.db` aside, and start with a fresh user database and bootstrap
-   administrator. This loses users, grants, activity, sessions, and download
-   associations; unreferenced physical download files may require manual
-   cleanup.
+3. Stop OpenTV and restore a consistent backup of `opentv.db`, the matching
+   auth encryption key, and download data.
+4. Only as a destructive last resort, stop OpenTV, move `opentv.db` aside, and
+   start with a fresh database and bootstrap administrator.
+
+   Because accounts and catalog share one file, this step discards **both**.
+   You lose users, grants, activity, sessions and download associations, and
+   also every playlist, channel, guide and metadata row. The catalog half is
+   re-fetchable — re-add each playlist and let it refresh — but the account
+   half is not, so prefer step 3 whenever a backup exists. Unreferenced
+   physical download files may require manual cleanup.
 
 There is deliberately no unauthenticated remote recovery endpoint or
 environment switch that bypasses account authorization.
