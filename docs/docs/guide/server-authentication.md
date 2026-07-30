@@ -292,12 +292,18 @@ password-only server, or a device with no browser, and QR device linking remains
 for approving from a second device.
 
 Playlists reached through a server offer the same operations as local ones, but
-the server decides which. Clearing your own watch progress and correcting a
-category's type are yours to do from the app. Refreshing, editing and deleting
-change a catalog everyone on that server shares, so they belong to an
-administrator and open the server's own pages rather than being rebuilt in the
-app. The app asks the server which operations apply to *you* — it never decides
-from a cached role, and the server enforces each one regardless.
+the server decides which. Clearing your watch progress is yours to do from the
+app, because it is your own. Everything else edits what other people see and is
+therefore administrative: refreshing, editing and deleting open the server's own
+pages rather than being rebuilt in the app, and correcting a category's type is
+administrator-only too — the override is stored on the playlist and re-applied at
+every refresh, so it changes the catalog for everyone who can see it. Native
+Xtream categories cannot be reclassified at all; the provider owns them.
+
+The app asks the server which operations apply to *you*, and never decides from a
+cached role. That is a display concern only: the server enforces each operation
+independently, rechecking current status and role, so a client that draws a
+button it should not have still cannot use it.
 
 ## Account recovery
 
