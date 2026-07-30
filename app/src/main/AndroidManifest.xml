@@ -58,6 +58,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:supportsPictureInPicture="true"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"
             android:theme="@style/Theme.OpenTV">
@@ -65,6 +66,19 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+            <!--
+              Return path from a browser sign-in. Any app may claim this scheme, so the
+              server sends nothing secret through it: it means only "the approval is
+              finished, ask again now". The session is still fetched with the poll token
+              this process has held in memory since it started the request, so an app that
+              intercepts this learns nothing and can consume nothing.
+            -->
+            <intent-filter android:autoVerify="false">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="opentv" android:host="sign-in" />
             </intent-filter>
         </activity>
 

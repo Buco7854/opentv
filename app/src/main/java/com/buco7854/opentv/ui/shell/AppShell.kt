@@ -253,14 +253,18 @@ fun PlaylistsPanel(
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
-        PanelSectionHeader(
-            title = stringResource(R.string.shell_playlists),
-            addDescription = stringResource(R.string.shell_add_playlist),
-            onAdd = { showAdd = true },
-            addFocusRequester = addFocusRequester,
-        )
         if (busy) OtvProgressBar(Modifier.fillMaxWidth().padding(horizontal = 20.dp))
         LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
+            // Both headers live inside the list so they share its content padding and
+            // line up with each other; one outside and one inside sat 12dp apart.
+            item {
+                PanelSectionHeader(
+                    title = stringResource(R.string.shell_playlists),
+                    addDescription = stringResource(R.string.shell_add_playlist),
+                    onAdd = { showAdd = true },
+                    addFocusRequester = addFocusRequester,
+                )
+            }
             items(playlists.orEmpty(), key = { it.id }) { playlist ->
                 PanelPlaylistRow(
                     playlist = playlist,
@@ -561,7 +565,7 @@ private fun PanelHubPlaylistRow(
     var menuOpen by remember { mutableStateOf(false) }
     var confirmClear by remember { mutableStateOf(false) }
     var capabilities by remember(source.sourceId) {
-        mutableStateOf<PlaylistCapabilities?>(null)
+        mutableStateOf<HubPlaylistActions>(HubPlaylistActions.Loading)
     }
     val rejectedMessage = stringResource(R.string.hub_handoff_rejected)
     val clearedMessage = stringResource(R.string.playlist_progress_cleared)
@@ -569,9 +573,16 @@ private fun PanelHubPlaylistRow(
     // Fetched when the menu is first opened rather than for every row up front: this is a
     // network round trip per playlist, and most rows are never asked.
     LaunchedEffect(menuOpen, source.sourceId) {
-        if (!menuOpen || capabilities != null) return@LaunchedEffect
-        val result = OpenTvApp.graph.catalogFor(source.sourceId).playlistCapabilities()
-        capabilities = (result as? CatalogResult.Success)?.value
+        if (!menuOpen || capabilities is HubPlaylistActions.Ready) return@LaunchedEffect
+        capabilities = HubPlaylistActions.Loading
+        // A server too old to know this endpoint, or simply unreachable, must not leave the
+        // menu saying "Loading" for ever. Retrying on each open is cheap and self-healing.
+        capabilities = when (
+            val result = OpenTvApp.graph.catalogFor(source.sourceId).playlistCapabilities()
+        ) {
+            is CatalogResult.Success -> HubPlaylistActions.Ready(result.value)
+            else -> HubPlaylistActions.Unavailable
+        }
     }
 
     fun openInBrowser(url: String) {
@@ -582,12 +593,14 @@ private fun PanelHubPlaylistRow(
     }
 
     Row(
+        // Same metrics as a local playlist row -- only the leading indent differs, to show
+        // these belong to the server above them.
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 24.dp, top = 2.dp, bottom = 2.dp)
+            .padding(start = 12.dp, top = 2.dp, bottom = 2.dp)
             .focusHighlight(RoundedCornerShape(10.dp))
             .pressablePill(active = selected, activeAlpha = 0.12f, onClick = onClick)
-            .padding(start = 12.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
+            .padding(start = 12.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
@@ -620,10 +633,28 @@ private fun PanelHubPlaylistRow(
                 containerColor = OtvMenuDefaults.containerColor,
                 border = OtvMenuDefaults.border,
             ) {
-                val available = capabilities
-                if (available == null) {
+                val available = when (val current = capabilities) {
+                    HubPlaylistActions.Loading -> {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.common_loading)) },
+                            enabled = false,
+                            onClick = {},
+                        )
+                        return@DropdownMenu
+                    }
+                    HubPlaylistActions.Unavailable -> {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.source_load_failed)) },
+                            enabled = false,
+                            onClick = {},
+                        )
+                        return@DropdownMenu
+                    }
+                    is HubPlaylistActions.Ready -> current.capabilities
+                }
+                if (available.operations.isEmpty()) {
                     DropdownMenuItem(
-                        text = { Text(stringResource(R.string.common_loading)) },
+                        text = { Text(stringResource(R.string.shell_no_playlist_actions)) },
                         enabled = false,
                         onClick = {},
                     )
@@ -693,6 +724,13 @@ private fun PanelHubPlaylistRow(
             },
         )
     }
+}
+
+/** What we know about a hub playlist's operations: still asking, told, or could not ask. */
+private sealed interface HubPlaylistActions {
+    data object Loading : HubPlaylistActions
+    data object Unavailable : HubPlaylistActions
+    data class Ready(val capabilities: PlaylistCapabilities) : HubPlaylistActions
 }
 
 /** Renders one capability, marking the ones that leave for the server's own web pages. */

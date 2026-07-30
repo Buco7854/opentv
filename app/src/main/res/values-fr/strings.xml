@@ -40,6 +40,7 @@
     <string name="shell_playlists_and_more">Playlists et plus</string>
     <string name="shell_playlists">Playlists</string>
     <string name="shell_playlist_actions">Actions de la playlist</string>
+    <string name="shell_no_playlist_actions">Aucune action disponible</string>
     <string name="shell_add_playlist">Ajouter une playlist</string>
     <string name="shell_servers">Serveurs</string>
     <plurals name="shell_item_count">

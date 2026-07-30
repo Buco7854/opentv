@@ -5,6 +5,7 @@ import { authApi } from './api';
 import { LinkApprovalScreen } from './LinkApproval';
 import { PendingDeviceLink } from './fragment';
 import { CurrentUser, DeviceLinkRequest } from './types';
+import { attemptBrowserSignInReturn } from './browserSignInReturn';
 
 const currentUser: CurrentUser = {
   id: 'user-1',
@@ -27,6 +28,11 @@ vi.mock('./api', () => ({
     linkApprove: vi.fn(),
     linkDeny: vi.fn(),
   },
+}));
+vi.mock('./browserSignInReturn', () => ({
+  attemptBrowserSignInReturn: vi.fn(),
+  BROWSER_SIGN_IN_RETURN_URL: 'opentv://sign-in',
+  supportsBrowserSignInReturn: vi.fn(() => false),
 }));
 
 const lookup = (browserSignIn: boolean): DeviceLinkRequest => ({
@@ -56,6 +62,7 @@ describe('LinkApprovalScreen', () => {
     vi.mocked(authApi.linkLookup).mockReset();
     vi.mocked(authApi.linkApprove).mockReset().mockResolvedValue(null);
     vi.mocked(authApi.linkDeny).mockReset().mockResolvedValue(null);
+    vi.mocked(attemptBrowserSignInReturn).mockReset();
   });
 
   afterEach(cleanup);
@@ -66,8 +73,12 @@ describe('LinkApprovalScreen', () => {
     renderApproval(pending(true));
 
     expect(await screen.findByText('Device signed in')).toBeTruthy();
+    expect(screen.getByText('Sign-in is complete. You can return to the OpenTV app now.'))
+      .toBeTruthy();
     expect(authApi.linkLookup).toHaveBeenCalledWith({ linkToken: 'same-device-secret' });
     expect(authApi.linkApprove).toHaveBeenCalledWith({ linkToken: 'same-device-secret' });
+    await waitFor(() => expect(attemptBrowserSignInReturn).toHaveBeenCalledOnce());
+    expect(attemptBrowserSignInReturn).toHaveBeenCalledWith();
   });
 
   it('keeps an ordinary QR request on the explicit approval screen', async () => {
@@ -80,6 +91,7 @@ describe('LinkApprovalScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
     await waitFor(() => expect(authApi.linkApprove)
       .toHaveBeenCalledWith({ linkToken: 'qr-secret' }));
+    expect(attemptBrowserSignInReturn).not.toHaveBeenCalled();
   });
 
   it('requires the server-bound mode even when the fragment asks for automatic completion', async () => {
@@ -89,6 +101,7 @@ describe('LinkApprovalScreen', () => {
 
     expect(await screen.findByRole('button', { name: 'Approve' })).toBeTruthy();
     expect(authApi.linkApprove).not.toHaveBeenCalled();
+    expect(attemptBrowserSignInReturn).not.toHaveBeenCalled();
   });
 
   it('requires a click when the same-device link opened over an existing browser session', async () => {
@@ -102,5 +115,22 @@ describe('LinkApprovalScreen', () => {
 
     expect(await screen.findByRole('button', { name: 'Approve' })).toBeTruthy();
     expect(authApi.linkApprove).not.toHaveBeenCalled();
+    expect(attemptBrowserSignInReturn).not.toHaveBeenCalled();
+  });
+
+  it('returns after explicit approval when the server says it is a browser sign-in', async () => {
+    vi.mocked(authApi.linkLookup).mockResolvedValue(lookup(true));
+
+    renderApproval({
+      linkToken: 'signed-in-secret',
+      browserSignIn: true,
+      automaticApproval: false,
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }));
+    await waitFor(() => expect(authApi.linkApprove)
+      .toHaveBeenCalledWith({ linkToken: 'signed-in-secret' }));
+    await waitFor(() => expect(attemptBrowserSignInReturn).toHaveBeenCalledOnce());
+    expect(attemptBrowserSignInReturn).toHaveBeenCalledWith();
   });
 });

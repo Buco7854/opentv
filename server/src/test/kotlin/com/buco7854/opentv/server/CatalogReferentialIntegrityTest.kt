@@ -5,6 +5,7 @@ import com.buco7854.opentv.core.log.CoreLog
 import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.model.Playlist
+import com.buco7854.opentv.core.model.XtreamSeries
 import com.buco7854.opentv.core.net.ConditionalFetch
 import com.buco7854.opentv.core.net.ConditionalFetcher
 import com.buco7854.opentv.core.net.TextBody
@@ -39,6 +40,47 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class CatalogReferentialIntegrityTest {
+    @Test
+    fun resolved_xtream_favorite_keeps_its_series_discriminator() = runBlocking {
+        withFixture { fixture ->
+            val playlistId = fixture.storage.playlists.insert(
+                Playlist(
+                    name = "Provider",
+                    url = null,
+                    xtreamBase = "https://provider.example",
+                    xtreamUser = "user",
+                    xtreamPass = "pass",
+                ),
+            )
+            val series = XtreamSeries(
+                playlistId = playlistId,
+                seriesId = 91,
+                name = "The Show",
+                categoryName = "Drama",
+                cover = null,
+                plot = null,
+                castNames = null,
+                genre = null,
+                rating = null,
+            )
+            fixture.storage.xtreamSeries.insertAll(listOf(series))
+            val contentId = fixture.content.xtreamSeries(series).contentId
+            fixture.db.users().insert(fixture.adminRow())
+            fixture.db.activity().addFavorite(
+                UserFavoriteRow(fixture.admin.userId, contentId, 1_000L),
+            )
+
+            val favorite = fixture.service
+                .resolvedFavorites(fixture.admin, playlistId)
+                .series
+                .single()
+
+            assertEquals(contentId, favorite.contentId)
+            assertEquals("The Show", favorite.seriesKey)
+            assertEquals("91", favorite.xtreamSeriesId)
+        }
+    }
+
     @Test
     fun content_resolution_does_not_observe_the_refresh_set_null_window() = runBlocking {
         withFixture { fixture ->

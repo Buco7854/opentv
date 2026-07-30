@@ -17,6 +17,7 @@ import com.buco7854.opentv.contract.PlaylistOperation as WirePlaylistOperation
 import com.buco7854.opentv.contract.ResumePointDto
 import com.buco7854.opentv.contract.SearchResultsDto
 import com.buco7854.opentv.contract.SeriesGroupPageDto
+import com.buco7854.opentv.contract.SeriesHitDto
 import com.buco7854.opentv.contract.XtreamSeriesPageDto
 import com.buco7854.opentv.contract.XtreamSeriesDetailDto
 import com.buco7854.opentv.contract.XtreamSeriesDto
@@ -117,6 +118,33 @@ class HubCatalogGatewayTest {
         assertFalse(gateway.toggleFavorite(ContentRef.HubContent("favorite-1")).successValue())
         assertEquals(listOf("favorite-1"), backend.removedFavorites)
         assertTrue(backend.localWriteAttempts.isEmpty())
+    }
+
+    @Test
+    fun xtreamFavoriteKeepsTheEpisodeListingIdentityUsedByBrowse() = runTest {
+        val backend = FakeHubBackend().apply {
+            resolved = FavoritesResolvedDto(
+                series = listOf(
+                    SeriesHitDto(
+                        contentId = "series-content",
+                        seriesKey = "The Show",
+                        count = 0,
+                        logo = null,
+                        groupTitle = "Drama",
+                        xtreamSeriesId = "91",
+                    ),
+                ),
+            )
+        }
+        val gateway = HubCatalogGateway(SourceId.Hub(3, 7), backend)
+
+        val favorite = gateway.favorites().successValue().items.single()
+        gateway.episodes(checkNotNull(favorite.seriesKey)).successValue()
+
+        assertEquals("The Show", favorite.title)
+        assertEquals("91", favorite.seriesId)
+        assertEquals("xs:91", favorite.seriesKey)
+        assertEquals("xs:91", backend.episodeSeriesKey)
     }
 
     @Test
@@ -519,6 +547,7 @@ private class FakeHubBackend : HubCatalogBackend {
     var nowRows = emptyList<ProgrammeDto>()
     var guideRows = emptyList<String>()
     var channelRequest: ChannelRequest? = null
+    var episodeSeriesKey: String? = null
     var failure: Throwable? = null
     var resumeCalls = 0
     var resolvedFavoriteCalls = 0
@@ -573,7 +602,7 @@ private class FakeHubBackend : HubCatalogBackend {
         xtreamPage
 
     override suspend fun episodes(seriesKey: String, season: Int?, offset: Int, limit: Int) =
-        episodePage
+        episodePage.also { episodeSeriesKey = seriesKey }
 
     override suspend fun xtreamSeriesDetail(seriesId: String): XtreamSeriesDetailDto =
         checkNotNull(xtreamDetail)

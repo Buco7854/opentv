@@ -75,6 +75,9 @@ import com.buco7854.opentv.source.CatalogItem
 import com.buco7854.opentv.source.CatalogLoadError
 import com.buco7854.opentv.source.CatalogProgramme
 import com.buco7854.opentv.source.ContentRef
+import com.buco7854.opentv.source.CatalogResult
+import com.buco7854.opentv.source.PlaylistCapabilities
+import com.buco7854.opentv.source.PlaylistOperation
 import com.buco7854.opentv.source.SourceId
 import com.buco7854.opentv.source.encode
 import com.buco7854.opentv.ui.components.BadgeRow
@@ -131,6 +134,20 @@ fun BrowseScreen(
     val downloadsByUrl by viewModel.downloadsByUrl.collectAsStateWithLifecycle()
     val traits by viewModel.traits.collectAsStateWithLifecycle()
     val isXtreamNative = traits?.hasXtreamSeries == true
+    // Correcting a category is a local convenience for a local playlist, but on a server it
+    // edits a catalog other people browse, so the server decides whether this user may do it
+    // at all -- and says it does not apply to native Xtream categories, which it owns. Ask
+    // rather than inferring: a hub M3U playlist can be corrected, a hub Xtream one cannot.
+    var correctionOffered by remember(sourceId) { mutableStateOf(sourceId !is SourceId.Hub) }
+    LaunchedEffect(sourceId) {
+        if (sourceId !is SourceId.Hub) return@LaunchedEffect
+        val result = com.buco7854.opentv.OpenTvApp.graph
+            .catalogFor(sourceId)
+            .playlistCapabilities()
+        correctionOffered = (result as? CatalogResult.Success<PlaylistCapabilities>)
+            ?.value
+            ?.get(PlaylistOperation.CORRECT_CATEGORY_TYPE) != null
+    }
     val gridView by viewModel.gridView.collectAsStateWithLifecycle()
     val favoriteKeys by viewModel.favoriteKeys.collectAsStateWithLifecycle()
     val account by viewModel.account.collectAsStateWithLifecycle()
@@ -288,7 +305,11 @@ fun BrowseScreen(
                 group == null -> GroupList(
                     groups = groups.filter { matches(it.name) },
                     // Xtream categories come from the panel; only M3U guessing needs correcting.
-                    onCorrect = if (isXtreamNative) null else ({ correctingGroup = it }),
+                    onCorrect = if (isXtreamNative || !correctionOffered) {
+                        null
+                    } else {
+                        ({ correctingGroup = it })
+                    },
                     onSelect = { viewModel.group.value = it },
                 )
 

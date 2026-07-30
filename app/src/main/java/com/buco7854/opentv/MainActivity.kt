@@ -1,6 +1,7 @@
 package com.buco7854.opentv
 
 import android.net.Uri
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -58,11 +59,15 @@ import com.buco7854.opentv.ui.shell.DockSection
 import com.buco7854.opentv.ui.shell.AppShellViewModel
 import com.buco7854.opentv.ui.shell.OpenTvDock
 import com.buco7854.opentv.ui.shell.PlaylistsPanel
+import com.buco7854.opentv.hub.BrowserSignInReturn
 import com.buco7854.opentv.ui.theme.OpenTvTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // The browser can return here after a sign-in. singleTop keeps that arriving as a
+        // new intent on this instance rather than stacking a second copy of the app.
+        if (BrowserSignInReturn.isSignInReturn(intent)) BrowserSignInReturn.signal()
         enableEdgeToEdge()
         setContent {
             OpenTvTheme {
@@ -71,6 +76,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (BrowserSignInReturn.isSignInReturn(intent)) BrowserSignInReturn.signal()
     }
 
     override fun onStart() {

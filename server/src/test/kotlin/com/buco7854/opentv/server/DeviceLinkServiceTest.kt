@@ -106,6 +106,13 @@ class DeviceLinkServiceTest {
                 DeviceLinkTokenRequestDto(started.linkToken),
                 "192.0.2.39",
             )
+            // Ignoring the browser's return signal changes nothing: approval alone does
+            // not mint or expose a session, and the waiting device still completes with
+            // the poll token that never left it.
+            assertTrue(
+                db.sessions().activeForUser(actor.userId)
+                    .none { it.clientKind == ClientKind.LINKED_DEVICE },
+            )
 
             val approved = links.poll(DeviceLinkPollRequestDto(started.pollToken)).status
 

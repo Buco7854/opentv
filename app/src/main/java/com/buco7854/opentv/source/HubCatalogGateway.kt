@@ -476,7 +476,7 @@ private fun SeriesHitDto.toCatalogItem(imageUrl: String?) = CatalogItem(
     imageUrl = imageUrl,
     kind = ChannelKind.SERIES,
     group = groupTitle,
-    seriesKey = seriesKey,
+    seriesKey = xtreamSeriesId?.let { "xs:$it" } ?: seriesKey,
     seriesId = xtreamSeriesId,
     count = count,
 )

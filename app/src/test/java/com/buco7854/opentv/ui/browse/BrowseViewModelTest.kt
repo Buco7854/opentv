@@ -210,6 +210,41 @@ class BrowseViewModelTest {
         }
     }
 
+    @Test
+    fun `late ancillary failures cannot replace a loaded hub catalog`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        try {
+            val groups = listOf(CatalogGroup("News", 3))
+            val favoriteResult =
+                CompletableDeferred<CatalogResult<Page<CatalogItem>>>()
+            val gateway = CatalogGatewayFake(SourceId.Hub(3, 9)).apply {
+                groupsResult = CatalogResult.Success(groups)
+                favoriteBlock = { _, _ -> favoriteResult.await() }
+            }
+            val viewModel = BrowseViewModel(gateway.source, gateway)
+            runCurrent()
+
+            assertEquals(groups, viewModel.catalog.value.groups)
+            assertEquals(null, viewModel.catalog.value.error)
+
+            favoriteResult.complete(CatalogResult.Unreachable)
+            advanceUntilIdle()
+
+            assertEquals(null, viewModel.catalog.value.error)
+            assertEquals(groups, viewModel.catalog.value.groups)
+
+            gateway.guideIdsResult =
+                CatalogResult.Failed(IllegalStateException("guide unavailable"))
+            viewModel.retry()
+            advanceUntilIdle()
+
+            assertEquals(null, viewModel.catalog.value.error)
+            assertEquals(groups, viewModel.catalog.value.groups)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
     private fun item(index: Int) = CatalogItem(
         ref = ContentRef.HubContent("content-$index"),
         title = "Channel $index",

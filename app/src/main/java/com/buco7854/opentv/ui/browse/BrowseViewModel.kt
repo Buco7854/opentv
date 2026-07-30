@@ -458,15 +458,12 @@ class BrowseViewModel private constructor(
                         }
                     }
                     CatalogResult.SignedOut -> {
-                        fail(CatalogLoadError.SignedOut)
+                        if (sourceId is SourceId.Hub) {
+                            fail(CatalogLoadError.SignedOut)
+                        }
                         return@launch
                     }
-                    CatalogResult.Unreachable -> {
-                        fail(CatalogLoadError.Unreachable)
-                        return@launch
-                    }
-                    is CatalogResult.Failed -> {
-                        fail(CatalogLoadError.Failed(result.cause))
+                    CatalogResult.Unreachable, is CatalogResult.Failed -> {
                         return@launch
                     }
                 }
@@ -479,9 +476,10 @@ class BrowseViewModel private constructor(
         viewModelScope.launch {
             when (val result = safeCall(gateway::guideIds)) {
                 is CatalogResult.Success -> mutableGuideIds.value = result.value
-                CatalogResult.SignedOut -> fail(CatalogLoadError.SignedOut)
-                CatalogResult.Unreachable -> fail(CatalogLoadError.Unreachable)
-                is CatalogResult.Failed -> fail(CatalogLoadError.Failed(result.cause))
+                CatalogResult.SignedOut -> if (sourceId is SourceId.Hub) {
+                    fail(CatalogLoadError.SignedOut)
+                }
+                CatalogResult.Unreachable, is CatalogResult.Failed -> Unit
             }
         }
     }

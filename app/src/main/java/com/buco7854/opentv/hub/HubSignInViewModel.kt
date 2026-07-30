@@ -18,6 +18,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -531,7 +533,17 @@ class HubSignInViewModel(
                 mutableState.value = HubSignInState.DeviceLinkExpired(mode)
                 return
             }
-            delay(minOf(intervalMs, remainingMs))
+            // Wait out the server's interval, but let the browser cut it short: after a
+            // browser sign-in the approval is already done, and the redirect back into the
+            // app says so. If it never arrives -- another app took the scheme, the user
+            // switched away, the browser refused it -- the interval simply elapses and the
+            // poll happens anyway, which is why this is an optimisation and not a mechanism.
+            val waitMs = minOf(intervalMs, remainingMs)
+            if (mode == DeviceLinkMode.BROWSER_SIGN_IN) {
+                withTimeoutOrNull(waitMs) { BrowserSignInReturn.events.first() }
+            } else {
+                delay(waitMs)
+            }
             if (nowMs() >= expiresAtMs) {
                 mutableState.value = HubSignInState.DeviceLinkExpired(mode)
                 return

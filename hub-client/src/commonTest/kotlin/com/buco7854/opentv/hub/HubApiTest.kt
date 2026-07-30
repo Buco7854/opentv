@@ -16,6 +16,7 @@ import com.buco7854.opentv.contract.PlaylistOperationExecution
 import com.buco7854.opentv.contract.ProgrammeDto
 import com.buco7854.opentv.contract.ServerInfoDto
 import com.buco7854.opentv.contract.SessionHeartbeatDto
+import com.buco7854.opentv.contract.SeriesHitDto
 import com.buco7854.opentv.contract.TotpEnrollmentDto
 import com.buco7854.opentv.contract.XtreamSeriesListItemDto
 import com.buco7854.opentv.contract.XtreamSeriesPageDto
@@ -400,6 +401,16 @@ class HubApiTest {
                                 airDate = null,
                             ),
                         ),
+                        series = listOf(
+                            SeriesHitDto(
+                                contentId = "series-1",
+                                seriesKey = "The Show",
+                                count = 0,
+                                logo = null,
+                                groupTitle = "Drama",
+                                xtreamSeriesId = "91",
+                            ),
+                        ),
                     ),
                 ),
             ),
@@ -408,6 +419,7 @@ class HubApiTest {
         val resolved = HubApi(transport).favoritesResolved(HubCredentials(BASE, "t"), 7)
 
         assertEquals("movie-1", resolved.movies.single().contentId)
+        assertEquals("91", resolved.series.single().xtreamSeriesId)
         val request = transport.seen.single()
         assertEquals("GET", request.method)
         assertEquals("$BASE/api/v1/playlists/7/favorites/resolved", request.url)

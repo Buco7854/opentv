@@ -62,11 +62,10 @@ class PlaylistCapabilitiesTest {
 
         val viewerM3u = fixture.service.capabilities(fixture.viewer, m3u).byOperation()
         assertEquals(
-            setOf(
-                PlaylistOperation.CLEAR_WATCH_PROGRESS,
-                PlaylistOperation.CORRECT_CATEGORY_TYPE,
-            ),
+            setOf(PlaylistOperation.CLEAR_WATCH_PROGRESS),
             viewerM3u.keys,
+            "a category override is re-applied for everyone at every refresh, so it is " +
+                "administration; only progress is genuinely the viewer's own",
         )
         assertEquals(
             PlaylistOperationExecution.IN_APP,
@@ -162,8 +161,17 @@ class PlaylistCapabilitiesTest {
             fixture.service.clearProgress(fixture.viewer, playlistId)
             assertNull(fixture.database.activity().resume(VIEWER, "content-1"))
 
+            // A grant is not enough: reclassifying changes what every other viewer sees.
+            assertFailsWith<ForbiddenApiException> {
+                fixture.service.setGroupKind(
+                    fixture.viewer,
+                    playlistId,
+                    GroupKindRequest("Documentaries", ChannelKind.MOVIE),
+                )
+            }
+            fixture.grant(ADMIN, playlistId)
             fixture.service.setGroupKind(
-                fixture.viewer,
+                fixture.admin,
                 playlistId,
                 GroupKindRequest("Documentaries", ChannelKind.MOVIE),
             )
@@ -183,6 +191,7 @@ class PlaylistCapabilitiesTest {
                     GroupKindRequest("Documentaries", ChannelKind.LIVE),
                 )
             }
+
         }
 
     @Test
@@ -199,9 +208,17 @@ class PlaylistCapabilitiesTest {
             )
             fixture.grant(VIEWER, playlistId)
 
-            assertFailsWith<IllegalArgumentException> {
+            assertFailsWith<ForbiddenApiException> {
                 fixture.service.setGroupKind(
                     fixture.viewer,
+                    playlistId,
+                    GroupKindRequest("Provider category", ChannelKind.MOVIE),
+                )
+            }
+            // Even an administrator cannot: the provider owns these categories.
+            assertFailsWith<IllegalArgumentException> {
+                fixture.service.setGroupKind(
+                    fixture.admin,
                     playlistId,
                     GroupKindRequest("Provider category", ChannelKind.MOVIE),
                 )
@@ -238,11 +255,10 @@ class PlaylistCapabilitiesTest {
 
             val operations = fixture.service.capabilities(fixture.admin, playlistId).byOperation()
             assertEquals(
-                setOf(
-                    PlaylistOperation.CLEAR_WATCH_PROGRESS,
-                    PlaylistOperation.CORRECT_CATEGORY_TYPE,
-                ),
+                setOf(PlaylistOperation.CLEAR_WATCH_PROGRESS),
                 operations.keys,
+                "a demoted administrator loses category correction too, not just the " +
+                    "browser-delegated operations",
             )
 
             fixture.database.grants().revoke(ADMIN, playlistId)

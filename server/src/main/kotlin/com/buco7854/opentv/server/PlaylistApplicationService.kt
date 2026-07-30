@@ -110,10 +110,10 @@ class PlaylistApplicationService(
         val playlist = playlist(id)
         val operations = buildList {
             add(inAppOperation(PlaylistOperation.CLEAR_WATCH_PROGRESS))
-            if (!playlist.isXtreamNative) {
-                add(inAppOperation(PlaylistOperation.CORRECT_CATEGORY_TYPE))
-            }
             if (auth.hasCurrentAdminAuthority(actor)) {
+                if (!playlist.isXtreamNative) {
+                    add(inAppOperation(PlaylistOperation.CORRECT_CATEGORY_TYPE))
+                }
                 val managementPath = "/browse/$id?manage=playlist"
                 if (playlist.url != null || playlist.xtreamBase != null) {
                     add(browserOperation(PlaylistOperation.REFRESH, managementPath))
@@ -309,7 +309,10 @@ class PlaylistApplicationService(
     }
 
     suspend fun setGroupKind(actor: Actor, id: Long, request: GroupKindRequest) {
-        requireAccess(actor, id)
+        // Admin, not merely granted. A category override is stored on the playlist and
+        // re-applied at every refresh, so it changes what the catalog looks like for
+        // everyone who can see it -- that is administration, however small the edit.
+        requireAdmin(actor)
         require(!playlist(id).isXtreamNative) {
             "Native Xtream categories cannot be reclassified"
         }
