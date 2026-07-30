@@ -12,6 +12,7 @@ import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondOutputStream
 import io.ktor.server.response.respondText
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
@@ -19,10 +20,13 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import java.io.IOException
+import java.io.FilterInputStream
 import java.net.URI
+import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.io.InputStream
@@ -32,6 +36,8 @@ import java.security.MessageDigest
 import java.time.Duration
 import java.util.LinkedHashMap
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Streams provider content through the server (browsers can't reach IPTV panels
@@ -47,6 +53,15 @@ class StreamProxy(
 ) {
     private val log = LoggerFactory.getLogger("opentv")
     private val activeBodies = ConcurrentHashMap<String, MutableSet<InputStream>>()
+    private class StreamingClientUse(
+        val leaseId: String,
+        val client: HttpClient,
+        val finished: AtomicBoolean = AtomicBoolean(),
+        @Volatile var cancelled: Boolean = false,
+    )
+    private val idleStreamingClients = ConcurrentLinkedQueue<HttpClient>()
+    private val activeStreamingClients =
+        ConcurrentHashMap<String, MutableSet<StreamingClientUse>>()
     private val sharedHls = SharedHlsCache(http, gate, connectionLimit)
     /**
      * Disk tier for the posters too large to hold in heap. A filesystem that refuses it -
@@ -667,11 +682,24 @@ class StreamProxy(
             call.request.headers[HttpHeaders.IfModifiedSince]
                 ?.let { builder.header(HttpHeaders.IfModifiedSince, it) }
 
+        val clientUse = acquireStreamingClient(leaseId)
+        try {
+            // Covers revocation between the route's initial check and registering this cancellable
+            // physical request. After this point lease cleanup sees and shuts down [clientUse].
+            leaseGuard()
+        } catch (error: Throwable) {
+            finishStreamingClient(clientUse, reusable = false)
+            throw error
+        }
         val upstream = try {
-            withContext(Dispatchers.IO) {
-                http.client.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream())
+            runInterruptible(Dispatchers.IO) {
+                clientUse.client.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream())
             }
+        } catch (error: CancellationException) {
+            finishStreamingClient(clientUse, reusable = false)
+            throw error
         } catch (e: Exception) {
+            finishStreamingClient(clientUse, reusable = false)
             // URI.authority contains user-info, and transport exception messages may repeat the
             // full Xtream path. Log the host plus a redacted failure, never the provider key.
             log.warn(
@@ -689,7 +717,15 @@ class StreamProxy(
         }
 
         val status = HttpStatusCode.fromValue(upstream.statusCode())
-        val body = upstream.body()
+        val body = object : FilterInputStream(upstream.body()) {
+            override fun close() {
+                try {
+                    super.close()
+                } finally {
+                    finishStreamingClient(clientUse, reusable = true)
+                }
+            }
+        }
         trackBody(leaseId, body)
         try {
             leaseGuard()
@@ -825,7 +861,42 @@ class StreamProxy(
         }
     }
 
+    private fun acquireStreamingClient(leaseId: String): StreamingClientUse {
+        val client = idleStreamingClients.poll() ?: HttpClient.newBuilder()
+            .followRedirects(HttpClient.Redirect.ALWAYS)
+            .connectTimeout(Duration.ofSeconds(20))
+            .build()
+        return StreamingClientUse(leaseId, client).also { use ->
+            activeStreamingClients
+                .computeIfAbsent(leaseId) { ConcurrentHashMap.newKeySet() }
+                .add(use)
+        }
+    }
+
+    private fun finishStreamingClient(use: StreamingClientUse, reusable: Boolean) {
+        if (!use.finished.compareAndSet(false, true)) return
+        activeStreamingClients[use.leaseId]?.let { active ->
+            active.remove(use)
+            if (active.isEmpty()) activeStreamingClients.remove(use.leaseId, active)
+        }
+        if (reusable && !use.cancelled && !use.client.isTerminated &&
+            idleStreamingClients.size < MAX_IDLE_STREAMING_CLIENTS
+        ) {
+            idleStreamingClients.offer(use.client)
+        } else {
+            use.client.shutdownNow()
+        }
+    }
+
+    private fun cancelStreamingClients(leaseId: String) {
+        activeStreamingClients.remove(leaseId)?.forEach { use ->
+            use.cancelled = true
+            use.client.shutdownNow()
+        }
+    }
+
     fun drop(leaseId: String) {
+        cancelStreamingClients(leaseId)
         activeBodies.remove(leaseId)?.forEach { runCatching { it.close() } }
     }
 
@@ -837,6 +908,8 @@ class StreamProxy(
 
     fun close() {
         sharedHls.close()
+        activeStreamingClients.keys.toList().forEach(::cancelStreamingClients)
+        while (true) idleStreamingClients.poll()?.shutdownNow() ?: break
     }
 
     private data class CachedImage(
@@ -877,6 +950,7 @@ class StreamProxy(
         const val REJECTED_CHILD_URL = "/api/v1/stream"
         const val STREAM_GUARD_INTERVAL_MS = 4_000L
         const val SHARED_RESPONSE_CHUNK_BYTES = 64 * 1024
+        const val MAX_IDLE_STREAMING_CLIENTS = 16
     }
 }
 

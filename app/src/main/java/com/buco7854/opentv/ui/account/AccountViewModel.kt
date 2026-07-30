@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.R
 import com.buco7854.opentv.core.model.Playlist
+import com.buco7854.opentv.core.repo.AccountInfoResult
 import com.buco7854.opentv.core.xtream.AccountInfo
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,6 +21,29 @@ data class AccountUiState(
     val refreshing: Boolean = false,
     val error: String? = null,
 )
+
+internal fun AccountUiState.withAccountInfo(
+    result: AccountInfoResult,
+    unavailableError: String,
+    staleError: String,
+): AccountUiState = when (result) {
+    is AccountInfoResult.Fresh -> copy(
+        info = result.info,
+        updatedAtMs = result.fetchedAtMs,
+        refreshing = false,
+        error = null,
+    )
+    is AccountInfoResult.Stale -> copy(
+        info = result.info,
+        updatedAtMs = result.fetchedAtMs,
+        refreshing = false,
+        error = staleError,
+    )
+    is AccountInfoResult.Unavailable -> copy(
+        refreshing = false,
+        error = unavailableError,
+    )
+}
 
 /**
  * Owns account loading and refresh policy so the composable only renders state.
@@ -46,20 +70,13 @@ class AccountViewModel(
         if (_state.value.refreshing) return
         _state.update { it.copy(refreshing = true, error = null) }
         viewModelScope.launch {
-            val info = graph.account.accountInfo(playlist, force)
+            val result = graph.account.accountInfo(playlist, force)
             _state.update {
-                if (info != null) {
-                    it.copy(
-                        info = info,
-                        updatedAtMs = System.currentTimeMillis(),
-                        refreshing = false,
-                    )
-                } else {
-                    it.copy(
-                        refreshing = false,
-                        error = getApplication<Application>().getString(R.string.account_error),
-                    )
-                }
+                it.withAccountInfo(
+                    result = result,
+                    unavailableError = getApplication<Application>().getString(R.string.account_error),
+                    staleError = getApplication<Application>().getString(R.string.account_stale_error),
+                )
             }
         }
     }

@@ -5,8 +5,10 @@ import com.buco7854.opentv.source.CatalogItem
 import com.buco7854.opentv.source.ContentRef
 import com.buco7854.opentv.source.SourceId
 import com.buco7854.opentv.source.FavoritesSection
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AllFavoritesIdentityTest {
@@ -36,6 +38,15 @@ class AllFavoritesIdentityTest {
                 listOf(FavoritesSection(remaining, "Remaining", emptyList(), false, null)),
             ),
         )
+    }
+
+    @Test
+    fun aSectionRefreshOnlyEndsSelectionWhenTheSelectionItselfIsGone() {
+        // Sections republish whenever one source starts or finishes loading, which
+        // must not close selection mode the user has only just opened.
+        assertFalse(shouldExitFavoriteSelection(selectedBefore = 0, retained = 0))
+        assertTrue(shouldExitFavoriteSelection(selectedBefore = 2, retained = 0))
+        assertFalse(shouldExitFavoriteSelection(selectedBefore = 2, retained = 1))
     }
 
     private fun item(ref: ContentRef) = CatalogItem(

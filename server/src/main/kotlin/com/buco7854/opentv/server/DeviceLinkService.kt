@@ -1,11 +1,13 @@
 package com.buco7854.opentv.server
 
-import com.buco7854.opentv.contract.*
+import androidx.room.immediateTransaction
+import androidx.room.useWriterConnection
 import androidx.sqlite.SQLiteException
+import com.buco7854.opentv.contract.*
 import com.buco7854.opentv.serverdata.ChallengeKind
 import com.buco7854.opentv.serverdata.UserStatus
 import com.buco7854.opentv.serverdata.db.AuthChallengeRow
-import com.buco7854.opentv.serverdata.db.ServerUserDatabase
+import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
@@ -34,7 +36,7 @@ internal data class DeviceLinkPollResult(
 
 /** Device authorization flow independent from HTTP delivery. */
 class DeviceLinkService(
-    private val db: ServerUserDatabase,
+    private val db: OpenTvServerDatabase,
     private val auth: AuthService,
     private val config: AuthConfig,
     private val clock: () -> Long = System::currentTimeMillis,
@@ -171,6 +173,7 @@ class DeviceLinkService(
             auth.claimDeviceLink(
                 challengeId = row.id,
                 userId = user.id,
+                approvedPayloadJson = row.payloadJson,
                 method = method,
                 deviceName = sanitizeDisplayValue(
                     payload.deviceName,
@@ -195,7 +198,7 @@ class DeviceLinkService(
         actor: Actor,
         request: DeviceLinkTokenRequestDto,
         clientIp: String,
-    ): DeviceLinkLookupDto {
+    ): DeviceLinkLookupDto = mutation.withLock {
         val resolved = resolve(request, clientIp)
         val now = clock()
         val updated = resolved.payload.copy(
@@ -211,7 +214,7 @@ class DeviceLinkService(
             fail(resolved)
         }
         limiter.success(*resolved.limitKeys)
-        return DeviceLinkLookupDto(
+        DeviceLinkLookupDto(
             deviceName = updated.deviceName,
             userAgent = updated.userAgent,
             ip = updated.ip,
@@ -224,7 +227,7 @@ class DeviceLinkService(
         actor: Actor,
         request: DeviceLinkTokenRequestDto,
         clientIp: String,
-    ) {
+    ) = mutation.withLock {
         auth.requireMfaSatisfied(actor)
         val resolved = resolve(request, clientIp)
         if (resolved.row.userId != actor.userId ||
@@ -239,14 +242,14 @@ class DeviceLinkService(
             approvedAtMs = now,
             approvedAuthMethod = actor.authMethod,
         )
-        decide(resolved, actor.userId, updated, now)
+        decide(resolved, actor.userId, updated, now, actor)
     }
 
     suspend fun deny(
         actor: Actor,
         request: DeviceLinkTokenRequestDto,
         clientIp: String,
-    ) {
+    ) = mutation.withLock {
         val resolved = resolve(request, clientIp)
         if (resolved.row.userId != actor.userId ||
             resolved.payload.scannedAtMs == null ||
@@ -264,14 +267,33 @@ class DeviceLinkService(
         userId: String,
         payload: DeviceLinkPayload,
         now: Long,
+        approvingActor: Actor? = null,
     ) {
-        if (db.challenges().completeDeviceLinkDecision(
+        val encoded = Json.encodeToString(payload)
+        val completed = if (approvingActor == null) {
+            db.challenges().completeDeviceLinkDecision(
                 resolved.row.id,
                 userId,
-                Json.encodeToString(payload),
+                encoded,
                 now,
-            ) != 1
-        ) {
+            )
+        } else {
+            db.useWriterConnection { connection ->
+                connection.immediateTransaction {
+                    // The first check prevents link-state disclosure. This second check shares
+                    // the approval transaction so a concurrent logout/revocation cannot leave a
+                    // stale approval behind.
+                    auth.requireMfaSatisfied(approvingActor)
+                    db.challenges().completeDeviceLinkDecision(
+                        resolved.row.id,
+                        userId,
+                        encoded,
+                        now,
+                    )
+                }
+            }
+        }
+        if (completed != 1) {
             fail(resolved)
         }
         limiter.success(*resolved.limitKeys)

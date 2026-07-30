@@ -233,8 +233,16 @@ class XtreamRepository(
     }
 
     // Panels read timeshift timestamps in server_info.timezone.
-    private suspend fun panelTimeZone(playlist: Playlist): TimeZone =
-        account.accountInfo(playlist)?.timezone
+    private suspend fun panelTimeZone(playlist: Playlist): TimeZone {
+        val timezone = when (val result = account.accountInfo(playlist)) {
+            is AccountInfoResult.Fresh -> result.info.timezone
+            // A panel timezone changes extremely rarely; its cached value is safer for
+            // catch-up timestamps than silently substituting the device timezone.
+            is AccountInfoResult.Stale -> result.info.timezone
+            is AccountInfoResult.Unavailable -> null
+        }
+        return timezone
             ?.let { name -> runCatching { TimeZone.of(name) }.getOrNull() }
             ?: TimeZone.currentSystemDefault()
+    }
 }

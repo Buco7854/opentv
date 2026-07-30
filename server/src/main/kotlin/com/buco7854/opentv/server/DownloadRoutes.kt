@@ -1,5 +1,6 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.contract.ApiErrorDto
 import io.ktor.http.ContentDisposition
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
@@ -51,10 +52,21 @@ internal fun Route.downloadRoutes(service: DownloadApplicationService) {
 
 internal fun Route.downloadFileRoutes(service: DownloadApplicationService) {
     get("/downloads/{id}/file") {
-        val file = service.file(
-            call.requiredParameter("id"),
-            call.request.queryParameters["token"],
-        )
+        val file = try {
+            service.file(
+                call.requiredParameter("id"),
+                call.request.queryParameters["token"],
+            )
+        } catch (_: DownloadFileAccessRevokedException) {
+            call.respond(
+                HttpStatusCode.Gone,
+                ApiErrorDto(
+                    "download_access_revoked",
+                    "The session that granted file access has ended",
+                ),
+            )
+            return@get
+        }
         if (call.request.queryParameters["save"] == "1") {
             call.response.header(
                 HttpHeaders.ContentDisposition,

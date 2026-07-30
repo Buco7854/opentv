@@ -4,7 +4,7 @@ import com.buco7854.opentv.contract.*
 import com.buco7854.opentv.serverdata.ChallengeKind
 import com.buco7854.opentv.serverdata.ClientKind
 import com.buco7854.opentv.serverdata.UserStatus
-import com.buco7854.opentv.serverdata.db.ServerUserDatabase
+import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
 import com.buco7854.opentv.serverdata.db.WebAuthnCredentialRow
 import com.webauthn4j.WebAuthnManager
 import com.webauthn4j.converter.util.ObjectConverter
@@ -74,21 +74,21 @@ internal interface WebAuthnAssertionVerifier {
 
 /** WebAuthn registration, second-factor, and primary-login ceremonies verified by WebAuthn4J. */
 class WebAuthnService private constructor(
-    private val db: ServerUserDatabase,
+    private val db: OpenTvServerDatabase,
     private val auth: AuthService,
     private val config: AuthConfig,
     private val clock: () -> Long,
     private val assertionVerifier: WebAuthnAssertionVerifier?,
 ) {
     constructor(
-        db: ServerUserDatabase,
+        db: OpenTvServerDatabase,
         auth: AuthService,
         config: AuthConfig,
         clock: () -> Long = System::currentTimeMillis,
     ) : this(db, auth, config, clock, null)
 
     internal constructor(
-        db: ServerUserDatabase,
+        db: OpenTvServerDatabase,
         auth: AuthService,
         config: AuthConfig,
         verifier: WebAuthnAssertionVerifier,

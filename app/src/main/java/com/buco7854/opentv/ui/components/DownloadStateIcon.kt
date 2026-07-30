@@ -12,6 +12,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.DownloadDone
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.AlertDialog
@@ -61,6 +62,29 @@ class DownloadActionsViewModel(app: Application) : AndroidViewModel(app) {
     }
 }
 
+internal enum class DownloadControl {
+    ACTIVE,
+    RESUME,
+    RETRY,
+    DOWNLOADED,
+    DOWNLOAD,
+}
+
+internal fun downloadControl(status: Int?): DownloadControl = when (status) {
+    DownloadStatus.RUNNING,
+    DownloadStatus.QUEUED,
+    DownloadStatus.PREPARING -> DownloadControl.ACTIVE
+    DownloadStatus.PAUSED -> DownloadControl.RESUME
+    DownloadStatus.HUB_SIGNED_OUT,
+    DownloadStatus.HUB_UNREACHABLE,
+    DownloadStatus.HUB_CAPACITY,
+    DownloadStatus.HUB_GONE,
+    DownloadStatus.FAILED,
+    DownloadStatus.CANCELLED -> DownloadControl.RETRY
+    DownloadStatus.DONE -> DownloadControl.DOWNLOADED
+    else -> DownloadControl.DOWNLOAD
+}
+
 internal fun launchDownloadWithNotificationPermission(
     sdkInt: Int,
     permissionGranted: Boolean,
@@ -106,14 +130,28 @@ fun DownloadStateIcon(
     onDownload: () -> Unit,
     viewModel: DownloadActionsViewModel = viewModel(),
 ) {
-    var confirmDelete by remember { mutableStateOf(false) }
+    var confirmDelete by remember(state?.id) { mutableStateOf(false) }
     val deleteCancelFocusRequester = remember { FocusRequester() }
     val launchDownload = rememberDownloadWithNotificationPermission()
 
     fun longPress(): (() -> Unit)? = state?.let { { confirmDelete = true } }
 
-    when (state?.status) {
-        DownloadStatus.RUNNING, DownloadStatus.QUEUED, DownloadStatus.PREPARING -> Box(
+    if (state == null) {
+        IconButton(
+            onClick = { launchDownload(onDownload) },
+            modifier = Modifier.focusHighlight(),
+        ) {
+            Icon(
+                Icons.Outlined.Download,
+                contentDescription = stringResource(R.string.downloads_download),
+                tint = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+        return
+    }
+
+    when (downloadControl(state.status)) {
+        DownloadControl.ACTIVE -> Box(
             Modifier
                 .size(48.dp)
                 .focusHighlight(CircleShape)
@@ -154,7 +192,7 @@ fun DownloadStateIcon(
             )
         }
 
-        DownloadStatus.PAUSED -> Box(
+        DownloadControl.RESUME -> Box(
             Modifier
                 .size(48.dp)
                 .focusHighlight(CircleShape)
@@ -173,10 +211,7 @@ fun DownloadStateIcon(
             )
         }
 
-        DownloadStatus.HUB_SIGNED_OUT,
-        DownloadStatus.HUB_UNREACHABLE,
-        DownloadStatus.HUB_CAPACITY,
-        DownloadStatus.HUB_GONE -> Box(
+        DownloadControl.RETRY -> Box(
             Modifier
                 .size(48.dp)
                 .focusHighlight(CircleShape)
@@ -189,13 +224,13 @@ fun DownloadStateIcon(
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                Icons.Rounded.PlayArrow,
+                Icons.Outlined.Refresh,
                 contentDescription = stringResource(R.string.common_retry),
                 tint = MaterialTheme.colorScheme.onSurface,
             )
         }
 
-        DownloadStatus.DONE -> Box(
+        DownloadControl.DOWNLOADED -> Box(
             Modifier
                 .size(48.dp)
                 .focusHighlight(CircleShape)
@@ -207,7 +242,7 @@ fun DownloadStateIcon(
             Icon(Icons.Outlined.DownloadDone, contentDescription = stringResource(R.string.downloads_downloaded), tint = MaterialTheme.colorScheme.onSurface)
         }
 
-        else -> IconButton(
+        DownloadControl.DOWNLOAD -> IconButton(
             onClick = { launchDownload(onDownload) },
             modifier = Modifier.focusHighlight(),
         ) {
@@ -215,7 +250,7 @@ fun DownloadStateIcon(
         }
     }
 
-    if (confirmDelete && state != null) {
+    if (confirmDelete) {
         RequestInitialFocusOnTv(deleteCancelFocusRequester, state.id)
         AlertDialog(
             onDismissRequest = { confirmDelete = false },

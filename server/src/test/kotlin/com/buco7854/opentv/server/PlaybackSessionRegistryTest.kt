@@ -3,6 +3,7 @@ package com.buco7854.opentv.server
 import com.buco7854.opentv.contract.SessionCommandDto
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -72,6 +73,83 @@ class PlaybackSessionRegistryTest {
     }
 
     @Test
+    fun mediaActivityKeepsALeaseAliveWhenItsAuthenticatedHeartbeatIsDelayed() {
+        val clock = MutableClock()
+        val sessions = PlaybackSessionRegistry(clock, staleMs = 100, reapInBackground = false)
+        val lease = create(sessions, "viewer")
+
+        clock.value = 90
+        sessions.touch(lease)
+        clock.value = 150
+
+        assertEquals(listOf(lease), sessions.active().map { it.id })
+        sessions.close()
+    }
+
+    @Test
+    fun invalidMediaGrantCannotKeepALeaseAlive() {
+        val clock = MutableClock()
+        val sessions = PlaybackSessionRegistry(clock, staleMs = 100, reapInBackground = false)
+        val owner = actor("viewer")
+        val lease = sessions.create(
+            owner, 1, "same", "https://example.test/stream", "", "",
+        )
+        val grants = PlaybackMediaGrants(sessions, clock = clock::nowMs)
+
+        clock.value = 90
+        assertFailsWith<PlaybackRevokedException> {
+            grants.validate(lease.id, "not-a-grant")
+        }
+        clock.value = 101
+
+        assertTrue(sessions.active().isEmpty())
+        sessions.close()
+    }
+
+    @Test
+    fun staleReaperSnapshotCannotRemoveALeaseRevivedByAHeartbeat() {
+        val clock = MutableClock()
+        lateinit var sessions: PlaybackSessionRegistry
+        lateinit var first: PlaybackSessionRegistry.Live
+        lateinit var second: PlaybackSessionRegistry.Live
+        var revivedId: String? = null
+        val cleanup = object : PlaybackLeaseCleanup {
+            override fun memberLeaving(leaseId: String) = Unit
+            override fun shareGroupUnused(group: String) = Unit
+
+            override fun leaseTerminated(leaseId: String, unusedShareGroup: String?) {
+                if (revivedId != null) return
+                val revived = if (leaseId == first.id) second else first
+                val revivedActor = if (revived.id == first.id) actor("first") else actor("second")
+                revivedId = revived.id
+                sessions.update(
+                    revivedActor,
+                    "",
+                    "",
+                    revived.state.copy(id = revived.id),
+                )
+            }
+        }
+        sessions = PlaybackSessionRegistry(
+            clock,
+            staleMs = 100,
+            cleanup = cleanup,
+            reapInBackground = false,
+        )
+        first = sessions.create(
+            actor("first"), 1, "same", "https://example.test/stream", "", "",
+        )
+        second = sessions.create(
+            actor("second"), 1, "same", "https://example.test/stream", "", "",
+        )
+        clock.value = 101
+
+        val active = sessions.active()
+        assertEquals(revivedId, active.single().id)
+        sessions.close()
+    }
+
+    @Test
     fun mediaGrantIsBoundToOwnerSessionAndRevokedWithLease() {
         val sessions = PlaybackSessionRegistry(reapInBackground = false)
         val owner = actor("owner")
@@ -86,6 +164,40 @@ class PlaybackSessionRegistryTest {
             sessions.owned(owner, "never-issued")
         }
         sessions.remove(lease.id)
+        assertFailsWith<PlaybackRevokedException> {
+            grants.validate(lease.id, grant.token)
+        }
+        sessions.close()
+    }
+
+    @Test
+    fun refreshingMediaGrantDoesNotInvalidateAnInFlightPreviousGrant() {
+        val sessions = PlaybackSessionRegistry(reapInBackground = false)
+        val owner = actor("owner")
+        val lease = sessions.create(
+            owner, 1, "content", "https://example.test/stream", "", "",
+        )
+        val grants = PlaybackMediaGrants(sessions)
+        val previous = grants.issue(owner, lease.id)
+        val replacement = grants.issue(owner, lease.id)
+
+        assertEquals(lease.id, grants.validate(lease.id, previous.token).id)
+        assertEquals(lease.id, grants.validate(lease.id, replacement.token).id)
+        sessions.close()
+    }
+
+    @Test
+    fun revokingAnAuthSessionTerminatesItsPlaybackLeaseAndGrant() {
+        val sessions = PlaybackSessionRegistry(reapInBackground = false)
+        val owner = actor("owner")
+        val lease = sessions.create(
+            owner, 1, "content", "https://example.test/stream", "", "",
+        )
+        val grants = PlaybackMediaGrants(sessions)
+        val grant = grants.issue(owner, lease.id)
+
+        sessions.terminateSession(owner.authSessionId)
+
         assertFailsWith<PlaybackRevokedException> {
             grants.validate(lease.id, grant.token)
         }
@@ -251,6 +363,69 @@ class PlaybackSessionRegistryTest {
     }
 
     @Test
+    fun resourceAttachmentCannotPublishAfterLeaseRevocationCleanup() {
+        lateinit var grants: PlaybackMediaGrants
+        val cleanup = object : PlaybackLeaseCleanup {
+            override fun memberLeaving(leaseId: String) = Unit
+            override fun shareGroupUnused(group: String) = Unit
+            override fun leaseTerminated(leaseId: String, unusedShareGroup: String?) {
+                grants.revokeLease(leaseId)
+            }
+        }
+        val sessions = PlaybackSessionRegistry(cleanup = cleanup, reapInBackground = false)
+        val owner = actor("owner")
+        val lease = sessions.create(
+            owner, 1, "same", "https://example.test/stream", "", "",
+        )
+        grants = PlaybackMediaGrants(sessions)
+        val resourceLock = PlaybackMediaGrants::class.java
+            .getDeclaredField("resourceLock")
+            .also { it.isAccessible = true }
+            .get(grants)
+        val executor = Executors.newFixedThreadPool(2)
+        val bindingThread = java.util.concurrent.atomic.AtomicReference<Thread>()
+        val removalThread = java.util.concurrent.atomic.AtomicReference<Thread>()
+
+        try {
+            val (binding, removal) = synchronized(resourceLock) {
+                val binding = executor.submit {
+                    bindingThread.set(Thread.currentThread())
+                    sessions.withLiveLease(lease.id) {
+                        grants.bindResource(lease.id, "late-remux")
+                    }
+                }
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1)
+                while (bindingThread.get()?.state != Thread.State.BLOCKED &&
+                    System.nanoTime() < deadline
+                ) {
+                    Thread.yield()
+                }
+                assertEquals(Thread.State.BLOCKED, bindingThread.get()?.state)
+
+                val removal = executor.submit {
+                    removalThread.set(Thread.currentThread())
+                    sessions.remove(lease.id)
+                }
+                val removalDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1)
+                while (removalThread.get()?.state != Thread.State.BLOCKED &&
+                    System.nanoTime() < removalDeadline
+                ) {
+                    Thread.yield()
+                }
+                assertEquals(Thread.State.BLOCKED, removalThread.get()?.state)
+                binding to removal
+            }
+            binding.get(1, TimeUnit.SECONDS)
+            removal.get(1, TimeUnit.SECONDS)
+
+            assertFalse(grants.hasAttachments("late-remux"))
+        } finally {
+            executor.shutdownNow()
+            sessions.close()
+        }
+    }
+
+    @Test
     fun joinAnswerRequiresPendingRequestAndMovesPeerAtomicallyBetweenRooms() {
         val sessions = PlaybackSessionRegistry(reapInBackground = false)
         val firstHost = create(sessions, "first-host")
@@ -401,6 +576,32 @@ class PlaybackSessionRegistryTest {
         sessions.leaveRoom(guest)
 
         assertTrue(sessions.drainCommands(host).any { it.type == "room-go" })
+        sessions.close()
+    }
+
+    @Test
+    fun unreadyMemberCannotStrandTheRoomReloadBarrier() = runBlocking {
+        val sessions = PlaybackSessionRegistry(staleMs = 25, reapInBackground = false)
+        val host = create(sessions, "host")
+        val guest = create(sessions, "guest")
+        assertTrue(join(sessions, host, guest))
+        val generation = assertNotNull(
+            sessions.drainCommands(host).single { it.type == "room-audio" }.generation,
+        )
+        sessions.drainCommands(guest)
+        assertTrue(sessions.markReady(host, generation))
+
+        val roomGo = withTimeout(1_000) {
+            while (true) {
+                sessions.drainCommands(host).firstOrNull { it.type == "room-go" }?.let {
+                    return@withTimeout it
+                }
+                delay(5)
+            }
+            error("unreachable")
+        }
+
+        assertEquals(generation, roomGo.generation)
         sessions.close()
     }
 

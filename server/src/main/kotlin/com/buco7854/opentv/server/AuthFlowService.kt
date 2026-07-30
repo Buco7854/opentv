@@ -7,7 +7,7 @@ import com.buco7854.opentv.serverdata.ClientKind
 import com.buco7854.opentv.serverdata.UserRole
 import com.buco7854.opentv.serverdata.UserStatus
 import com.buco7854.opentv.serverdata.db.MfaCompletionWrite
-import com.buco7854.opentv.serverdata.db.ServerUserDatabase
+import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
 import com.buco7854.opentv.serverdata.db.completeMfa
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -17,7 +17,7 @@ import java.security.MessageDigest
 
 /** Local password, activation, MFA, and recovery flows, independent from HTTP delivery. */
 internal class AuthFlowService(
-    private val db: ServerUserDatabase,
+    private val db: OpenTvServerDatabase,
     private val config: AuthConfig,
     private val bootstrapFile: Path,
     private val clock: () -> Long,

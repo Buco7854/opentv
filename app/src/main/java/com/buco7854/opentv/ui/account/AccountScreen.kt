@@ -1,6 +1,7 @@
 package com.buco7854.opentv.ui.account
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -44,6 +45,11 @@ import com.buco7854.opentv.ui.components.Pill
 import com.buco7854.opentv.ui.components.playlistViewModel
 import java.text.DateFormat
 import java.util.Date
+
+private const val DAY_MS = 86_400_000L
+
+internal fun accountDaysLeft(expiryMs: Long, nowMs: Long): Int =
+    Math.floorDiv(expiryMs - nowMs, DAY_MS).toInt()
 
 /** Account / connection-monitoring page for one playlist. Refresh forces past the repo's 60s cache. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -96,7 +102,12 @@ fun AccountScreen(playlistId: Long, onBack: () -> Unit) {
         contentWindowInsets = WindowInsets(0.dp),
     ) { padding ->
         when {
-            state.loading -> {}
+            state.loading -> Box(
+                Modifier.padding(padding).fillMaxSize(),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.onSurface)
+            }
 
             playlist?.xtreamBase == null -> Column(Modifier.padding(padding)) {
                 EmptyState(
@@ -206,7 +217,7 @@ private fun DetailsCard(account: AccountInfo) {
             }
             account.expiresAtMs?.let { expiry ->
                 HorizontalDivider(color = MaterialTheme.colorScheme.surfaceContainerHighest)
-                val daysLeft = ((expiry - System.currentTimeMillis()) / 86_400_000L).toInt()
+                val daysLeft = accountDaysLeft(expiry, System.currentTimeMillis())
                 DetailRow(stringResource(R.string.account_expires)) {
                     Text(
                         if (daysLeft >= 0) {

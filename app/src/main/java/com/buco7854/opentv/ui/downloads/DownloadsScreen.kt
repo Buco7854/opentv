@@ -1,6 +1,7 @@
 package com.buco7854.opentv.ui.downloads
 
 import android.app.Application
+import android.text.format.Formatter
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -20,6 +22,7 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -27,13 +30,22 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -48,31 +60,52 @@ import com.buco7854.opentv.core.model.DownloadStatus
 import com.buco7854.opentv.download.DownloadStorage
 import com.buco7854.opentv.ui.components.EmptyState
 import com.buco7854.opentv.ui.components.OtvProgressBar
+import com.buco7854.opentv.ui.components.OtvTextButton
+import com.buco7854.opentv.ui.components.RequestInitialFocusOnTv
 import com.buco7854.opentv.ui.components.focusHighlight
 import com.buco7854.opentv.ui.components.combinedPadding
 import com.buco7854.opentv.ui.components.rememberDownloadWithNotificationPermission
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import java.util.Locale
 
 class DownloadsViewModel(app: Application) : AndroidViewModel(app) {
     private val graph = OpenTvApp.graph
+    private val mutableMessage = MutableStateFlow<String?>(null)
+
     val downloads = graph.downloads.downloads
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val message = mutableMessage.asStateFlow()
 
     fun pause(item: Download) = viewModelScope.launch { graph.downloads.pause(item) }
     fun resume(item: Download) = viewModelScope.launch { graph.downloads.resume(item) }
     fun retry(item: Download) = viewModelScope.launch { graph.downloads.retry(item) }
-    fun delete(item: Download) = viewModelScope.launch { graph.downloads.delete(item) }
+    fun delete(item: Download) = viewModelScope.launch {
+        graph.downloads.delete(item)?.let { mutableMessage.value = it }
+    }
+
+    fun consumeMessage() {
+        mutableMessage.value = null
+    }
 }
 
-private fun formatBytes(bytes: Long): String = when {
-    bytes >= 1_000_000_000 -> String.format(Locale.US, "%.1f GB", bytes / 1e9)
-    bytes >= 1_000_000 -> String.format(Locale.US, "%.0f MB", bytes / 1e6)
-    bytes >= 1_000 -> String.format(Locale.US, "%.0f kB", bytes / 1e3)
-    else -> "$bytes B"
-}
+@Composable
+private fun formatBytes(bytes: Long): String =
+    Formatter.formatShortFileSize(LocalContext.current, bytes.coerceAtLeast(0))
+
+internal fun downloadProgressFraction(downloadedBytes: Long, totalBytes: Long): Float? =
+    if (totalBytes > 0) {
+        (downloadedBytes.coerceAtLeast(0).toDouble() / totalBytes)
+            .coerceIn(0.0, 1.0)
+            .toFloat()
+    } else {
+        null
+    }
+
+internal fun downloadProgressPercent(downloadedBytes: Long, totalBytes: Long): Int =
+    ((downloadProgressFraction(downloadedBytes, totalBytes) ?: 0f) * 100).toInt()
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -82,9 +115,21 @@ fun DownloadsScreen(
     viewModel: DownloadsViewModel = viewModel(),
 ) {
     val downloads by viewModel.downloads.collectAsStateWithLifecycle()
+    val message by viewModel.message.collectAsStateWithLifecycle()
     val launchDownload = rememberDownloadWithNotificationPermission()
+    var pendingDelete by remember { mutableStateOf<Download?>(null) }
+    val deleteCancelFocusRequester = remember { FocusRequester() }
+    val snackbar = remember { SnackbarHostState() }
+
+    LaunchedEffect(message) {
+        message?.let {
+            snackbar.showSnackbar(it)
+            viewModel.consumeMessage()
+        }
+    }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.common_downloads)) },
@@ -119,10 +164,49 @@ fun DownloadsScreen(
                     onPause = { viewModel.pause(item) },
                     onResume = { launchDownload { viewModel.resume(item) } },
                     onRetry = { launchDownload { viewModel.retry(item) } },
-                    onDelete = { viewModel.delete(item) },
+                    onDelete = { pendingDelete = item },
                 )
             }
         }
+    }
+
+    pendingDelete?.let { item ->
+        RequestInitialFocusOnTv(deleteCancelFocusRequester, item.id)
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text(stringResource(R.string.downloads_remove_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        if (item.status == DownloadStatus.DONE) {
+                            R.string.downloads_delete_file_text
+                        } else {
+                            R.string.downloads_delete_partial_text
+                        },
+                        item.title,
+                    ),
+                )
+            },
+            confirmButton = {
+                OtvTextButton(
+                    onClick = {
+                        pendingDelete = null
+                        viewModel.delete(item)
+                    },
+                    danger = true,
+                ) {
+                    Text(stringResource(R.string.common_delete))
+                }
+            },
+            dismissButton = {
+                OtvTextButton(
+                    onClick = { pendingDelete = null },
+                    modifier = Modifier.focusRequester(deleteCancelFocusRequester),
+                ) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
     }
 }
 
@@ -162,7 +246,7 @@ private fun DownloadCard(
                         DownloadStatus.PREPARING -> if (item.totalBytes > 0) {
                             stringResource(
                                 R.string.downloads_preparing_percent,
-                                ((item.downloadedBytes * 100) / item.totalBytes).toInt(),
+                                downloadProgressPercent(item.downloadedBytes, item.totalBytes),
                             )
                         } else {
                             stringResource(R.string.downloads_preparing)
@@ -198,31 +282,46 @@ private fun DownloadCard(
                     )
                 }
                 when (item.status) {
-                    DownloadStatus.DONE -> IconButton(onClick = onPlay) {
+                    DownloadStatus.DONE -> IconButton(
+                        onClick = onPlay,
+                        modifier = Modifier.focusHighlight(CircleShape),
+                    ) {
                         Icon(Icons.Rounded.PlayArrow, contentDescription = stringResource(R.string.common_play), tint = MaterialTheme.colorScheme.onSurface)
                     }
                     DownloadStatus.QUEUED,
-                    DownloadStatus.RUNNING -> IconButton(onClick = onPause) {
+                    DownloadStatus.RUNNING -> IconButton(
+                        onClick = onPause,
+                        modifier = Modifier.focusHighlight(CircleShape),
+                    ) {
                         Icon(Icons.Rounded.Pause, contentDescription = stringResource(R.string.common_pause))
                     }
                     DownloadStatus.PREPARING -> IconButton(
                         onClick = onPause,
-                        modifier = Modifier.focusHighlight(),
+                        modifier = Modifier.focusHighlight(CircleShape),
                     ) {
                         Icon(Icons.Rounded.Pause, contentDescription = stringResource(R.string.common_pause))
                     }
-                    DownloadStatus.PAUSED -> IconButton(onClick = onResume) {
+                    DownloadStatus.PAUSED -> IconButton(
+                        onClick = onResume,
+                        modifier = Modifier.focusHighlight(CircleShape),
+                    ) {
                         Icon(
                             Icons.Rounded.PlayArrow,
                             contentDescription = stringResource(R.string.common_resume),
                             tint = MaterialTheme.colorScheme.onSurface,
                         )
                     }
-                    else -> IconButton(onClick = onRetry) {
+                    else -> IconButton(
+                        onClick = onRetry,
+                        modifier = Modifier.focusHighlight(CircleShape),
+                    ) {
                         Icon(Icons.Outlined.Refresh, contentDescription = stringResource(R.string.common_retry))
                     }
                 }
-                IconButton(onClick = onDelete) {
+                IconButton(
+                    onClick = onDelete,
+                    modifier = Modifier.focusHighlight(CircleShape),
+                ) {
                     Icon(
                         Icons.Outlined.Delete,
                         contentDescription = stringResource(R.string.common_delete),
@@ -237,7 +336,9 @@ private fun DownloadCard(
             ) {
                 Spacer(Modifier.height(10.dp))
                 OtvProgressBar(
-                    progress = { (item.downloadedBytes.toFloat() / item.totalBytes).coerceIn(0f, 1f) },
+                    progress = {
+                        downloadProgressFraction(item.downloadedBytes, item.totalBytes) ?: 0f
+                    },
                     modifier = Modifier.fillMaxWidth(),
                 )
             }

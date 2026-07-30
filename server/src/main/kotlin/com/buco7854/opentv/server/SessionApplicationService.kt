@@ -75,7 +75,8 @@ class SessionApplicationService(
         val remote = sourceUrl.startsWith("http://") || sourceUrl.startsWith("https://")
         val source = if (remote) cipher.encryptStream(sourceUrl, lease.id) else null
         val downloadFile = request.downloadId?.let {
-            cipher.encryptDownloadFile(actor.userId, it)
+            auth.requireActiveActor(actor)
+            cipher.encryptDownloadFile(actor.userId, actor.authSessionId, it)
         }
         val remuxStart = source?.let { mediaUrl("/api/v1/remux/start", it, lease.id, grant.token) }
             ?: ("/api/v1/remux/start?d=${urlEncode(requireNotNull(request.downloadId))}" +

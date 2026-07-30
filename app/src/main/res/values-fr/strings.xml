@@ -183,6 +183,7 @@
     <string name="downloads_remove_title">Supprimer le téléchargement ?</string>
     <string name="downloads_delete_file_text">Supprimer le fichier téléchargé de « %1$s » ?</string>
     <string name="downloads_delete_partial_text">Annuler et supprimer le téléchargement partiel de « %1$s » ?</string>
+    <string name="downloads_delete_failed">Impossible de supprimer le fichier. Vérifiez l’emplacement de stockage, puis réessayez.</string>
     <string name="downloads_already_downloaded">Déjà téléchargé</string>
     <string name="downloads_paused_resume_hint">En pause. Reprenez-le depuis Téléchargements</string>
     <string name="downloads_already_downloading">Téléchargement déjà en cours</string>
@@ -263,6 +264,7 @@
     <string name="account_no_api_title">Pas d\'API de compte</string>
     <string name="account_no_api_subtitle">Le suivi des connexions nécessite une URL de playlist de type Xtream (get.php?username=…&amp;password=…). Cette playlist n\'en a pas.</string>
     <string name="account_error">Impossible de joindre l\'API de compte du fournisseur. Les détails sont dans le journal d\'erreurs.</string>
+    <string name="account_stale_error">Impossible d’actualiser les informations du compte. Les données affichées proviennent d’une mise à jour antérieure.</string>
     <string name="account_loading">Chargement des informations du compte…</string>
     <string name="account_updated">Mis à jour %1$s</string>
     <string name="account_cache_hint">Les résultats sont mis en cache une minute ; le bouton actualiser force une requête au fournisseur.</string>
@@ -352,7 +354,6 @@
     <string name="hub_link_expired">Le code a expiré.</string>
     <string name="hub_link_restart">Recommencer</string>
     <string name="hub_pending_approval">Ce compte attend l\'approbation d\'un administrateur.</string>
-    <string name="hub_connected">Connecté à %1$s</string>
     <string name="hub_settings_title">Serveur</string>
     <string name="hub_signed_in_as">Connecté en tant que %1$s</string>
     <string name="hub_remove_download_after_pull">Supprimer du serveur après le téléchargement</string>
@@ -367,10 +368,15 @@
     <string name="hub_sign_out">Se déconnecter</string>
     <string name="hub_remove">Supprimer le serveur</string>
     <string name="hub_remove_confirm">Supprimer ce serveur ? Les téléchargements déjà enregistrés sur cet appareil sont conservés.</string>
-    <string name="hub_status_signed_out">Déconnecté</string>
-    <string name="hub_status_unreachable">Injoignable</string>
     <string name="hub_sign_in_again">Se reconnecter</string>
     <string name="hub_retry">Réessayer</string>
+    <string name="hub_enter_address">Saisissez l\'adresse d\'un serveur OpenTV.</string>
+    <string name="hub_server_unexpected_response">Ce serveur a envoyé une réponse qu\'OpenTV n\'a pas comprise.</string>
+    <string name="hub_sign_in_not_saved">Connexion réussie, mais ce serveur n\'a pas pu être enregistré.</string>
+    <string name="hub_too_many_attempts">Trop de tentatives. Réessayez dans un instant.</string>
+    <string name="hub_step_unsupported">Cette version de l\'application ne peut pas terminer cette étape de connexion.</string>
+    <string name="hub_request_failed">Le serveur n\'a pas pu traiter la demande.</string>
+    <string name="hub_generic_failure">Une erreur s\'est produite. Réessayez.</string>
     <string name="source_load_failed">Impossible de charger ce contenu</string>
     <string name="source_unreachable_title">Serveur injoignable</string>
     <string name="source_signed_out_title">Déconnecté</string>

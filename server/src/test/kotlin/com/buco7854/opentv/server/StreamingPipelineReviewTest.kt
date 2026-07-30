@@ -21,8 +21,10 @@ import io.ktor.server.testing.testApplication
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.async
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.runTest
 import java.io.ByteArrayInputStream
@@ -30,6 +32,8 @@ import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetSocketAddress
+import java.net.ServerSocket
+import java.net.SocketTimeoutException
 import java.net.URI
 import java.nio.file.Files
 import java.util.Locale
@@ -604,6 +608,72 @@ class StreamingPipelineReviewTest {
     }
 
     @Test
+    fun `dropping a proxy lease closes an upstream still waiting for response headers`() =
+        testApplication {
+            val listener = ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"))
+            val requestAccepted = CountDownLatch(1)
+            val executor = Executors.newSingleThreadExecutor()
+            val upstreamDisconnected = executor.submit<Boolean> {
+                listener.accept().use { connection ->
+                    val reader = connection.getInputStream()
+                        .bufferedReader(Charsets.ISO_8859_1)
+                    while (true) {
+                        val line = reader.readLine() ?: break
+                        if (line.isEmpty()) break
+                    }
+                    requestAccepted.countDown()
+                    connection.soTimeout = 1_000
+                    try {
+                        reader.read() == -1
+                    } catch (_: SocketTimeoutException) {
+                        false
+                    }
+                }
+            }
+            val connections = ProviderConnections()
+            val gate = StreamGate(connections)
+            val proxy = StreamProxy(ServerHttp(), testCipher(), gate) { 1 }
+            application {
+                routing {
+                    get("/") {
+                        proxy.handle(
+                            call,
+                            StreamCapability(
+                                "http://127.0.0.1:${listener.localPort}/stream.ts",
+                                "lease",
+                            ),
+                            "grant",
+                        ) {}
+                    }
+                }
+            }
+
+            try {
+                coroutineScope {
+                    val response = async(Dispatchers.Default) {
+                        client.get("/").bodyAsBytes()
+                    }
+                    assertTrue(requestAccepted.await(2, TimeUnit.SECONDS))
+
+                    response.cancelAndJoin()
+                    proxy.drop("lease")
+
+                    assertTrue(
+                        upstreamDisconnected.get(2, TimeUnit.SECONDS),
+                        "revoked proxy lease left the provider request physically open",
+                    )
+                }
+            } finally {
+                proxy.drop("lease")
+                proxy.close()
+                listener.close()
+                executor.shutdownNow()
+                gate.close()
+                connections.closeAll()
+            }
+        }
+
+    @Test
     fun `proxy connection failures do not log provider credentials`() = testApplication {
         val connections = ProviderConnections()
         val gate = StreamGate(connections)
@@ -885,6 +955,70 @@ class StreamingPipelineReviewTest {
                     runCatching { response.await() }
                     connections.closeAll()
                 }
+            }
+        }
+
+    @Test
+    fun `closing a relay cancels an upstream request still waiting for response headers`() =
+        testApplication {
+            val listener = ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"))
+            val requestAccepted = CountDownLatch(1)
+            val executor = Executors.newSingleThreadExecutor()
+            val upstreamDisconnected = executor.submit<Boolean> {
+                listener.accept().use { connection ->
+                    val reader = connection.getInputStream()
+                        .bufferedReader(Charsets.ISO_8859_1)
+                    while (true) {
+                        val line = reader.readLine() ?: break
+                        if (line.isEmpty()) break
+                    }
+                    requestAccepted.countDown()
+                    connection.soTimeout = 1_000
+                    try {
+                        reader.read() == -1
+                    } catch (_: SocketTimeoutException) {
+                        false
+                    }
+                }
+            }
+            val connections = ProviderConnections()
+            val relay = LiveRelay(ServerHttp(), connections, { false })
+            application {
+                routing {
+                    get("/") {
+                        relay.stream(
+                            call,
+                            "http://127.0.0.1:${listener.localPort}/live.ts",
+                            "room",
+                            "provider",
+                            1,
+                            "lease",
+                            MediaCapabilities.BROWSER,
+                        ) {}
+                    }
+                }
+            }
+
+            try {
+                coroutineScope {
+                    val response = async(Dispatchers.Default) {
+                        runCatching { client.get("/").bodyAsBytes() }
+                    }
+                    assertTrue(requestAccepted.await(2, TimeUnit.SECONDS))
+
+                    relay.close()
+
+                    assertTrue(
+                        upstreamDisconnected.get(2, TimeUnit.SECONDS),
+                        "relay retirement released its seat but left the physical HTTP request open",
+                    )
+                    response.await()
+                }
+            } finally {
+                relay.close()
+                listener.close()
+                executor.shutdownNow()
+                connections.closeAll()
             }
         }
 

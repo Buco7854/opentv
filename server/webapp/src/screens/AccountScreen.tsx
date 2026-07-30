@@ -1,5 +1,5 @@
-// Xtream account: connections hero + detail rows, always fetched live from the
-// provider (open and refresh both force a fresh request).
+// Xtream account: connections hero + detail rows. Open and refresh request live
+// data, while a labelled cached response keeps the screen useful through an outage.
 
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
@@ -30,7 +30,8 @@ export function AccountScreen() {
       const next = await api.account(playlistId, force);
       if (!stillWanted()) return;
       setInfo(next);
-      setUpdatedAtMs(Date.now());
+      setUpdatedAtMs(next.fetchedAtMs);
+      setError(next.stale ? t('account.stale') : null);
     } catch (cause) {
       if (!stillWanted()) return;
       setError(errorMessage(cause, { [GENERIC]: () => t('account.unreachable') }));

@@ -6,7 +6,7 @@ import com.buco7854.opentv.core.repo.MetadataRepository
 import com.buco7854.opentv.core.repo.PlaylistRepository
 import com.buco7854.opentv.core.repo.XtreamRepository
 import com.buco7854.opentv.core.storage.Storage
-import com.buco7854.opentv.serverdata.db.ServerUserDatabase
+import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
 
 /** Server composition: shared repositories plus web-only adapters and orchestrators. */
 class ServerGraph(
@@ -36,7 +36,7 @@ class ServerGraph(
     val webAuthn: WebAuthnService,
     val deviceLink: DeviceLinkService,
     val authConfig: AuthConfig,
-    val userDatabase: ServerUserDatabase,
+    val userDatabase: OpenTvServerDatabase,
     val contentIdentities: ContentIdentityService,
     val userActivity: UserActivityService,
 )

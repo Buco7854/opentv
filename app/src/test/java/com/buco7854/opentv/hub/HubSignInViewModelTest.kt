@@ -8,6 +8,7 @@ import com.buco7854.opentv.contract.DeviceLinkStatusDto
 import com.buco7854.opentv.contract.ServerInfoDto
 import com.buco7854.opentv.contract.TotpEnrollmentDto
 import com.buco7854.opentv.core.model.HubSource
+import com.buco7854.opentv.diag.ErrorLog
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -196,8 +197,29 @@ class HubSignInViewModelTest {
 
         val state = viewModel.state.value as HubSignInState.Password
         assertEquals("typed-user", state.username)
-        assertEquals("The username or password was not accepted.", state.error)
+        assertEquals(HubSignInFailure.BAD_CREDENTIALS, state.error)
         assertFalse(state.toString().contains(SESSION_TOKEN))
+    }
+
+    @Test
+    fun `a protocol violation reads as one failure and keeps its detail in the log`() = runTest {
+        val gateway = FakeGateway().apply {
+            passwordCall = { _, _ -> AuthFlowDto(status = "AUTHENTICATED", sessionToken = null) }
+        }
+        val viewModel = probedViewModel(gateway, FakeSink())
+        viewModel.selectPassword()
+        ErrorLog.clear()
+
+        viewModel.submitPassword("alice", "password")
+        advanceUntilIdle()
+
+        // The user cannot act on which part of the response was wrong...
+        val state = viewModel.state.value as HubSignInState.Password
+        assertEquals(HubSignInFailure.UNEXPECTED_RESPONSE, state.error)
+        // ...but the shape of it stays debuggable.
+        val logged = ErrorLog.entries.value.single()
+        assertEquals("Hub sign-in", logged.tag)
+        assertTrue(logged.message.contains("session token"))
     }
 
     @Test

@@ -287,9 +287,6 @@ interface GrantDao {
     @Query("DELETE FROM user_playlist_grants WHERE userId = :userId AND playlistId = :playlistId")
     suspend fun revoke(userId: String, playlistId: Long)
 
-    @Query("DELETE FROM user_playlist_grants WHERE playlistId = :playlistId")
-    suspend fun deletePlaylist(playlistId: Long)
-
     @Transaction
     suspend fun replaceDefaults(ids: List<Long>) {
         clearDefaults()
@@ -352,8 +349,6 @@ interface ContentDao {
     """)
     suspend fun retireNotSeen(playlistId: Long, seenAtMs: Long)
 
-    @Query("DELETE FROM content_identities WHERE playlistId = :playlistId")
-    suspend fun deletePlaylist(playlistId: Long)
 }
 
 @Dao
@@ -506,18 +501,6 @@ interface MaintenanceDao {
 
     @Query("SELECT * FROM playlist_deletions ORDER BY requestedAtMs")
     suspend fun pendingPlaylistDeletions(): List<PlaylistDeletionRow>
-
-    @Query("""
-        SELECT playlistId FROM default_playlist_template
-        UNION
-        SELECT playlistId FROM user_playlist_grants
-        UNION
-        SELECT playlistId FROM content_identities
-        UNION
-        SELECT playlistId FROM playlist_deletions
-        ORDER BY playlistId
-    """)
-    suspend fun referencedPlaylistIds(): List<Long>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun beginPlaylistDeletion(row: PlaylistDeletionRow)

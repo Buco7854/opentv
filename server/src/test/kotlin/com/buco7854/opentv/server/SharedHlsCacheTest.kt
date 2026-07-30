@@ -43,10 +43,21 @@ class SharedHlsCacheTest {
             segment.ts
         """.trimIndent().encodeToByteArray()
         val segment = ByteArray(256 * 1024) { (it % 251).toByte() }
+        val manifestReaders = CountDownLatch(3)
+        val extensionlessReaders = CountDownLatch(3)
+        val segmentReaders = CountDownLatch(3)
         val upstream = server { exchange ->
             val path = exchange.requestURI.path
             calls.computeIfAbsent(path) { AtomicInteger() }.incrementAndGet()
-            Thread.sleep(100)
+            val overlappingReaders = when (path) {
+                "/live/index.m3u8" -> manifestReaders
+                "/live/manifest" -> extensionlessReaders
+                else -> segmentReaders
+            }
+            assertTrue(
+                overlappingReaders.await(2, TimeUnit.SECONDS),
+                "the test clients serialized before exercising the cache's single-flight",
+            )
             val isManifest = path.endsWith(".m3u8") || path.endsWith("/manifest")
             val body = if (isManifest) manifest else segment
             exchange.responseHeaders.add(
@@ -79,6 +90,7 @@ class SharedHlsCacheTest {
                     routing {
                         get("/manifest/{member}") {
                             val member = assertNotNull(call.parameters["member"])
+                            manifestReaders.countDown()
                             proxy.handleSharedHls(
                                 call,
                                 StreamCapability(
@@ -95,6 +107,7 @@ class SharedHlsCacheTest {
                         }
                         get("/segment/{member}") {
                             val member = assertNotNull(call.parameters["member"])
+                            segmentReaders.countDown()
                             proxy.handleSharedHls(
                                 call,
                                 StreamCapability(
@@ -111,6 +124,7 @@ class SharedHlsCacheTest {
                         }
                         get("/extensionless/{member}") {
                             val member = assertNotNull(call.parameters["member"])
+                            extensionlessReaders.countDown()
                             proxy.handleSharedHls(
                                 call,
                                 StreamCapability(

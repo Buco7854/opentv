@@ -16,7 +16,10 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36], application = Application::class)
+// SDK 35 like every other Robolectric test here. Robolectric 4.16.1 requires JDK 21 for
+// SDK 36 but only JDK 17 for 35, so asking for 36 passes on a workstation with a newer
+// JDK and fails CI, which builds on 17. Nothing below is SDK-specific.
+@Config(sdk = [35], application = Application::class)
 class RoutesIdentityTest {
     @Test
     fun hubReauthenticationRouteCarriesTheExistingRowId() {

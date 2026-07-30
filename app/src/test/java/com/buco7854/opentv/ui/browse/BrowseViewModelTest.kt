@@ -185,6 +185,31 @@ class BrowseViewModelTest {
         }
     }
 
+    @Test
+    fun `a failed now airing refresh cannot blank a loaded hub catalog`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        try {
+            val groups = listOf(CatalogGroup("News", 3))
+            val gateway = CatalogGatewayFake(SourceId.Hub(3, 9)).apply {
+                groupsResult = CatalogResult.Success(groups)
+            }
+            val viewModel = BrowseViewModel(gateway.source, gateway)
+            advanceUntilIdle()
+            assertEquals(groups, viewModel.catalog.value.groups)
+
+            // The browse screen refreshes this on a timer; one lost poll must
+            // not replace the catalog the user is reading.
+            gateway.nowAiringResult = CatalogResult.Unreachable
+            viewModel.reloadNowAiring()
+            advanceUntilIdle()
+
+            assertEquals(null, viewModel.catalog.value.error)
+            assertEquals(groups, viewModel.catalog.value.groups)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
     private fun item(index: Int) = CatalogItem(
         ref = ContentRef.HubContent("content-$index"),
         title = "Channel $index",

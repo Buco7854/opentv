@@ -3,7 +3,7 @@ package com.buco7854.opentv.server
 import com.buco7854.opentv.contract.*
 import com.buco7854.opentv.serverdata.UserRole
 import com.buco7854.opentv.serverdata.db.AuthChallengeRow
-import com.buco7854.opentv.serverdata.db.ServerUserDatabase
+import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
 import com.buco7854.opentv.serverdata.db.UserPlaylistGrantRow
 import com.buco7854.opentv.serverdata.db.UserRow
 import java.util.UUID
@@ -15,7 +15,7 @@ import java.util.UUID
  * composition graph acyclic.
  */
 internal class AuthAccountService(
-    private val db: ServerUserDatabase,
+    private val db: OpenTvServerDatabase,
     private val clock: () -> Long,
     private val playlistExists: suspend (Long) -> Boolean,
 ) {

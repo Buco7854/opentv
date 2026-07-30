@@ -103,6 +103,15 @@ internal fun retainedFavoriteFilter(
 ): SourceId? = selected?.takeIf { source -> sections.any { it.source == source } }
 
 /**
+ * Whether a published section change should end selection mode: only when
+ * everything that was selected has gone. An empty selection is where selection
+ * mode starts, so a section reporting its own load state must not close it
+ * while the user is still choosing.
+ */
+internal fun shouldExitFavoriteSelection(selectedBefore: Int, retained: Int): Boolean =
+    selectedBefore > 0 && retained == 0
+
+/**
  * Every favorite the user has, from every source, on one page.
  *
  * Favorites stay owned by the source they came from — local ones live in the
@@ -169,8 +178,9 @@ fun AllFavoritesScreen(
         val available = state.sections.flatMapTo(mutableSetOf()) { section ->
             section.items.map { favoriteItemKey(section.source, it) }
         }
+        val selectedBefore = selected.size
         selected.keys.toList().filterNot { it in available }.forEach(selected::remove)
-        if (selected.isEmpty()) selectMode = false
+        if (shouldExitFavoriteSelection(selectedBefore, selected.size)) selectMode = false
     }
 
     fun keyOf(source: SourceId, item: CatalogItem) = favoriteItemKey(source, item)
@@ -246,7 +256,9 @@ fun AllFavoritesScreen(
                     ) {
                         Icon(
                             if (selectMode) Icons.Outlined.Close else Icons.AutoMirrored.Outlined.ArrowBack,
-                            contentDescription = null,
+                            contentDescription = stringResource(
+                                if (selectMode) R.string.common_close else R.string.common_back,
+                            ),
                         )
                     }
                 },

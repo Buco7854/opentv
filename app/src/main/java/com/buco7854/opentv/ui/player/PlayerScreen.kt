@@ -187,15 +187,7 @@ fun PlayerScreen(
         ) {
             showWatchTogether = true
         }
-        delay(
-            if (notice.kind == WatchTogetherNoticeKind.ADMIN_MESSAGE ||
-                notice.kind == WatchTogetherNoticeKind.ROOM_ENDED
-            ) {
-                6_000
-            } else {
-                3_500
-            },
-        )
+        delay(noticeDwellMs(notice.kind, notice.text?.length ?: 0))
         viewModel.dismissWatchTogetherNotice(notice.id)
     }
     val modalOpen = showGuide || showSubtitleTracks || showAudioTracks ||

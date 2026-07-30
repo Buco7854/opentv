@@ -45,6 +45,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -334,7 +335,10 @@ fun SeriesDetailScreen(
     val seasons = state.seasons.ifEmpty {
         episodes.mapNotNull { it.season }.distinct().sorted()
     }
-    var selectedSeason by remember { mutableStateOf<Int?>(null) } // null = all seasons
+    // Saveable so the chosen season survives process death, and the config changes
+    // this Activity does not declare: it handles orientation itself, but not a
+    // theme or locale switch, which still recreates it.
+    var selectedSeason by rememberSaveable { mutableStateOf<Int?>(null) } // null = all seasons
     val shown = remember(episodes, selectedSeason) {
         selectedSeason?.let { s -> episodes.filter { it.season == s } } ?: episodes
     }
@@ -403,7 +407,15 @@ fun SeriesDetailScreen(
                             state.episodeTotal,
                         ),
                     )
-                    if (seasons.size > 1) Pill("${seasons.size} seasons")
+                    if (seasons.size > 1) {
+                        Pill(
+                            pluralStringResource(
+                                R.plurals.details_season_count,
+                                seasons.size,
+                                seasons.size,
+                            ),
+                        )
+                    }
                     meta?.rating?.let { Pill("★ %.1f".format(it)) }
                 }
                 meta?.infoLine?.let { line ->

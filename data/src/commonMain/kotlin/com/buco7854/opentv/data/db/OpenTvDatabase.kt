@@ -22,17 +22,17 @@ import androidx.room.RoomDatabaseConstructor
     exportSchema = true,
 )
 @ConstructedBy(OpenTvDatabaseConstructor::class)
-abstract class OpenTvDatabase : RoomDatabase() {
-    abstract fun playlistDao(): PlaylistDao
-    abstract fun channelDao(): ChannelDao
-    abstract fun epgDao(): EpgDao
-    abstract fun downloadDao(): DownloadDao
-    abstract fun metadataDao(): MetadataDao
-    abstract fun xtreamSeriesDao(): XtreamSeriesDao
-    abstract fun favoriteDao(): FavoriteDao
-    abstract fun groupOverrideDao(): GroupOverrideDao
-    abstract fun resumeDao(): ResumeDao
-    abstract fun hubSourceDao(): HubSourceDao
+abstract class OpenTvDatabase : RoomDatabase(), CatalogDaos {
+    abstract override fun playlistDao(): PlaylistDao
+    abstract override fun channelDao(): ChannelDao
+    abstract override fun epgDao(): EpgDao
+    abstract override fun downloadDao(): DownloadDao
+    abstract override fun metadataDao(): MetadataDao
+    abstract override fun xtreamSeriesDao(): XtreamSeriesDao
+    abstract override fun favoriteDao(): FavoriteDao
+    abstract override fun groupOverrideDao(): GroupOverrideDao
+    abstract override fun resumeDao(): ResumeDao
+    abstract override fun hubSourceDao(): HubSourceDao
 }
 
 // Room generates the per-platform actuals.

@@ -21,6 +21,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -39,6 +40,27 @@ import com.buco7854.opentv.R
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SubtitleStyleControls(style: SubtitleStyle, onChange: (SubtitleStyle) -> Unit) {
+    var pendingStyles by remember { mutableStateOf(emptyList<SubtitleStyle>()) }
+    LaunchedEffect(style) {
+        val applied = pendingStyles.indexOf(style)
+        pendingStyles = when {
+            applied >= 0 -> pendingStyles.drop(applied + 1)
+            pendingStyles.isNotEmpty() -> emptyList()
+            else -> pendingStyles
+        }
+    }
+    val displayedStyle = pendingStyles.lastOrNull() ?: style
+    var scaleDraft by remember { mutableStateOf<Float?>(null) }
+    val scale = scaleDraft ?: displayedStyle.scale
+
+    fun submit(transform: SubtitleStyle.() -> SubtitleStyle) {
+        val current = pendingStyles.lastOrNull() ?: style
+        val next = current.transform()
+        if (next == current) return
+        pendingStyles = pendingStyles + next
+        onChange(next)
+    }
+
     Column {
         // Live preview; backdrop is video-like (not pure black) so the translucent-background style is visible.
         Box(
@@ -54,9 +76,9 @@ fun SubtitleStyleControls(style: SubtitleStyle, onChange: (SubtitleStyle) -> Uni
             Text(
                 stringResource(R.string.settings_subtitle_preview),
                 color = Color.White,
-                fontSize = (16 * style.scale).sp,
-                fontWeight = if (style.bold) FontWeight.Bold else FontWeight.Normal,
-                modifier = if (style.background) {
+                fontSize = (16 * scale).sp,
+                fontWeight = if (displayedStyle.bold) FontWeight.Bold else FontWeight.Normal,
+                modifier = if (displayedStyle.background) {
                     Modifier
                         .clip(RoundedCornerShape(4.dp))
                         .background(Color.Black.copy(alpha = 0.7f))
@@ -66,8 +88,6 @@ fun SubtitleStyleControls(style: SubtitleStyle, onChange: (SubtitleStyle) -> Uni
         }
 
         Spacer(Modifier.height(16.dp))
-        var draft by remember(style.scale) { mutableStateOf<Float?>(null) }
-        val scale = draft ?: style.scale
         Text(stringResource(R.string.settings_subtitle_size, (scale * 100).toInt()), style = MaterialTheme.typography.labelLarge)
         // Thin track + round thumb, no ticks/stop indicator, to match the web client.
         val sliderColors = SliderDefaults.colors(
@@ -77,8 +97,13 @@ fun SubtitleStyleControls(style: SubtitleStyle, onChange: (SubtitleStyle) -> Uni
         )
         Slider(
             value = scale,
-            onValueChange = { draft = it },
-            onValueChangeFinished = { draft?.let { onChange(style.copy(scale = it)) } },
+            onValueChange = { scaleDraft = it },
+            onValueChangeFinished = {
+                scaleDraft?.let { value ->
+                    scaleDraft = null
+                    submit { copy(scale = value) }
+                }
+            },
             valueRange = 0.5f..2f,
             colors = sliderColors,
             thumb = { Box(Modifier.size(16.dp).background(MaterialTheme.colorScheme.onSurface, CircleShape)) },
@@ -96,14 +121,14 @@ fun SubtitleStyleControls(style: SubtitleStyle, onChange: (SubtitleStyle) -> Uni
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             FilterChip(
-                selected = !style.background,
-                onClick = { onChange(style.copy(background = false)) },
+                selected = !displayedStyle.background,
+                onClick = { submit { copy(background = false) } },
                 label = { Text(stringResource(R.string.settings_subtitle_outline)) },
                 modifier = Modifier.padding(end = 8.dp),
             )
             FilterChip(
-                selected = style.background,
-                onClick = { onChange(style.copy(background = true)) },
+                selected = displayedStyle.background,
+                onClick = { submit { copy(background = true) } },
                 label = { Text(stringResource(R.string.settings_subtitle_background)) },
             )
         }
@@ -112,8 +137,8 @@ fun SubtitleStyleControls(style: SubtitleStyle, onChange: (SubtitleStyle) -> Uni
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(stringResource(R.string.settings_subtitle_bold), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
             Switch(
-                checked = style.bold,
-                onCheckedChange = { onChange(style.copy(bold = it)) },
+                checked = displayedStyle.bold,
+                onCheckedChange = { value -> submit { copy(bold = value) } },
             )
         }
     }

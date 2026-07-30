@@ -273,6 +273,32 @@ class DownloadWorkerTest {
     }
 
     @Test
+    fun `provider 416 cannot override a previously recorded larger total`() = runBlocking {
+        val path = File(context.cacheDir, "provider-recorded-416-${System.nanoTime()}.mp4")
+        path.writeText("abc")
+        val id = store.insert(
+            Download(
+                title = "Provider movie",
+                url = server.url("/movie").toString(),
+                filePath = path.absolutePath,
+                totalBytes = 6,
+                downloadedBytes = 3,
+            ),
+        )
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(416)
+                .setHeader("Content-Range", "bytes */3"),
+        )
+
+        assertFailure(worker(id, providerDependencies()).doWork())
+
+        assertEquals(DownloadStatus.FAILED, store.get(id)?.status)
+        assertEquals(6L, store.get(id)?.totalBytes)
+        assertEquals("abc", path.readText())
+    }
+
+    @Test
     fun `hub pull resumes with Range`() = runBlocking {
         val url = server.url("/api/v1/downloads/server-1/file?token=short").toString()
         val id = hubRow(url, totalBytes = 12)
@@ -506,6 +532,51 @@ class DownloadWorkerTest {
         assertEquals(4, hubAccess.refreshes.size)
         repeat(4) { server.takeRequest() }
         assertEquals(0, server.requestCount - 4)
+    }
+
+    @Test
+    fun `revoked file capability is terminal without a refresh loop`() = runBlocking {
+        val revokedUrl = server.url("/api/v1/downloads/server-1/file?token=revoked").toString()
+        val id = hubRow(revokedUrl, totalBytes = 6)
+        val path = File(requireNotNull(store.get(id)).filePath)
+        path.writeText("abc")
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(410)
+                .setHeader("Content-Type", "application/json")
+                .setBody(
+                    """{"code":"download_access_revoked","message":"The session has ended"}""",
+                ),
+        )
+
+        assertSuccess(worker(id).doWork())
+
+        assertEquals(DownloadStatus.HUB_GONE, store.get(id)?.status)
+        assertEquals(1, server.requestCount)
+        assertTrue(hubAccess.refreshes.isEmpty())
+        assertEquals("abc", path.readText())
+    }
+
+    @Test
+    fun `unrelated gone response is not treated as session revocation`() = runBlocking {
+        val url = server.url("/api/v1/downloads/server-1/file?token=short").toString()
+        val id = hubRow(url, totalBytes = 6)
+        val path = File(requireNotNull(store.get(id)).filePath)
+        path.writeText("abc")
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(410)
+                .setHeader("Content-Type", "application/json")
+                .setBody("""{"code":"upstream_gone","message":"The upstream file is gone"}"""),
+        )
+        hubAccess.states += state(url, status = "RUNNING", downloaded = 3, total = 6)
+
+        assertFailure(worker(id).doWork())
+
+        assertEquals(DownloadStatus.FAILED, store.get(id)?.status)
+        assertNotEquals(DownloadStatus.HUB_GONE, store.get(id)?.status)
+        assertEquals("abc", path.readText())
+        assertEquals(1, hubAccess.refreshes.size)
     }
 
     private suspend fun hubRow(url: String, totalBytes: Long = 0): Long {

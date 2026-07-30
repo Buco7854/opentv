@@ -9,10 +9,17 @@ import com.buco7854.opentv.core.xtream.XtreamApi
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
+sealed interface AccountInfoResult {
+    data class Fresh(val info: AccountInfo, val fetchedAtMs: Long) : AccountInfoResult
+    data class Stale(val info: AccountInfo, val fetchedAtMs: Long) : AccountInfoResult
+    data class Unavailable(val cause: Throwable? = null) : AccountInfoResult
+}
+
 /** Xtream connection monitoring; cached for [CACHE_MS] (one request/min/playlist). */
 class AccountRepository(
     private val xtreamApi: XtreamApi,
     private val log: CoreLog,
+    private val clock: () -> Long = ::nowMs,
 ) {
     companion object {
         const val CACHE_MS = 60_000L
@@ -35,33 +42,41 @@ class AccountRepository(
      * else's provider request: if this playlist is already being refreshed, the last known
      * answer is returned instead of queueing behind it.
      */
-    suspend fun accountInfo(playlist: Playlist, force: Boolean = false): AccountInfo? {
-        val creds = playlist.credentials() ?: return null
-        fresh(playlist.id, force)?.let { return it }
+    suspend fun accountInfo(playlist: Playlist, force: Boolean = false): AccountInfoResult {
+        val creds = playlist.credentials() ?: return AccountInfoResult.Unavailable()
+        fresh(playlist.id, force)?.let {
+            return AccountInfoResult.Fresh(it.info, it.fetchedAtMs)
+        }
         val fetch = state.withLock { fetches.getOrPut(playlist.id) { Mutex() } }
-        val stale = state.withLock { cache[playlist.id]?.info }
-        if (!fetch.tryLock()) return stale
+        val stale = state.withLock { cache[playlist.id] }
+        if (!fetch.tryLock()) {
+            return stale?.let { AccountInfoResult.Stale(it.info, it.fetchedAtMs) }
+                ?: AccountInfoResult.Unavailable()
+        }
         try {
-            fresh(playlist.id, force)?.let { return it }
+            fresh(playlist.id, force)?.let {
+                return AccountInfoResult.Fresh(it.info, it.fetchedAtMs)
+            }
             return try {
                 val info = xtreamApi.fetchAccountInfo(creds)
-                state.withLock { cache[playlist.id] = CachedInfo(info, nowMs()) }
-                info
+                val fetchedAtMs = clock()
+                state.withLock { cache[playlist.id] = CachedInfo(info, fetchedAtMs) }
+                AccountInfoResult.Fresh(info, fetchedAtMs)
             } catch (e: Exception) {
                 e.rethrowCancellation()
-                // Fall back to stale data, but still log the failure.
                 log.log("Connection status (${playlist.name})", e)
-                stale
+                stale?.let { AccountInfoResult.Stale(it.info, it.fetchedAtMs) }
+                    ?: AccountInfoResult.Unavailable(e)
             }
         } finally {
             fetch.unlock()
         }
     }
 
-    private suspend fun fresh(playlistId: Long, force: Boolean): AccountInfo? {
+    private suspend fun fresh(playlistId: Long, force: Boolean): CachedInfo? {
         if (force) return null
         return state.withLock {
-            cache[playlistId]?.takeIf { nowMs() - it.fetchedAtMs < CACHE_MS }?.info
+            cache[playlistId]?.takeIf { clock() - it.fetchedAtMs < CACHE_MS }
         }
     }
 }

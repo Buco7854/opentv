@@ -1,14 +1,15 @@
 package com.buco7854.opentv.server
 
 import com.buco7854.opentv.contract.*
+import com.buco7854.opentv.data.db.PlaylistRow
 import com.buco7854.opentv.serverdata.ChallengeKind
 import com.buco7854.opentv.serverdata.AuthMethod
 import com.buco7854.opentv.serverdata.UserStatus
-import com.buco7854.opentv.serverdata.createServerUserDatabase
+import com.buco7854.opentv.serverdata.createOpenTvServerDatabase
 import com.buco7854.opentv.serverdata.db.ContentIdentityRow
 import com.buco7854.opentv.serverdata.db.DefaultPlaylistRow
 import com.buco7854.opentv.serverdata.db.PendingOidcIdentityRow
-import com.buco7854.opentv.serverdata.db.ServerUserDatabase
+import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
 import com.buco7854.opentv.serverdata.db.UserResumeRow
 import androidx.room.useWriterConnection
 import java.net.URI
@@ -26,6 +27,7 @@ class UserAdministrationLifecycleTest {
     fun createWithPasswordIsActiveAndHasNoActivationChallenge() = runTest {
         withAdmin { service, actor, db, _ ->
             val password = "a new sufficiently long password"
+            db.playlistDao().insert(PlaylistRow(id = 42, name = "Default", url = null))
             db.grants().addDefault(DefaultPlaylistRow(42))
             val created = service.adminCreateUser(
                 actor,
@@ -353,6 +355,7 @@ class UserAdministrationLifecycleTest {
             mapOf("resolved-content" to "A human title")
         }
         withAdmin(resumeTitles = resolver) { service, actor, db, _ ->
+            db.playlistDao().insert(PlaylistRow(id = 1, name = "Provider", url = null))
             val user = service.adminCreateUser(
                 actor,
                 CreateUserRequestDto("viewer", "Viewer"),
@@ -393,10 +396,10 @@ class UserAdministrationLifecycleTest {
     private suspend fun withAdmin(
         passwordEnabled: Boolean = true,
         resumeTitles: suspend (Collection<String>) -> Map<String, String> = { emptyMap() },
-        block: suspend (AuthService, Actor, ServerUserDatabase, AuthService) -> Unit,
+        block: suspend (AuthService, Actor, OpenTvServerDatabase, AuthService) -> Unit,
     ) {
         val dir = Files.createTempDirectory("opentv-admin-lifecycle-test")
-        val db = createServerUserDatabase(dir.resolve("server-users.db").toString())
+        val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
         val now = 1_700_000_000_000L
         val enabledConfig = authConfig(passwordEnabled = true)
         try {

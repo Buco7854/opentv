@@ -13,6 +13,8 @@ OpenTV is a modular monolith with two independent clients:
   hub clients.
 - `:core`: platform-neutral logic shared by Android and server.
 - `:data`: Room implementation of `:core` storage ports for Android and JVM.
+- `:server-data`: JVM server persistence; its merged database composes the
+  shared `:data` catalog entities with server-only account/identity entities.
 - `server/webapp`: React/TypeScript/Vite client for `:server`.
 
 Android does not bundle the server. It includes `:core`, Android `:data`,
@@ -33,11 +35,14 @@ M3U/Xtream behavior remains independent.
 - Repositories/use cases: `core/.../repo/`
 - M3U/XMLTV/Xtream/catch-up logic: corresponding packages under `core/.../`
 - Room database/DAOs: `data/.../db/OpenTvDatabase.kt`, `Daos.kt`
+- Catalog DAO composition seam: `data/.../db/CatalogDaos.kt`
 - Room adapter: `data/.../RoomStorage.kt`
 - Exported Room schemas: `data/schemas/`
 
 ### Server
 
+- Merged Room database/factory: `server-data/.../db/OpenTvServerDatabase.kt`,
+  `OpenTvServerStorage.jvm.kt`
 - Process entry point: `server/.../Main.kt`
 - Environment configuration: `ServerConfig.kt`
 - Composition and lifecycle: `Application.kt`, `ServerGraph.kt`
@@ -281,13 +286,24 @@ absent from the initial bundle.
   Stream/remux routes validate the encrypted source plus the rotating grant bound to its live
   lease and derive user/session identity from that lease. Download-file snapshots, including
   readable prefixes of a running blob, similarly use a signed, expiring,
-  owner-and-download-bound `StreamCipher` capability and remain range-capable.
+  owner-session-and-download-bound `StreamCipher` capability and remain range-capable.
 - Android hub downloads pipeline the provider fetch and device pull.
   `HubDownloadCoordinator` hands off as soon as the server's growing blob has usable bytes;
   each signed file response is a fixed snapshot, and the authenticated download DTO remains
   authoritative for status and expected size. Android marks the local row done only when the
-  DTO is `DONE` and both byte counts match. The pull refreshes its short-lived capability
-  through the authenticated hub API after a 401 and bypasses the provider-connection gate.
+  DTO is `DONE` and both byte counts match. The pull refreshes an expired or malformed
+  short-lived capability through the authenticated hub API after a 401 and bypasses the
+  provider-connection gate. A download-file capability seals the minting auth-session id as
+  well as its owner and download id; every file request reuses persistent session
+  authentication to check that session and user are still live. A decrypted capability whose
+  session ended returns 410 `download_access_revoked`, which Android maps directly to terminal
+  `HUB_GONE` without attempting a re-mint loop. The file route remains outside bearer auth.
+- Revoking one auth session does not change the user's persistent download reference or shared
+  server fetch, so another device's independently minted capability keeps working. Revoking
+  every session suspends that user's active download references; an in-flight blob is parked
+  only when no other active user reference remains, and re-enqueueing later resumes it. Deleting
+  a user removes its references through the database cascade and orphan cleanup, but a blob
+  referenced by another user is neither cancelled nor deleted.
 - The HLS rewriter mints capabilities only for children on the manifest's own origin;
   playlists are provider-controlled input and must not be able to aim the server's HTTP
   client at another host.
@@ -377,20 +393,57 @@ absent from the initial bundle.
 
 ## Persistence and identity
 
-- Room schema version is 12 for `:data` (`opentv.db`), 2 for `:server-data`
-  (`server-users.db`). The catalog database deliberately uses destructive migration
-  fallback and is recreated on a schema-version mismatch. On Android this wipes local
-  playlists, connected-hub rows, favorites, resume points, download records, and other
-  catalog-backed state; on the server it wipes playlists and their catalog/guide data.
-  Downloaded files may remain on disk without their Room records. Exported catalog schemas
-  remain documentation, while `OpenTvDatabaseSchemaTest` pins fresh creation, indexed
-  search, and destructive reopening. `:server-data` keeps explicit migrations and
-  migration coverage in `ServerUserMigrationTest`.
+- Android uses `OpenTvDatabase` version 12 in `opentv.db`, containing only the shared
+  catalog/Android-local entity set. The server uses `OpenTvServerDatabase` version 1 in one
+  `opentv.db`, containing that catalog entity set plus every server-only account,
+  credential, session, grant, content-identity, activity and download entity. `RoomStorage`
+  depends on `CatalogDaos`, so both databases expose the same catalog ports without putting
+  `:server-data` or its entities on Android's dependency graph.
+- Both database builders currently use
+  `fallbackToDestructiveMigration(dropAllTables = true)`. On Android a schema mismatch wipes
+  local playlists, connected hubs, favorites, resume points, downloads and the catalog. On
+  the server it wipes the entire deployment database, including accounts, credentials,
+  sessions and grants as well as playlists/catalog data. This is acceptable only while no
+  one depends on persisted data: real Room migrations must replace the fallback before that
+  changes. Downloaded files may remain on disk without their Room records.
+- Schema export remains mandatory even during the destructive phase:
+  `data/schemas/...OpenTvDatabase/12.json` and
+  `server-data/schemas/...OpenTvServerDatabase/1.json` are the migration baselines and must
+  stay committed. The exported JSON is not the complete SQLite file: FTS5 sidecars and their
+  triggers are installed by `SEARCH_INDEX_CALLBACK` and do not appear in it. A future
+  migration that changes search tables or indexed columns must recreate/alter those objects
+  explicitly. `OpenTvDatabaseSchemaTest` and `OpenTvServerDatabaseSchemaTest` pin these
+  policies; `ServerUserDatabaseTest` proves fresh-server indexed search.
+- On the server, the catalog and the accounts now share ONE SQLite writer, so a long catalog
+  write is an availability problem for authentication and playback, not just slow. Playback
+  leases heartbeat every 3s and are reaped at 12s, so a writer held past that window kills
+  the playback of users who have nothing to do with the playlist being written. Two measured
+  cases and their remedies, both of which are easy to reintroduce:
+  - Row-by-row FTS5 trigger maintenance during a bulk catalog replace blocked
+    `sessions().touch()` for 3.2s at 20k channels and blew Room's 30s writer-pool timeout at
+    120k. Bulk catalog mutations must drop the FTS triggers inside the transaction, mutate
+    set-wise, rebuild the indexes, and restore the triggers (`RoomStorage`, `Transactions`).
+  - Identity reconciliation's row-by-row `updateAll` blocked it for 26s at 120k rows.
+    Insert/rebind now commits in 2,000-row chunks so other writers interleave. Reader-visible
+    atomicity comes from `CatalogGate` holding across all chunks, NOT from one transaction;
+    startup repair covers a crash mid-chunk. Retirement stays single-transaction because it
+    is set-wise and measured 148ms at 120k.
+  Any new bulk write over catalog or identity rows must be measured against a concurrent
+  `sessions().touch()`, not just for throughput. `MergedDatabaseContentionTest` is the harness.
+- Server playlist grants/defaults/content identities have real foreign keys to the catalog:
+  playlist deletion cascades all three, and channel deletion sets an identity's current
+  channel pointer to null. Room enables `PRAGMA foreign_keys`; integration tests prove this
+  by rejecting orphan grants and exercising the cascades.
+- `playlist_deletions` remains because deleting a playlist also terminates live runtime state
+  and removes downloaded files, neither of which is transactional SQLite work. Its tombstone
+  makes that external cleanup restartable and blocks new admission while deletion runs. After
+  file cleanup, `deleteCatalogPlaylist` removes the catalog slice and cascade-bound server
+  state in one writer transaction. The startup path resumes only real tombstones; the former
+  scan/purge for cross-file orphan grants and identities is gone.
 - `auth_sessions.csrfToken` remains only as an unused schema column so the bearer-only
   transport does not require a database migration; it is never exposed or validated.
-- There is no audit/security-event log. The `security_events` table was removed in
-  server-user schema 2: nothing read it. Reintroducing one means designing its
-  reader and its retention first.
+- There is no audit/security-event log. Reintroducing one means designing its reader and
+  retention first.
 - Android local-playlist favorites, resume points, and downloads use existing URL/key
   identities; hub-backed state uses server `contentId`. A future stable identity
   migration for local content must update all three together rather than piecemeal.
@@ -469,7 +522,8 @@ cd ../..
 - Playback status codes: a lease that is gone is 410 and nothing else. 404 means many
   ordinary things on these routes (no extra tracks to expose, an unknown segment), so
   no client may infer "stop playing" from it.
-- The catalog Room database uses destructive fallback; `:server-data` does not.
+- Android and server Room databases currently use destructive fallback; this must become
+  real migrations before persisted deployment data matters.
 - No hand-maintained OpenAPI file.
 - Security headers and the CSP are configured once at composition in
   `Application.kt`; caching headers are bound to the static-content route so they

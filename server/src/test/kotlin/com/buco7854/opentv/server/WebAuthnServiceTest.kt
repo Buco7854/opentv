@@ -2,14 +2,18 @@ package com.buco7854.opentv.server
 
 import com.buco7854.opentv.contract.*
 import com.buco7854.opentv.serverdata.AuthMethod
-import com.buco7854.opentv.serverdata.createServerUserDatabase
+import com.buco7854.opentv.serverdata.createOpenTvServerDatabase
 import com.buco7854.opentv.serverdata.db.WebAuthnCredentialRow
 import com.webauthn4j.credential.CredentialRecord
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.test.runTest
 import java.lang.reflect.Proxy
 import java.net.URI
 import java.nio.file.Files
 import java.util.Base64
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -22,7 +26,7 @@ class WebAuthnServiceTest {
     @Test
     fun registrationPinsServerPropertiesAndRateLimitsMalformedResponses() = runTest {
         val dir = Files.createTempDirectory("opentv-webauthn-test")
-        val db = createServerUserDatabase(dir.resolve("server-users.db").toString())
+        val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
         try {
             val config = config()
             val auth = AuthService(db, config, dir)
@@ -83,7 +87,7 @@ class WebAuthnServiceTest {
     @Test
     fun loginOptionsAreDiscoverableAndFloodGuarded() = runTest {
         val dir = Files.createTempDirectory("opentv-webauthn-login-options-test")
-        val db = createServerUserDatabase(dir.resolve("server-users.db").toString())
+        val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
         try {
             val config = config()
             val auth = AuthService(db, config, dir)
@@ -155,7 +159,7 @@ class WebAuthnServiceTest {
     @Test
     fun loginIsSingleUseAndRequiresUserVerificationOnlyOnThePrimaryPath() = runTest {
         val dir = Files.createTempDirectory("opentv-webauthn-login-test")
-        val db = createServerUserDatabase(dir.resolve("server-users.db").toString())
+        val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
         var now = 1_700_000_000_000L
         try {
             val config = config()
@@ -239,6 +243,98 @@ class WebAuthnServiceTest {
 
             assertEquals(AuthMethod.PASSWORD, secondFactor.flow.user?.authMethod)
             assertEquals(listOf(true, false), requirements)
+        } finally {
+            db.close()
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun concurrentPrimaryAssertionsCannotMoveTheSignatureCounterBackwards() = runTest {
+        val dir = Files.createTempDirectory("opentv-webauthn-counter-race-test")
+        val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
+        val now = 1_700_000_000_000L
+        try {
+            val config = config()
+            val auth = AuthService(db, config, dir, { now })
+            auth.initialize()
+            val bootstrapToken = Files.readString(dir.resolve("bootstrap.token")).trim()
+            auth.bootstrap(
+                BootstrapRequestDto(
+                    bootstrapToken,
+                    "Admin",
+                    "a sufficiently long password",
+                    "Administrator",
+                ),
+                "127.0.0.1",
+            )
+            val user = assertNotNull(db.users().byNormalizedUsername("admin"))
+            val credentialId = byteArrayOf(4, 8, 15, 16, 23, 42)
+            db.credentials().upsertWebAuthn(
+                WebAuthnCredentialRow(
+                    credentialId = credentialId,
+                    userId = user.id,
+                    publicKeyCose = byteArrayOf(1),
+                    signCount = 10,
+                    transportsJson = "[]",
+                    backupEligible = true,
+                    backedUp = true,
+                    label = "Test passkey",
+                    createdAtMs = now,
+                    lastUsedAtMs = null,
+                ),
+            )
+            val verifiedCount = AtomicInteger()
+            val bothVerified = CompletableDeferred<Unit>()
+            val newerCommitted = CompletableDeferred<Unit>()
+            val verifier = object : WebAuthnAssertionVerifier {
+                override suspend fun verify(
+                    credentialJson: String,
+                    browserChallenge: String,
+                    userVerificationRequired: Boolean,
+                    credentialLookup: suspend (ByteArray) -> WebAuthnCredentialRow?,
+                ): VerifiedWebAuthnAssertion {
+                    val snapshot = assertNotNull(credentialLookup(credentialId))
+                    if (verifiedCount.incrementAndGet() == 2) bothVerified.complete(Unit)
+                    bothVerified.await()
+                    if (credentialJson == "older") newerCommitted.await()
+                    return VerifiedWebAuthnAssertion(
+                        credential = snapshot,
+                        userHandle = snapshot.userId.toByteArray(Charsets.UTF_8),
+                        signCount = if (credentialJson == "newer") 12 else 11,
+                        backupEligible = true,
+                        backedUp = true,
+                    )
+                }
+            }
+            val webAuthn = WebAuthnService(db, auth, config, verifier, { now })
+            val newerOptions = webAuthn.loginOptions(
+                WebAuthnLoginOptionsRequestDto(),
+                "192.0.2.10",
+            )
+            val olderOptions = webAuthn.loginOptions(
+                WebAuthnLoginOptionsRequestDto(),
+                "192.0.2.11",
+            )
+
+            supervisorScope {
+                val newer = async {
+                    webAuthn.completeLogin(
+                        WebAuthnLoginCompleteRequestDto(newerOptions.serverChallenge, "newer"),
+                        "192.0.2.10",
+                    ).also { newerCommitted.complete(Unit) }
+                }
+                val older = async {
+                    webAuthn.completeLogin(
+                        WebAuthnLoginCompleteRequestDto(olderOptions.serverChallenge, "older"),
+                        "192.0.2.11",
+                    )
+                }
+
+                assertEquals("AUTHENTICATED", newer.await().flow.status)
+                assertFailsWith<InvalidCredentialsException> { older.await() }
+            }
+            assertEquals(12, assertNotNull(db.credentials().webAuthnById(credentialId)).signCount)
         } finally {
             db.close()
             dir.toFile().deleteRecursively()

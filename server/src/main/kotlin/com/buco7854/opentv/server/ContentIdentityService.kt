@@ -8,21 +8,90 @@ import com.buco7854.opentv.core.storage.ChannelListing
 import com.buco7854.opentv.core.storage.Storage
 import com.buco7854.opentv.core.storage.XtreamSeriesListing
 import com.buco7854.opentv.serverdata.db.ContentIdentityRow
-import com.buco7854.opentv.serverdata.db.ServerUserDatabase
+import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
+import com.buco7854.opentv.serverdata.db.writeContentIdentityReconciliation
 import java.net.URI
 import java.security.MessageDigest
 import java.util.UUID
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 class ContentIdentityService(
-    private val db: ServerUserDatabase,
+    private val db: OpenTvServerDatabase,
     private val storage: Storage,
     private val loadChannels: suspend (List<Long>) -> List<Channel> = storage.channels::getMany,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private val reconciliation = Mutex()
+    private val catalogGatesGuard = Mutex()
+    private val catalogGates = mutableMapOf<Long, CatalogGate>()
+
+    /**
+     * Holds a shared catalog read across all storage and identity reads in one user-visible
+     * operation. Refreshes take the exclusive side, so the channel FK's temporary SET NULL
+     * state never escapes through an API response.
+     */
+    internal suspend fun <T> withStablePlaylist(
+        playlistId: Long,
+        block: suspend () -> T,
+    ): T = withCatalogAccess(playlistId, write = false, block)
+
+    /**
+     * Runs a catalog refresh and identity reconciliation as one application-level operation.
+     * SQLite still commits the streaming catalog batches independently, but readers of this
+     * service wait until their stable identities have been rebound.
+     */
+    suspend fun refreshPlaylist(
+        playlistId: Long,
+        refresh: suspend () -> Boolean,
+    ): Boolean = withCatalogAccess(playlistId, write = true) {
+        try {
+            refresh().also { refreshed ->
+                if (refreshed) reconcilePlaylistWhileStable(playlistId, retireMissing = true)
+            }
+        } catch (failure: Throwable) {
+            repairAfterFailedCatalogWrite(playlistId, failure)
+        }
+    }
+
+    /** Catalog updates always rewrite some part of the playlist and therefore always reconcile. */
+    suspend fun <T> updatePlaylist(
+        playlistId: Long,
+        update: suspend () -> T,
+    ): T = withCatalogAccess(playlistId, write = true) {
+        try {
+            update().also {
+                reconcilePlaylistWhileStable(playlistId, retireMissing = true)
+            }
+        } catch (failure: Throwable) {
+            repairAfterFailedCatalogWrite(playlistId, failure)
+        }
+    }
+
+    /** Repairs a catalog commit that may have outlived the process before reconciliation. */
+    suspend fun repairPlaylist(playlistId: Long) =
+        withCatalogAccess(playlistId, write = true) {
+            reconcilePlaylistWhileStable(playlistId, retireMissing = false)
+        }
+
+    /** Serializes a catalog mutation that does not rewrite identity-bearing rows. */
+    suspend fun <T> mutatePlaylist(
+        playlistId: Long,
+        mutation: suspend () -> T,
+    ): T = withCatalogAccess(playlistId, write = true, block = mutation)
+
+    /** Prevents a refresh from writing new catalog rows after playlist deletion cascades. */
+    suspend fun <T> deletePlaylist(
+        playlistId: Long,
+        delete: suspend () -> T,
+    ): T = mutatePlaylist(playlistId, delete)
 
     suspend fun channel(channel: Channel): ContentIdentityRow =
         channels(listOf(channel)).getValue(channel.id)
@@ -101,17 +170,22 @@ class ContentIdentityService(
 
     /** The identity alone. Prefer this over [resolve] when the channel is not needed: the
      *  channel lives in the other database, so resolving one is never free. */
-    suspend fun identity(contentId: String): ContentIdentityRow =
-        db.content().get(contentId) ?: throw ResourceNotFound("content")
+    suspend fun identity(contentId: String): ContentIdentityRow {
+        val observed = db.content().get(contentId) ?: throw ResourceNotFound("content")
+        return withStablePlaylist(observed.playlistId) {
+            db.content().get(contentId) ?: throw ResourceNotFound("content")
+        }
+    }
 
     /** Identities for a batch of ids, so a list endpoint reads them once rather than per row.
      *  Ids with no identity are absent from the result. */
     suspend fun identitiesByContentId(contentIds: Collection<String>): Map<String, ContentIdentityRow> {
         if (contentIds.isEmpty()) return emptyMap()
-        return contentIds.distinct()
-            .chunked(MAX_BOUND_VARIABLES)
-            .flatMap { db.content().byContentIds(it) }
-            .associateBy { it.contentId }
+        val ids = contentIds.distinct()
+        val observed = readIdentities(ids)
+        return withStablePlaylists(observed.values.map(ContentIdentityRow::playlistId)) {
+            readIdentities(ids)
+        }
     }
 
     /**
@@ -119,26 +193,33 @@ class ContentIdentityService(
      * one channel batch. Missing or retired content is deliberately absent from the result.
      */
     suspend fun titlesByContentId(contentIds: Collection<String>): Map<String, String> {
-        val identities = identitiesByContentId(contentIds)
-        if (identities.isEmpty()) return emptyMap()
-        val channels = loadChannels(
-            identities.values.filterNot(ContentIdentityRow::retired)
-                .mapNotNull { it.currentChannelId },
-        ).associateBy(Channel::id)
-        return identities.mapNotNull { (contentId, identity) ->
-            channels[identity.currentChannelId]
-                ?.takeIf { it.matches(identity) }
-                ?.let { contentId to it.name }
-        }.toMap()
+        val ids = contentIds.distinct()
+        if (ids.isEmpty()) return emptyMap()
+        val observed = readIdentities(ids)
+        return withStablePlaylists(observed.values.map(ContentIdentityRow::playlistId)) {
+            val identities = readIdentities(ids)
+            val channels = loadChannels(
+                identities.values.filterNot(ContentIdentityRow::retired)
+                    .mapNotNull { it.currentChannelId },
+            ).associateBy(Channel::id)
+            identities.mapNotNull { (contentId, identity) ->
+                channels[identity.currentChannelId]
+                    ?.takeIf { it.matches(identity) }
+                    ?.let { contentId to it.name }
+            }.toMap()
+        }
     }
 
     suspend fun resolve(contentId: String): Pair<ContentIdentityRow, Channel?> {
-        val identity = identity(contentId)
-        val channel = identity.currentChannelId
-            ?.takeUnless { identity.retired }
-            ?.let { storage.channels.get(it) }
-            ?.takeIf { it.matches(identity) }
-        return identity to channel
+        val observed = db.content().get(contentId) ?: throw ResourceNotFound("content")
+        return withStablePlaylist(observed.playlistId) {
+            val identity = db.content().get(contentId) ?: throw ResourceNotFound("content")
+            val channel = identity.currentChannelId
+                ?.takeUnless { identity.retired }
+                ?.let { storage.channels.get(it) }
+                ?.takeIf { it.matches(identity) }
+            identity to channel
+        }
     }
 
     suspend fun requireChannel(contentId: String): Pair<ContentIdentityRow, Channel> {
@@ -146,10 +227,16 @@ class ContentIdentityService(
         return identity to (channel ?: throw ResourceNotFound("content", "Content is unavailable"))
     }
 
-    suspend fun deletePlaylist(playlistId: Long) = db.content().deletePlaylist(playlistId)
-
     /** Reconcile a refreshed catalog while retaining missing identities as retired. */
-    suspend fun reconcilePlaylist(playlistId: Long) {
+    suspend fun reconcilePlaylist(playlistId: Long) =
+        withCatalogAccess(playlistId, write = true) {
+            reconcilePlaylistWhileStable(playlistId, retireMissing = true)
+        }
+
+    private suspend fun reconcilePlaylistWhileStable(
+        playlistId: Long,
+        retireMissing: Boolean,
+    ) {
         val observedAt = clock()
         val channels = mutableListOf<Channel>()
         listOf(ChannelKind.LIVE, ChannelKind.MOVIE, ChannelKind.SERIES).forEach { kind ->
@@ -178,17 +265,24 @@ class ContentIdentityService(
             val pending = linkedMapOf<IdentityKey, ContentIdentityRow>()
             channels.forEach { channel ->
                 val key = IdentityKey(channel.kind, channelFingerprint(channel))
-                pending[key] = existing[key]?.copy(
-                    currentChannelId = channel.id,
-                    lastSeenAtMs = seenAt,
-                    retired = false,
-                ) ?: newIdentity(playlistId, key, channel.id, seenAt)
+                pending[key] = existing[key]?.let { current ->
+                    current.copy(
+                        currentChannelId = channel.id,
+                        lastSeenAtMs = if (retireMissing) seenAt else current.lastSeenAtMs,
+                        retired = false,
+                    )
+                } ?: newIdentity(playlistId, key, channel.id, seenAt)
             }
             xtreamSeries.forEach { series ->
                 val key = xtreamSeriesKey(series.seriesId)
                 pending.putIfAbsent(
                     key,
-                    existing[key]?.copy(lastSeenAtMs = seenAt, retired = false)
+                    existing[key]?.let { current ->
+                        current.copy(
+                            lastSeenAtMs = if (retireMissing) seenAt else current.lastSeenAtMs,
+                            retired = false,
+                        )
+                    }
                         ?: newIdentity(playlistId, key, null, seenAt),
                 )
             }
@@ -196,15 +290,23 @@ class ContentIdentityService(
                 val key = m3uSeriesKey(series.seriesKey)
                 pending.putIfAbsent(
                     key,
-                    existing[key]?.copy(lastSeenAtMs = seenAt, retired = false)
+                    existing[key]?.let { current ->
+                        current.copy(
+                            lastSeenAtMs = if (retireMissing) seenAt else current.lastSeenAtMs,
+                            retired = false,
+                        )
+                    }
                         ?: newIdentity(playlistId, key, null, seenAt),
                 )
             }
             val inserts = pending.filterKeys { it !in existing }.values.toList()
             val updates = pending.filterKeys { it in existing }.values.toList()
-            if (inserts.isNotEmpty()) db.content().insertAll(inserts)
-            if (updates.isNotEmpty()) db.content().updateAll(updates)
-            db.content().retireNotSeen(playlistId, seenAt)
+            db.writeContentIdentityReconciliation(
+                inserts,
+                updates,
+                playlistId,
+                seenAt.takeIf { retireMissing },
+            )
         }
     }
 
@@ -212,12 +314,12 @@ class ContentIdentityService(
         playlistId: Long,
         keys: List<IdentityKey>,
         channelIdFor: (IdentityKey) -> Long? = { null },
-    ): Map<IdentityKey, ContentIdentityRow> {
+    ): Map<IdentityKey, ContentIdentityRow> = withStablePlaylist(playlistId) {
         val wanted = keys.distinct()
-        if (wanted.isEmpty()) return emptyMap()
+        if (wanted.isEmpty()) return@withStablePlaylist emptyMap()
         val known = lookup(playlistId, wanted)
         val missing = wanted.filterNot { it in known }
-        if (missing.isEmpty()) return known
+        if (missing.isEmpty()) return@withStablePlaylist known
         val now = clock()
         val created = reconciliation.withLock {
             db.content().insertAll(
@@ -225,7 +327,70 @@ class ContentIdentityService(
             )
             lookup(playlistId, missing)
         }
-        return known + created
+        known + created
+    }
+
+    private suspend fun readIdentities(
+        contentIds: List<String>,
+    ): Map<String, ContentIdentityRow> =
+        contentIds.chunked(MAX_BOUND_VARIABLES)
+            .flatMap { db.content().byContentIds(it) }
+            .associateBy(ContentIdentityRow::contentId)
+
+    private suspend fun <T> withStablePlaylists(
+        playlistIds: Collection<Long>,
+        block: suspend () -> T,
+    ): T {
+        suspend fun acquire(ids: List<Long>, index: Int): T =
+            if (index == ids.size) {
+                block()
+            } else {
+                withStablePlaylist(ids[index]) { acquire(ids, index + 1) }
+            }
+        return acquire(playlistIds.distinct().sorted(), 0)
+    }
+
+    private suspend fun repairAfterFailedCatalogWrite(
+        playlistId: Long,
+        failure: Throwable,
+    ): Nothing {
+        try {
+            withContext(NonCancellable) {
+                // Bind whatever the failed streaming refresh managed to commit, but do not
+                // interpret absent rows in a partial response as provider-confirmed retirement.
+                reconcilePlaylistWhileStable(playlistId, retireMissing = false)
+            }
+        } catch (repairFailure: Throwable) {
+            failure.addSuppressed(repairFailure)
+        }
+        throw failure
+    }
+
+    private suspend fun <T> withCatalogAccess(
+        playlistId: Long,
+        write: Boolean,
+        block: suspend () -> T,
+    ): T {
+        val held = coroutineContext[CatalogAccess]
+        if (playlistId in held?.writes.orEmpty() ||
+            (!write && playlistId in held?.reads.orEmpty())
+        ) {
+            return block()
+        }
+        check(!write || playlistId !in held?.reads.orEmpty()) {
+            "Cannot upgrade a stable catalog read to a write"
+        }
+        val gate = catalogGatesGuard.withLock {
+            catalogGates.getOrPut(playlistId, ::CatalogGate)
+        }
+        val access = CatalogAccess(
+            reads = held?.reads.orEmpty() + playlistId,
+            writes = held?.writes.orEmpty() + if (write) setOf(playlistId) else emptySet(),
+        )
+        val guarded = suspend {
+            withContext(access) { block() }
+        }
+        return if (write) gate.write(guarded) else gate.read(guarded)
     }
 
     private suspend fun lookup(
@@ -301,5 +466,80 @@ class ContentIdentityService(
 
     private companion object {
         const val MAX_BOUND_VARIABLES = 500
+    }
+}
+
+private class CatalogAccess(
+    val reads: Set<Long>,
+    val writes: Set<Long>,
+) : AbstractCoroutineContextElement(CatalogAccess) {
+    companion object Key : CoroutineContext.Key<CatalogAccess>
+}
+
+/**
+ * Coroutine-friendly per-playlist read/write gate. Readers remain concurrent; a queued writer
+ * prevents new readers and waits for the readers already inside, avoiding refresh starvation.
+ */
+private class CatalogGate {
+    private val state = Mutex()
+    private var readers = 0
+    private var readersDrained = completedSignal()
+    private var writer: CompletableDeferred<Unit>? = null
+
+    suspend fun <T> read(block: suspend () -> T): T {
+        while (true) {
+            val activeWriter = state.withLock {
+                writer?.let { return@withLock it }
+                if (readers == 0) readersDrained = CompletableDeferred()
+                readers++
+                null
+            }
+            if (activeWriter == null) break
+            activeWriter.await()
+        }
+        try {
+            return block()
+        } finally {
+            state.withLock {
+                readers--
+                check(readers >= 0)
+                if (readers == 0) readersDrained.complete(Unit)
+            }
+        }
+    }
+
+    suspend fun <T> write(block: suspend () -> T): T {
+        val completion = CompletableDeferred<Unit>()
+        var ownsWriterSlot = false
+        try {
+            while (true) {
+                var readersToDrain: CompletableDeferred<Unit>? = null
+                val activeWriter = state.withLock {
+                    writer?.let { return@withLock it }
+                    writer = completion
+                    ownsWriterSlot = true
+                    readersToDrain = readersDrained.takeIf { readers > 0 }
+                    null
+                }
+                if (activeWriter == null) {
+                    readersToDrain?.await()
+                    break
+                }
+                activeWriter.await()
+            }
+            return block()
+        } finally {
+            if (ownsWriterSlot) {
+                state.withLock {
+                    check(writer === completion)
+                    writer = null
+                    completion.complete(Unit)
+                }
+            }
+        }
+    }
+
+    private companion object {
+        fun completedSignal() = CompletableDeferred<Unit>().also { it.complete(Unit) }
     }
 }

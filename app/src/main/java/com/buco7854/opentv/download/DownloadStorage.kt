@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Environment
 import android.os.ParcelFileDescriptor
+import android.provider.DocumentsContract
 import android.webkit.MimeTypeMap
 import androidx.documentfile.provider.DocumentFile
 import com.buco7854.opentv.diag.ErrorLog
@@ -31,10 +32,8 @@ object DownloadStorage {
         else -> File(path).takeIf { it.exists() }?.length() ?: 0L
     }
 
-    fun delete(context: Context, path: String) {
-        if (path.isEmpty()) return
+    fun delete(context: Context, path: String): Boolean =
         deleteConfirmed(context, path)
-    }
 
     /** URI string ExoPlayer can play directly. */
     fun playableUri(path: String): String =
@@ -206,11 +205,36 @@ object DownloadStorage {
         if (path.isEmpty()) return true
         return runCatching {
             if (isContentUri(path)) {
-                DocumentFile.fromSingleUri(context, Uri.parse(path))?.delete() == true
+                val uri = Uri.parse(path)
+                runCatching {
+                    context.contentResolver.delete(uri, null, null) > 0
+                }.getOrDefault(false) ||
+                    documentPresence(context, uri) == DocumentPresence.ABSENT
             } else {
                 val file = File(path)
                 !file.exists() || file.delete()
             }
         }.getOrDefault(false)
+    }
+
+    private fun documentPresence(context: Context, uri: Uri): DocumentPresence =
+        try {
+            context.contentResolver.query(
+                uri,
+                arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) DocumentPresence.PRESENT else DocumentPresence.ABSENT
+            } ?: DocumentPresence.UNKNOWN
+        } catch (_: Exception) {
+            DocumentPresence.UNKNOWN
+        }
+
+    private enum class DocumentPresence {
+        PRESENT,
+        ABSENT,
+        UNKNOWN,
     }
 }

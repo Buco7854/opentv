@@ -3,6 +3,8 @@ package com.buco7854.opentv.serverdata.db
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
+import com.buco7854.opentv.data.db.ChannelRow
+import com.buco7854.opentv.data.db.PlaylistRow
 
 @Entity(
     tableName = "users",
@@ -197,18 +199,36 @@ data class AuthChallengeRow(
     val consumedAtMs: Long?,
 )
 
-@Entity(tableName = "default_playlist_template", primaryKeys = ["playlistId"])
+@Entity(
+    tableName = "default_playlist_template",
+    primaryKeys = ["playlistId"],
+    foreignKeys = [ForeignKey(
+        entity = PlaylistRow::class,
+        parentColumns = ["id"],
+        childColumns = ["playlistId"],
+        onDelete = ForeignKey.CASCADE,
+    )],
+)
 data class DefaultPlaylistRow(val playlistId: Long)
 
 @Entity(
     tableName = "user_playlist_grants",
     primaryKeys = ["userId", "playlistId"],
-    foreignKeys = [ForeignKey(
-        entity = UserRow::class,
-        parentColumns = ["id"],
-        childColumns = ["userId"],
-        onDelete = ForeignKey.CASCADE,
-    )],
+    indices = [Index("playlistId")],
+    foreignKeys = [
+        ForeignKey(
+            entity = UserRow::class,
+            parentColumns = ["id"],
+            childColumns = ["userId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+        ForeignKey(
+            entity = PlaylistRow::class,
+            parentColumns = ["id"],
+            childColumns = ["playlistId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
 )
 data class UserPlaylistGrantRow(
     val userId: String,
@@ -222,6 +242,20 @@ data class UserPlaylistGrantRow(
     indices = [
         Index(value = ["playlistId", "kind", "providerFingerprint"], unique = true),
         Index("currentChannelId"),
+    ],
+    foreignKeys = [
+        ForeignKey(
+            entity = PlaylistRow::class,
+            parentColumns = ["id"],
+            childColumns = ["playlistId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+        ForeignKey(
+            entity = ChannelRow::class,
+            parentColumns = ["id"],
+            childColumns = ["currentChannelId"],
+            onDelete = ForeignKey.SET_NULL,
+        ),
     ],
 )
 data class ContentIdentityRow(

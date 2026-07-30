@@ -10,7 +10,7 @@ import androidx.sqlite.execSQL
  * The catalog tables are external content; these triggers make every refresh atomic with its
  * search-index update.
  */
-internal val SEARCH_INDEX_CALLBACK = object : RoomDatabase.Callback() {
+val SEARCH_INDEX_CALLBACK = object : RoomDatabase.Callback() {
     override fun onCreate(connection: SQLiteConnection) {
         ensureSearchIndexSchema(connection)
     }

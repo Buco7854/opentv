@@ -26,7 +26,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
@@ -59,7 +58,6 @@ import kotlinx.coroutines.launch
 fun HubSettingsScreen(hubId: Long, onBack: () -> Unit, onRemoved: () -> Unit) {
     val graph = OpenTvApp.graph
     val accounts = graph.hubAccounts
-    val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val handoff = remember(context) { HubBrowserHandoff(context) }
     val backFocusRequester = remember { FocusRequester() }
@@ -101,7 +99,10 @@ fun HubSettingsScreen(hubId: Long, onBack: () -> Unit, onRemoved: () -> Unit) {
                             .focusRequester(backFocusRequester)
                             .focusHighlight(),
                     ) {
-                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = null)
+                        Icon(
+                            Icons.AutoMirrored.Outlined.ArrowBack,
+                            contentDescription = stringResource(R.string.common_back),
+                        )
                     }
                 },
             )
@@ -195,7 +196,13 @@ fun HubSettingsScreen(hubId: Long, onBack: () -> Unit, onRemoved: () -> Unit) {
 
             HorizontalDivider()
             OtvTextButton(
-                onClick = { scope.launch { accounts.signOut(hubId) } },
+                // Nothing on this screen reflects an ended session, and the sign-out
+                // itself must outlive the composition: leaving would otherwise cancel
+                // the logout before the local token is forgotten.
+                onClick = {
+                    graph.applicationScope.launch { accounts.signOut(hubId) }
+                    onBack()
+                },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text(stringResource(R.string.hub_sign_out)) }
             OtvTextButton(
@@ -224,10 +231,10 @@ fun HubSettingsScreen(hubId: Long, onBack: () -> Unit, onRemoved: () -> Unit) {
                 OtvTextButton(
                     onClick = {
                         confirmRemove = false
-                        scope.launch {
-                            accounts.remove(hubId)
-                            onRemoved()
-                        }
+                        // Removal ends with the same HTTP logout, so it runs where a
+                        // navigation cannot cancel it half-done.
+                        graph.applicationScope.launch { accounts.remove(hubId) }
+                        onRemoved()
                     },
                     danger = true,
                 ) { Text(stringResource(R.string.hub_remove)) }

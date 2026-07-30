@@ -33,6 +33,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -102,7 +103,7 @@ fun LogScreen(onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             items(entries, key = { it.id }) { entry ->
-                var expanded by remember { mutableStateOf(false) }
+                var expanded by rememberSaveable { mutableStateOf(false) }
                 Card(
                     onClick = { expanded = !expanded },
                     shape = RoundedCornerShape(16.dp),

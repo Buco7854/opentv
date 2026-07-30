@@ -1,13 +1,21 @@
 package com.buco7854.opentv.download
 
 import android.app.Application
+import android.content.ContentProvider
+import android.content.ContentValues
 import android.content.Context
+import android.database.Cursor
+import android.database.MatrixCursor
+import android.net.Uri
 import android.os.Environment
+import android.provider.DocumentsContract
 import androidx.test.core.app.ApplicationProvider
+import com.buco7854.opentv.R
 import com.buco7854.opentv.core.download.DownloadFileName
 import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.model.Download
+import com.buco7854.opentv.core.model.DownloadStatus
 import com.buco7854.opentv.core.storage.DownloadStore
 import com.buco7854.opentv.data.prefs.PlayerPrefs
 import kotlinx.coroutines.CoroutineScope
@@ -17,11 +25,16 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.File
+import java.io.FileNotFoundException
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class)
@@ -79,6 +92,185 @@ class DownloadRepositoryTest {
             stale.delete()
         }
     }
+
+    @Test
+    fun `retry after revoked capability truncates the old partial before replacement`() =
+        runBlocking {
+            val context = ApplicationProvider.getApplicationContext<Context>()
+            val store = RepositoryDownloadStore()
+            val scheduler = RepositoryScheduler()
+            val scope = CoroutineScope(SupervisorJob())
+            val preferences = HubDownloadPreferences(
+                context.getSharedPreferences("repository-revoked-test", Context.MODE_PRIVATE),
+            )
+            val coordinator = HubDownloadCoordinator(
+                store,
+                UnusedHubRemote,
+                scheduler,
+                preferences,
+                scope,
+            )
+            val repository = DownloadRepository(
+                context,
+                store,
+                PlayerPrefs(context),
+                scheduler,
+                coordinator,
+            )
+            val partial = File(context.cacheDir, "revoked-partial-${System.nanoTime()}.mp4")
+            partial.writeText("partial bytes from the revoked session")
+            val id = store.insert(
+                Download(
+                    title = "Movie",
+                    url = "https://hub.invalid/api/v1/downloads/server-1/file?token=revoked",
+                    filePath = partial.absolutePath,
+                    status = DownloadStatus.HUB_GONE,
+                    totalBytes = 100,
+                    downloadedBytes = partial.length(),
+                    hubSourceId = 4,
+                    contentId = "content-1",
+                    serverDownloadId = "server-1",
+                ),
+            )
+
+            try {
+                var failedAfterPreparation = false
+                try {
+                    repository.retry(requireNotNull(store.get(id)))
+                } catch (_: IllegalStateException) {
+                    failedAfterPreparation = true
+                }
+
+                assertTrue(failedAfterPreparation)
+                assertEquals(0L, partial.length())
+                assertEquals(DownloadStatus.PREPARING, store.get(id)?.status)
+                assertEquals(null, store.get(id)?.serverDownloadId)
+                assertEquals(listOf(id), scheduler.preparations)
+            } finally {
+                scope.cancel()
+                partial.delete()
+            }
+        }
+
+    @Test
+    fun `delete keeps row when document provider refuses physical deletion`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        Robolectric.setupContentProvider(
+            DeleteOutcomeProvider::class.java,
+            "downloads-delete-refused",
+        )
+        val fixture = deleteFixture(context, "repository-delete-test")
+        val id = fixture.store.insert(
+            Download(
+                title = "Refused",
+                url = "https://provider.invalid/refused.mp4",
+                filePath = "content://downloads-delete-refused/document/refused",
+                status = DownloadStatus.DONE,
+            ),
+        )
+
+        try {
+            val result = fixture.repository.delete(requireNotNull(fixture.store.get(id)))
+
+            assertEquals(context.getString(R.string.downloads_delete_failed), result)
+            assertNotNull(fixture.store.get(id))
+        } finally {
+            fixture.scope.cancel()
+        }
+    }
+
+    @Test
+    fun `delete removes row when provider confirms document is already gone`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        Robolectric.setupContentProvider(
+            DeleteOutcomeProvider::class.java,
+            "downloads-delete-missing",
+        )
+        val fixture = deleteFixture(context, "repository-delete-missing-test")
+        val id = fixture.store.insert(
+            Download(
+                title = "Already gone",
+                url = "https://provider.invalid/gone.mp4",
+                filePath = "content://downloads-delete-missing/document/gone",
+                status = DownloadStatus.DONE,
+            ),
+        )
+
+        try {
+            val result = fixture.repository.delete(requireNotNull(fixture.store.get(id)))
+
+            assertNull(result)
+            assertNull(fixture.store.get(id))
+        } finally {
+            fixture.scope.cancel()
+        }
+    }
+
+    private fun deleteFixture(context: Context, preferencesName: String): DeleteFixture {
+        val store = RepositoryDownloadStore()
+        val scheduler = RepositoryScheduler()
+        val scope = CoroutineScope(SupervisorJob())
+        val coordinator = HubDownloadCoordinator(
+            store,
+            UnusedHubRemote,
+            scheduler,
+            HubDownloadPreferences(
+                context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE),
+            ),
+            scope,
+        )
+        return DeleteFixture(
+            DownloadRepository(context, store, PlayerPrefs(context), scheduler, coordinator),
+            store,
+            scope,
+        )
+    }
+}
+
+private data class DeleteFixture(
+    val repository: DownloadRepository,
+    val store: RepositoryDownloadStore,
+    val scope: CoroutineScope,
+)
+
+private class DeleteOutcomeProvider : ContentProvider() {
+    override fun onCreate() = true
+
+    override fun query(
+        uri: Uri,
+        projection: Array<out String>?,
+        selection: String?,
+        selectionArgs: Array<out String>?,
+        sortOrder: String?,
+    ): Cursor {
+        val columns = projection ?: arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+        return MatrixCursor(columns).apply {
+            if (uri.lastPathSegment != "gone") {
+                addRow(columns.map { column ->
+                    when (column) {
+                        DocumentsContract.Document.COLUMN_DOCUMENT_ID -> "refused"
+                        else -> null
+                    }
+                })
+            }
+        }
+    }
+
+    override fun getType(uri: Uri) = "video/mp4"
+
+    override fun insert(uri: Uri, values: ContentValues?): Uri? = null
+
+    override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int {
+        if (uri.lastPathSegment == "gone") throw FileNotFoundException()
+        return 0
+    }
+
+    override fun update(
+        uri: Uri,
+        values: ContentValues?,
+        selection: String?,
+        selectionArgs: Array<out String>?,
+    ) = 0
 }
 
 private class RepositoryDownloadStore : DownloadStore {
@@ -133,10 +325,13 @@ private class RepositoryDownloadStore : DownloadStore {
 
 private class RepositoryScheduler : DownloadScheduler {
     val enqueued = mutableListOf<Long>()
+    val preparations = mutableListOf<Long>()
     override fun enqueue(downloadId: Long) {
         enqueued += downloadId
     }
-    override fun enqueuePreparation(downloadId: Long) = Unit
+    override fun enqueuePreparation(downloadId: Long) {
+        preparations += downloadId
+    }
     override fun cancel(downloadId: Long) = Unit
 }
 

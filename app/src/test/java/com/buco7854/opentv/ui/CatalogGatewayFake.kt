@@ -42,6 +42,8 @@ internal class CatalogGatewayFake(
     var guideBlock: suspend (ContentRef) -> CatalogResult<List<CatalogGuideEntry>> = {
         CatalogResult.Success(emptyList())
     }
+    var nowAiringResult: CatalogResult<Map<String, CatalogProgramme>> =
+        CatalogResult.Success(emptyMap())
     val channelRequests = mutableListOf<Pair<Int, Int>>()
 
     override suspend fun groups(kind: Int) = groupsBlock(kind)
@@ -80,8 +82,7 @@ internal class CatalogGatewayFake(
 
     override suspend fun search(query: String) = searchBlock(query)
 
-    override suspend fun nowAiring() =
-        CatalogResult.Success<Map<String, CatalogProgramme>>(emptyMap())
+    override suspend fun nowAiring() = nowAiringResult
 
     override suspend fun guideIds() = CatalogResult.Success<Set<String>>(emptySet())
 

@@ -2,10 +2,11 @@ package com.buco7854.opentv.server
 
 import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.core.model.ChannelKind
+import com.buco7854.opentv.data.db.PlaylistRow
 import com.buco7854.opentv.serverdata.DownloadBlobStatus
 import com.buco7854.opentv.serverdata.UserRole
 import com.buco7854.opentv.serverdata.UserStatus
-import com.buco7854.opentv.serverdata.createServerUserDatabase
+import com.buco7854.opentv.serverdata.createOpenTvServerDatabase
 import com.buco7854.opentv.serverdata.db.ContentIdentityRow
 import com.buco7854.opentv.serverdata.db.DownloadBlobRow
 import com.buco7854.opentv.serverdata.db.UserDownloadRow
@@ -149,7 +150,7 @@ class DownloadManagerTransferTest {
 
     private class Fixture {
         private val dir = Files.createTempDirectory("download-manager-transfer")
-        private val db = createServerUserDatabase(dir.resolve("users.db").toString())
+        private val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
         val server: HttpServer = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         val manager = DownloadManager(
             db = db,
@@ -159,11 +160,14 @@ class DownloadManagerTransferTest {
             connections = ProviderConnections(),
             connectionLimit = { Int.MAX_VALUE },
         )
-        val identity = ContentIdentityRow("content-1", 1, ChannelKind.MOVIE, "opaque", 1, 1, false)
+        val identity = ContentIdentityRow(
+            "content-1", 1, ChannelKind.MOVIE, "opaque", null, 1, false,
+        )
         val downloadPath = dir.resolve("user-downloads/movie.bin")
 
         init {
             runBlocking {
+                db.playlistDao().insert(PlaylistRow(id = 1, name = "Provider", url = null))
                 db.users().insert(
                     UserRow(
                         id = "owner",

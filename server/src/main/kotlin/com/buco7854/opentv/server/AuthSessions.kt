@@ -5,13 +5,13 @@ import com.buco7854.opentv.serverdata.ClientKind
 import com.buco7854.opentv.serverdata.UserRole
 import com.buco7854.opentv.serverdata.UserStatus
 import com.buco7854.opentv.serverdata.db.AuthSessionRow
-import com.buco7854.opentv.serverdata.db.ServerUserDatabase
+import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
 import com.buco7854.opentv.serverdata.db.UserRow
 import java.util.UUID
 
 /** Persistent, revocable session storage independent from HTTP delivery. */
 internal class PersistentSessionService(
-    private val db: ServerUserDatabase,
+    private val db: OpenTvServerDatabase,
     private val config: AuthConfig,
     private val cleanup: UserStateCleanupCoordinator,
     private val clock: () -> Long,

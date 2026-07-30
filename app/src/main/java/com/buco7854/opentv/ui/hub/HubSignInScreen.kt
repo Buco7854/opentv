@@ -54,6 +54,7 @@ import com.buco7854.opentv.hub.ApiHubAuthGateway
 import com.buco7854.opentv.hub.HubEndpoints
 import com.buco7854.opentv.hub.DeviceLinkMode
 import com.buco7854.opentv.hub.DeviceLinkPhase
+import com.buco7854.opentv.hub.HubSignInFailure
 import com.buco7854.opentv.hub.HubSignInState
 import com.buco7854.opentv.hub.HubSignInViewModel
 import com.buco7854.opentv.hub.RegistryHubSignInSink
@@ -121,7 +122,10 @@ fun HubSignInScreen(hubId: Long?, onDone: (Long) -> Unit, onBack: () -> Unit) {
                             .focusRequester(backFocusRequester)
                             .focusHighlight(),
                     ) {
-                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = null)
+                        Icon(
+                            Icons.AutoMirrored.Outlined.ArrowBack,
+                            contentDescription = stringResource(R.string.common_back),
+                        )
                     }
                 },
             )
@@ -150,7 +154,7 @@ fun HubSignInScreen(hubId: Long?, onDone: (Long) -> Unit, onBack: () -> Unit) {
                                 viewModel::probe,
                             )
                         } else {
-                            RetryStep(current.error, viewModel::retryKnownHub)
+                            RetryStep(failureMessage(current.error), viewModel::retryKnownHub)
                         }
 
                     is HubSignInState.UpdateRequired -> MessageStep(stringResource(R.string.hub_app_too_old))
@@ -189,7 +193,7 @@ private fun UrlEntryStep(state: HubSignInState.UrlEntry, onSubmit: (String) -> U
         placeholder = { Text(stringResource(R.string.hub_field_url_hint)) },
         singleLine = true,
         isError = state.error != null,
-        supportingText = state.error?.let { { Text(it) } },
+        supportingText = state.error?.let { { Text(failureMessage(it)) } },
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
         keyboardActions = KeyboardActions(
             onGo = { if (url.isNotBlank()) onSubmit(url) },
@@ -206,7 +210,7 @@ private fun UrlEntryStep(state: HubSignInState.UrlEntry, onSubmit: (String) -> U
 @Composable
 private fun MethodChooserStep(state: HubSignInState.MethodChooser, viewModel: HubSignInViewModel) {
     Text(stringResource(R.string.hub_choose_method), style = MaterialTheme.typography.titleMedium)
-    state.error?.let { ErrorText(it) }
+    state.error?.let { ErrorText(failureMessage(it)) }
     if (state.passwordAvailable) {
         OtvButton(onClick = viewModel::selectPassword, modifier = Modifier.fillMaxWidth()) {
             Text(stringResource(R.string.hub_method_password))
@@ -243,7 +247,7 @@ private fun PasswordStep(state: HubSignInState.Password, onSubmit: (String, Stri
     // disk by the system, and a password must not outlive the composition.
     var password by remember { mutableStateOf("") }
     val focusManager = LocalFocusManager.current
-    state.error?.let { ErrorText(it) }
+    state.error?.let { ErrorText(failureMessage(it)) }
     OutlinedTextField(
         value = username,
         onValueChange = { username = it },
@@ -289,7 +293,7 @@ private fun MfaStep(state: HubSignInState.MfaChallenge, viewModel: HubSignInView
         stringResource(if (useRecovery) R.string.hub_recovery_subtitle else R.string.hub_mfa_subtitle),
         style = MaterialTheme.typography.bodyMedium,
     )
-    state.error?.let { ErrorText(it) }
+    state.error?.let { ErrorText(failureMessage(it)) }
     OutlinedTextField(
         value = code,
         onValueChange = { code = it },
@@ -341,7 +345,7 @@ private fun ColumnScope.EnrollmentStep(state: HubSignInState.TotpEnrollment, onS
         fontFamily = FontFamily.Monospace,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    state.error?.let { ErrorText(it) }
+    state.error?.let { ErrorText(failureMessage(it)) }
     OutlinedTextField(
         value = code,
         onValueChange = { code = it },
@@ -404,7 +408,7 @@ private fun ColumnScope.DeviceLinkStep(state: HubSignInState.DeviceLink, hubBase
         textAlign = TextAlign.Center,
         modifier = Modifier.fillMaxWidth(),
     )
-    state.error?.let { ErrorText(it) }
+    state.error?.let { ErrorText(failureMessage(it)) }
     if (rejected) ErrorText(stringResource(R.string.hub_handoff_rejected))
     if (handoff.hasBrowser()) {
         // Approving on this very device is only sensible where a browser exists.
@@ -454,6 +458,24 @@ private fun MessageStep(message: String) {
 private fun ErrorText(message: String) {
     Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
 }
+
+/** The state machine names the failure; the words live here, in both locales. */
+@Composable
+private fun failureMessage(failure: HubSignInFailure): String = stringResource(
+    when (failure) {
+        HubSignInFailure.ADDRESS_REQUIRED -> R.string.hub_enter_address
+        HubSignInFailure.NOT_OPENTV -> R.string.hub_not_opentv
+        HubSignInFailure.UNREACHABLE -> R.string.hub_unreachable
+        HubSignInFailure.BAD_CREDENTIALS -> R.string.hub_bad_credentials
+        HubSignInFailure.BAD_CODE -> R.string.hub_mfa_rejected
+        HubSignInFailure.TOO_MANY_ATTEMPTS -> R.string.hub_too_many_attempts
+        HubSignInFailure.STEP_UNSUPPORTED -> R.string.hub_step_unsupported
+        HubSignInFailure.REQUEST_FAILED -> R.string.hub_request_failed
+        HubSignInFailure.UNEXPECTED_RESPONSE -> R.string.hub_server_unexpected_response
+        HubSignInFailure.NOT_SAVED -> R.string.hub_sign_in_not_saved
+        HubSignInFailure.GENERIC -> R.string.hub_generic_failure
+    },
+)
 
 internal fun isHubSignInRoot(state: HubSignInState, reauthenticating: Boolean): Boolean =
     state is HubSignInState.UrlEntry ||

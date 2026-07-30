@@ -140,9 +140,11 @@ class ResourceDtoTest {
             isTrial = false,
             createdAtMs = null,
             timezone = null,
-        ).toDto()
+        ).toDto(fetchedAtMs = 123, stale = true)
 
         assertTrue(providerUsername !in Json.encodeToString(AccountInfoDto.serializer(), dto))
+        assertEquals(123, dto.fetchedAtMs)
+        assertTrue(dto.stale)
     }
 
     @Test
@@ -172,10 +174,11 @@ class ResourceDtoTest {
             Base64.getEncoder().encodeToString(ByteArray(32) { it.toByte() }),
             clock = { now },
         )
-        val token = expiringCipher.encryptDownloadFile("user-1", "download-1")
+        val token = expiringCipher.encryptDownloadFile("user-1", "session-1", "download-1")
 
         val capability = expiringCipher.tryDecryptDownloadFile(token.token)
         assertEquals("user-1", capability?.userId)
+        assertEquals("session-1", capability?.authSessionId)
         assertEquals("download-1", capability?.downloadId)
         assertNull(expiringCipher.tryDecryptImage(token.token))
         assertNull(expiringCipher.tryDecryptStream(token.token))
@@ -188,7 +191,7 @@ class ResourceDtoTest {
         val stream = cipher.encryptStream("https://provider.example/live.ts", "lease-1")
         val image = cipher.encryptImage("https://provider.example/poster.jpg", "user-1")
         val socket = cipher.encryptWebSocket("session-1", "lease-1").token
-        val file = cipher.encryptDownloadFile("user-1", "download-1").token
+        val file = cipher.encryptDownloadFile("user-1", "session-1", "download-1").token
 
         assertTrue(cipher.tryDecryptStream(stream) != null)
         assertTrue(cipher.tryDecryptImage(image) != null)

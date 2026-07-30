@@ -29,6 +29,7 @@ data class WebSocketCapability(
 
 data class DownloadFileCapability(
     val userId: String,
+    val authSessionId: String,
     val downloadId: String,
     val expiresAtMs: Long,
 )
@@ -83,7 +84,9 @@ class StreamCipher(
     }
 
     fun encryptImage(url: String, userId: String, playlistId: Long? = null): String {
-        require(userId.isNotBlank() && userId.length <= 128) { "Invalid image capability user" }
+        require(userId.isNotBlank() && userId.length <= 128 && '\n' !in userId) {
+            "Invalid image capability user"
+        }
         val expiresAtMs = clock() + IMAGE_CAPABILITY_TTL_MS
         return encryptValue(
             'i',
@@ -93,10 +96,10 @@ class StreamCipher(
     }
 
     fun encryptWebSocket(sessionId: String, leaseId: String): WebSocketCapabilityToken {
-        require(sessionId.isNotBlank() && sessionId.length <= 128) {
+        require(sessionId.isNotBlank() && sessionId.length <= 128 && '\n' !in sessionId) {
             "Invalid WebSocket session"
         }
-        require(leaseId.isNotBlank() && leaseId.length <= 128) {
+        require(leaseId.isNotBlank() && leaseId.length <= 128 && '\n' !in leaseId) {
             "Invalid WebSocket lease"
         }
         val expiresAtMs = clock() + WEB_SOCKET_CAPABILITY_TTL_MS
@@ -106,25 +109,40 @@ class StreamCipher(
         )
     }
 
-    fun encryptDownloadFile(userId: String, downloadId: String): DownloadFileCapabilityToken {
+    fun encryptDownloadFile(
+        userId: String,
+        authSessionId: String,
+        downloadId: String,
+    ): DownloadFileCapabilityToken {
         require(userId.isNotBlank() && userId.length <= 128) { "Invalid download owner" }
+        require(authSessionId.isNotBlank() && authSessionId.length <= 128) {
+            "Invalid download session"
+        }
         require(downloadId.isNotBlank() && downloadId.length <= 128) { "Invalid download id" }
+        require('\n' !in userId && '\n' !in authSessionId && '\n' !in downloadId) {
+            "Invalid download capability field"
+        }
         val expiresAtMs = clock() + DOWNLOAD_FILE_CAPABILITY_TTL_MS
         return DownloadFileCapabilityToken(
-            encryptValue('f', "$expiresAtMs\n$userId\n$downloadId", DOWNLOAD_FILE_PURPOSE),
+            encryptValue(
+                'f',
+                "$expiresAtMs\n$userId\n$authSessionId\n$downloadId",
+                DOWNLOAD_FILE_PURPOSE,
+            ),
             expiresAtMs,
         )
     }
 
     private fun encryptValue(tag: Char, value: String, purpose: ByteArray): String {
         val plain = value.toByteArray()
+        val domain = purpose + byteArrayOf(0, tag.code.toByte())
         val nonce = Mac.getInstance("HmacSHA256").run {
             init(SecretKeySpec(macKey, "HmacSHA256"))
-            doFinal(purpose + plain).copyOf(12)
+            doFinal(domain + plain).copyOf(12)
         }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
             init(Cipher.ENCRYPT_MODE, encKey, GCMParameterSpec(128, nonce))
-            updateAAD(purpose)
+            updateAAD(domain)
         }
         val body = nonce + cipher.doFinal(plain)
         return "$tag.${Base64.getUrlEncoder().withoutPadding().encodeToString(body)}"
@@ -170,10 +188,12 @@ class StreamCipher(
 
     fun tryDecryptDownloadFile(token: String): DownloadFileCapability? {
         val fields = decryptExpiringFields(token, 'f', DOWNLOAD_FILE_PURPOSE) ?: return null
-        if (fields.size != 3) return null
+        if (fields.size != 4) return null
         val userId = fields[1].takeIf { it.isNotBlank() && it.length <= 128 } ?: return null
-        val downloadId = fields[2].takeIf { it.isNotBlank() && it.length <= 128 } ?: return null
-        return DownloadFileCapability(userId, downloadId, fields[0].toLong())
+        val authSessionId =
+            fields[2].takeIf { it.isNotBlank() && it.length <= 128 } ?: return null
+        val downloadId = fields[3].takeIf { it.isNotBlank() && it.length <= 128 } ?: return null
+        return DownloadFileCapability(userId, authSessionId, downloadId, fields[0].toLong())
     }
 
     private fun decryptExpiringFields(
@@ -196,7 +216,7 @@ class StreamCipher(
             val nonce = body.copyOfRange(0, 12)
             val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
                 init(Cipher.DECRYPT_MODE, encKey, GCMParameterSpec(128, nonce))
-                updateAAD(purpose)
+                updateAAD(purpose + byteArrayOf(0, token[0].code.toByte()))
             }
             String(cipher.doFinal(body.copyOfRange(12, body.size)))
         }.getOrNull()
@@ -210,7 +230,7 @@ class StreamCipher(
         val STREAM_PURPOSE = "opentv-stream-v3".toByteArray()
         val IMAGE_PURPOSE = "opentv-image-v1".toByteArray()
         val WEB_SOCKET_PURPOSE = "opentv-websocket-v1".toByteArray()
-        val DOWNLOAD_FILE_PURPOSE = "opentv-download-file-v1".toByteArray()
+        val DOWNLOAD_FILE_PURPOSE = "opentv-download-file-v2".toByteArray()
     }
 }
 

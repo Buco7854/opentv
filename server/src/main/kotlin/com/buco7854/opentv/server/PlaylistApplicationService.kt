@@ -5,15 +5,19 @@ import com.buco7854.opentv.core.log.ProviderSecrets
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.model.Playlist
 import com.buco7854.opentv.core.model.SeriesGroup
+import com.buco7854.opentv.core.repo.AccountInfoResult
 import com.buco7854.opentv.core.repo.AccountRepository
 import com.buco7854.opentv.core.repo.EpgRepository
 import com.buco7854.opentv.core.repo.PlaylistRepository
 import com.buco7854.opentv.core.repo.XtreamRepository
+import com.buco7854.opentv.core.repo.XtreamUnreachableException
 import com.buco7854.opentv.core.repo.xtreamSeriesKey
 import com.buco7854.opentv.core.storage.SEARCH_RESULTS_PER_KIND
 import com.buco7854.opentv.core.storage.Storage
+import com.buco7854.opentv.core.xtream.XtreamAuthException
 import com.buco7854.opentv.serverdata.db.PlaylistDeletionRow
-import com.buco7854.opentv.serverdata.db.ServerUserDatabase
+import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
+import com.buco7854.opentv.serverdata.db.deleteCatalogPlaylist
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
@@ -29,7 +33,7 @@ class PlaylistApplicationService(
     private val auth: AuthService,
     private val content: ContentIdentityService,
     private val activity: UserActivityService,
-    private val userDatabase: ServerUserDatabase,
+    private val userDatabase: OpenTvServerDatabase,
     private val downloads: DownloadManager,
     private val cleanup: UserStateCleanupCoordinator = NoopUserStateCleanupCoordinator,
 ) {
@@ -57,20 +61,21 @@ class PlaylistApplicationService(
 
     suspend fun update(actor: Actor, id: Long, request: PlaylistUpsertRequest): PlaylistDto {
         requireAdmin(actor)
-        val resolved = request.preservingSecretsFrom(playlist(id))
-        when (resolved.mode) {
-            "xtream" -> playlists.updateXtream(
-                id, resolved.name, resolved.server, resolved.username, resolved.password,
-            )
-            "url" -> playlists.updateUrl(id, resolved.name, resolved.url, resolved.epgUrl)
-            "file" -> if (resolved.content.isNotBlank()) {
-                playlists.replaceFromLines(id, resolved.name, resolved.content.lineSequence())
-            } else {
-                playlists.rename(id, resolved.name)
+        content.updatePlaylist(id) {
+            val resolved = request.preservingSecretsFrom(playlist(id))
+            when (resolved.mode) {
+                "xtream" -> playlists.updateXtream(
+                    id, resolved.name, resolved.server, resolved.username, resolved.password,
+                )
+                "url" -> playlists.updateUrl(id, resolved.name, resolved.url, resolved.epgUrl)
+                "file" -> if (resolved.content.isNotBlank()) {
+                    playlists.replaceFromLines(id, resolved.name, resolved.content.lineSequence())
+                } else {
+                    playlists.rename(id, resolved.name)
+                }
+                else -> throw IllegalArgumentException("Unknown mode")
             }
-            else -> throw IllegalArgumentException("Unknown mode")
         }
-        content.reconcilePlaylist(id)
         return playlist(id).toApiDto()
     }
 
@@ -86,17 +91,15 @@ class PlaylistApplicationService(
         userDatabase.maintenance().pendingPlaylistDeletions().forEach {
             completePlaylistDeletion(it.playlistId)
         }
-        val existing = storage.playlists.getAll().mapTo(mutableSetOf()) { it.id }
-        userDatabase.maintenance().referencedPlaylistIds()
-            .filterNot { it in existing }
-            .forEach { completePlaylistDeletion(it) }
+        // A process can die after a channel swap commits but before identity reconciliation.
+        // Rebind the stored catalog at startup without treating a partial swap as retirement.
+        storage.playlists.getAll().forEach { content.repairPlaylist(it.id) }
     }
 
     suspend fun refresh(actor: Actor, id: Long, force: Boolean): PlaylistDto {
         requireAdmin(actor)
-        val refreshed = playlists.refresh(id, force)
+        content.refreshPlaylist(id) { playlists.refresh(id, force) }
         runCatching { epg.refresh(id, force) }
-        if (refreshed) content.reconcilePlaylist(id)
         return playlist(id).toApiDto()
     }
 
@@ -264,13 +267,24 @@ class PlaylistApplicationService(
 
     suspend fun account(actor: Actor, id: Long, force: Boolean): AccountInfoDto {
         requireAdmin(actor)
-        return account.accountInfo(playlist(id), force)?.toDto()
-            ?: throw ResourceNotFound("account", "No account API for this playlist")
+        return when (val result = account.accountInfo(playlist(id), force)) {
+            is AccountInfoResult.Fresh ->
+                result.info.toDto(result.fetchedAtMs, stale = false)
+            is AccountInfoResult.Stale ->
+                result.info.toDto(result.fetchedAtMs, stale = true)
+            is AccountInfoResult.Unavailable -> when (val cause = result.cause) {
+                null -> throw ResourceNotFound("account", "No account API for this playlist")
+                is XtreamAuthException -> throw cause
+                else -> throw XtreamUnreachableException("Could not reach the provider account API")
+            }
+        }
     }
 
     suspend fun setGroupKind(actor: Actor, id: Long, request: GroupKindRequest) {
         requireAdmin(actor)
-        playlists.setGroupOverride(id, request.groupTitle, request.kind)
+        content.mutatePlaylist(id) {
+            playlists.setGroupOverride(id, request.groupTitle, request.kind)
+        }
     }
 
     suspend fun favorites(actor: Actor, id: Long): List<FavoriteDto> =
@@ -294,46 +308,48 @@ class PlaylistApplicationService(
 
     suspend fun resolvedFavorites(actor: Actor, id: Long): FavoritesResolvedDto {
         requireAccess(actor, id)
-        val ids = activity.favoriteIds(actor, id)
-        val identities = content.identitiesByContentId(ids)
-        // One query for every favorite's channel, not one query per favorite.
-        val channelIds = ids.mapNotNull { contentId ->
-            identities[contentId]?.takeIf { it.playlistId == id }?.currentChannelId
+        return content.withStablePlaylist(id) {
+            val ids = activity.favoriteIds(actor, id)
+            val identities = content.identitiesByContentId(ids)
+            // One query for every favorite's channel, not one query per favorite.
+            val channelIds = ids.mapNotNull { contentId ->
+                identities[contentId]?.takeIf { it.playlistId == id }?.currentChannelId
+            }
+            val channels = storage.channels.getMany(channelIds).associateBy { it.id }
+            val resolved = ids.mapNotNull { contentId ->
+                val identity = identities[contentId]?.takeIf { it.playlistId == id }
+                    ?: return@mapNotNull null
+                identity.currentChannelId?.let { channels[it] }?.let { contentId to it }
+            }
+            val live = resolved.filter { it.second.kind == ChannelKind.LIVE }
+                .map { (contentId, channel) -> channel.toDto(cipher, contentId, actor.userId) }
+            val movies = resolved.filter { it.second.kind == ChannelKind.MOVIE }
+                .map { (contentId, channel) -> channel.toDto(cipher, contentId, actor.userId) }
+            val series = mutableListOf<SeriesHitDto>()
+            val panel = storage.xtreamSeries.observeAll(id).first()
+            val panelIdentities = content.xtreamSeriesIdentities(panel)
+            panel.forEach { entry ->
+                val contentId = panelIdentities[entry.seriesId]?.contentId ?: return@forEach
+                if (contentId !in ids) return@forEach
+                series += SeriesHitDto(
+                    contentId, entry.name, 0,
+                    cipher.encryptOrNull(entry.cover, actor.userId, id),
+                    entry.categoryName, entry.seriesId.toString(),
+                )
+            }
+            val m3u = storage.channels.observeAllSeries(id).first()
+                .filterNot { it.seriesKey.startsWith("xs:") }
+            val m3uIdentities = content.m3uSeriesIdentities(id, m3u)
+            m3u.forEach { entry ->
+                val contentId = m3uIdentities[entry.seriesKey]?.contentId ?: return@forEach
+                if (contentId !in ids) return@forEach
+                series += SeriesHitDto(
+                    contentId, entry.seriesKey, entry.count,
+                    cipher.encryptOrNull(entry.logo, actor.userId, id), entry.groupTitle,
+                )
+            }
+            FavoritesResolvedDto(live, movies, series.sortedBy { it.seriesKey.lowercase() })
         }
-        val channels = storage.channels.getMany(channelIds).associateBy { it.id }
-        val resolved = ids.mapNotNull { contentId ->
-            val identity = identities[contentId]?.takeIf { it.playlistId == id }
-                ?: return@mapNotNull null
-            identity.currentChannelId?.let { channels[it] }?.let { contentId to it }
-        }
-        val live = resolved.filter { it.second.kind == ChannelKind.LIVE }
-            .map { (contentId, channel) -> channel.toDto(cipher, contentId, actor.userId) }
-        val movies = resolved.filter { it.second.kind == ChannelKind.MOVIE }
-            .map { (contentId, channel) -> channel.toDto(cipher, contentId, actor.userId) }
-        val series = mutableListOf<SeriesHitDto>()
-        val panel = storage.xtreamSeries.observeAll(id).first()
-        val panelIdentities = content.xtreamSeriesIdentities(panel)
-        panel.forEach { entry ->
-            val contentId = panelIdentities[entry.seriesId]?.contentId ?: return@forEach
-            if (contentId !in ids) return@forEach
-            series += SeriesHitDto(
-                contentId, entry.name, 0,
-                cipher.encryptOrNull(entry.cover, actor.userId, id),
-                entry.categoryName, entry.seriesId.toString(),
-            )
-        }
-        val m3u = storage.channels.observeAllSeries(id).first()
-            .filterNot { it.seriesKey.startsWith("xs:") }
-        val m3uIdentities = content.m3uSeriesIdentities(id, m3u)
-        m3u.forEach { entry ->
-            val contentId = m3uIdentities[entry.seriesKey]?.contentId ?: return@forEach
-            if (contentId !in ids) return@forEach
-            series += SeriesHitDto(
-                contentId, entry.seriesKey, entry.count,
-                cipher.encryptOrNull(entry.logo, actor.userId, id), entry.groupTitle,
-            )
-        }
-        return FavoritesResolvedDto(live, movies, series.sortedBy { it.seriesKey.lowercase() })
     }
 
     suspend fun episodes(
@@ -370,16 +386,18 @@ class PlaylistApplicationService(
 
     suspend fun xtreamSeriesDetail(actor: Actor, id: Long, seriesId: Long): XtreamSeriesDetailDto {
         requireAccess(actor, id)
-        val series = storage.xtreamSeries.get(id, seriesId) ?: throw ResourceNotFound("series")
-        val failure = runCatching { xtream.ensureEpisodes(id, seriesId) }.exceptionOrNull()
-        val episodes = storage.channels.observeEpisodes(id, xtreamSeriesKey(seriesId)).first()
-        content.channels(episodes)
-        return XtreamSeriesDetailDto(
-            series.toDto(cipher, content.xtreamSeries(series).contentId, actor.userId),
-            channelDtos(actor, episodes),
-            failure?.let { "Couldn't load episodes: ${ProviderSecrets.redact(it)}" }
-                ?.takeIf { episodes.isEmpty() },
-        )
+        return content.withStablePlaylist(id) {
+            val series = storage.xtreamSeries.get(id, seriesId) ?: throw ResourceNotFound("series")
+            val failure = runCatching { xtream.ensureEpisodes(id, seriesId) }.exceptionOrNull()
+            val episodes = storage.channels.observeEpisodes(id, xtreamSeriesKey(seriesId)).first()
+            content.channels(episodes)
+            XtreamSeriesDetailDto(
+                series.toDto(cipher, content.xtreamSeries(series).contentId, actor.userId),
+                channelDtos(actor, episodes),
+                failure?.let { "Couldn't load episodes: ${ProviderSecrets.redact(it)}" }
+                    ?.takeIf { episodes.isEmpty() },
+            )
+        }
     }
 
     private suspend fun channelDtos(
@@ -405,11 +423,13 @@ class PlaylistApplicationService(
 
     private suspend fun completePlaylistDeletion(id: Long) {
         cleanup.playlistDeleting(id)
-        if (storage.playlists.get(id) != null) playlists.delete(id)
-        downloads.deletePlaylist(id)
-        content.deletePlaylist(id)
-        auth.deletePlaylistState(id)
-        userDatabase.maintenance().finishPlaylistDeletion(id)
+        content.deletePlaylist(id) {
+            // Blob records cascade through content identities when the playlist disappears, so
+            // delete their files first. The tombstone makes this external cleanup crash-safe.
+            downloads.deletePlaylist(id)
+            if (storage.playlists.get(id) != null) userDatabase.deleteCatalogPlaylist(id)
+            userDatabase.maintenance().finishPlaylistDeletion(id)
+        }
     }
 }
 

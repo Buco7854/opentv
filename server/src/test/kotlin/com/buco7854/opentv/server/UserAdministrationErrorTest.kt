@@ -1,11 +1,12 @@
 package com.buco7854.opentv.server
 
 import com.buco7854.opentv.contract.*
+import com.buco7854.opentv.data.db.PlaylistRow
 import com.buco7854.opentv.serverdata.UserRole
 import com.buco7854.opentv.serverdata.UserStatus
-import com.buco7854.opentv.serverdata.createServerUserDatabase
+import com.buco7854.opentv.serverdata.createOpenTvServerDatabase
 import com.buco7854.opentv.serverdata.db.PlaylistDeletionRow
-import com.buco7854.opentv.serverdata.db.ServerUserDatabase
+import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
 import kotlinx.coroutines.test.runTest
 import java.net.URI
 import java.nio.file.Files
@@ -71,6 +72,46 @@ class UserAdministrationErrorTest {
             assertFailsWith<ResourceNotFound> {
                 service.adminUpdateUser(actor, deleted, UpdateUserRequestDto(displayName = "Gone"))
             }
+        }
+    }
+
+    @Test
+    fun aDisabledAdministratorsAlreadyAuthenticatedRequestIsRejected() = runTest {
+        withAdmin { service, actor, admin, db ->
+            service.adminCreateUser(
+                actor,
+                CreateUserRequestDto(
+                    "backup",
+                    "Backup administrator",
+                    password = "another sufficiently long password",
+                    role = UserRole.ADMIN,
+                ),
+            )
+            val backupLogin = service.passwordLogin(
+                PasswordLoginRequestDto("backup", "another sufficiently long password"),
+                "127.0.0.2",
+            )
+            val backup = assertNotNull(
+                service.authenticate(assertNotNull(backupLogin.sessionToken)),
+            ).first
+            service.adminUpdateUser(
+                backup,
+                admin,
+                UpdateUserRequestDto(status = UserStatus.DISABLED),
+            )
+            assertEquals(UserStatus.DISABLED, assertNotNull(db.users().get(admin)).status)
+
+            assertFailsWith<UnauthenticatedApiException> {
+                service.adminCreateUser(
+                    actor,
+                    CreateUserRequestDto(
+                        "created-by-disabled-admin",
+                        "Should not exist",
+                        password = "a sufficiently long viewer password",
+                    ),
+                )
+            }
+            assertEquals(null, db.users().byNormalizedUsername("created-by-disabled-admin"))
         }
     }
 
@@ -181,10 +222,10 @@ class UserAdministrationErrorTest {
 
     private suspend fun withAdmin(
         knownPlaylists: Set<Long> = emptySet(),
-        block: suspend (AuthService, Actor, String, ServerUserDatabase) -> Unit,
+        block: suspend (AuthService, Actor, String, OpenTvServerDatabase) -> Unit,
     ) {
         val dir = Files.createTempDirectory("opentv-admin-error-test")
-        val db = createServerUserDatabase(dir.resolve("server-users.db").toString())
+        val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
         val now = 1_700_000_000_000L
         val config = AuthConfig(
             publicUrl = URI("https://tv.example.com"),
@@ -200,6 +241,9 @@ class UserAdministrationErrorTest {
             sessionAbsoluteMs = 30L * 24 * 60 * 60_000L,
         )
         try {
+            knownPlaylists.forEach {
+                db.playlistDao().insert(PlaylistRow(id = it, name = "Playlist $it", url = null))
+            }
             val service = AuthService(db, config, dir, { now }, { it in knownPlaylists })
             service.initialize()
             val bootstrapToken = Files.readString(dir.resolve("bootstrap.token")).trim()

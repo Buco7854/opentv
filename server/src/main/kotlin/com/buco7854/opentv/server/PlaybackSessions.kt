@@ -5,6 +5,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -79,6 +80,7 @@ class PlaybackSessionRegistry(
         // room resumes together, so no one plays ahead while another is still buffering the switch.
         val ready: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
         @Volatile var reloading: Boolean = false
+        @Volatile var reloadTimeout: Job? = null
         // A room's reload barriers are ordered independently of command delivery. A ready or
         // room-go from an older generation can never complete/release the current barrier.
         @Volatile var barrierGeneration: Long = 0
@@ -136,8 +138,35 @@ class PlaybackSessionRegistry(
         return live
     }
 
-    fun lease(id: String): Live = sessions[id] ?: throw PlaybackRevokedException()
+    fun lease(id: String): Live =
+        sessions[id] ?: throw PlaybackRevokedException()
 
+    /**
+     * Keep an already-authorized media lease alive.
+     *
+     * This is deliberately separate from [lease]: an invalid grant must not be able to preserve
+     * a guessed or leaked lease id. Media routes call it only after their capability check passes.
+     */
+    @Synchronized
+    fun touch(id: String): Live {
+        val live = sessions[id] ?: throw PlaybackRevokedException()
+        live.lastSeenMs = clock.nowMs()
+        return live
+    }
+
+    /**
+     * Publish lease-owned runtime state atomically with respect to lease termination.
+     *
+     * Cleanup runs while holding this registry monitor, so it either sees state published by
+     * [block] or wins first and prevents [block] from running against a tombstoned lease.
+     */
+    @Synchronized
+    internal fun <T> withLiveLease(id: String, block: (Live) -> T): T {
+        val live = sessions[id] ?: throw PlaybackRevokedException()
+        return block(live)
+    }
+
+    @Synchronized
     fun update(actor: Actor, ip: String, userAgent: String, dto: SessionHeartbeatDto) {
         owned(actor, dto.id)
         val now = clock.nowMs()
@@ -395,6 +424,7 @@ class PlaybackSessionRegistry(
      *  (its audio track rides along), so nobody resumes until all are back. */
     private fun startReload(room: Room) {
         check(room.barrierGeneration < Long.MAX_VALUE) { "Room barrier generation exhausted" }
+        room.reloadTimeout?.cancel()
         room.barrierGeneration++
         room.reloading = true
         room.ready.clear()
@@ -406,12 +436,32 @@ class PlaybackSessionRegistry(
                 generation = room.barrierGeneration,
             ),
         )
+        val generation = room.barrierGeneration
+        room.reloadTimeout = reaperScope.launch {
+            // Match the clients' lease-sized fail-open window. One dead or malicious member must
+            // not leave the server replaying room-audio forever on every reconnect.
+            delay(staleMs.coerceAtLeast(1))
+            finishReloadOnTimeout(room.id, generation)
+        }
     }
 
     private fun finishReloadIfReady(room: Room) {
         if (!room.reloading || !room.ready.containsAll(room.members)) return
+        finishReload(room)
+    }
+
+    @Synchronized
+    private fun finishReloadOnTimeout(roomId: String, generation: Long) {
+        val room = rooms[roomId] ?: return
+        if (!room.reloading || room.barrierGeneration != generation) return
+        finishReload(room)
+    }
+
+    private fun finishReload(room: Room) {
         room.reloading = false
         room.ready.clear()
+        room.reloadTimeout?.cancel()
+        room.reloadTimeout = null
         broadcast(room, SessionCommandDto(type = "room-go", generation = room.barrierGeneration))
     }
 
@@ -477,6 +527,8 @@ class PlaybackSessionRegistry(
         // Cut any shared live connection this viewer was riding, now that it's no longer a member.
         runCatching { cleanup.memberLeaving(id) }
         if (room.members.isEmpty()) {
+            room.reloadTimeout?.cancel()
+            room.reloadTimeout = null
             rooms.remove(room.id)
             runCatching { cleanup.shareGroupUnused(room.id) }
             return
@@ -546,9 +598,19 @@ class PlaybackSessionRegistry(
     fun active(): List<Live> {
         val now = clock.nowMs()
         val cutoff = now - staleMs
-        val stale = sessions.values.filter { it.lastSeenMs < cutoff }.map { it.id }
-        stale.forEach { remove(it) }
+        val stale = sessions.values
+            .filter { it.lastSeenMs < cutoff }
+            .map { it.id to it.lastSeenMs }
+        stale.forEach { (id, observedLastSeenMs) ->
+            removeIfStillStale(id, observedLastSeenMs, cutoff)
+        }
         return sessions.values.sortedByDescending { it.startedAtMs }
+    }
+
+    @Synchronized
+    private fun removeIfStillStale(id: String, observedLastSeenMs: Long, cutoff: Long) {
+        val live = sessions[id] ?: return
+        if (live.lastSeenMs == observedLastSeenMs && live.lastSeenMs < cutoff) remove(id)
     }
 
     companion object {

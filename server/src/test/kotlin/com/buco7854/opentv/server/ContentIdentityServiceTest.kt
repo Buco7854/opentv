@@ -3,8 +3,8 @@ package com.buco7854.opentv.server
 import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.model.Playlist
-import com.buco7854.opentv.data.createRoomStorage
-import com.buco7854.opentv.serverdata.createServerUserDatabase
+import com.buco7854.opentv.core.storage.Storage
+import com.buco7854.opentv.serverdata.createOpenTvServerStorage
 import com.buco7854.opentv.serverdata.db.ContentIdentityRow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
@@ -32,18 +32,18 @@ class ContentIdentityServiceTest {
     )
 
     private fun <T> withServices(
-        block: suspend (ContentIdentityService, Long, (Long) -> Unit) -> T,
+        block: suspend (ContentIdentityService, Storage, Long, (Long) -> Unit) -> T,
     ) = runTest {
         val dir = Files.createTempDirectory("content-identity")
-        val storage = createRoomStorage(dir.resolve("catalog.db").toString())
-        val db = createServerUserDatabase(dir.resolve("users.db").toString())
+        val persistence = createOpenTvServerStorage(dir.resolve("opentv.db").toString())
+        val storage = persistence.catalog
+        val db = persistence.database
         try {
             var now = 1_000L
             val playlistId = storage.playlists.insert(Playlist(name = "P", url = null))
             val service = ContentIdentityService(db, storage) { now }
-            block(service, playlistId) { advanceBy -> now += advanceBy }
+            block(service, storage, playlistId) { advanceBy -> now += advanceBy }
         } finally {
-            db.close()
             storage.close()
             dir.toFile().deleteRecursively()
         }
@@ -52,8 +52,9 @@ class ContentIdentityServiceTest {
     @Test
     fun a_link_survives_the_refresh_that_renumbers_every_channel() = runTest {
         val dir = Files.createTempDirectory("content-identity-refresh")
-        val storage = createRoomStorage(dir.resolve("catalog.db").toString())
-        val db = createServerUserDatabase(dir.resolve("users.db").toString())
+        val persistence = createOpenTvServerStorage(dir.resolve("opentv.db").toString())
+        val storage = persistence.catalog
+        val db = persistence.database
         try {
             val playlistId = storage.playlists.insert(Playlist(name = "P", url = null))
             val service = ContentIdentityService(db, storage)
@@ -84,15 +85,16 @@ class ContentIdentityServiceTest {
             assertEquals(after.id, resolved.id)
             assertEquals(contentId, service.channel(after).contentId)
         } finally {
-            db.close()
             storage.close()
             dir.toFile().deleteRecursively()
         }
     }
 
     @Test
-    fun repeated_browsing_returns_one_stable_identity_per_item() = withServices { service, playlistId, _ ->
+    fun repeated_browsing_returns_one_stable_identity_per_item() =
+        withServices { service, storage, playlistId, _ ->
         val page = (1L..40L).map { channel(playlistId, it, it) }
+        storage.channels.insertAll(page)
 
         val first = service.channels(page)
         val second = service.channels(page)
@@ -111,14 +113,16 @@ class ContentIdentityServiceTest {
     @Test
     fun titles_are_resolved_with_one_channel_batch_and_missing_channels_are_absent() = runTest {
         val dir = Files.createTempDirectory("content-title-resolution")
-        val storage = createRoomStorage(dir.resolve("catalog.db").toString())
-        val db = createServerUserDatabase(dir.resolve("users.db").toString())
+        val persistence = createOpenTvServerStorage(dir.resolve("opentv.db").toString())
+        val storage = persistence.catalog
+        val db = persistence.database
         try {
             val playlistId = storage.playlists.insert(Playlist(name = "P", url = null))
             val resolvedChannel = channel(playlistId, 7L, 7L).copy(
                 name = "A human title",
                 kind = ChannelKind.MOVIE,
             )
+            storage.channels.insertAll(listOf(resolvedChannel))
             val resolvedContentId = ContentIdentityService(db, storage)
                 .channel(resolvedChannel)
                 .contentId
@@ -128,7 +132,7 @@ class ContentIdentityServiceTest {
                     playlistId = playlistId,
                     kind = ChannelKind.MOVIE,
                     providerFingerprint = "missing-fingerprint",
-                    currentChannelId = 8L,
+                    currentChannelId = null,
                     lastSeenAtMs = 1_000L,
                     retired = false,
                 )
@@ -150,11 +154,10 @@ class ContentIdentityServiceTest {
             )
 
             assertEquals(1, batchCalls)
-            assertEquals(setOf(7L, 8L), requestedIds.toSet())
+            assertEquals(setOf(7L), requestedIds.toSet())
             assertEquals("A human title", titles[resolvedContentId])
             assertNull(titles["missing-content"])
         } finally {
-            db.close()
             storage.close()
             dir.toFile().deleteRecursively()
         }
@@ -162,8 +165,9 @@ class ContentIdentityServiceTest {
 
     @Test
     fun browsing_does_not_disturb_the_record_of_what_the_provider_still_lists() =
-        withServices { service, playlistId, advanceClock ->
+        withServices { service, storage, playlistId, advanceClock ->
             val stocked = (1L..3L).map { channel(playlistId, it, it) }
+            storage.channels.insertAll(stocked)
             val before = service.channels(stocked).getValue(1L)
 
             advanceClock(60_000L)
@@ -174,10 +178,15 @@ class ContentIdentityServiceTest {
         }
 
     @Test
-    fun an_item_that_appears_between_refreshes_still_resolves() = withServices { service, playlistId, _ ->
-        service.channels(listOf(channel(playlistId, 1L, 1L)))
+    fun an_item_that_appears_between_refreshes_still_resolves() =
+        withServices { service, storage, playlistId, _ ->
+        val first = channel(playlistId, 1L, 1L)
+        storage.channels.insertAll(listOf(first))
+        service.channels(listOf(first))
 
-        val late = service.channel(channel(playlistId, 2L, 2L))
+        val lateChannel = channel(playlistId, 2L, 2L)
+        storage.channels.insertAll(listOf(lateChannel))
+        val late = service.channel(lateChannel)
 
         assertEquals(playlistId, late.playlistId)
         assertEquals(2L, late.currentChannelId)
@@ -186,8 +195,9 @@ class ContentIdentityServiceTest {
     @Test
     fun a_stale_pointer_never_resolves_content_from_another_playlist() = runTest {
         val dir = Files.createTempDirectory("content-identity-stale-pointer")
-        val storage = createRoomStorage(dir.resolve("catalog.db").toString())
-        val db = createServerUserDatabase(dir.resolve("users.db").toString())
+        val persistence = createOpenTvServerStorage(dir.resolve("opentv.db").toString())
+        val storage = persistence.catalog
+        val db = persistence.database
         try {
             val firstPlaylist = storage.playlists.insert(Playlist(name = "First", url = null))
             val secondPlaylist = storage.playlists.insert(Playlist(name = "Second", url = null))
@@ -218,7 +228,69 @@ class ContentIdentityServiceTest {
 
             assertNull(resolved)
         } finally {
-            db.close()
+            storage.close()
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun startup_repair_completes_a_partially_committed_chunked_reconciliation() = runTest {
+        val dir = Files.createTempDirectory("content-identity-partial-repair")
+        val persistence = createOpenTvServerStorage(dir.resolve("opentv.db").toString())
+        val storage = persistence.catalog
+        val db = persistence.database
+        try {
+            val playlistId = storage.playlists.insert(Playlist(name = "P", url = null))
+            val service = ContentIdentityService(db, storage) { 1_000L }
+            storage.channels.replaceKinds(
+                playlistId,
+                listOf(ChannelKind.LIVE),
+                (1L..4L).map { channel(playlistId, 0, it).copy(id = 0) },
+            )
+            service.reconcilePlaylist(playlistId)
+            val before = storage.channels
+                .observeInGroup(playlistId, ChannelKind.LIVE, "Live")
+                .first()
+                .associateBy { it.xtreamStreamId }
+            val seededIdentities = service.channels(before.values.toList())
+            val original = before.values.associate { seeded ->
+                requireNotNull(seeded.xtreamStreamId) to seededIdentities.getValue(seeded.id)
+            }
+
+            storage.channels.replaceKinds(
+                playlistId,
+                listOf(ChannelKind.LIVE),
+                listOf(1L, 2L, 3L, 5L, 6L).map {
+                    channel(playlistId, 0, it).copy(id = 0)
+                },
+            )
+            val after = storage.channels
+                .observeInGroup(playlistId, ChannelKind.LIVE, "Live")
+                .first()
+                .associateBy { it.xtreamStreamId }
+
+            val streamOne = original.getValue(1L)
+            db.content().update(streamOne.copy(currentChannelId = after.getValue(1L).id))
+            val partiallyInserted = service.channel(after.getValue(5L))
+
+            service.repairPlaylist(playlistId)
+
+            (1L..3L).forEach { streamId ->
+                val identity = service.channel(after.getValue(streamId))
+                assertEquals(original.getValue(streamId).contentId, identity.contentId)
+                assertEquals(after.getValue(streamId).id, identity.currentChannelId)
+                assertEquals(1_000L, identity.lastSeenAtMs)
+            }
+            assertEquals(
+                partiallyInserted.contentId,
+                service.channel(after.getValue(5L)).contentId,
+            )
+            assertEquals(after.getValue(6L).id, service.channel(after.getValue(6L)).currentChannelId)
+            val absent = db.content().get(original.getValue(4L).contentId)
+            assertEquals(false, absent?.retired)
+            assertNull(absent?.currentChannelId)
+            assertEquals(6, db.content().forPlaylist(playlistId).size)
+        } finally {
             storage.close()
             dir.toFile().deleteRecursively()
         }
@@ -228,8 +300,9 @@ class ContentIdentityServiceTest {
     fun consecutive_refreshes_in_the_same_millisecond_still_retire_missing_content() =
         runTest {
             val dir = Files.createTempDirectory("content-identity-same-clock-refresh")
-            val storage = createRoomStorage(dir.resolve("catalog.db").toString())
-            val db = createServerUserDatabase(dir.resolve("users.db").toString())
+            val persistence = createOpenTvServerStorage(dir.resolve("opentv.db").toString())
+            val storage = persistence.catalog
+            val db = persistence.database
             try {
                 val playlistId = storage.playlists.insert(Playlist(name = "P", url = null))
                 val service = ContentIdentityService(db, storage) { 1_000L }
@@ -258,7 +331,6 @@ class ContentIdentityServiceTest {
                 assertTrue(retired.retired)
                 assertNull(retired.currentChannelId)
             } finally {
-                db.close()
                 storage.close()
                 dir.toFile().deleteRecursively()
             }

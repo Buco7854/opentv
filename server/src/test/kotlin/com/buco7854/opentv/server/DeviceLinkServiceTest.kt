@@ -1,13 +1,24 @@
 package com.buco7854.opentv.server
 
+import androidx.room.immediateTransaction
+import androidx.room.useWriterConnection
 import com.buco7854.opentv.contract.*
 import com.buco7854.opentv.serverdata.AuthMethod
 import com.buco7854.opentv.serverdata.ClientKind
 import com.buco7854.opentv.serverdata.UserRole
 import com.buco7854.opentv.serverdata.UserStatus
-import com.buco7854.opentv.serverdata.createServerUserDatabase
-import com.buco7854.opentv.serverdata.db.ServerUserDatabase
+import com.buco7854.opentv.serverdata.createOpenTvServerDatabase
+import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 import java.net.URI
 import java.nio.file.Files
 import kotlin.test.Test
@@ -227,9 +238,179 @@ class DeviceLinkServiceTest {
         }
     }
 
+    @Test
+    fun aDenialCommittedAfterPollReadsApprovalCannotIssueASession() = runTest {
+        withFixture {
+            val started = links.start(DeviceLinkStartRequestDto("Car"), null, "192.0.2.48")
+            val request = DeviceLinkTokenRequestDto(started.linkToken)
+            links.lookup(actor, request, "198.51.100.18")
+            links.approve(actor, request, "198.51.100.18")
+            val row = assertNotNull(
+                db.challenges().byToken(
+                    com.buco7854.opentv.serverdata.ChallengeKind.DEVICE_LINK,
+                    AuthCrypto.hashToken(started.pollToken),
+                ),
+            )
+            val fields = Json.parseToJsonElement(row.payloadJson).jsonObject.toMutableMap()
+            fields["approvedAtMs"] = JsonNull
+            fields["deniedAtMs"] = JsonPrimitive(clock.now + 1)
+            fields["approvedAuthMethod"] = JsonNull
+            val deniedPayload = JsonObject(fields).toString()
+            val denialUncommitted = CompletableDeferred<Unit>()
+            val allowDenialCommit = CompletableDeferred<Unit>()
+            val denial = async(Dispatchers.IO) {
+                db.useWriterConnection { connection ->
+                    connection.immediateTransaction {
+                        db.challenges().update(row.copy(payloadJson = deniedPayload))
+                        denialUncommitted.complete(Unit)
+                        allowDenialCommit.await()
+                    }
+                }
+            }
+            denialUncommitted.await()
+            val poll = async(Dispatchers.Default) {
+                links.poll(DeviceLinkPollRequestDto(started.pollToken))
+            }
+
+            // The uncommitted writer leaves the approved snapshot visible to readers while
+            // parking the poll before its session-issuing writer transaction.
+            withContext(Dispatchers.IO) { Thread.sleep(100) }
+            allowDenialCommit.complete(Unit)
+            denial.await()
+            val result = poll.await()
+
+            assertNull(result.status.flow)
+            assertTrue(
+                db.sessions().activeForUser(actor.userId)
+                    .none { it.clientKind == ClientKind.LINKED_DEVICE },
+            )
+        }
+    }
+
+    @Test
+    fun concurrentApprovalAndDenialHaveExactlyOneWinner() = runTest {
+        withFixture {
+            val started = links.start(DeviceLinkStartRequestDto("Car"), null, "192.0.2.49")
+            val request = DeviceLinkTokenRequestDto(started.linkToken)
+            links.lookup(actor, request, "198.51.100.19")
+            val writerHeld = CompletableDeferred<Unit>()
+            val releaseWriter = CompletableDeferred<Unit>()
+            val blocker = async(Dispatchers.IO) {
+                db.useWriterConnection { connection ->
+                    connection.immediateTransaction {
+                        writerHeld.complete(Unit)
+                        releaseWriter.await()
+                    }
+                }
+            }
+            writerHeld.await()
+            val approval = async(Dispatchers.Default) {
+                runCatching { links.approve(actor, request, "198.51.100.19") }
+            }
+            val denial = async(Dispatchers.Default) {
+                runCatching { links.deny(actor, request, "198.51.100.20") }
+            }
+
+            // Both requests can read the undecided row while SQLite's writer is parked.
+            withContext(Dispatchers.IO) { Thread.sleep(100) }
+            releaseWriter.complete(Unit)
+            blocker.await()
+            val outcomes = listOf(approval.await(), denial.await())
+
+            assertEquals(1, outcomes.count(Result<Unit>::isSuccess))
+            assertEquals(1, outcomes.count(Result<Unit>::isFailure))
+        }
+    }
+
+    @Test
+    fun aConcurrentRescanCannotEraseAnApproval() = runTest {
+        withFixture {
+            val started = links.start(DeviceLinkStartRequestDto("Car"), null, "192.0.2.50")
+            val request = DeviceLinkTokenRequestDto(started.linkToken)
+            links.lookup(actor, request, "198.51.100.21")
+            val writerHeld = CompletableDeferred<Unit>()
+            val releaseWriter = CompletableDeferred<Unit>()
+            val blocker = async(Dispatchers.IO) {
+                db.useWriterConnection { connection ->
+                    connection.immediateTransaction {
+                        writerHeld.complete(Unit)
+                        releaseWriter.await()
+                    }
+                }
+            }
+            writerHeld.await()
+            val approval = async(Dispatchers.Default) {
+                links.approve(actor, request, "198.51.100.21")
+            }
+            // Let approval read the undecided row and wait for SQLite's writer before a same-user
+            // rescan reads that same snapshot and queues its idempotent claim behind it.
+            withContext(Dispatchers.IO) { Thread.sleep(100) }
+            val rescan = async(Dispatchers.Default) {
+                links.lookup(actor, request, "198.51.100.22")
+            }
+            withContext(Dispatchers.IO) { Thread.sleep(100) }
+            releaseWriter.complete(Unit)
+            blocker.await()
+            approval.await()
+            rescan.await()
+
+            val row = assertNotNull(
+                db.challenges().byToken(
+                    com.buco7854.opentv.serverdata.ChallengeKind.DEVICE_LINK,
+                    AuthCrypto.hashToken(started.pollToken),
+                ),
+            )
+            val payload = Json.parseToJsonElement(row.payloadJson).jsonObject
+            assertTrue(
+                payload["approvedAtMs"] != null && payload["approvedAtMs"] !is JsonNull,
+            )
+            assertTrue(payload["deniedAtMs"] == null || payload["deniedAtMs"] is JsonNull)
+        }
+    }
+
+    @Test
+    fun approvalCannotCommitAfterTheApprovingSessionIsRevoked() = runTest {
+        withFixture {
+            val started = links.start(DeviceLinkStartRequestDto("Car"), null, "192.0.2.51")
+            val request = DeviceLinkTokenRequestDto(started.linkToken)
+            links.lookup(actor, request, "198.51.100.23")
+            val revocationUncommitted = CompletableDeferred<Unit>()
+            val allowRevocationCommit = CompletableDeferred<Unit>()
+            val revocation = async(Dispatchers.IO) {
+                db.useWriterConnection { connection ->
+                    connection.immediateTransaction {
+                        db.sessions().revoke(actor.authSessionId, clock.now + 1)
+                        revocationUncommitted.complete(Unit)
+                        allowRevocationCommit.await()
+                    }
+                }
+            }
+            revocationUncommitted.await()
+            val approval = async(Dispatchers.Default) {
+                runCatching { links.approve(actor, request, "198.51.100.23") }
+            }
+
+            // Approval's first read sees the still-committed active session, then its decision
+            // write waits behind the revocation transaction.
+            withContext(Dispatchers.IO) { Thread.sleep(100) }
+            allowRevocationCommit.complete(Unit)
+            revocation.await()
+            assertTrue(approval.await().isFailure)
+
+            val row = assertNotNull(
+                db.challenges().byToken(
+                    com.buco7854.opentv.serverdata.ChallengeKind.DEVICE_LINK,
+                    AuthCrypto.hashToken(started.pollToken),
+                ),
+            )
+            val payload = Json.parseToJsonElement(row.payloadJson).jsonObject
+            assertTrue(payload["approvedAtMs"] == null || payload["approvedAtMs"] is JsonNull)
+        }
+    }
+
     private suspend fun withFixture(block: suspend Fixture.() -> Unit) {
         val dir = Files.createTempDirectory("opentv-device-link-test")
-        val db = createServerUserDatabase(dir.resolve("server-users.db").toString())
+        val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
         val clock = MutableClock(1_700_000_000_000L)
         val config = config()
         val auth = AuthService(db, config, dir, clock::time)
@@ -275,7 +456,7 @@ class DeviceLinkServiceTest {
     }
 
     private data class Fixture(
-        val db: ServerUserDatabase,
+        val db: OpenTvServerDatabase,
         val clock: MutableClock,
         val config: AuthConfig,
         val auth: AuthService,

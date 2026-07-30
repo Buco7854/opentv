@@ -3,7 +3,7 @@ package com.buco7854.opentv.server
 import com.buco7854.opentv.contract.*
 import com.buco7854.opentv.serverdata.ClientKind
 import com.buco7854.opentv.serverdata.UserRole
-import com.buco7854.opentv.serverdata.createServerUserDatabase
+import com.buco7854.opentv.serverdata.createOpenTvServerDatabase
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -36,7 +36,7 @@ class NativeAuthFlowTest {
     fun `all successful auth completions return bearer tokens and tag the client`() =
         testApplication {
             val dir = Files.createTempDirectory("opentv-native-auth")
-            val db = createServerUserDatabase(dir.resolve("users.db").toString())
+            val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
             val clock = Clock()
             val config = authConfig()
             val auth = AuthService(db, config, dir, clock = clock::time)

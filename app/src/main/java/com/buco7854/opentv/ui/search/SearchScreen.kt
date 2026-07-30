@@ -346,6 +346,10 @@ fun SearchScreen(
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var guideItem by remember { mutableStateOf<CatalogItem?>(null) }
+    // Outlives the result list: a re-search rebuilds it, and a section the user
+    // collapsed must not spring open again behind the loading spinner.
+    val expandedSections = remember { mutableStateMapOf<String, Boolean>() }
+    fun expanded(key: String) = expandedSections.getOrDefault(key, true)
 
     fun play(item: CatalogItem, live: Boolean) {
         onPlay(item, live)
@@ -417,8 +421,6 @@ fun SearchScreen(
                     stringResource(R.string.search_no_results_subtitle, query),
                 )
                 else -> {
-                    val expandedSections = remember { mutableStateMapOf<String, Boolean>() }
-                    fun expanded(key: String) = expandedSections.getOrDefault(key, true)
                     LazyColumn(
                         contentPadding = PaddingValues(16.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),

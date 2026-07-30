@@ -11,6 +11,7 @@ import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.model.Download
 import com.buco7854.opentv.core.model.DownloadStatus
 import com.buco7854.opentv.core.model.Playlist
+import com.buco7854.opentv.core.repo.AccountInfoResult
 import com.buco7854.opentv.core.xtream.AccountInfo
 import com.buco7854.opentv.diag.ErrorLog
 import com.buco7854.opentv.download.downloadIdentityKey
@@ -240,6 +241,12 @@ class BrowseViewModel private constructor(
         }
     }
 
+    /**
+     * Now-airing rows decorate a catalog that is already on screen, and the
+     * browse screen refreshes them on a timer, so a lost poll reports nothing:
+     * it must not replace the catalog with a failure state. A dead session
+     * still does, because nothing else on the screen works either.
+     */
     fun reloadNowAiring() {
         viewModelScope.launch {
             when (val result = gateway.nowAiring()) {
@@ -247,12 +254,7 @@ class BrowseViewModel private constructor(
                 CatalogResult.SignedOut -> if (sourceId is SourceId.Hub) {
                     fail(CatalogLoadError.SignedOut)
                 }
-                CatalogResult.Unreachable -> if (sourceId is SourceId.Hub) {
-                    fail(CatalogLoadError.Unreachable)
-                }
-                is CatalogResult.Failed -> if (sourceId is SourceId.Hub) {
-                    fail(CatalogLoadError.Failed(result.cause))
-                }
+                CatalogResult.Unreachable, is CatalogResult.Failed -> Unit
             }
         }
     }
@@ -262,7 +264,13 @@ class BrowseViewModel private constructor(
         val currentGraph = graph ?: return
         viewModelScope.launch {
             val source = currentGraph.storage.playlists.get(local.playlistId) ?: return@launch
-            currentGraph.account.accountInfo(source, force)?.let { mutableAccount.value = it }
+            when (val result = currentGraph.account.accountInfo(source, force)) {
+                is AccountInfoResult.Fresh -> mutableAccount.value = result.info
+                // This subtitle never claims a refresh time, so retaining its last-known
+                // connection figures is more useful than clearing it during an outage.
+                is AccountInfoResult.Stale -> mutableAccount.value = result.info
+                is AccountInfoResult.Unavailable -> Unit
+            }
         }
     }
 

@@ -273,11 +273,20 @@ fun ConfirmDeletePlaylistDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val cancelFocusRequester = remember { FocusRequester() }
+    RequestInitialFocusOnTv(cancelFocusRequester, playlist.id)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.playlist_delete_title)) },
         text = { Text(stringResource(R.string.playlist_delete_text, playlist.name)) },
         confirmButton = { OtvTextButton(onClick = onConfirm, danger = true) { Text(stringResource(R.string.common_remove)) } },
-        dismissButton = { OtvTextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) } },
+        dismissButton = {
+            OtvTextButton(
+                onClick = onDismiss,
+                modifier = Modifier.focusRequester(cancelFocusRequester),
+            ) {
+                Text(stringResource(R.string.common_cancel))
+            }
+        },
     )
 }

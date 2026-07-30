@@ -9,7 +9,12 @@ import io.ktor.server.routing.Route
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
@@ -100,7 +105,9 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
     }
     post("/remux/start") {
         if (!requireFfmpeg(media, call)) return@post
-        val (source, sessionId) = remuxTarget(media, call)
+        val target = remuxTarget(media, call)
+        val source = target.source
+        val sessionId = target.leaseId
         val startupStartedNs = System.nanoTime()
         val requestedAudio = call.request.queryParameters["audio"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
         val timeshift = call.request.queryParameters["timeshift"] == "1"
@@ -110,27 +117,32 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
         val capabilities = media.sessions.roomCapabilities(sessionId)
         val supersededGroups = media.sessions.roomMembers(sessionId) + sessionId + group
         try {
-            val connectionLimitStartedNs = System.nanoTime()
-            val connectionLimit = media.connectionLimit(source)
-            val connectionLimitMs = (System.nanoTime() - connectionLimitStartedNs) / 1_000_000
-            val result = withContext(Dispatchers.IO) {
-                media.remux.start(
-                    source,
-                    audio,
-                    capabilities,
-                    timeshift,
-                    connectionLimit,
-                    group,
-                    supersededGroups,
-                    startupStartedNs,
-                    connectionLimitMs,
-                )
-            }
-            try {
-                media.mediaGrants.bindResource(sessionId, result.id)
-            } catch (error: Exception) {
-                if (!media.mediaGrants.hasAttachments(result.id)) media.remux.stop(result.id)
-                throw error
+            val result = withLeaseKeepAlive(target.guard) {
+                val connectionLimitStartedNs = System.nanoTime()
+                val connectionLimit = media.connectionLimit(source)
+                val connectionLimitMs = (System.nanoTime() - connectionLimitStartedNs) / 1_000_000
+                val prepared = withContext(Dispatchers.IO) {
+                    media.remux.start(
+                        source,
+                        audio,
+                        capabilities,
+                        timeshift,
+                        connectionLimit,
+                        group,
+                        supersededGroups,
+                        startupStartedNs,
+                        connectionLimitMs,
+                    )
+                }
+                try {
+                    media.sessions.withLiveLease(sessionId) {
+                        media.mediaGrants.bindResource(sessionId, prepared.id)
+                    }
+                } catch (error: Exception) {
+                    if (!media.mediaGrants.hasAttachments(prepared.id)) media.remux.stop(prepared.id)
+                    throw error
+                }
+                prepared
             }
             val suffix = "?sid=${urlEncode(sessionId)}&g=${urlEncode(requireNotNull(rawGrant))}"
             call.respond(
@@ -151,6 +163,8 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
                 HttpStatusCode.TooManyRequests,
                 ApiErrorDto("provider_capacity", e.message ?: "Connection limit reached"),
             )
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: IllegalStateException) {
             call.respond(
                 HttpStatusCode.BadGateway,
@@ -160,8 +174,9 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
     }
     delete("/remux/{id}") {
         val id = call.requiredParameter("id")
+        val leaseId = call.request.queryParameters["sid"]
         val finalAttachment = media.mediaGrants.releaseResource(
-            call.request.queryParameters["sid"],
+            leaseId,
             call.request.queryParameters["g"],
             id,
         )
@@ -170,11 +185,13 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
     }
     get("/remux/{id}/{file}") {
         val id = call.requiredParameter("id")
+        val leaseId = call.request.queryParameters["sid"]
         media.mediaGrants.validateResource(
-            call.request.queryParameters["sid"],
+            leaseId,
             call.request.queryParameters["g"],
             id,
         )
+        media.sessions.touch(requireNotNull(leaseId))
         val file = call.requiredParameter("file")
         when {
             file == "master.m3u8" -> media.remux.master(id, call, mediaQuery(call))
@@ -225,8 +242,9 @@ private fun authorizedStream(
 ): AuthorizedStream {
     val capability = requiredStreamCapability(media, call)
     val grant = call.request.queryParameters["g"]
-    val guard = {
+    val guard: () -> Unit = {
         media.mediaGrants.validateCapability(capability.leaseId, grant, capability)
+        media.sessions.touch(capability.leaseId)
     }
     guard()
     return AuthorizedStream(capability, grant, guard)
@@ -242,7 +260,11 @@ private suspend fun requireFfmpeg(media: MediaRouteDependencies, call: Applicati
     return false
 }
 
-private data class RemuxTarget(val source: String, val leaseId: String)
+private data class RemuxTarget(
+    val source: String,
+    val leaseId: String,
+    val guard: () -> Unit,
+)
 
 private suspend fun remuxTarget(
     media: MediaRouteDependencies,
@@ -251,18 +273,46 @@ private suspend fun remuxTarget(
     val grant = call.request.queryParameters["g"]
     val downloadId = call.request.queryParameters["d"]
         ?: return requiredStreamCapability(media, call).let { capability ->
-            media.mediaGrants.validateCapability(capability.leaseId, grant, capability)
-            RemuxTarget(capability.url, capability.leaseId)
+            val guard: () -> Unit = {
+                media.mediaGrants.validateCapability(capability.leaseId, grant, capability)
+                media.sessions.touch(capability.leaseId)
+            }
+            guard()
+            RemuxTarget(capability.url, capability.leaseId, guard)
         }
     val leaseId = call.request.queryParameters["sid"]
     val lease = leaseId?.let(media.sessions::lease)
         ?: throw IllegalArgumentException("Invalid or missing target url")
     val source = media.downloads.fileFor(lease.userId, downloadId)?.second?.toString()
         ?: throw IllegalArgumentException("Invalid or missing target url")
-    media.mediaGrants.validateSource(leaseId, grant, source)
-    return RemuxTarget(source, requireNotNull(leaseId))
+    val guard: () -> Unit = {
+        media.mediaGrants.validateSource(leaseId, grant, source)
+        media.sessions.touch(requireNotNull(leaseId))
+    }
+    guard()
+    return RemuxTarget(source, requireNotNull(leaseId), guard)
+}
+
+private suspend fun <T> withLeaseKeepAlive(
+    guard: () -> Unit,
+    block: suspend () -> T,
+): T = coroutineScope {
+    guard()
+    val heartbeat = launch {
+        while (isActive) {
+            delay(MEDIA_GUARD_INTERVAL_MS)
+            guard()
+        }
+    }
+    try {
+        block()
+    } finally {
+        heartbeat.cancel()
+    }
 }
 
 private fun mediaQuery(call: ApplicationCall): String =
     "?sid=${urlEncode(call.request.queryParameters["sid"].orEmpty())}" +
         "&g=${urlEncode(call.request.queryParameters["g"].orEmpty())}"
+
+private const val MEDIA_GUARD_INTERVAL_MS = 4_000L

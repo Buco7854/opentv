@@ -1,7 +1,7 @@
 package com.buco7854.opentv.server
 
 import com.buco7854.opentv.contract.*
-import com.buco7854.opentv.serverdata.createServerUserDatabase
+import com.buco7854.opentv.serverdata.createOpenTvServerDatabase
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.http.HttpHeaders
@@ -170,7 +170,7 @@ class ApiSecurityTest {
         block: suspend (AuthService, StreamCipher, String, String) -> Unit,
     ) {
         val dir = Files.createTempDirectory("opentv-api-security")
-        val db = createServerUserDatabase(dir.resolve("users.db").toString())
+        val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
         try {
             val auth = AuthService(db, authConfig(), dir)
             auth.initialize()

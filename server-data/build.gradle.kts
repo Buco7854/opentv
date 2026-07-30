@@ -10,6 +10,7 @@ kotlin {
 
     sourceSets {
         commonMain.dependencies {
+            api(project(":data"))
             api(libs.room.runtime)
             implementation(libs.kotlinx.coroutines.core)
         }

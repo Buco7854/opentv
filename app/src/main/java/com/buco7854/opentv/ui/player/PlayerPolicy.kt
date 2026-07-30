@@ -53,6 +53,35 @@ internal enum class PlayerBackAction {
     EXIT,
 }
 
+/**
+ * How long a notice shows before dismissing itself. Every other kind is copy we
+ * wrote and can read in a beat, but an admin message is up to 1000 characters of
+ * someone else's words: at ~200 words per minute that is nearer a minute than the
+ * six seconds it used to get. Scale the dwell to the length so the message can
+ * actually be finished, and keep a ceiling so a wall of text cannot sit over the
+ * video indefinitely. Back dismisses any notice early.
+ */
+internal fun noticeDwellMs(kind: WatchTogetherNoticeKind, textLength: Int): Long = when (kind) {
+    WatchTogetherNoticeKind.ADMIN_MESSAGE ->
+        (ADMIN_MESSAGE_BASE_MS + textLength * ADMIN_MESSAGE_PER_CHAR_MS)
+            .coerceIn(ADMIN_MESSAGE_MIN_MS, ADMIN_MESSAGE_MAX_MS)
+    WatchTogetherNoticeKind.ROOM_ENDED -> ROOM_ENDED_MS
+    else -> DEFAULT_NOTICE_MS
+}
+
+/** A beat to read the opening lines before an overlong notice starts drifting. */
+internal const val READING_LEAD_IN_MS = 1_200L
+
+/** And a beat on the last line before the notice disappears. */
+internal const val READING_TAIL_MS = 900L
+
+private const val DEFAULT_NOTICE_MS = 3_500L
+private const val ROOM_ENDED_MS = 6_000L
+private const val ADMIN_MESSAGE_BASE_MS = 4_000L
+private const val ADMIN_MESSAGE_PER_CHAR_MS = 55L
+private const val ADMIN_MESSAGE_MIN_MS = 6_000L
+private const val ADMIN_MESSAGE_MAX_MS = 60_000L
+
 /** Back peels transient player layers before it is allowed to leave playback. */
 internal fun playerBackAction(hasNotice: Boolean, controlsVisible: Boolean): PlayerBackAction =
     when {

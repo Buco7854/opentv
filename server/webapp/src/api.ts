@@ -156,6 +156,8 @@ export interface AccountInfo {
   isTrial: boolean;
   createdAtMs: number | null;
   timezone: string | null;
+  fetchedAtMs: number;
+  stale: boolean;
 }
 
 export interface Metadata {

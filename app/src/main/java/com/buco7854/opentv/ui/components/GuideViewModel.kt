@@ -17,6 +17,7 @@ import com.buco7854.opentv.source.ContentRef
 import com.buco7854.opentv.source.SourceId
 import com.buco7854.opentv.source.encode
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -36,6 +37,7 @@ internal class GuideViewModel(
 
     private var item: CatalogItem? = null
     private var loadGeneration = 0L
+    private var loadJob: Job? = null
 
     fun show(target: CatalogItem) {
         item = target
@@ -44,6 +46,15 @@ internal class GuideViewModel(
 
     fun retry() {
         item?.let(::load)
+    }
+
+    fun hide(target: CatalogItem) {
+        if (item?.ref != target.ref) return
+        item = null
+        loadGeneration++
+        loadJob?.cancel()
+        loadJob = null
+        mutableState.value = GuideState()
     }
 
     suspend fun catchupUrlFor(entry: CatalogGuideEntry): String? {
@@ -60,8 +71,9 @@ internal class GuideViewModel(
 
     private fun load(target: CatalogItem) {
         val generation = ++loadGeneration
+        loadJob?.cancel()
         mutableState.value = GuideState()
-        viewModelScope.launch {
+        loadJob = viewModelScope.launch {
             val result = try {
                 gateway.guideFor(target.ref)
             } catch (cancelled: CancellationException) {

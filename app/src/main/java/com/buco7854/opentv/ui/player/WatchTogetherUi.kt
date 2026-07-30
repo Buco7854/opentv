@@ -1,5 +1,7 @@
 package com.buco7854.opentv.ui.player
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -8,7 +10,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -21,12 +25,15 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -38,6 +45,7 @@ import com.buco7854.opentv.ui.components.OtvTextButton
 import com.buco7854.opentv.ui.components.OtvTonalButton
 import com.buco7854.opentv.ui.components.QualityBadge
 import com.buco7854.opentv.ui.components.RequestInitialFocusOnTv
+import kotlinx.coroutines.delay
 
 internal data class WatchTogetherActions(
     val onWatchAlone: () -> Unit,
@@ -377,21 +385,62 @@ internal fun WatchTogetherNoticeOverlay(notice: WatchTogetherNotice) {
         WatchTogetherNoticeKind.ACTION_FAILED ->
             stringResource(R.string.watch_together_action_failed)
     }
+    // Only an admin message can be long — up to 1000 characters of someone else's
+    // words. The rest are our own one-liners, and giving them a scroll container
+    // would mean a focusable overlay stealing D-pad focus for a three-second beat.
+    val scrollable = notice.kind == WatchTogetherNoticeKind.ADMIN_MESSAGE
     Surface(
         color = Color.Black.copy(alpha = 0.82f),
         contentColor = Color.White,
         shape = RoundedCornerShape(12.dp),
         shadowElevation = 8.dp,
+        modifier = Modifier.widthIn(max = 560.dp),
     ) {
-        Text(
-            message,
-            style = MaterialTheme.typography.bodyLarge,
-            // Admin messages may be up to 1000 characters. Cap the overlay so a
-            // long one cannot blanket the video — on a TV there is no scrolling.
-            maxLines = 4,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
-        )
+        if (scrollable) {
+            // Bound the height rather than the line count, so nothing is unreadable:
+            // whatever does not fit is scrolled to instead of ellipsised away. Half
+            // the screen keeps the video visible behind it. The overlay deliberately
+            // does not take focus: a focused scroll container answers Page Up/Down and
+            // nothing a remote sends, so it would buy a television nothing while taking
+            // the player's own key handling — show controls, seek — out of the dispatch
+            // path for the whole dwell. Keying the scroll state to the notice starts a
+            // replacement message at its own first line.
+            key(notice.id) {
+                val scroll = rememberScrollState()
+                // Because nothing here takes focus, a remote cannot scroll this by
+                // hand, and clipping without even an ellipsis would hide the tail of a
+                // long message with no sign it existed. So the text reads itself: it
+                // drifts to the end over the same dwell the notice was given, which is
+                // already scaled to its length. A message that fits never moves, and a
+                // touch drag outranks the animation, so a phone user can still take over.
+                LaunchedEffect(scroll.maxValue) {
+                    if (scroll.maxValue == 0) return@LaunchedEffect
+                    val travelMs = noticeDwellMs(notice.kind, notice.text?.length ?: 0) -
+                        READING_LEAD_IN_MS - READING_TAIL_MS
+                    delay(READING_LEAD_IN_MS)
+                    scroll.animateScrollTo(
+                        scroll.maxValue,
+                        tween(travelMs.toInt().coerceAtLeast(1), easing = LinearEasing),
+                    )
+                }
+                Text(
+                    message,
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier
+                        .heightIn(max = (LocalConfiguration.current.screenHeightDp * 0.5f).dp)
+                        .verticalScroll(scroll)
+                        .padding(horizontal = 20.dp, vertical = 14.dp),
+                )
+            }
+        } else {
+            Text(
+                message,
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
+            )
+        }
     }
 }
 

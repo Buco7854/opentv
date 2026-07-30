@@ -12,15 +12,14 @@ import com.buco7854.opentv.core.repo.PlaylistRepository
 import com.buco7854.opentv.core.repo.XtreamRepository
 import com.buco7854.opentv.core.storage.Storage
 import com.buco7854.opentv.core.xtream.XtreamApi
-import com.buco7854.opentv.data.createRoomStorage
 import com.buco7854.opentv.serverdata.AuthMethod
 import com.buco7854.opentv.serverdata.ClientKind
 import com.buco7854.opentv.serverdata.UserRole
 import com.buco7854.opentv.serverdata.UserStatus
-import com.buco7854.opentv.serverdata.createServerUserDatabase
+import com.buco7854.opentv.serverdata.createOpenTvServerStorage
 import com.buco7854.opentv.serverdata.db.ContentIdentityRow
 import com.buco7854.opentv.serverdata.db.DefaultPlaylistRow
-import com.buco7854.opentv.serverdata.db.ServerUserDatabase
+import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
 import com.buco7854.opentv.serverdata.db.UserPlaylistGrantRow
 import com.buco7854.opentv.serverdata.db.UserRow
 import kotlinx.coroutines.test.runTest
@@ -97,8 +96,11 @@ class PlaylistRefreshTest {
     }
 
     @Test
-    fun `startup removes authorization state whose catalog playlist was destructively lost`() =
+    fun `deleting a playlist cascades its authorization and identity state`() =
         withService { fixture ->
+            val playlistId = fixture.storage.playlists.insert(
+                Playlist(name = "Provider", url = null),
+            )
             fixture.userDatabase.users().insert(
                 UserRow(
                     "viewer",
@@ -113,14 +115,14 @@ class PlaylistRefreshTest {
                     null,
                 ),
             )
-            fixture.userDatabase.grants().addDefault(DefaultPlaylistRow(1))
+            fixture.userDatabase.grants().addDefault(DefaultPlaylistRow(playlistId))
             fixture.userDatabase.grants().grant(
-                UserPlaylistGrantRow("viewer", 1, fixture.now),
+                UserPlaylistGrantRow("viewer", playlistId, fixture.now),
             )
             fixture.userDatabase.content().insert(
                 ContentIdentityRow(
                     "old-content",
-                    1,
+                    playlistId,
                     0,
                     "old-fingerprint",
                     null,
@@ -128,28 +130,18 @@ class PlaylistRefreshTest {
                     false,
                 ),
             )
-            assertTrue(fixture.storage.playlists.getAll().isEmpty())
+            fixture.service.delete(admin, playlistId)
 
-            fixture.service.reconcilePendingDeletions()
-
+            assertEquals(null, fixture.storage.playlists.get(playlistId))
             assertTrue(fixture.userDatabase.grants().defaults().isEmpty())
             assertTrue(fixture.userDatabase.grants().forUser("viewer").isEmpty())
-            assertTrue(fixture.userDatabase.content().forPlaylist(1).isEmpty())
-
-            val reusedId = fixture.storage.playlists.insert(Playlist(name = "Unrelated", url = null))
-            assertEquals(1, reusedId)
-            val viewer = admin.copy(
-                userId = "viewer",
-                username = "viewer",
-                displayName = "Viewer",
-                roles = setOf(UserRole.USER),
-            )
-            assertFalse(fixture.auth.hasPlaylistAccess(viewer, reusedId))
+            assertTrue(fixture.userDatabase.content().forPlaylist(playlistId).isEmpty())
+            assertTrue(fixture.userDatabase.maintenance().pendingPlaylistDeletions().isEmpty())
         }
 
     private class Fixture(
         val storage: Storage,
-        val userDatabase: ServerUserDatabase,
+        val userDatabase: OpenTvServerDatabase,
         val playlists: PlaylistRepository,
         val service: PlaylistApplicationService,
         val auth: AuthService,
@@ -161,8 +153,9 @@ class PlaylistRefreshTest {
 
     private fun withService(block: suspend (Fixture) -> Unit) = runTest {
         val dir = Files.createTempDirectory("playlist-refresh")
-        val storage = createRoomStorage(dir.resolve("catalog.db").toString())
-        val userDatabase = createServerUserDatabase(dir.resolve("users.db").toString())
+        val persistence = createOpenTvServerStorage(dir.resolve("opentv.db").toString())
+        val storage = persistence.catalog
+        val userDatabase = persistence.database
         try {
             lateinit var fixture: Fixture
             val fetcher = ConditionalFetcher { _, _, _ ->
@@ -203,7 +196,6 @@ class PlaylistRefreshTest {
             fixture.body = playlistLines
             block(fixture)
         } finally {
-            userDatabase.close()
             storage.close()
             dir.toFile().deleteRecursively()
         }

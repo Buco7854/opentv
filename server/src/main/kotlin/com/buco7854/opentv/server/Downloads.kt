@@ -6,7 +6,7 @@ import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.serverdata.DownloadBlobStatus
 import com.buco7854.opentv.serverdata.db.ContentIdentityRow
 import com.buco7854.opentv.serverdata.db.DownloadBlobRow
-import com.buco7854.opentv.serverdata.db.ServerUserDatabase
+import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
 import com.buco7854.opentv.serverdata.db.UserDownloadRow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -34,7 +34,7 @@ import kotlin.math.absoluteValue
 
 /** Shared physical transfers with private per-user references. */
 class DownloadManager(
-    private val db: ServerUserDatabase,
+    private val db: OpenTvServerDatabase,
     private val http: ServerHttp,
     private val settings: ServerSettings,
     dataDir: Path,
@@ -169,6 +169,29 @@ class DownloadManager(
         }
     }
 
+    /**
+     * An all-session revocation removes this user's active interest without changing any other
+     * user's reference to the shared blob. Park an in-flight transfer only when that leaves no
+     * active references; a later enqueue by the user resumes their suspended reference.
+     */
+    suspend fun suspendUserAccess(userId: String) {
+        db.downloads().forUser(userId).forEach { observed ->
+            withBlobLock(observed.blobId) {
+                val current = db.downloads().userDownload(observed.id)
+                    ?.takeIf { it.userId == userId }
+                    ?: return@withBlobLock
+                if (!current.suspended || current.active) {
+                    db.downloads().upsertUserDownload(
+                        current.copy(active = false, suspended = true, updatedAtMs = clock()),
+                    )
+                }
+                if (db.downloads().activeReferenceCount(current.blobId) == 0) {
+                    parkTransfer(current.blobId, onlyWhenInFlight = true)
+                }
+            }
+        }
+    }
+
     suspend fun fileFor(userId: String, userDownloadId: String): Pair<DownloadBlobRow, Path>? {
         val result = downloadFileFor(userId, userDownloadId) ?: return null
         return result.takeIf { (blob) -> blob.status == DownloadBlobStatus.DONE }
@@ -216,7 +239,7 @@ class DownloadManager(
 
     fun scheduleOrphanCleanup() {
         scope.launch {
-            db.downloads().orphanBlobs().forEach { deleteBlob(it.id) }
+            db.downloads().orphanBlobs().forEach { deleteOrphanBlob(it.id) }
         }
     }
 
@@ -264,6 +287,16 @@ class DownloadManager(
 
     private suspend fun deleteBlob(id: String) {
         withBlobLock(id) { deleteBlobUnlocked(id) }
+    }
+
+    /**
+     * [orphanBlobs] is a snapshot. A new user can reference the shared blob before cleanup reaches
+     * it, so resolve orphanhood again under the same lock used by enqueue/delete.
+     */
+    internal suspend fun deleteOrphanBlob(id: String) {
+        withBlobLock(id) {
+            if (db.downloads().referenceCount(id) == 0) deleteBlobUnlocked(id)
+        }
     }
 
     private suspend fun deleteBlobUnlocked(id: String) {

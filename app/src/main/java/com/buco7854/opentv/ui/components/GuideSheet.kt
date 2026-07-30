@@ -26,6 +26,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -87,6 +88,9 @@ fun GuideSheet(
     val displayEntries = entries?.map(CatalogGuideEntry::toGuideEntry)
 
     LaunchedEffect(item.ref) { viewModel.show(item) }
+    DisposableEffect(viewModel, item.ref) {
+        onDispose { viewModel.hide(item) }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,

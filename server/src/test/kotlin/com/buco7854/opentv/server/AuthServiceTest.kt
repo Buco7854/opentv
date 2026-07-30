@@ -1,8 +1,9 @@
 package com.buco7854.opentv.server
 
 import com.buco7854.opentv.contract.*
+import com.buco7854.opentv.data.db.PlaylistRow
 import com.buco7854.opentv.serverdata.db.DefaultPlaylistRow
-import com.buco7854.opentv.serverdata.createServerUserDatabase
+import com.buco7854.opentv.serverdata.createOpenTvServerDatabase
 import com.buco7854.opentv.serverdata.AuthMethod
 import com.buco7854.opentv.serverdata.ChallengeKind
 import com.buco7854.opentv.serverdata.UserRole
@@ -28,7 +29,7 @@ class AuthServiceTest {
     @Test
     fun bootstrapRequiresMfaCopiesTemplateAndIssuesRevocableSession() = runTest {
         val dir = Files.createTempDirectory("opentv-auth-test")
-        val db = createServerUserDatabase(dir.resolve("server-users.db").toString())
+        val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
         var now = 1_700_000_000_000L
         var revokedSession: String? = null
         val cleanup = object : UserStateCleanupCoordinator {
@@ -42,6 +43,7 @@ class AuthServiceTest {
         }
         val service = AuthService(db, authConfig(), dir, { now }, cleanup = cleanup)
         try {
+            db.playlistDao().insert(PlaylistRow(id = 42, name = "Default", url = null))
             db.grants().addDefault(DefaultPlaylistRow(42))
             service.initialize()
             val bootstrapToken = Files.readString(dir.resolve("bootstrap.token")).trim()
@@ -130,7 +132,7 @@ class AuthServiceTest {
     @Test
     fun invalidMfaChallengesContributeToTheIpRateLimit() = runTest {
         val dir = Files.createTempDirectory("opentv-auth-limit-test")
-        val db = createServerUserDatabase(dir.resolve("server-users.db").toString())
+        val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
         val service = AuthService(db, authConfig(), dir)
         try {
             repeat(5) {
@@ -156,7 +158,7 @@ class AuthServiceTest {
     @Test
     fun accountSecurityIsReachableWithoutMfaButOnlyRightAfterSigningIn() = runTest {
         val dir = Files.createTempDirectory("opentv-auth-stepup-test")
-        val db = createServerUserDatabase(dir.resolve("server-users.db").toString())
+        val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
         var now = 1_700_000_000_000L
         val service = AuthService(db, authConfig(mfaRequiredRoles = emptySet()), dir, { now })
         try {
@@ -201,7 +203,7 @@ class AuthServiceTest {
     @Test
     fun accountCredentialsGateTotpAndRecoveryWithoutRestrictingPasskeys() = runTest {
         val dir = Files.createTempDirectory("opentv-auth-account-credentials-test")
-        val db = createServerUserDatabase(dir.resolve("server-users.db").toString())
+        val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
         val now = 1_700_000_000_000L
         val config = authConfig(mfaRequiredRoles = emptySet(), oidc = oidcConfig())
         try {
@@ -266,7 +268,7 @@ class AuthServiceTest {
     @Test
     fun lastPasskeyCannotBeDeletedWhenPasswordLoginIsDisabledAndWebAuthnSessionsSurvive() = runTest {
         val dir = Files.createTempDirectory("opentv-auth-passkey-disabled-test")
-        val db = createServerUserDatabase(dir.resolve("server-users.db").toString())
+        val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
         var now = 1_700_000_000_000L
         try {
             val enabledConfig = authConfig(mfaRequiredRoles = emptySet())
@@ -317,7 +319,7 @@ class AuthServiceTest {
     @Test
     fun aPersistedOidcIdentityIsNotASignInFactorWhenOidcIsDisabled() = runTest {
         val dir = Files.createTempDirectory("opentv-auth-disabled-oidc-factor-test")
-        val db = createServerUserDatabase(dir.resolve("server-users.db").toString())
+        val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
         val now = 1_700_000_000_000L
         try {
             val enabledConfig = authConfig(mfaRequiredRoles = emptySet())
@@ -378,7 +380,7 @@ class AuthServiceTest {
     @Test
     fun oidcGroupRemappingRollsBackTheIdentityWhenTheEffectiveRoleCannotBeStored() = runTest {
         val dir = Files.createTempDirectory("opentv-auth-oidc-role-transaction-test")
-        val db = createServerUserDatabase(dir.resolve("server-users.db").toString())
+        val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
         val now = 1_700_000_000_000L
         val config = authConfig(mfaRequiredRoles = emptySet(), oidc = oidcConfig())
         try {
@@ -439,7 +441,7 @@ class AuthServiceTest {
     @Test
     fun deletingPasskeyRotatesTheActingSessionAndRevokesTheOthers() = runTest {
         val dir = Files.createTempDirectory("opentv-auth-passkey-delete-test")
-        val db = createServerUserDatabase(dir.resolve("server-users.db").toString())
+        val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
         var now = 1_700_000_000_000L
         try {
             val config = authConfig(mfaRequiredRoles = emptySet())
@@ -480,7 +482,7 @@ class AuthServiceTest {
     @Test
     fun passkeyListingDoesNotRequireRecentAuthenticationButDeletionDoes() = runTest {
         val dir = Files.createTempDirectory("opentv-auth-passkey-list-test")
-        val db = createServerUserDatabase(dir.resolve("server-users.db").toString())
+        val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
         var now = 1_700_000_000_000L
         try {
             val config = authConfig(mfaRequiredRoles = emptySet())
@@ -515,7 +517,7 @@ class AuthServiceTest {
     @Test
     fun additionalTotpWorksWithAPasskeyAndPreservesRecoveryCodes() = runTest {
         val dir = Files.createTempDirectory("opentv-auth-totp-add-test")
-        val db = createServerUserDatabase(dir.resolve("server-users.db").toString())
+        val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
         var now = 1_700_000_000_000L
         try {
             val config = authConfig(mfaRequiredRoles = emptySet())
@@ -617,7 +619,7 @@ class AuthServiceTest {
     @Test
     fun additionalTotpStartRequiresARecentSession() = runTest {
         val dir = Files.createTempDirectory("opentv-auth-totp-add-recent-test")
-        val db = createServerUserDatabase(dir.resolve("server-users.db").toString())
+        val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
         var now = 1_700_000_000_000L
         try {
             val config = authConfig(mfaRequiredRoles = emptySet())
@@ -651,7 +653,7 @@ class AuthServiceTest {
     @Test
     fun deletingTotpWithAPasskeyRotatesTheActingSessionAndRevokesTheOthers() = runTest {
         val dir = Files.createTempDirectory("opentv-auth-totp-delete-test")
-        val db = createServerUserDatabase(dir.resolve("server-users.db").toString())
+        val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
         val now = 1_700_000_000_000L
         try {
             val config = authConfig(mfaRequiredRoles = emptySet())
@@ -693,7 +695,7 @@ class AuthServiceTest {
     @Test
     fun deletingTotpIsRefusedWhenItIsTheLastRequiredMfaFactor() = runTest {
         val dir = Files.createTempDirectory("opentv-auth-totp-delete-mfa-test")
-        val db = createServerUserDatabase(dir.resolve("server-users.db").toString())
+        val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
         val now = 1_700_000_000_000L
         try {
             val initialConfig = authConfig(mfaRequiredRoles = emptySet())
@@ -737,7 +739,7 @@ class AuthServiceTest {
     @Test
     fun deletingTotpIsRefusedWhenNoUsableSignInMethodRemains() = runTest {
         val dir = Files.createTempDirectory("opentv-auth-totp-delete-signin-test")
-        val db = createServerUserDatabase(dir.resolve("server-users.db").toString())
+        val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
         val now = 1_700_000_000_000L
         try {
             val initialConfig = authConfig(mfaRequiredRoles = emptySet())
@@ -785,7 +787,7 @@ class AuthServiceTest {
     @Test
     fun deletingTotpRequiresARecentSession() = runTest {
         val dir = Files.createTempDirectory("opentv-auth-totp-delete-recent-test")
-        val db = createServerUserDatabase(dir.resolve("server-users.db").toString())
+        val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
         var now = 1_700_000_000_000L
         try {
             val config = authConfig(mfaRequiredRoles = emptySet())
@@ -819,7 +821,7 @@ class AuthServiceTest {
     @Test
     fun deletingTotpInvalidatesAnEnrollmentInFlight() = runTest {
         val dir = Files.createTempDirectory("opentv-auth-totp-delete-enrollment-test")
-        val db = createServerUserDatabase(dir.resolve("server-users.db").toString())
+        val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
         val now = 1_700_000_000_000L
         try {
             val config = authConfig(mfaRequiredRoles = emptySet())

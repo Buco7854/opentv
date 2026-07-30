@@ -12,7 +12,7 @@ import com.buco7854.opentv.serverdata.db.AuthChallengeRow
 import com.buco7854.opentv.serverdata.db.AuthSessionRow
 import com.buco7854.opentv.serverdata.db.OidcIdentityRow
 import com.buco7854.opentv.serverdata.db.PendingOidcIdentityRow
-import com.buco7854.opentv.serverdata.db.ServerUserDatabase
+import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
 import com.buco7854.opentv.serverdata.db.UserRow
 import com.buco7854.opentv.serverdata.db.WebAuthnCredentialRow
 import com.buco7854.opentv.serverdata.db.MfaCompletionWrite
@@ -65,7 +65,7 @@ internal data class AuthResult(
 }
 
 class AuthService(
-    private val db: ServerUserDatabase,
+    private val db: OpenTvServerDatabase,
     private val config: AuthConfig,
     private val dataDir: Path,
     private val clock: () -> Long = System::currentTimeMillis,
@@ -103,16 +103,31 @@ class AuthService(
         cleanup,
         clock,
     )
-    suspend fun initialize() = mutation.withLock {
+    suspend fun initialize(): Set<String> = mutation.withLock {
         val now = clock()
-        db.sessions().prune(now - 24 * 60 * 60_000L)
+        val revokedUserIds = db.useWriterConnection { connection ->
+            connection.immediateTransaction {
+                db.sessions().prune(now - 24 * 60 * 60_000L)
+                val affected = linkedSetOf<String>()
+                for (user in db.users().all()) {
+                    val revokesSession = db.sessions().activeForUser(user.id).any { session ->
+                        session.authMethod == AuthMethod.PASSWORD &&
+                            (!config.passwordEnabled ||
+                                (session.mfaSatisfiedAtMs == null &&
+                                    accounts.effectiveRole(user) in config.mfaRequiredRoles))
+                    }
+                    if (revokesSession) affected += user.id
+                }
+                if (!config.passwordEnabled) db.sessions().revokePasswordSessions(now)
+                db.sessions().revokePasswordSessionsMissingMfa(
+                    now,
+                    UserRole.USER in config.mfaRequiredRoles,
+                    UserRole.ADMIN in config.mfaRequiredRoles,
+                )
+                affected
+            }
+        }
         db.challenges().prune(now - 24 * 60 * 60_000L)
-        if (!config.passwordEnabled) db.sessions().revokePasswordSessions(now)
-        db.sessions().revokePasswordSessionsMissingMfa(
-            now,
-            UserRole.USER in config.mfaRequiredRoles,
-            UserRole.ADMIN in config.mfaRequiredRoles,
-        )
         val usableAdminExists = if (config.passwordEnabled) {
             db.users().activeAdminCount() > 0
         } else {
@@ -120,7 +135,7 @@ class AuthService(
         }
         if (usableAdminExists) {
             Files.deleteIfExists(bootstrapFile)
-            return@withLock
+            return@withLock revokedUserIds
         }
         val seed = config.initialAdmin
         if (seed != null && config.passwordEnabled) {
@@ -133,6 +148,7 @@ class AuthService(
                 "OIDC-only startup without an administrator requires OPENTV_OIDC_ADMIN_GROUPS"
             }
         }
+        revokedUserIds
     }
 
     /**
@@ -223,6 +239,7 @@ class AuthService(
             ?.takeIf { it.kind == ChallengeKind.MFA && it.consumedAtMs == null && it.expiresAtMs > now }
             ?: throw InvalidChallengeException()
         require(parent.userId == credential.userId) { "Credential owner mismatch" }
+        val committedCredential = webAuthnCredentialForCommit(credential, enrollment)
         val user = activeUser(credential.userId)
         val replacedSession = parent.payloadJson.removePrefix("reauth:")
             .takeIf { parent.payloadJson.startsWith("reauth:") }
@@ -247,7 +264,7 @@ class AuthService(
                 write = MfaCompletionWrite(
                     session = session.row,
                     loginAtMs = now,
-                    webAuthnCredential = credential,
+                    webAuthnCredential = committedCredential,
                     replacementRecoveryCodes = recovery?.second,
                 ),
             )
@@ -271,7 +288,8 @@ class AuthService(
                     it.consumedAtMs == null &&
                     it.expiresAtMs > now
             } ?: throw InvalidChallengeException()
-        val user = activeUser(credential.userId)
+        val committedCredential = webAuthnCredentialForCommit(credential, enrollment = false)
+        val user = activeUser(committedCredential.userId)
         val session = prepareSession(
             user,
             AuthMethod.WEBAUTHN,
@@ -283,13 +301,43 @@ class AuthService(
                 write = MfaCompletionWrite(
                     session = session.row,
                     loginAtMs = now,
-                    webAuthnCredential = credential,
+                    webAuthnCredential = committedCredential,
                 ),
             )
         ) {
             throw InvalidChallengeException()
         }
         AuthResult(sessionFlow(session))
+    }
+
+    /**
+     * Rechecks ownership and the authenticator counter under the same process-wide mutation
+     * lock that serializes the challenge/session commit. Assertion verification is deliberately
+     * outside that lock because it can be expensive; without this second read, two primary
+     * assertions can both verify against one old row and a late lower counter can overwrite a
+     * counter that already committed.
+     */
+    private suspend fun webAuthnCredentialForCommit(
+        verified: WebAuthnCredentialRow,
+        enrollment: Boolean,
+    ): WebAuthnCredentialRow {
+        val current = db.credentials().webAuthnById(verified.credentialId)
+        if (enrollment) {
+            if (current != null) throw InvalidCredentialsException()
+            return verified
+        }
+        current ?: throw InvalidCredentialsException()
+        if (current.userId != verified.userId ||
+            (current.signCount > 0 && verified.signCount <= current.signCount)
+        ) {
+            throw InvalidCredentialsException()
+        }
+        return current.copy(
+            signCount = verified.signCount,
+            backupEligible = verified.backupEligible,
+            backedUp = verified.backedUp,
+            lastUsedAtMs = verified.lastUsedAtMs,
+        )
     }
 
     internal suspend fun completeOidc(
@@ -579,11 +627,6 @@ class AuthService(
     suspend fun setUserPlaylists(actor: Actor, userId: String, ids: List<Long>) =
         userAdministration.setUserPlaylists(actor, userId, ids)
 
-    suspend fun deletePlaylistState(playlistId: Long) = mutation.withLock {
-        db.grants().removeDefault(playlistId)
-        db.grants().deletePlaylist(playlistId)
-    }
-
     suspend fun grants(userId: String): List<Long> = db.grants().forUser(userId)
 
     internal suspend fun regenerateRecoveryCodes(actor: Actor): AuthResult = mutation.withLock {
@@ -706,17 +749,11 @@ class AuthService(
     internal suspend fun claimDeviceLink(
         challengeId: String,
         userId: String,
+        approvedPayloadJson: String,
         method: String,
         deviceName: String?,
     ): AuthResult = mutation.withLock {
         val now = clock()
-        db.challenges().get(challengeId)
-            ?.takeIf {
-                it.kind == ChallengeKind.DEVICE_LINK &&
-                    it.userId == userId &&
-                    it.consumedAtMs == null &&
-                    it.expiresAtMs > now
-            } ?: throw InvalidChallengeException()
         val user = activeUser(userId)
         val session = sessionService.prepare(
             user,
@@ -725,11 +762,28 @@ class AuthService(
             deviceName = deviceName,
             clientKind = ClientKind.LINKED_DEVICE,
         )
-        if (!db.completeMfa(
-                challengeId = challengeId,
-                write = MfaCompletionWrite(session.row, now),
-            )
-        ) {
+        val committed = db.useWriterConnection { connection ->
+            connection.immediateTransaction {
+                val currentUser = db.users().get(userId)
+                    ?.takeIf { it.status == UserStatus.ACTIVE }
+                    ?: return@immediateTransaction false
+                val challenge = db.challenges().get(challengeId)
+                    ?.takeIf {
+                        it.kind == ChallengeKind.DEVICE_LINK &&
+                            it.userId == currentUser.id &&
+                            it.payloadJson == approvedPayloadJson &&
+                            it.consumedAtMs == null &&
+                            it.expiresAtMs > now
+                    } ?: return@immediateTransaction false
+                if (db.challenges().consume(challenge.id, now) != 1) {
+                    return@immediateTransaction false
+                }
+                db.sessions().insert(session.row)
+                db.users().markLogin(currentUser.id, now)
+                true
+            }
+        }
+        if (!committed) {
             throw InvalidChallengeException()
         }
         AuthResult(sessionFlow(session))

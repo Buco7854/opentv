@@ -80,6 +80,43 @@ class PlayerPolicyTest {
     }
 
     @Test
+    fun `an admin message gets reading time while our own copy keeps its beat`() {
+        // Our own one-liners are unaffected by length: they are fixed copy.
+        assertEquals(3_500L, noticeDwellMs(WatchTogetherNoticeKind.JOINED, 0))
+        assertEquals(3_500L, noticeDwellMs(WatchTogetherNoticeKind.CONTROL_GRANTED, 400))
+        assertEquals(6_000L, noticeDwellMs(WatchTogetherNoticeKind.ROOM_ENDED, 0))
+
+        // A short admin message still gets at least the old six seconds, so the
+        // scaling never makes a notice briefer than it used to be.
+        assertEquals(6_000L, noticeDwellMs(WatchTogetherNoticeKind.ADMIN_MESSAGE, 0))
+        assertEquals(6_000L, noticeDwellMs(WatchTogetherNoticeKind.ADMIN_MESSAGE, 20))
+
+        // The case this exists for: the server allows 1000 characters, which cannot
+        // be read in six seconds. It must scale well past that, and stay bounded.
+        val long = noticeDwellMs(WatchTogetherNoticeKind.ADMIN_MESSAGE, 1_000)
+        assertTrue("1000 chars needs real reading time, got $long", long >= 45_000L)
+        assertEquals(60_000L, noticeDwellMs(WatchTogetherNoticeKind.ADMIN_MESSAGE, 10_000))
+
+        // Monotonic in length, so a longer message is never shown for less time.
+        val lengths = listOf(0, 50, 200, 500, 1_000, 5_000)
+        val dwells = lengths.map { noticeDwellMs(WatchTogetherNoticeKind.ADMIN_MESSAGE, it) }
+        assertEquals(dwells.sorted(), dwells)
+    }
+
+    @Test
+    fun `a drifting admin message always has room to travel inside its dwell`() {
+        // The overlay scrolls a long message to its end over the dwell, less a lead-in
+        // and a tail. If the constants ever drift past each other that subtraction goes
+        // negative and the animation would be clamped to a single frame, dumping the
+        // reader at the bottom instantly.
+        val shortest = noticeDwellMs(WatchTogetherNoticeKind.ADMIN_MESSAGE, 0)
+        assertTrue(
+            "lead-in plus tail must fit inside even the shortest admin dwell",
+            READING_LEAD_IN_MS + READING_TAIL_MS < shortest,
+        )
+    }
+
+    @Test
     fun `hidden chrome is reachable from remote keys`() {
         assertEquals(
             PlayerRemoteAction.SHOW_CONTROLS,

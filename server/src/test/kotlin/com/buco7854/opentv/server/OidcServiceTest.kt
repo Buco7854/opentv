@@ -1,6 +1,6 @@
 package com.buco7854.opentv.server
 
-import com.buco7854.opentv.serverdata.createServerUserDatabase
+import com.buco7854.opentv.serverdata.createOpenTvServerDatabase
 import com.nimbusds.jose.JOSEObjectType
 import com.nimbusds.jose.JWSAlgorithm
 import com.nimbusds.jose.JWSHeader
@@ -80,7 +80,7 @@ class OidcServiceTest {
         server.start()
 
         val dir = Files.createTempDirectory("opentv-oidc-test")
-        val db = createServerUserDatabase(dir.resolve("server-users.db").toString())
+        val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
         try {
             val config = oidcConfig(URI(issuer))
             val auth = AuthService(db, config, dir)

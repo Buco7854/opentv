@@ -13,6 +13,9 @@ class DownloadApplicationService(
     private val cipher: StreamCipher,
 ) {
     suspend fun list(actor: Actor): List<DownloadDto> {
+        // The route authenticated this actor, but re-check immediately before minting so a
+        // concurrent administrative revocation cannot refresh file access from a stale actor.
+        auth.requireActiveActor(actor)
         val rows = downloads.list(actor.userId)
         val identities = content.identitiesByContentId(rows.map { (_, blob) -> blob.contentId })
         val access = auth.playlistAccess(actor)
@@ -27,7 +30,7 @@ class DownloadApplicationService(
                         blob.totalBytes > 0 &&
                         blob.downloadedBytes == blob.totalBytes)
                 ) {
-                    cipher.encryptDownloadFile(actor.userId, user.id)
+                    cipher.encryptDownloadFile(actor.userId, actor.authSessionId, user.id)
                 } else {
                     null
                 }
@@ -52,17 +55,20 @@ class DownloadApplicationService(
     suspend fun enqueue(actor: Actor, request: EnqueueDownloadRequest): MessageDto {
         val (identity, channel) = content.requireChannel(request.contentId)
         if (!auth.hasPlaylistAccess(actor, identity.playlistId)) throw ForbiddenApiException()
+        auth.requireActiveActor(actor)
         val (_, message) = downloads.enqueue(actor.userId, identity, channel)
         return MessageDto(message ?: "Download started: ${channel.name}")
     }
 
     suspend fun pause(actor: Actor, id: String) {
         requireEntitled(actor, id)
+        auth.requireActiveActor(actor)
         downloads.pause(actor.userId, id)
     }
 
     suspend fun resume(actor: Actor, id: String) {
         requireEntitled(actor, id)
+        auth.requireActiveActor(actor)
         downloads.resume(actor.userId, id)
     }
 
@@ -70,6 +76,7 @@ class DownloadApplicationService(
 
     suspend fun delete(actor: Actor, id: String) {
         requireEntitled(actor, id)
+        auth.requireActiveActor(actor)
         downloads.delete(actor.userId, id)
     }
 
@@ -77,6 +84,10 @@ class DownloadApplicationService(
         val capability = rawToken?.let(cipher::tryDecryptDownloadFile)
             ?.takeIf { it.downloadId == id }
             ?: throw UnauthenticatedApiException()
+        val mintingActor = auth.authenticateSession(capability.authSessionId)
+        if (mintingActor?.userId != capability.userId) {
+            throw DownloadFileAccessRevokedException()
+        }
         return downloads.downloadFileFor(capability.userId, id)?.let { (download, path) ->
             DownloadFile(
                 title = download.title,
@@ -117,3 +128,5 @@ data class DownloadFile(
     val path: Path,
     val availableBytes: Long,
 )
+
+internal class DownloadFileAccessRevokedException : RuntimeException()

@@ -13,8 +13,7 @@ import com.buco7854.opentv.core.storage.Storage
 import com.buco7854.opentv.core.util.nowMs
 import com.buco7854.opentv.core.xtream.XtreamApi
 import com.buco7854.opentv.core.xtream.XtreamAuthException
-import com.buco7854.opentv.data.createRoomStorage
-import com.buco7854.opentv.serverdata.createServerUserDatabase
+import com.buco7854.opentv.serverdata.createOpenTvServerStorage
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.HttpHeaders
 import io.ktor.serialization.kotlinx.json.json
@@ -57,7 +56,6 @@ data class HealthDto(
 class ServerRuntime(
     val graph: ServerGraph,
     private val storage: Storage,
-    private val userDatabase: com.buco7854.opentv.serverdata.db.ServerUserDatabase,
     private val connections: ProviderConnections,
 ) : AutoCloseable {
     private val closed = AtomicBoolean()
@@ -71,7 +69,6 @@ class ServerRuntime(
         graph.proxy.close()
         graph.streamGate.close()
         connections.closeAll()
-        userDatabase.close()
         storage.close()
     }
 }
@@ -81,8 +78,9 @@ object ServerBootstrap {
     fun create(config: ServerConfig): ServerRuntime {
         Files.createDirectories(config.dataDir)
         val log = LoggerFactory.getLogger("opentv")
-        val storage = createRoomStorage(config.dataDir.resolve("opentv.db").toString())
-        val userDatabase = createServerUserDatabase(config.dataDir.resolve("server-users.db").toString())
+        val persistence = createOpenTvServerStorage(config.dataDir.resolve("opentv.db").toString())
+        val storage = persistence.catalog
+        val userDatabase = persistence.database
         val cleanup = RuntimeUserStateCleanupCoordinator()
         val contentIdentities = ContentIdentityService(userDatabase, storage)
         val auth = AuthService(
@@ -222,10 +220,10 @@ object ServerBootstrap {
             contentIdentities = contentIdentities,
             userActivity = userActivity,
         )
-        val runtime = ServerRuntime(graph, storage, userDatabase, connections)
+        val runtime = ServerRuntime(graph, storage, connections)
         try {
             runBlocking {
-                auth.initialize()
+                initializeAuthentication(auth, cleanup)
                 oidc.validateConfiguration()
                 apiServices.playlists.reconcilePendingDeletions()
                 userActivity.prune()
@@ -236,6 +234,15 @@ object ServerBootstrap {
             runtime.close()
             throw error
         }
+    }
+}
+
+internal suspend fun initializeAuthentication(
+    auth: AuthService,
+    cleanup: UserStateCleanupCoordinator,
+) {
+    auth.initialize().forEach { userId ->
+        cleanup.sessionRevoked(userId, null)
     }
 }
 

@@ -24,8 +24,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Request
+import okhttp3.ResponseBody
 import java.io.IOException
 import com.buco7854.opentv.R
 
@@ -42,6 +47,7 @@ class DownloadWorker(
             Regex("""bytes (\d+)-(\d+)/(\d+)""", RegexOption.IGNORE_CASE)
         private val UNSATISFIED_RANGE =
             Regex("""bytes \*/(\d+)""", RegexOption.IGNORE_CASE)
+        private const val MAX_ERROR_BODY_BYTES = 8 * 1024
 
         fun ensureNotificationChannel(context: Context) {
             if (Build.VERSION.SDK_INT >= 26) {
@@ -236,6 +242,11 @@ class DownloadWorker(
             if (!response.isSuccessful) {
                 throw HttpStatusException(
                     response.code,
+                    errorCode = if (response.code == 410) {
+                        parseErrorCode(response.body)
+                    } else {
+                        null
+                    },
                     resourceLength = if (response.code == 416) {
                         UNSATISFIED_RANGE.matchEntire(
                             response.header("Content-Range").orEmpty(),
@@ -373,6 +384,15 @@ class DownloadWorker(
                 requestFailure = error
             }
 
+            if ((requestFailure as? HttpStatusException)?.let {
+                    it.code == 410 && it.errorCode == "download_access_revoked"
+                } == true
+            ) {
+                throw HubGoneException(
+                    "download_access_revoked",
+                    "The session that granted file access has ended",
+                )
+            }
             val localBytes = DownloadStorage.length(applicationContext, item.filePath)
             val state = dependencies.hubDownloads.refreshFile(
                 requireNotNull(item.hubSourceId),
@@ -566,8 +586,31 @@ class DownloadWorker(
 
     private class HttpStatusException(
         val code: Int,
+        val errorCode: String? = null,
         val resourceLength: Long? = null,
     ) : IOException("HTTP $code")
+
+    private fun parseErrorCode(body: ResponseBody): String? {
+        val input = body.byteStream()
+        val bytes = ByteArray(MAX_ERROR_BODY_BYTES + 1)
+        var size = 0
+        while (size < bytes.size) {
+            val read = input.read(bytes, size, bytes.size - size)
+            if (read < 0) break
+            size += read
+        }
+        if (size > MAX_ERROR_BODY_BYTES) return null
+        return try {
+            Json.parseToJsonElement(String(bytes, 0, size, Charsets.UTF_8))
+                .jsonObject["code"]
+                ?.jsonPrimitive
+                ?.content
+        } catch (_: SerializationException) {
+            null
+        } catch (_: IllegalArgumentException) {
+            null
+        }
+    }
 
     private data class ContentRange(val start: Long, val end: Long, val total: Long)
 

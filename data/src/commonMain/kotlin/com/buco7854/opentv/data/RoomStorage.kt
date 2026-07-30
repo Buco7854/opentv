@@ -1,5 +1,9 @@
 package com.buco7854.opentv.data
 
+import androidx.room.PooledConnection
+import androidx.room.RoomDatabase
+import androidx.room.immediateTransaction
+import androidx.room.useWriterConnection
 import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.model.Download
@@ -28,16 +32,21 @@ import com.buco7854.opentv.core.storage.SEARCH_RESULTS_PER_KIND
 import com.buco7854.opentv.core.storage.Storage
 import com.buco7854.opentv.core.storage.XtreamSeriesStore
 import com.buco7854.opentv.core.storage.XtreamSeriesListing
-import com.buco7854.opentv.data.db.OpenTvDatabase
+import com.buco7854.opentv.data.db.CatalogDaos
 import com.buco7854.opentv.data.db.channelIndexedSearchQuery
 import com.buco7854.opentv.data.db.searchIndexQuery
 import com.buco7854.opentv.data.db.seriesIndexedSearchQuery
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
-/** Room implementation of the core storage ports. */
-class RoomStorage(private val db: OpenTvDatabase) : Storage {
-    override fun close() = db.close()
+/** Room implementation of the core storage ports. Database lifecycle remains explicit. */
+class RoomStorage(
+    private val db: CatalogDaos,
+    private val closeDatabase: () -> Unit,
+) : Storage {
+    private val roomDatabase = db as? RoomDatabase
+
+    override fun close() = closeDatabase()
 
     override val playlists = object : PlaylistStore {
         override fun observeAll(): Flow<List<Playlist>> =
@@ -55,12 +64,39 @@ class RoomStorage(private val db: OpenTvDatabase) : Storage {
         override suspend fun insertAll(channels: List<Channel>) =
             db.channelDao().insertAll(channels.map { it.toRow() })
 
-        override suspend fun deleteForPlaylist(playlistId: Long) = db.channelDao().deleteForPlaylist(playlistId)
-        override suspend fun deleteForPlaylistKind(playlistId: Long, kind: Int) =
-            db.channelDao().deleteForPlaylistKind(playlistId, kind)
+        override suspend fun deleteForPlaylist(playlistId: Long) {
+            val database = roomDatabase
+            if (database == null) {
+                db.channelDao().deleteForPlaylist(playlistId)
+            } else {
+                database.withChannelSearchIndexesRebuilt {
+                    db.channelDao().deleteForPlaylist(playlistId)
+                }
+            }
+        }
 
-        override suspend fun replaceKinds(playlistId: Long, kinds: List<Int>, channels: List<Channel>) =
-            db.channelDao().replaceKinds(playlistId, kinds, channels.map { it.toRow() })
+        override suspend fun deleteForPlaylistKind(playlistId: Long, kind: Int) {
+            val database = roomDatabase
+            if (database == null) {
+                db.channelDao().deleteForPlaylistKind(playlistId, kind)
+            } else {
+                database.withChannelSearchIndexesRebuilt {
+                    db.channelDao().deleteForPlaylistKind(playlistId, kind)
+                }
+            }
+        }
+
+        override suspend fun replaceKinds(playlistId: Long, kinds: List<Int>, channels: List<Channel>) {
+            val rows = channels.map { it.toRow() }
+            val database = roomDatabase
+            if (database == null) {
+                db.channelDao().replaceKinds(playlistId, kinds, rows)
+            } else {
+                database.withChannelSearchIndexesRebuilt {
+                    db.channelDao().replaceKinds(playlistId, kinds, rows)
+                }
+            }
+        }
         override suspend fun count(playlistId: Long, kind: Int): Int = db.channelDao().count(playlistId, kind)
 
         override fun observeGroups(playlistId: Long, kind: Int): Flow<List<GroupCount>> =
@@ -193,11 +229,28 @@ class RoomStorage(private val db: OpenTvDatabase) : Storage {
         override suspend fun insertAll(series: List<XtreamSeries>) =
             db.xtreamSeriesDao().insertAll(series.map { it.toRow() })
 
-        override suspend fun deleteForPlaylist(playlistId: Long) =
-            db.xtreamSeriesDao().deleteForPlaylist(playlistId)
+        override suspend fun deleteForPlaylist(playlistId: Long) {
+            val database = roomDatabase
+            if (database == null) {
+                db.xtreamSeriesDao().deleteForPlaylist(playlistId)
+            } else {
+                database.withSeriesSearchIndexesRebuilt {
+                    db.xtreamSeriesDao().deleteForPlaylist(playlistId)
+                }
+            }
+        }
 
-        override suspend fun replaceAll(playlistId: Long, series: List<XtreamSeries>) =
-            db.xtreamSeriesDao().replaceAll(playlistId, series.map { it.toRow() })
+        override suspend fun replaceAll(playlistId: Long, series: List<XtreamSeries>) {
+            val rows = series.map { it.toRow() }
+            val database = roomDatabase
+            if (database == null) {
+                db.xtreamSeriesDao().replaceAll(playlistId, rows)
+            } else {
+                database.withSeriesSearchIndexesRebuilt {
+                    db.xtreamSeriesDao().replaceAll(playlistId, rows)
+                }
+            }
+        }
 
         override suspend fun count(playlistId: Long): Int = db.xtreamSeriesDao().count(playlistId)
 
@@ -408,6 +461,103 @@ class RoomStorage(private val db: OpenTvDatabase) : Storage {
         override suspend fun clearIdentity(id: Long) = db.hubSourceDao().clearIdentity(id)
     }
 }
+
+/**
+ * Rebuilds both catalog FTS5 indexes around [block].
+ *
+ * The base-table mutation, index rebuild and trigger restoration share the caller's Room writer
+ * transaction, so readers see either the complete old or complete new catalog. This is public
+ * only for the server database's merged catalog/account deletion transaction.
+ */
+suspend fun <R> RoomDatabase.withCatalogSearchIndexesRebuilt(
+    block: suspend () -> R,
+): R = withChannelSearchIndexesRebuilt {
+    withSeriesSearchIndexesRebuilt {
+        block()
+    }
+}
+
+/**
+ * FTS5 external-content delete triggers become disproportionately expensive during a wholesale
+ * replacement. Drop them transactionally around the base-table mutation, then let FTS5 rebuild
+ * its index in one set-based operation.
+ */
+private suspend fun <R> RoomDatabase.withChannelSearchIndexesRebuilt(
+    block: suspend () -> R,
+): R = withSearchIndexesRebuilt(
+    CHANNEL_SEARCH_TRIGGER_NAMES,
+    CHANNEL_SEARCH_TABLES,
+    block,
+)
+
+private suspend fun <R> RoomDatabase.withSeriesSearchIndexesRebuilt(
+    block: suspend () -> R,
+): R = withSearchIndexesRebuilt(
+    SERIES_SEARCH_TRIGGER_NAMES,
+    SERIES_SEARCH_TABLES,
+    block,
+)
+
+private suspend fun <R> RoomDatabase.withSearchIndexesRebuilt(
+    triggerNames: List<String>,
+    searchTables: List<String>,
+    block: suspend () -> R,
+): R = useWriterConnection { connection ->
+    connection.immediateTransaction {
+        val triggerSql = connection.readTriggerSql(triggerNames)
+        triggerNames.forEach { name ->
+            connection.execute("DROP TRIGGER ${name.quotedIdentifier()}")
+        }
+        val result = block()
+        searchTables.forEach { table ->
+            connection.execute("INSERT INTO $table($table) VALUES('rebuild')")
+        }
+        triggerSql.forEach { connection.execute(it) }
+        result
+    }
+}
+
+private suspend fun PooledConnection.readTriggerSql(names: List<String>): List<String> {
+    val sqlByName = usePrepared(
+        "SELECT name, sql FROM sqlite_master WHERE type = 'trigger' " +
+            "AND name IN (${names.joinToString { "?" }})",
+    ) { statement ->
+        names.forEachIndexed { index, name -> statement.bindText(index + 1, name) }
+        buildMap {
+            while (statement.step()) {
+                put(statement.getText(0), statement.getText(1))
+            }
+        }
+    }
+    check(sqlByName.keys == names.toSet()) {
+        "Catalog search triggers are missing: ${names.toSet() - sqlByName.keys}"
+    }
+    return names.map(sqlByName::getValue)
+}
+
+private suspend fun PooledConnection.execute(sql: String) =
+    usePrepared(sql) { statement -> statement.step() }
+
+private fun String.quotedIdentifier(): String = "\"${replace("\"", "\"\"")}\""
+
+private val CHANNEL_SEARCH_TABLES = listOf("channels_fts", "channels_words_fts")
+private val CHANNEL_SEARCH_TRIGGER_NAMES = listOf(
+    "opentv_channels_fts_ai",
+    "opentv_channels_fts_ad",
+    "opentv_channels_fts_au",
+    "opentv_channels_words_fts_ai",
+    "opentv_channels_words_fts_ad",
+    "opentv_channels_words_fts_au",
+)
+private val SERIES_SEARCH_TABLES = listOf("xtream_series_fts", "xtream_series_words_fts")
+private val SERIES_SEARCH_TRIGGER_NAMES = listOf(
+    "opentv_xtream_series_fts_ai",
+    "opentv_xtream_series_fts_ad",
+    "opentv_xtream_series_fts_au",
+    "opentv_xtream_series_words_fts_ai",
+    "opentv_xtream_series_words_fts_ad",
+    "opentv_xtream_series_words_fts_au",
+)
 
 /** SQLite's bound-variable ceiling, with room to spare for the rest of a statement. */
 private const val MAX_BOUND_VARIABLES = 500

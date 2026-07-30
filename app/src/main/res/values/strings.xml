@@ -183,6 +183,7 @@
     <string name="downloads_remove_title">Remove download?</string>
     <string name="downloads_delete_file_text">Delete the downloaded file for \"%1$s\"?</string>
     <string name="downloads_delete_partial_text">Cancel and delete the partial download for \"%1$s\"?</string>
+    <string name="downloads_delete_failed">Could not delete the file. Check the storage location and try again.</string>
     <string name="downloads_already_downloaded">Already downloaded</string>
     <string name="downloads_paused_resume_hint">Paused. Resume it from Downloads</string>
     <string name="downloads_already_downloading">Already downloading</string>
@@ -263,6 +264,7 @@
     <string name="account_no_api_title">No account API</string>
     <string name="account_no_api_subtitle">Connection monitoring needs an Xtream-style playlist URL (get.php?username=…&amp;password=…). This playlist doesn\'t have one.</string>
     <string name="account_error">Couldn\'t reach the provider\'s account API. Details are in the error log.</string>
+    <string name="account_stale_error">Couldn\'t refresh account information. Showing data from an earlier update.</string>
     <string name="account_loading">Loading account information…</string>
     <string name="account_updated">Updated %1$s</string>
     <string name="account_cache_hint">Results are cached for a minute; the refresh button forces a fresh request to the provider.</string>
@@ -352,7 +354,6 @@
     <string name="hub_link_expired">The code expired.</string>
     <string name="hub_link_restart">Start over</string>
     <string name="hub_pending_approval">This account is waiting for an administrator to approve it.</string>
-    <string name="hub_connected">Connected to %1$s</string>
     <string name="hub_settings_title">Server</string>
     <string name="hub_signed_in_as">Signed in as %1$s</string>
     <string name="hub_remove_download_after_pull">Remove from server after download</string>
@@ -367,10 +368,15 @@
     <string name="hub_sign_out">Sign out</string>
     <string name="hub_remove">Remove server</string>
     <string name="hub_remove_confirm">Remove this server? Downloads already saved on this device are kept.</string>
-    <string name="hub_status_signed_out">Signed out</string>
-    <string name="hub_status_unreachable">Unreachable</string>
     <string name="hub_sign_in_again">Sign in again</string>
     <string name="hub_retry">Retry</string>
+    <string name="hub_enter_address">Enter an OpenTV server address.</string>
+    <string name="hub_server_unexpected_response">This server sent a response OpenTV didn\'t understand.</string>
+    <string name="hub_sign_in_not_saved">Signed in, but this server couldn\'t be saved.</string>
+    <string name="hub_too_many_attempts">Too many attempts. Try again in a moment.</string>
+    <string name="hub_step_unsupported">This version of the app can\'t complete that sign-in step.</string>
+    <string name="hub_request_failed">The server couldn\'t complete the request.</string>
+    <string name="hub_generic_failure">Something went wrong. Try again.</string>
     <string name="source_load_failed">Couldn\'t load this content</string>
     <string name="source_unreachable_title">Server unreachable</string>
     <string name="source_signed_out_title">Signed out</string>

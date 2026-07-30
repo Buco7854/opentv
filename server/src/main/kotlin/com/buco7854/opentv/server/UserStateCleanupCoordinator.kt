@@ -38,8 +38,12 @@ class RuntimeUserStateCleanupCoordinator : UserStateCleanupCoordinator {
     override suspend fun sessionRevoked(userId: String, authSessionId: String?) =
         admission.withLock {
             val current = requireNotNull(runtime) { "Runtime cleanup has not been bound" }
-            if (authSessionId == null) current.sessions.terminateUser(userId)
-            else current.sessions.terminateSession(authSessionId)
+            if (authSessionId == null) {
+                current.sessions.terminateUser(userId)
+                current.downloads.suspendUserAccess(userId)
+            } else {
+                current.sessions.terminateSession(authSessionId)
+            }
         }
 
     override suspend fun playlistGrantRevoked(userId: String, playlistId: Long) =

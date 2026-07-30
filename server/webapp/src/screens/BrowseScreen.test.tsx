@@ -1,7 +1,8 @@
 import { act, fireEvent, render } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { api, ChannelKind, GroupCount, PlaylistDetail } from '../api';
+import { AccountInfo, api, ChannelKind, GroupCount, PlaylistDetail } from '../api';
+import { t } from '../i18n';
 import { BrowseScreen } from './BrowseScreen';
 
 vi.mock('../auth/AuthProvider', () => ({ useAuth: () => ({ user: { role: 'ADMIN' } }) }));
@@ -116,6 +117,35 @@ describe('BrowseScreen', () => {
 
     expect(view.queryByText('Forbidden')).toBeNull();
     expect(view.getByTestId('query').textContent).toBe('?t=0&g=All+channels');
+    view.unmount();
+  });
+
+  it('labels stale connection figures as earlier data', async () => {
+    vi.mocked(api.playlistDetail).mockResolvedValue({
+      ...detail,
+      playlist: {
+        ...detail.playlist,
+        mode: 'xtream',
+        hasXtreamPanel: true,
+      },
+    });
+    const account: AccountInfo = {
+      activeConnections: 1,
+      maxConnections: 2,
+      status: 'Active',
+      expiresAtMs: null,
+      isTrial: false,
+      createdAtMs: null,
+      timezone: null,
+      fetchedAtMs: 100,
+      stale: true,
+    };
+    vi.spyOn(api, 'account').mockResolvedValue(account);
+
+    const view = renderBrowse();
+
+    const figures = t('browse.connections', { active: 1, max: 2 });
+    expect(await view.findByText(`${figures} · ${t('account.earlierData')}`)).toBeTruthy();
     view.unmount();
   });
 });

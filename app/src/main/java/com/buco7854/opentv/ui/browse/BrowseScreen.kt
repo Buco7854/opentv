@@ -61,7 +61,10 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.buco7854.opentv.R
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.model.Download
@@ -154,11 +157,16 @@ fun BrowseScreen(
         }
     }
 
-    // Keep "now airing" rows fresh (local DB query, no network).
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(60_000)
-            viewModel.reloadNowAiring()
+    // Keep "now airing" rows fresh. A hub answers this over the network, so the
+    // timer follows the lifecycle rather than the composition: a backgrounded
+    // app must not keep polling a server nobody is looking at.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                delay(60_000)
+                viewModel.reloadNowAiring()
+            }
         }
     }
 
@@ -266,7 +274,12 @@ fun BrowseScreen(
                     SourceUnreachable(viewModel::retry)
                 catalog.error is CatalogLoadError.Failed ->
                     SourceLoadFailed(message = null, onRetry = viewModel::retry)
-                catalog.loading && !hasContent -> Box(
+                browseListLoading(
+                    loading = catalog.loading,
+                    groupSelected = group != null,
+                    groupCount = groups.size,
+                    itemCount = items.size,
+                ) -> Box(
                     Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -725,6 +738,19 @@ private fun favoriteKey(item: CatalogItem): String = when (val ref = item.ref) {
         else -> ref.url
     }
 }
+
+/**
+ * Whether the browse content area owes the user a spinner rather than a list.
+ * The answer belongs to the level being shown: inside a category the category
+ * list behind it is already loaded, so asking whether *anything* has arrived
+ * would render "this category is empty" for the whole of a server round trip.
+ */
+internal fun browseListLoading(
+    loading: Boolean,
+    groupSelected: Boolean,
+    groupCount: Int,
+    itemCount: Int,
+): Boolean = loading && if (groupSelected) itemCount == 0 else groupCount == 0
 
 /** Compact filter field for the browse content area. */
 @Composable

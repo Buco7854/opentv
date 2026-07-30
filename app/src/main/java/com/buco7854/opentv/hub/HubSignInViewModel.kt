@@ -11,6 +11,7 @@ import com.buco7854.opentv.contract.DeviceLinkStatusDto
 import com.buco7854.opentv.contract.ServerInfoDto
 import com.buco7854.opentv.contract.TotpEnrollmentDto
 import com.buco7854.opentv.core.model.HubSource
+import com.buco7854.opentv.diag.ErrorLog
 import java.net.URI
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
@@ -96,10 +97,30 @@ enum class DeviceLinkPhase {
     SCANNED,
 }
 
+/**
+ * Why a sign-in step failed. The state machine names the reason and the screen
+ * owns the words, so these failures are localized like the rest of the app.
+ */
+enum class HubSignInFailure {
+    ADDRESS_REQUIRED,
+    NOT_OPENTV,
+    UNREACHABLE,
+    BAD_CREDENTIALS,
+    BAD_CODE,
+    TOO_MANY_ATTEMPTS,
+    STEP_UNSUPPORTED,
+    REQUEST_FAILED,
+
+    /** The server answered something this protocol does not allow. */
+    UNEXPECTED_RESPONSE,
+    NOT_SAVED,
+    GENERIC,
+}
+
 sealed interface HubSignInState {
     data class UrlEntry(
         val url: String = "",
-        val error: String? = null,
+        val error: HubSignInFailure? = null,
     ) : HubSignInState
 
     data class Probing(
@@ -108,7 +129,7 @@ sealed interface HubSignInState {
 
     data class ProbeFailed(
         val url: String,
-        val error: String,
+        val error: HubSignInFailure,
     ) : HubSignInState
 
     data class UpdateRequired(
@@ -120,7 +141,7 @@ sealed interface HubSignInState {
     data class MethodChooser(
         val baseUrl: String,
         val capabilities: AuthCapabilitiesDto,
-        val error: String? = null,
+        val error: HubSignInFailure? = null,
     ) : HubSignInState {
         val passwordAvailable: Boolean
             get() = capabilities.passwordEnabled
@@ -133,13 +154,13 @@ sealed interface HubSignInState {
 
     data class Password(
         val username: String = "",
-        val error: String? = null,
+        val error: HubSignInFailure? = null,
     ) : HubSignInState
 
     data class MfaChallenge(
         val challenge: String,
         val methods: List<String>,
-        val error: String? = null,
+        val error: HubSignInFailure? = null,
     ) : HubSignInState {
         val recoveryAvailable: Boolean
             get() = methods.any { it.equals(RECOVERY_METHOD, ignoreCase = true) }
@@ -150,7 +171,7 @@ sealed interface HubSignInState {
         val otpauthUri: String,
         val challenge: String,
         val expiresAtMs: Long,
-        val error: String? = null,
+        val error: HubSignInFailure? = null,
     ) : HubSignInState
 
     data class DeviceLink(
@@ -158,7 +179,7 @@ sealed interface HubSignInState {
         val expiresAtMs: Long,
         val phase: DeviceLinkPhase,
         val mode: DeviceLinkMode,
-        val error: String? = null,
+        val error: HubSignInFailure? = null,
         /**
          * Who scanned the code, once the server knows. Shown so the user can
          * refuse an approval from an account that is not theirs: whoever holds
@@ -235,7 +256,8 @@ class HubSignInViewModel(
         if (activeJob?.isActive == true) return
         val normalized = HubEndpoints.normalizeBaseUrl(url)
         if (normalized.isBlank()) {
-            mutableState.value = HubSignInState.ProbeFailed(url, "Enter an OpenTV server address.")
+            mutableState.value =
+                HubSignInState.ProbeFailed(url, HubSignInFailure.ADDRESS_REQUIRED)
             return
         }
         mutableState.value = HubSignInState.Probing(normalized)
@@ -266,7 +288,8 @@ class HubSignInViewModel(
                     fallback = { message -> HubSignInState.Password(username, message) },
                 )
             } catch (_: HubUnauthorizedException) {
-                mutableState.value = HubSignInState.Password(username, "The username or password was not accepted.")
+                mutableState.value =
+                    HubSignInState.Password(username, HubSignInFailure.BAD_CREDENTIALS)
             } catch (error: Throwable) {
                 error.rethrowCancellation()
                 mutableState.value = HubSignInState.Password(username, safeError(error))
@@ -397,7 +420,7 @@ class HubSignInViewModel(
             if (info.product != PRODUCT) {
                 mutableState.value = HubSignInState.ProbeFailed(
                     normalized,
-                    "This address is not an OpenTV server.",
+                    HubSignInFailure.NOT_OPENTV,
                 )
                 return
             }
@@ -420,13 +443,14 @@ class HubSignInViewModel(
 
     private suspend fun handleAuthFlow(
         flow: AuthFlowDto,
-        fallback: (String) -> HubSignInState,
+        fallback: (HubSignInFailure) -> HubSignInState,
     ) {
         when (flow.status.uppercase(Locale.US)) {
             STATUS_AUTHENTICATED -> {
                 val token = flow.sessionToken
                 if (token.isNullOrBlank()) {
-                    mutableState.value = fallback("The server completed sign-in without a session.")
+                    mutableState.value =
+                        fallback(unexpectedResponse("Authenticated without a session token"))
                 } else {
                     finish(token)
                 }
@@ -435,7 +459,7 @@ class HubSignInViewModel(
             STATUS_MFA_REQUIRED -> {
                 val challenge = flow.challenge
                 mutableState.value = if (challenge.isNullOrBlank()) {
-                    fallback("The server returned an incomplete sign-in challenge.")
+                    fallback(unexpectedResponse("MFA required without a challenge"))
                 } else {
                     HubSignInState.MfaChallenge(challenge, flow.methods)
                 }
@@ -444,7 +468,8 @@ class HubSignInViewModel(
             STATUS_ENROLLMENT_REQUIRED -> {
                 val challenge = flow.challenge
                 if (challenge.isNullOrBlank()) {
-                    mutableState.value = fallback("The server returned an incomplete enrollment challenge.")
+                    mutableState.value =
+                        fallback(unexpectedResponse("Enrollment required without a challenge"))
                     return
                 }
                 try {
@@ -462,7 +487,8 @@ class HubSignInViewModel(
             }
 
             STATUS_PENDING_APPROVAL -> mutableState.value = HubSignInState.PendingApproval
-            else -> mutableState.value = fallback("The server returned an unsupported sign-in response.")
+            else -> mutableState.value =
+                fallback(unexpectedResponse("Unsupported sign-in status ${flow.status}"))
         }
     }
 
@@ -473,12 +499,12 @@ class HubSignInViewModel(
                 ?: sink.add(defaultHubName(baseUrl), baseUrl, token)
         } catch (error: Throwable) {
             error.rethrowCancellation()
-            val message = "Sign-in succeeded, but the hub could not be saved."
+            val failure = HubSignInFailure.NOT_SAVED
             mutableState.value = if (targetHubId == null) {
-                HubSignInState.UrlEntry(baseUrl, message)
+                HubSignInState.UrlEntry(baseUrl, failure)
             } else {
                 methodChooser().let { state ->
-                    (state as? HubSignInState.MethodChooser)?.copy(error = message) ?: state
+                    (state as? HubSignInState.MethodChooser)?.copy(error = failure) ?: state
                 }
             }
             return
@@ -544,7 +570,7 @@ class HubSignInViewModel(
                         mutableState.value = start.toState(
                             DeviceLinkPhase.SCANNED,
                             mode,
-                            "The hub approved this device without completing sign-in.",
+                            unexpectedResponse("Device link approved without a sign-in flow"),
                             expiresAtMs,
                         )
                     } else {
@@ -576,7 +602,7 @@ class HubSignInViewModel(
                 else -> mutableState.value = start.toState(
                     DeviceLinkPhase.PENDING,
                     mode,
-                    "The hub returned an unsupported device-link response.",
+                    unexpectedResponse("Unsupported device-link status ${status.status}"),
                     expiresAtMs,
                 )
             }
@@ -586,7 +612,7 @@ class HubSignInViewModel(
     private fun DeviceLinkStartDto.toState(
         phase: DeviceLinkPhase,
         mode: DeviceLinkMode,
-        error: String? = null,
+        error: HubSignInFailure? = null,
         expiresAtMs: Long = this.expiresAtMs,
         scannedBy: String? = null,
     ) = HubSignInState.DeviceLink(
@@ -602,19 +628,29 @@ class HubSignInViewModel(
         capabilities?.let { HubSignInState.MethodChooser(baseUrl, it) }
             ?: HubSignInState.UrlEntry(baseUrl)
 
-    private fun authCodeError(error: Throwable): String =
+    private fun authCodeError(error: Throwable): HubSignInFailure =
         if (error is HubUnauthorizedException) {
-            "The code was not accepted."
+            HubSignInFailure.BAD_CODE
         } else {
             safeError(error)
         }
 
-    private fun safeError(error: Throwable): String = when (error) {
-        is HubUnreachableException -> "Could not reach this OpenTV server."
-        is HubCapacityException -> "Too many attempts. Try again shortly."
-        is NotImplementedError -> "This app build does not support this sign-in step yet."
-        is HubException -> "The OpenTV server could not complete the request."
-        else -> "Something went wrong. Try again."
+    private fun safeError(error: Throwable): HubSignInFailure = when (error) {
+        is HubUnreachableException -> HubSignInFailure.UNREACHABLE
+        is HubCapacityException -> HubSignInFailure.TOO_MANY_ATTEMPTS
+        is NotImplementedError -> HubSignInFailure.STEP_UNSUPPORTED
+        is HubException -> HubSignInFailure.REQUEST_FAILED
+        else -> HubSignInFailure.GENERIC
+    }
+
+    /**
+     * A server that breaks the protocol reads as one message: the user cannot act
+     * on which part of it broke. The specific shape goes to the error log, which
+     * is where that distinction is worth having.
+     */
+    private fun unexpectedResponse(detail: String): HubSignInFailure {
+        ErrorLog.log(LOG_TAG, message = detail)
+        return HubSignInFailure.UNEXPECTED_RESPONSE
     }
 
     private fun defaultHubName(url: String): String =
@@ -630,6 +666,7 @@ class HubSignInViewModel(
     companion object {
         const val SUPPORTED_API_VERSION = 1
 
+        private const val LOG_TAG = "Hub sign-in"
         private const val PRODUCT = "opentv"
         private const val STATUS_AUTHENTICATED = "AUTHENTICATED"
         private const val STATUS_MFA_REQUIRED = "MFA_REQUIRED"

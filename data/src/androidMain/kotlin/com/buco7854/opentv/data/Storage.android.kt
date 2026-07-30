@@ -15,5 +15,5 @@ fun createRoomStorage(context: Context): Storage {
         .fallbackToDestructiveMigration(dropAllTables = true)
         .addCallback(SEARCH_INDEX_CALLBACK)
         .build()
-    return RoomStorage(db)
+    return RoomStorage(db, db::close)
 }

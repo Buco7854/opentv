@@ -1,6 +1,6 @@
 package com.buco7854.opentv.server
 
-import com.buco7854.opentv.serverdata.createServerUserDatabase
+import com.buco7854.opentv.serverdata.createOpenTvServerDatabase
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.install
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
@@ -22,7 +22,7 @@ internal fun withPublicAuthServer(
     block: suspend ApplicationTestBuilder.(bootstrapToken: String) -> Unit,
 ) = testApplication {
     val dir: Path = Files.createTempDirectory("opentv-public-auth")
-    val db = createServerUserDatabase(dir.resolve("users.db").toString())
+    val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
     try {
         val config = publicAuthTestConfig()
         val auth = AuthService(db, config, dir)

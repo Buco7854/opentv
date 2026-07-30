@@ -2,6 +2,7 @@ package com.buco7854.opentv.serverdata.db
 
 import androidx.room.immediateTransaction
 import androidx.room.useWriterConnection
+import com.buco7854.opentv.data.withCatalogSearchIndexesRebuilt
 
 data class GrantReplacement(
     val removed: Set<Long>,
@@ -17,7 +18,7 @@ data class MfaCompletionWrite(
 )
 
 /** Atomically replaces grants and updates the visibility state of associated downloads. */
-suspend fun ServerUserDatabase.replaceUserPlaylistGrants(
+suspend fun OpenTvServerDatabase.replaceUserPlaylistGrants(
     userId: String,
     playlistIds: List<Long>,
     atMs: Long,
@@ -40,7 +41,7 @@ suspend fun ServerUserDatabase.replaceUserPlaylistGrants(
  * Commits a successful MFA ceremony as one unit. A racing or already-consumed
  * challenge rolls the complete transaction back, including recovery-code use.
  */
-suspend fun ServerUserDatabase.completeMfa(
+suspend fun OpenTvServerDatabase.completeMfa(
     challengeId: String,
     parentChallengeId: String? = null,
     recoveryCodeId: String? = null,
@@ -80,3 +81,42 @@ suspend fun ServerUserDatabase.completeMfa(
 }
 
 private class MfaCompletionConflict : RuntimeException()
+
+/**
+ * Persists one logical reconciliation without monopolizing SQLite's only writer.
+ *
+ * The caller owns application-level isolation and crash repair. Each DAO call below is its own
+ * Room transaction so unrelated session, login and download writes can run between chunks.
+ */
+suspend fun OpenTvServerDatabase.writeContentIdentityReconciliation(
+    inserts: List<ContentIdentityRow>,
+    updates: List<ContentIdentityRow>,
+    playlistId: Long,
+    retireMissingBeforeMs: Long?,
+) {
+    inserts.chunked(CONTENT_IDENTITY_WRITE_CHUNK_SIZE).forEach {
+        content().insertAll(it)
+    }
+    updates.chunked(CONTENT_IDENTITY_WRITE_CHUNK_SIZE).forEach {
+        content().updateAll(it)
+    }
+    retireMissingBeforeMs?.let { content().retireNotSeen(playlistId, it) }
+}
+
+/**
+ * Removes the complete shared catalog slice for one playlist. The final playlist delete
+ * cascades server grants, defaults, identities and their dependent per-user state inside the
+ * same writer transaction.
+ */
+suspend fun OpenTvServerDatabase.deleteCatalogPlaylist(playlistId: Long) =
+    withCatalogSearchIndexesRebuilt {
+        resumeDao().deleteForPlaylist(playlistId)
+        channelDao().deleteForPlaylist(playlistId)
+        epgDao().deleteForPlaylist(playlistId)
+        xtreamSeriesDao().deleteForPlaylist(playlistId)
+        favoriteDao().deleteForPlaylist(playlistId)
+        groupOverrideDao().deleteForPlaylist(playlistId)
+        playlistDao().delete(playlistId)
+    }
+
+const val CONTENT_IDENTITY_WRITE_CHUNK_SIZE = 2_000

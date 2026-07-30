@@ -297,11 +297,12 @@ function ConnectionLine({ playlistId }: { playlistId: number }) {
   const { data: info } = useAsync(() => api.account(playlistId, false), [playlistId]);
   if (!info) return null;
   const warn = info.maxConnections >= 1 && info.activeConnections >= info.maxConnections;
+  const earlier = info.stale ? ` · ${t('account.earlierData')}` : '';
   return (
     <button type="button" className={`subtitle conn${warn ? ' warn' : ''}`}
             onClick={() => navigate(`/account/${playlistId}`)}>
       <Icon name="person" className="sm" />
-      {t('browse.connections', { active: info.activeConnections, max: info.maxConnections })}
+      {t('browse.connections', { active: info.activeConnections, max: info.maxConnections })}{earlier}
     </button>
   );
 }

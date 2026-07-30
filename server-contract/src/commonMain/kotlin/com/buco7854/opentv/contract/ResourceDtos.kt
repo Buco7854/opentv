@@ -188,4 +188,6 @@ data class AccountInfoDto(
     val isTrial: Boolean,
     val createdAtMs: Long?,
     val timezone: String?,
+    val fetchedAtMs: Long,
+    val stale: Boolean,
 )

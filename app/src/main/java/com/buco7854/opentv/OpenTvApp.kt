@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.work.Configuration
 import androidx.work.WorkManager
 import com.buco7854.opentv.core.log.CoreLog
+import com.buco7854.opentv.core.repo.AccountInfoResult
 import com.buco7854.opentv.core.repo.AccountRepository
 import com.buco7854.opentv.core.repo.EpgRepository
 import com.buco7854.opentv.core.repo.FavoriteRepository
@@ -119,7 +120,15 @@ class AppGraph(app: Application) : AutoCloseable {
             downloads = storage.downloads,
             playlists = storage.playlists,
             settings = playerPrefs.settings,
-            accountInfo = { playlist -> account.accountInfo(playlist) },
+            accountInfo = { playlist ->
+                when (val result = account.accountInfo(playlist)) {
+                    is AccountInfoResult.Fresh -> result.info
+                    // The worker only needs a connection-budget estimate and presents no
+                    // freshness claim, so a cached provider limit remains useful here.
+                    is AccountInfoResult.Stale -> result.info
+                    is AccountInfoResult.Unavailable -> null
+                }
+            },
             httpClient = Http.ok,
             userAgent = { Http.userAgent },
             activePlaybackHost = PlaybackMonitor.activeHost,

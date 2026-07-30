@@ -136,10 +136,14 @@ class DownloadRepository(
         scheduler.enqueue(item.id)
     }
 
-    suspend fun delete(item: Download) {
+    suspend fun delete(item: Download): String? {
         scheduler.cancel(item.id)
-        withContext(Dispatchers.IO) { DownloadStorage.delete(context, item.filePath) }
+        val deleted = withContext(Dispatchers.IO) {
+            DownloadStorage.delete(context, item.filePath)
+        }
+        if (!deleted) return context.getString(R.string.downloads_delete_failed)
         store.delete(item.id)
+        return null
     }
 
     data class MoveResult(val moved: Int, val alreadyThere: Int, val failed: Int)

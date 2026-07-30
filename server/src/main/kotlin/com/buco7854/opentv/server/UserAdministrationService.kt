@@ -7,7 +7,7 @@ import com.buco7854.opentv.serverdata.ChallengeKind
 import com.buco7854.opentv.serverdata.UserRole
 import com.buco7854.opentv.serverdata.UserStatus
 import com.buco7854.opentv.serverdata.db.OidcIdentityRow
-import com.buco7854.opentv.serverdata.db.ServerUserDatabase
+import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
 import com.buco7854.opentv.serverdata.db.UserRow
 import com.buco7854.opentv.serverdata.db.replaceUserPlaylistGrants
 import kotlinx.coroutines.sync.Mutex
@@ -84,7 +84,7 @@ private enum class AdminAccountMutation(
 
 /** Administrative user, identity, session, and playlist-entitlement use cases. */
 internal class UserAdministrationService(
-    private val db: ServerUserDatabase,
+    private val db: OpenTvServerDatabase,
     private val accounts: AuthAccountService,
     private val sessions: PersistentSessionService,
     private val credentials: AuthCredentialService,
@@ -342,8 +342,16 @@ internal class UserAdministrationService(
             replacement.removed.forEach { cleanup.playlistGrantRevoked(userId, it) }
         }
 
-    private fun requireAdmin(actor: Actor) {
+    private suspend fun requireAdmin(actor: Actor) {
+        // The route authenticator's Actor is a request-start snapshot. Recheck the persisted
+        // account so a request already waiting when another administrator disables or demotes
+        // this account cannot run with stale authority.
         if (!actor.isAdmin) throw ForbiddenApiException()
+        val current = db.users().get(actor.userId) ?: throw UnauthenticatedApiException()
+        if (current.status != UserStatus.ACTIVE) throw UnauthenticatedApiException()
+        if (accounts.effectiveRole(current) != UserRole.ADMIN) {
+            throw ForbiddenApiException()
+        }
     }
 
     private suspend fun ensureAccountMutationsAllowed(

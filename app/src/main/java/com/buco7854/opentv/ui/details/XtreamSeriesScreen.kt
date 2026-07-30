@@ -31,6 +31,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalResources
@@ -89,7 +90,10 @@ fun XtreamSeriesScreen(
     val seasons = state.seasons.ifEmpty {
         episodes.mapNotNull { it.season }.distinct().sorted()
     }
-    var selectedSeason by remember { mutableStateOf<Int?>(null) }
+    // Saveable so the chosen season survives process death, and the config changes
+    // this Activity does not declare: it handles orientation itself, but not a
+    // theme or locale switch, which still recreates it.
+    var selectedSeason by rememberSaveable { mutableStateOf<Int?>(null) }
     val shown = remember(episodes, selectedSeason) {
         selectedSeason?.let { s -> episodes.filter { it.season == s } } ?: episodes
     }

@@ -2,14 +2,14 @@ package com.buco7854.opentv.server
 
 import com.buco7854.opentv.serverdata.db.PasswordCredentialRow
 import com.buco7854.opentv.serverdata.db.RecoveryCodeRow
-import com.buco7854.opentv.serverdata.db.ServerUserDatabase
+import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
 import com.buco7854.opentv.serverdata.db.TotpCredentialRow
 import java.security.MessageDigest
 import java.util.UUID
 
 /** Password, TOTP, and recovery-code persistence shared by local and account-security flows. */
 internal class AuthCredentialService(
-    private val db: ServerUserDatabase,
+    private val db: OpenTvServerDatabase,
     private val config: AuthConfig,
     private val clock: () -> Long,
 ) {

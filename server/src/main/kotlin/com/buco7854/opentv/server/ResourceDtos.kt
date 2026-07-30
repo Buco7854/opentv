@@ -126,6 +126,7 @@ internal fun XtreamSeriesListing.toListItemDto(
 
 internal fun Programme.toDto() = ProgrammeDto(id, playlistId, tvgId, title, description, startMs, endMs)
 internal fun GuideEntry.toDto() = GuideEntryDto(title, description, startMs, endMs, replayable)
-internal fun AccountInfo.toDto() = AccountInfoDto(
+internal fun AccountInfo.toDto(fetchedAtMs: Long, stale: Boolean) = AccountInfoDto(
     activeConnections, maxConnections, status, expiresAtMs, isTrial, createdAtMs, timezone,
+    fetchedAtMs, stale,
 )

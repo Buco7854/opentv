@@ -2,12 +2,12 @@ package com.buco7854.opentv.server
 
 import com.buco7854.opentv.contract.*
 import com.buco7854.opentv.core.model.ChannelKind
-import com.buco7854.opentv.serverdata.db.ServerUserDatabase
+import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
 import com.buco7854.opentv.serverdata.db.UserFavoriteRow
 import com.buco7854.opentv.serverdata.db.UserResumeRow
 
 class UserActivityService(
-    private val db: ServerUserDatabase,
+    private val db: OpenTvServerDatabase,
     private val auth: AuthService,
     private val content: ContentIdentityService,
     private val clock: () -> Long = System::currentTimeMillis,

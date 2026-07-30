@@ -4,12 +4,14 @@ import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -87,12 +89,12 @@ fun SettingsScreen(
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val moveDownloads by viewModel.moveDownloads.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
-    val current = settings ?: return
+    val current = settings
     val resources = LocalResources.current
-    val update: (PlayerSettings) -> Unit = viewModel::save
+    val update: (PlayerSettings.() -> PlayerSettings) -> Unit = viewModel::updateSettings
 
-    LaunchedEffect(current.downloadDirUri) {
-        viewModel.refreshMoveCount()
+    LaunchedEffect(current?.downloadDirUri) {
+        if (current != null) viewModel.refreshMoveCount()
     }
     LaunchedEffect(moveDownloads.result) {
         val result = moveDownloads.result ?: return@LaunchedEffect
@@ -121,6 +123,15 @@ fun SettingsScreen(
         },
         contentWindowInsets = WindowInsets(0.dp),
     ) { padding ->
+        if (current == null) {
+            Box(
+                Modifier.padding(padding).fillMaxSize(),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.onSurface)
+            }
+            return@Scaffold
+        }
         Column(
             Modifier
                 .padding(padding)
@@ -137,7 +148,7 @@ fun SettingsScreen(
                         PlayerSettings.THEME_LIGHT to stringResource(R.string.settings_theme_light),
                     ),
                     selected = current.themeMode,
-                    onSelect = { update(current.copy(themeMode = it)) },
+                    onSelect = { value -> update { copy(themeMode = value) } },
                     hint = stringResource(R.string.settings_theme_hint),
                 )
             }
@@ -146,13 +157,13 @@ fun SettingsScreen(
                 LanguagePicker(
                     label = stringResource(R.string.settings_preferred_audio),
                     value = current.preferredAudioLang,
-                    onSelect = { update(current.copy(preferredAudioLang = it)) },
+                    onSelect = { value -> update { copy(preferredAudioLang = value) } },
                 )
                 Spacer(Modifier.height(12.dp))
                 LanguagePicker(
                     label = stringResource(R.string.settings_preferred_subtitles),
                     value = current.preferredTextLang,
-                    onSelect = { update(current.copy(preferredTextLang = it)) },
+                    onSelect = { value -> update { copy(preferredTextLang = value) } },
                 )
                 Hint(stringResource(R.string.settings_tracks_hint))
             }
@@ -162,7 +173,7 @@ fun SettingsScreen(
                     label = stringResource(R.string.settings_seek_step),
                     options = listOf(5, 10, 30).map { it to stringResource(R.string.settings_seconds, it) },
                     selected = current.seekSeconds,
-                    onSelect = { update(current.copy(seekSeconds = it)) },
+                    onSelect = { value -> update { copy(seekSeconds = value) } },
                 )
                 SettingDivider()
                 ChipSetting(
@@ -173,7 +184,7 @@ fun SettingsScreen(
                         PlayerSettings.BUFFER_STABLE to stringResource(R.string.settings_buffer_stable),
                     ),
                     selected = current.bufferPreset,
-                    onSelect = { update(current.copy(bufferPreset = it)) },
+                    onSelect = { value -> update { copy(bufferPreset = value) } },
                     hint = stringResource(R.string.settings_buffer_hint),
                 )
                 SettingDivider()
@@ -186,14 +197,14 @@ fun SettingsScreen(
                         3 to stringResource(R.string.player_scale_stretch),
                     ),
                     selected = current.resizeMode,
-                    onSelect = { update(current.copy(resizeMode = it)) },
+                    onSelect = { value -> update { copy(resizeMode = value) } },
                 )
                 SettingDivider()
                 SwitchSetting(
                     label = stringResource(R.string.settings_decoder_fallback),
                     description = stringResource(R.string.settings_decoder_fallback_desc),
                     checked = current.decoderFallback,
-                    onChange = { update(current.copy(decoderFallback = it)) },
+                    onChange = { value -> update { copy(decoderFallback = value) } },
                 )
             }
 
@@ -205,7 +216,7 @@ fun SettingsScreen(
                         1 to "1", 2 to "2", 3 to "3",
                     ),
                     selected = current.downloadLimit,
-                    onSelect = { update(current.copy(downloadLimit = it)) },
+                    onSelect = { value -> update { copy(downloadLimit = value) } },
                     hint = stringResource(R.string.settings_downloads_hint),
                 )
                 SettingDivider()
@@ -224,7 +235,7 @@ fun SettingsScreen(
             SectionCard(stringResource(R.string.player_subtitles)) {
                 SubtitleStyleControls(
                     style = current.subtitleStyle,
-                    onChange = { update(current.copy(subtitleStyle = it)) },
+                    onChange = { value -> update { copy(subtitleStyle = value) } },
                 )
             }
         }
@@ -312,7 +323,10 @@ private fun SwitchSetting(
 }
 
 @Composable
-private fun DownloadLocationSetting(current: PlayerSettings, update: (PlayerSettings) -> Unit) {
+private fun DownloadLocationSetting(
+    current: PlayerSettings,
+    update: (PlayerSettings.() -> PlayerSettings) -> Unit,
+) {
     val context = LocalContext.current
     val folderPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -322,7 +336,7 @@ private fun DownloadLocationSetting(current: PlayerSettings, update: (PlayerSett
                 uri,
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
             )
-            update(current.copy(downloadDirUri = uri.toString()))
+            update { copy(downloadDirUri = uri.toString()) }
         }
     }
     Text(stringResource(R.string.settings_location), style = MaterialTheme.typography.titleSmall)
@@ -337,7 +351,9 @@ private fun DownloadLocationSetting(current: PlayerSettings, update: (PlayerSett
             modifier = Modifier.weight(1f),
         )
         if (current.downloadDirUri.isNotEmpty()) {
-            OtvTextButton(onClick = { update(current.copy(downloadDirUri = "")) }) { Text(stringResource(R.string.settings_reset)) }
+            OtvTextButton(onClick = { update { copy(downloadDirUri = "") } }) {
+                Text(stringResource(R.string.settings_reset))
+            }
         }
         OtvTextButton(onClick = { folderPicker.launch(null) }) { Text(stringResource(R.string.settings_choose)) }
     }
@@ -392,7 +408,10 @@ private val USER_AGENT_PRESETS = listOf(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun UserAgentSetting(current: PlayerSettings, update: (PlayerSettings) -> Unit) {
+private fun UserAgentSetting(
+    current: PlayerSettings,
+    update: (PlayerSettings.() -> PlayerSettings) -> Unit,
+) {
     var text by rememberSaveable { mutableStateOf(current.userAgent) }
     val focused = remember { mutableStateOf(false) }
     LaunchedEffect(current.userAgent) {
@@ -408,7 +427,7 @@ private fun UserAgentSetting(current: PlayerSettings, update: (PlayerSettings) -
                 selected = current.userAgent == value,
                 onClick = {
                     text = value
-                    update(current.copy(userAgent = value))
+                    update { copy(userAgent = value) }
                 },
                 label = { Text(name ?: stringResource(R.string.settings_ua_default)) },
             )
@@ -418,7 +437,8 @@ private fun UserAgentSetting(current: PlayerSettings, update: (PlayerSettings) -
         value = text,
         onValueChange = {
             text = it
-            update(current.copy(userAgent = it))
+            val value = it
+            update { copy(userAgent = value) }
         },
         singleLine = true,
         label = { Text(stringResource(R.string.settings_custom_user_agent)) },

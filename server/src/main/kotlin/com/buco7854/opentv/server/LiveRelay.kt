@@ -19,14 +19,18 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import java.io.InputStream
+import java.io.FilterInputStream
 import java.net.URI
+import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.file.Files
+import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
@@ -66,6 +70,7 @@ class LiveRelay(
         @Volatile private var reader: Job? = null
         @Volatile private var closer: Job? = null
         @Volatile private var upstream: InputStream? = null
+        @Volatile private var upstreamClient: HttpClient? = null
         @Volatile private var probe: Process? = null
         @Volatile private var ffmpeg: Process? = null
         @Volatile private var dead = false
@@ -132,9 +137,11 @@ class LiveRelay(
             reader?.cancel(); reader = null
             closer?.cancel(); closer = null
             runCatching { upstream?.close() } // unblock a read parked on the socket
+            runCatching { upstreamClient?.shutdownNow() } // unblock a send parked before headers
             probe?.let(::terminate)
             ffmpeg?.let(::terminate)
             upstream = null
+            upstreamClient = null
             probe = null
             ffmpeg = null
             relays.remove(key, this)
@@ -148,6 +155,8 @@ class LiveRelay(
             while (currentCoroutineContext().isActive) {
                 val stream = try {
                     open()
+                } catch (error: CancellationException) {
+                    throw error
                 } catch (e: Exception) {
                     delay(RECONNECT_MS)
                     continue
@@ -162,6 +171,8 @@ class LiveRelay(
                         val chunk = buffer.copyOf(n)
                         members.values.forEach { it.trySend(chunk) }
                     }
+                } catch (error: CancellationException) {
+                    throw error
                 } catch (e: Exception) {
                     // Providers drop long transfers; fall through and reconnect.
                 } finally {
@@ -174,7 +185,7 @@ class LiveRelay(
             }
         }
 
-        private fun open(): InputStream {
+        private suspend fun open(): InputStream {
             // One ffmpeg reads the provider (the room's single connection), copies the video, and
             // transcodes the audio to AAC only when the room can't decode the source codec -
             // otherwise it's copied too. Remuxed back to a transport stream we tee; resent headers
@@ -206,12 +217,47 @@ class LiveRelay(
                 .timeout(java.time.Duration.ofSeconds(30))
                 .header("User-Agent", http.userAgent)
                 .build()
-            val response = http.client.send(request, HttpResponse.BodyHandlers.ofInputStream())
-            if (response.statusCode() !in 200..299) {
-                response.body().close()
-                throw IllegalStateException("upstream HTTP ${response.statusCode()}")
+            // HttpClient cancellation can leave an HTTP/1.1 socket parked until response headers.
+            // A relay owns one long-lived request, so give it a closeable client whose shutdown is
+            // tied to the relay rather than leaking that physical read behind released accounting.
+            val requestClient = HttpClient.newBuilder()
+                .followRedirects(HttpClient.Redirect.ALWAYS)
+                .connectTimeout(Duration.ofSeconds(20))
+                .build()
+            synchronized(lifecycle) {
+                if (dead) {
+                    requestClient.shutdownNow()
+                    throw CancellationException("Relay was retired")
+                }
+                upstreamClient = requestClient
             }
-            return response.body()
+            try {
+                val response = runInterruptible(Dispatchers.IO) {
+                    requestClient.send(request, HttpResponse.BodyHandlers.ofInputStream())
+                }
+                if (response.statusCode() !in 200..299) {
+                    response.body().close()
+                    throw IllegalStateException("upstream HTTP ${response.statusCode()}")
+                }
+                return object : FilterInputStream(response.body()) {
+                    override fun close() {
+                        try {
+                            super.close()
+                        } finally {
+                            synchronized(lifecycle) {
+                                if (upstreamClient === requestClient) upstreamClient = null
+                            }
+                            requestClient.shutdownNow()
+                        }
+                    }
+                }
+            } catch (error: Throwable) {
+                synchronized(lifecycle) {
+                    if (upstreamClient === requestClient) upstreamClient = null
+                }
+                requestClient.shutdownNow()
+                throw error
+            }
         }
 
         /** "copy" when the source audio is room-decodable, "aac" when it isn't. Unknown is
