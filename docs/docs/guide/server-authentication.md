@@ -185,6 +185,16 @@ polling token held only in memory and a QR link whose secret is in the URL
 fragment. The new device polls no faster than the interval returned by the
 server; faster polling returns `429` and `Retry-After`.
 
+The same mechanism serves two situations. A **second device** scans the QR and
+approves from an account that is already signed in. **One device on its own**
+starts the request, opens the link in its own browser, and signs in there — this
+is how Android signs in by default, and it is why the app no longer rebuilds each
+authentication method natively. A request started this way is marked as browser
+sign-in, and the web client completes the approval by itself only when it landed
+with no existing session and the server-bound request agrees it is a browser
+sign-in. An ordinary QR link, or a browser that is already signed in, still asks
+for explicit approval, so a link someone was sent cannot authorize silently.
+
 Scanning the QR claims the request for the signed-in phone user and moves it
 from `PENDING` to `SCANNED`. The phone shows the requesting device name, user
 agent, and IP address. The requesting client shows the claiming account's
@@ -273,10 +283,21 @@ contracts:
   now-watching, user management, pending OIDC identities, templates, and grants
   are visible only to administrators.
 
-Android uses the same bearer-protected API, reports itself as a native client,
-and supports password/MFA sign-in plus QR device linking. OIDC and passkey
-sign-in use the device-link flow in a browser, so no provider refresh token is
-stored on Android.
+Android uses the same bearer-protected API and reports itself as a native client.
+It signs in through your server's own web login by default, so whatever that
+server accepts — password, TOTP, passkey, single sign-on — works without the app
+implementing it, and a method you enable later needs no app update. No provider
+refresh token is stored on Android. The in-app password form remains for a
+password-only server, or a device with no browser, and QR device linking remains
+for approving from a second device.
+
+Playlists reached through a server offer the same operations as local ones, but
+the server decides which. Clearing your own watch progress and correcting a
+category's type are yours to do from the app. Refreshing, editing and deleting
+change a catalog everyone on that server shares, so they belong to an
+administrator and open the server's own pages rather than being rebuilt in the
+app. The app asks the server which operations apply to *you* — it never decides
+from a cached role, and the server enforces each one regardless.
 
 ## Account recovery
 
