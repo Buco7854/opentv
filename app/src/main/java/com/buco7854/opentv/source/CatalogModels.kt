@@ -109,6 +109,85 @@ data class PlaylistCapabilities(
         operations[operation]
 }
 
+enum class PlaylistEditMode {
+    XTREAM,
+    M3U_URL,
+    FILE,
+}
+
+enum class PlaylistEditField {
+    NAME,
+    SERVER,
+    USERNAME,
+    PASSWORD,
+    URL,
+    EPG_URL,
+    CONTENT,
+}
+
+/**
+ * Provider values are deliberately absent. [storedFields] only tells a form that
+ * leaving the corresponding input blank will keep an existing server-side value.
+ */
+data class PlaylistEditForm(
+    val id: Long,
+    val name: String,
+    val mode: PlaylistEditMode,
+    val fields: Set<PlaylistEditField>,
+    val storedFields: Set<PlaylistEditField>,
+)
+
+data class PlaylistEditUpdate(
+    val name: String? = null,
+    val server: String? = null,
+    val username: String? = null,
+    val password: String? = null,
+    val url: String? = null,
+    val epgUrl: String? = null,
+    val content: String? = null,
+)
+
+enum class PlaylistEpgRefreshOutcome {
+    SUCCEEDED,
+    FAILED,
+    NOT_CONFIGURED,
+}
+
+data class PlaylistRefreshResult(
+    val catalogChanged: Boolean,
+    val epg: PlaylistEpgRefreshOutcome,
+    val lastRefreshedMs: Long,
+    val channelCount: Int,
+)
+
+sealed interface PlaylistRefreshProgress {
+    data object Queued : PlaylistRefreshProgress
+    data object Running : PlaylistRefreshProgress
+    data class Finished(val result: PlaylistRefreshResult) : PlaylistRefreshProgress
+}
+
+class PlaylistRefreshFailedException :
+    Exception("The server could not refresh the playlist")
+
+data class PlaylistDeleteInfo(
+    val id: Long,
+    val name: String,
+    /** Complete confirmation copy supplied by the authoritative server. */
+    val warning: String,
+)
+
+data class ProviderAccountInfo(
+    val activeConnections: Int,
+    val maxConnections: Int,
+    val status: String,
+    val expiresAtMs: Long?,
+    val isTrial: Boolean,
+    val createdAtMs: Long?,
+    val timezone: String?,
+    val fetchedAtMs: Long,
+    val stale: Boolean,
+)
+
 sealed interface CatalogResult<out T> {
     data class Success<T>(val value: T) : CatalogResult<T>
     data object SignedOut : CatalogResult<Nothing>

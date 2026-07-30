@@ -349,7 +349,13 @@ fun AllFavoritesScreen(
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
-            if (state.loading && state.sections.isEmpty()) OtvProgressBar(Modifier.fillMaxWidth())
+            // One indicator for the whole page. Each source used to carry its own bar under
+            // its own heading, so two sources meant two bars stacked under two headings --
+            // and before any section existed there was a third at the top. Sources appear as
+            // they arrive instead; a heading with a spinner under it says nothing the single
+            // bar does not already say.
+            val anyLoading = state.loading || state.sections.any { it.loading }
+            if (anyLoading) OtvProgressBar(Modifier.fillMaxWidth())
 
             if (showHeaders && !selectMode) {
                 SourceFilterChips(state.sections, filter) { filter = it }
@@ -363,7 +369,10 @@ fun AllFavoritesScreen(
                 )
             }
 
-            if (!state.loading && state.sections.isEmpty()) {
+            // "No favourites" means no source has any, not merely that no source exists.
+            if (!anyLoading &&
+                state.sections.none { it.items.isNotEmpty() || it.error != null }
+            ) {
                 EmptyState(
                     title = stringResource(R.string.favorites_empty_title),
                     subtitle = stringResource(R.string.favorites_empty_subtitle),
@@ -380,6 +389,10 @@ fun AllFavoritesScreen(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 visible.forEach { section ->
+                    // A source appears once it has something to say -- favourites, or a
+                    // failure worth acting on. One that is still loading, or that simply has
+                    // no favourites, would otherwise contribute a heading over nothing.
+                    if (section.items.isEmpty() && section.error == null) return@forEach
                     if (showHeaders) {
                         item(key = "h-${section.source.encode()}", span = { GridItemSpan(maxLineSpan) }) {
                             SectionTitle(section)
@@ -395,13 +408,6 @@ fun AllFavoritesScreen(
                                 onRetry = { favorites.retry(section.source) },
                                 onSignIn = { onSignIn(section.source) },
                             )
-                        }
-
-                        section.loading && section.items.isEmpty() -> item(
-                            key = "l-${section.source.encode()}",
-                            span = { GridItemSpan(maxLineSpan) },
-                        ) {
-                            OtvProgressBar(Modifier.fillMaxWidth().padding(vertical = 8.dp))
                         }
 
                         else -> {

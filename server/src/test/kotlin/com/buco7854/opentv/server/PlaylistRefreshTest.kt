@@ -1,5 +1,7 @@
 package com.buco7854.opentv.server
 
+import com.buco7854.opentv.contract.PlaylistRefreshJobDto
+import com.buco7854.opentv.contract.PlaylistRefreshJobStatus
 import com.buco7854.opentv.core.epg.TextSource
 import com.buco7854.opentv.core.log.CoreLog
 import com.buco7854.opentv.core.model.Playlist
@@ -22,7 +24,11 @@ import com.buco7854.opentv.serverdata.db.DefaultPlaylistRow
 import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
 import com.buco7854.opentv.serverdata.db.UserPlaylistGrantRow
 import com.buco7854.opentv.serverdata.db.UserRow
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import java.net.URI
 import java.nio.file.Files
 import kotlin.test.Test
@@ -72,6 +78,35 @@ class PlaylistRefreshTest {
                 .map { it.contentId to it.lastSeenAtMs }.toSet(),
         )
     }
+
+    @Test
+    fun `a long refresh exposes an observable job until its typed result is ready`() =
+        withService { fixture ->
+            val id = fixture.storage.playlists.insert(
+                Playlist(name = "Provider", url = "https://provider.example/playlist.m3u"),
+            )
+
+            val started = fixture.service.startRefresh(admin, id, force = true)
+            assertEquals(PlaylistRefreshJobStatus.QUEUED, started.status)
+
+            val finished = withContext(Dispatchers.IO) {
+                withTimeout(5_000) {
+                    var current: PlaylistRefreshJobDto
+                    do {
+                        delay(10)
+                        current = fixture.service.refreshStatus(admin, id, started.id)
+                    } while (
+                        current.status == PlaylistRefreshJobStatus.QUEUED ||
+                        current.status == PlaylistRefreshJobStatus.RUNNING
+                    )
+                    current
+                }
+            }
+
+            assertEquals(PlaylistRefreshJobStatus.SUCCEEDED, finished.status)
+            assertTrue(requireNotNull(finished.result).catalogChanged)
+            assertEquals(2, finished.result?.playlist?.channelCount)
+        }
 
     @Test
     fun `the repository reports whether it rewrote the catalog`() = withService { fixture ->
@@ -156,6 +191,7 @@ class PlaylistRefreshTest {
         val persistence = createOpenTvServerStorage(dir.resolve("opentv.db").toString())
         val storage = persistence.catalog
         val userDatabase = persistence.database
+        var service: PlaylistApplicationService? = null
         try {
             userDatabase.users().insert(
                 UserRow(
@@ -186,7 +222,7 @@ class PlaylistRefreshTest {
             val config = authConfig()
             val auth = AuthService(userDatabase, config, dir)
             val settings = ServerSettings(dir, pageSize = 50)
-            val service = PlaylistApplicationService(
+            val createdService = PlaylistApplicationService(
                 storage,
                 playlists,
                 epg,
@@ -206,10 +242,12 @@ class PlaylistRefreshTest {
                     connectionLimit = { Int.MAX_VALUE },
                 ),
             )
-            fixture = Fixture(storage, userDatabase, playlists, service, auth)
+            service = createdService
+            fixture = Fixture(storage, userDatabase, playlists, createdService, auth)
             fixture.body = playlistLines
             block(fixture)
         } finally {
+            service?.close()
             storage.close()
             dir.toFile().deleteRecursively()
         }

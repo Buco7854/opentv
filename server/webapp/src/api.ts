@@ -33,6 +33,32 @@ export interface Playlist {
   channelCount: number;
 }
 
+export interface PlaylistEdit {
+  id: number;
+  name: string;
+  mode: PlaylistMode;
+  fields: string[];
+  storedFields: string[];
+}
+
+export interface PlaylistRefreshResult {
+  playlist: Playlist;
+  catalogChanged: boolean;
+  epgStatus: string;
+}
+
+export interface PlaylistRefreshJob {
+  id: string;
+  status: string;
+  result: PlaylistRefreshResult | null;
+}
+
+export interface PlaylistDeleteInfo {
+  id: number;
+  name: string;
+  warning: string;
+}
+
 export const PlaylistOperation = {
   REFRESH: 'REFRESH',
   EDIT: 'EDIT',
@@ -232,6 +258,16 @@ export interface PlaylistDetail {
 export interface PlaylistUpsertRequest {
   mode: PlaylistMode;
   name: string;
+  server?: string;
+  username?: string;
+  password?: string;
+  url?: string;
+  epgUrl?: string;
+  content?: string;
+}
+
+export interface PlaylistUpdateRequest {
+  name?: string;
   server?: string;
   username?: string;
   password?: string;
@@ -495,11 +531,19 @@ export const api = {
   playlists: () => j<Playlist[]>('/playlists'),
   playlistCapabilities: (id: number) =>
     j<PlaylistCapabilities>(`/playlists/${id}/capabilities`),
+  playlistEdit: (id: number) => j<PlaylistEdit>(`/playlists/${id}/edit`),
   addPlaylist: (req: PlaylistUpsertRequest) => j<Playlist>('/playlists', post(req)),
-  updatePlaylist: (id: number, req: PlaylistUpsertRequest) => j<Playlist>(`/playlists/${id}`, put(req)),
+  updatePlaylist: (id: number, req: PlaylistUpdateRequest) =>
+    j<Playlist>(`/playlists/${id}`, put(req)),
+  playlistDeleteInfo: (id: number) =>
+    j<PlaylistDeleteInfo>(`/playlists/${id}/delete-info`),
   deletePlaylist: (id: number) => j<null>(`/playlists/${id}`, { method: 'DELETE' }),
   refreshPlaylist: (id: number, force: boolean) =>
-    j<Playlist>(`/playlists/${id}/refresh?force=${force}`, { method: 'POST' }, provider),
+    j<PlaylistRefreshResult>(
+      `/playlists/${id}/refresh?force=${force}`,
+      { method: 'POST' },
+      provider,
+    ),
   clearProgress: (id: number) => j<null>(`/playlists/${id}/clear-progress`, { method: 'POST' }),
   playlistDetail: (id: number) => j<PlaylistDetail>(`/playlists/${id}`),
   groups: (id: number, kind: number) => j<GroupCount[]>(`/playlists/${id}/groups?kind=${kind}`),

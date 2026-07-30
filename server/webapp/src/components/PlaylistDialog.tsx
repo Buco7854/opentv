@@ -29,7 +29,9 @@ export function PlaylistDialog({ editing, onDismiss, onDone }: {
   async function submit(req: PlaylistUpsertRequest) {
     setBusy(true);
     try {
-      const saved = isEdit ? await api.updatePlaylist(editing.id, req) : await api.addPlaylist(req);
+      const saved = isEdit
+        ? await api.updatePlaylist(editing.id, (({ mode: _mode, ...update }) => update)(req))
+        : await api.addPlaylist(req);
       reportSuccess(isEdit ? t('playlists.updated') : t('playlists.added'));
       onDone(saved);
     } catch (e) {

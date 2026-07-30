@@ -41,6 +41,27 @@ object HubEndpoints {
     fun playlistCapabilities(base: String, playlistId: Long) =
         api(base, "/playlists/$playlistId/capabilities")
 
+    fun playlistEdit(base: String, playlistId: Long) =
+        api(base, "/playlists/$playlistId/edit")
+
+    fun playlist(base: String, playlistId: Long) =
+        api(base, "/playlists/$playlistId")
+
+    fun playlistRefreshJobs(base: String, playlistId: Long, force: Boolean) =
+        api(base, "/playlists/$playlistId/refresh-jobs?force=$force")
+
+    fun playlistRefreshJob(base: String, playlistId: Long, refreshId: String) =
+        api(
+            base,
+            "/playlists/$playlistId/refresh-jobs/${Urls.encodePathSegment(refreshId)}",
+        )
+
+    fun playlistDeleteInfo(base: String, playlistId: Long) =
+        api(base, "/playlists/$playlistId/delete-info")
+
+    fun playlistAccount(base: String, playlistId: Long, force: Boolean) =
+        api(base, "/playlists/$playlistId/account?force=$force")
+
     fun playlistClearProgress(base: String, playlistId: Long) =
         api(base, "/playlists/$playlistId/clear-progress")
 

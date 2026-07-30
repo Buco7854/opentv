@@ -1,5 +1,6 @@
 package com.buco7854.opentv.hub
 
+import com.buco7854.opentv.contract.AccountInfoDto
 import com.buco7854.opentv.contract.AuthCapabilitiesDto
 import com.buco7854.opentv.contract.AuthFlowDto
 import com.buco7854.opentv.contract.ChannelDto
@@ -10,9 +11,18 @@ import com.buco7854.opentv.contract.MediaGrantDto
 import com.buco7854.opentv.contract.PlaybackCreateRequest
 import com.buco7854.opentv.contract.PlaybackLeaseDto
 import com.buco7854.opentv.contract.PlaylistCapabilitiesDto
+import com.buco7854.opentv.contract.PlaylistDeleteInfoDto
+import com.buco7854.opentv.contract.PlaylistDto
+import com.buco7854.opentv.contract.PlaylistEditDto
+import com.buco7854.opentv.contract.PlaylistEditField
+import com.buco7854.opentv.contract.PlaylistEpgRefreshStatus
 import com.buco7854.opentv.contract.PlaylistOperation
 import com.buco7854.opentv.contract.PlaylistOperationCapabilityDto
 import com.buco7854.opentv.contract.PlaylistOperationExecution
+import com.buco7854.opentv.contract.PlaylistRefreshJobDto
+import com.buco7854.opentv.contract.PlaylistRefreshJobStatus
+import com.buco7854.opentv.contract.PlaylistRefreshResultDto
+import com.buco7854.opentv.contract.PlaylistUpdateRequest
 import com.buco7854.opentv.contract.ProgrammeDto
 import com.buco7854.opentv.contract.ServerInfoDto
 import com.buco7854.opentv.contract.SessionHeartbeatDto
@@ -518,6 +528,104 @@ class HubApiTest {
         assertEquals("PUT", transport.seen[1].method)
         assertEquals("$BASE/api/v1/playlists/7/group-kind", transport.seen[1].url)
         assertEquals("""{"groupTitle":"News & Sport","kind":1}""", transport.seen[1].body)
+    }
+
+    @Test
+    fun nativePlaylistAdministrationUsesWriteOnlyProviderFields() = runTest {
+        val playlist = PlaylistDto(7, "Provider", "xtream", true, 123, 40)
+        val transport = FakeTransport(
+            ok(
+                serverBody(
+                    PlaylistEditDto.serializer(),
+                    PlaylistEditDto(
+                        7,
+                        "Provider",
+                        "xtream",
+                        listOf(
+                            PlaylistEditField.NAME,
+                            PlaylistEditField.SERVER,
+                            PlaylistEditField.USERNAME,
+                            PlaylistEditField.PASSWORD,
+                        ),
+                        listOf(
+                            PlaylistEditField.SERVER,
+                            PlaylistEditField.USERNAME,
+                            PlaylistEditField.PASSWORD,
+                        ),
+                    ),
+                ),
+            ),
+            ok(serverBody(PlaylistDto.serializer(), playlist.copy(name = "Renamed"))),
+            ok(
+                serverBody(
+                    PlaylistRefreshJobDto.serializer(),
+                    PlaylistRefreshJobDto(
+                        "refresh-1",
+                        PlaylistRefreshJobStatus.QUEUED,
+                    ),
+                ),
+            ),
+            ok(
+                serverBody(
+                    PlaylistRefreshJobDto.serializer(),
+                    PlaylistRefreshJobDto(
+                        "refresh-1",
+                        PlaylistRefreshJobStatus.SUCCEEDED,
+                        PlaylistRefreshResultDto(
+                            playlist,
+                            catalogChanged = true,
+                            epgStatus = PlaylistEpgRefreshStatus.SUCCEEDED,
+                        ),
+                    ),
+                ),
+            ),
+            ok(
+                serverBody(
+                    PlaylistDeleteInfoDto.serializer(),
+                    PlaylistDeleteInfoDto(7, "Provider", "This cannot be undone."),
+                ),
+            ),
+            HttpResponseSpec(204, emptyMap(), ""),
+            ok(
+                serverBody(
+                    AccountInfoDto.serializer(),
+                    AccountInfoDto(1, 2, "Active", null, false, null, null, 456, false),
+                ),
+            ),
+        )
+        val api = HubApi(transport)
+        val credentials = HubCredentials(BASE, "t")
+
+        val edit = api.playlistEdit(credentials, 7)
+        api.updatePlaylist(credentials, 7, PlaylistUpdateRequest(name = "Renamed"))
+        val started = api.startPlaylistRefresh(credentials, 7, force = true)
+        val refresh = api.playlistRefreshStatus(credentials, 7, started.id)
+        val deleteInfo = api.playlistDeleteInfo(credentials, 7)
+        api.deletePlaylist(credentials, 7)
+        val account = api.playlistAccount(credentials, 7, force = true)
+
+        assertEquals("xtream", edit.mode)
+        assertEquals(true, refresh.result?.catalogChanged)
+        assertEquals("This cannot be undone.", deleteInfo.warning)
+        assertEquals(2, account.maxConnections)
+        assertEquals("GET", transport.seen[0].method)
+        assertEquals("$BASE/api/v1/playlists/7/edit", transport.seen[0].url)
+        assertEquals("PUT", transport.seen[1].method)
+        assertEquals("$BASE/api/v1/playlists/7", transport.seen[1].url)
+        assertEquals("""{"name":"Renamed"}""", transport.seen[1].body)
+        assertEquals("POST", transport.seen[2].method)
+        assertEquals("$BASE/api/v1/playlists/7/refresh-jobs?force=true", transport.seen[2].url)
+        assertEquals("GET", transport.seen[3].method)
+        assertEquals(
+            "$BASE/api/v1/playlists/7/refresh-jobs/refresh-1",
+            transport.seen[3].url,
+        )
+        assertEquals("GET", transport.seen[4].method)
+        assertEquals("$BASE/api/v1/playlists/7/delete-info", transport.seen[4].url)
+        assertEquals("DELETE", transport.seen[5].method)
+        assertEquals("$BASE/api/v1/playlists/7", transport.seen[5].url)
+        assertEquals("GET", transport.seen[6].method)
+        assertEquals("$BASE/api/v1/playlists/7/account?force=true", transport.seen[6].url)
     }
 
     @Test

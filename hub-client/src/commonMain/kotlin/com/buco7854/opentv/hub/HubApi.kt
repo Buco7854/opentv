@@ -2,6 +2,7 @@ package com.buco7854.opentv.hub
 
 import com.buco7854.opentv.contract.AuthCapabilitiesDto
 import com.buco7854.opentv.contract.AuthFlowDto
+import com.buco7854.opentv.contract.AccountInfoDto
 import com.buco7854.opentv.contract.ChannelDto
 import com.buco7854.opentv.contract.ChannelPageDto
 import com.buco7854.opentv.contract.CurrentUserDto
@@ -23,8 +24,12 @@ import com.buco7854.opentv.contract.PasswordLoginRequestDto
 import com.buco7854.opentv.contract.PlaybackCreateRequest
 import com.buco7854.opentv.contract.PlaybackLeaseDto
 import com.buco7854.opentv.contract.PlaylistCapabilitiesDto
+import com.buco7854.opentv.contract.PlaylistDeleteInfoDto
 import com.buco7854.opentv.contract.PlaylistDto
+import com.buco7854.opentv.contract.PlaylistEditDto
 import com.buco7854.opentv.contract.GroupKindRequest
+import com.buco7854.opentv.contract.PlaylistRefreshJobDto
+import com.buco7854.opentv.contract.PlaylistUpdateRequest
 import com.buco7854.opentv.contract.ProgrammeDto
 import com.buco7854.opentv.contract.RecoveryCompleteRequestDto
 import com.buco7854.opentv.contract.ResumePointDto
@@ -137,6 +142,69 @@ class HubApi(
             HubEndpoints.playlistCapabilities(c.baseUrl, playlistId),
             PlaylistCapabilitiesDto.serializer(),
         ).forHub(c.baseUrl)
+
+    suspend fun playlistEdit(c: HubCredentials, playlistId: Long): PlaylistEditDto =
+        get(c, HubEndpoints.playlistEdit(c.baseUrl, playlistId), PlaylistEditDto.serializer())
+
+    suspend fun updatePlaylist(
+        c: HubCredentials,
+        playlistId: Long,
+        request: PlaylistUpdateRequest,
+    ): PlaylistDto =
+        put(
+            c,
+            HubEndpoints.playlist(c.baseUrl, playlistId),
+            PlaylistUpdateRequest.serializer(),
+            request,
+            PlaylistDto.serializer(),
+        )
+
+    suspend fun startPlaylistRefresh(
+        c: HubCredentials,
+        playlistId: Long,
+        force: Boolean,
+    ): PlaylistRefreshJobDto =
+        postEmpty(
+            c,
+            HubEndpoints.playlistRefreshJobs(c.baseUrl, playlistId, force),
+            PlaylistRefreshJobDto.serializer(),
+        )
+
+    suspend fun playlistRefreshStatus(
+        c: HubCredentials,
+        playlistId: Long,
+        refreshId: String,
+    ): PlaylistRefreshJobDto =
+        get(
+            c,
+            HubEndpoints.playlistRefreshJob(c.baseUrl, playlistId, refreshId),
+            PlaylistRefreshJobDto.serializer(),
+        )
+
+    suspend fun playlistDeleteInfo(
+        c: HubCredentials,
+        playlistId: Long,
+    ): PlaylistDeleteInfoDto =
+        get(
+            c,
+            HubEndpoints.playlistDeleteInfo(c.baseUrl, playlistId),
+            PlaylistDeleteInfoDto.serializer(),
+        )
+
+    suspend fun deletePlaylist(c: HubCredentials, playlistId: Long) {
+        send(c, "DELETE", HubEndpoints.playlist(c.baseUrl, playlistId), null)
+    }
+
+    suspend fun playlistAccount(
+        c: HubCredentials,
+        playlistId: Long,
+        force: Boolean,
+    ): AccountInfoDto =
+        get(
+            c,
+            HubEndpoints.playlistAccount(c.baseUrl, playlistId, force),
+            AccountInfoDto.serializer(),
+        )
 
     suspend fun clearPlaylistProgress(c: HubCredentials, playlistId: Long) {
         send(c, "POST", HubEndpoints.playlistClearProgress(c.baseUrl, playlistId), null)
@@ -329,6 +397,17 @@ class HubApi(
         responseSerializer: KSerializer<R>,
     ): R = json.decodeFromString(responseSerializer, send(c, "POST", url, body(requestSerializer, value)).bodyText)
 
+    private suspend fun <T, R> put(
+        c: HubCredentials,
+        url: String,
+        requestSerializer: KSerializer<T>,
+        value: T,
+        responseSerializer: KSerializer<R>,
+    ): R = json.decodeFromString(
+        responseSerializer,
+        send(c, "PUT", url, body(requestSerializer, value)).bodyText,
+    )
+
     private suspend fun <R> postEmpty(c: HubCredentials, url: String, serializer: KSerializer<R>): R =
         json.decodeFromString(serializer, send(c, "POST", url, null).bodyText)
 
@@ -383,6 +462,7 @@ class HubApi(
         val DEFAULT_JSON = Json {
             ignoreUnknownKeys = true
             encodeDefaults = true
+            explicitNulls = false
         }
     }
 }

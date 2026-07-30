@@ -1,6 +1,7 @@
 package com.buco7854.opentv.source
 
 import android.content.SharedPreferences
+import com.buco7854.opentv.contract.AccountInfoDto
 import com.buco7854.opentv.contract.ChannelDto
 import com.buco7854.opentv.contract.ChannelListItemDto
 import com.buco7854.opentv.contract.ChannelPageDto
@@ -11,8 +12,17 @@ import com.buco7854.opentv.contract.GroupCountDto
 import com.buco7854.opentv.contract.GuideEntryDto
 import com.buco7854.opentv.contract.ProgrammeDto
 import com.buco7854.opentv.contract.PlaylistCapabilitiesDto
+import com.buco7854.opentv.contract.PlaylistDeleteInfoDto
+import com.buco7854.opentv.contract.PlaylistDto
+import com.buco7854.opentv.contract.PlaylistEditDto
+import com.buco7854.opentv.contract.PlaylistEditField as WirePlaylistEditField
+import com.buco7854.opentv.contract.PlaylistEpgRefreshStatus
+import com.buco7854.opentv.contract.PlaylistRefreshJobDto
+import com.buco7854.opentv.contract.PlaylistRefreshJobStatus
 import com.buco7854.opentv.contract.PlaylistOperationCapabilityDto
 import com.buco7854.opentv.contract.PlaylistOperationExecution
+import com.buco7854.opentv.contract.PlaylistRefreshResultDto
+import com.buco7854.opentv.contract.PlaylistUpdateRequest
 import com.buco7854.opentv.contract.PlaylistOperation as WirePlaylistOperation
 import com.buco7854.opentv.contract.ResumePointDto
 import com.buco7854.opentv.contract.SearchResultsDto
@@ -265,18 +275,18 @@ class HubCatalogGatewayTest {
         assertTrue(traits.favoritesAreServerSide)
         assertTrue(traits.resumeIsServerSide)
         assertTrue(traits.supportsRefresh)
-        assertFalse(traits.supportsSourceEditing)
+        assertTrue(traits.supportsSourceEditing)
+        assertTrue(traits.usesXtreamCredentials)
     }
 
     @Test
-    fun playlistCapabilitiesExposeInAppCallsAndSameHubBrowserTargets() = runTest {
+    fun playlistCapabilitiesExposeNativeAdministrationCalls() = runTest {
         val backend = FakeHubBackend().apply {
             operationCapabilities = HubPlaylistCapabilities(
                 mapOf(
                     WirePlaylistOperation.CLEAR_WATCH_PROGRESS to HubPlaylistOperation.InApp,
                     WirePlaylistOperation.CORRECT_CATEGORY_TYPE to HubPlaylistOperation.InApp,
-                    WirePlaylistOperation.EDIT to
-                        HubPlaylistOperation.Browser("https://hub.example/browse/7?manage=playlist"),
+                    WirePlaylistOperation.EDIT to HubPlaylistOperation.InApp,
                 ),
             )
         }
@@ -291,10 +301,8 @@ class HubCatalogGatewayTest {
             PlaylistOperationAvailability.InApp,
             capabilities[PlaylistOperation.CORRECT_CATEGORY_TYPE],
         )
-        assertEquals(
-            PlaylistOperationAvailability.Browser(
-                "https://hub.example/browse/7?manage=playlist",
-            ),
+        assertSame(
+            PlaylistOperationAvailability.InApp,
             capabilities[PlaylistOperation.EDIT],
         )
 
@@ -302,6 +310,49 @@ class HubCatalogGatewayTest {
         gateway.correctCategoryType("Documentaries", ChannelKind.MOVIE).successValue()
         assertEquals(1, backend.clearProgressCalls)
         assertEquals("Documentaries" to ChannelKind.MOVIE, backend.groupKind)
+    }
+
+    @Test
+    fun nativePlaylistAdministrationMapsWriteOnlyFormsProgressDeleteAndAccount() = runTest {
+        val backend = FakeHubBackend()
+        val gateway = HubCatalogGateway(SourceId.Hub(3, 7), backend)
+
+        val form = gateway.playlistEditForm().successValue()
+        assertEquals(PlaylistEditMode.XTREAM, form.mode)
+        assertEquals(
+            setOf(
+                PlaylistEditField.NAME,
+                PlaylistEditField.SERVER,
+                PlaylistEditField.USERNAME,
+                PlaylistEditField.PASSWORD,
+            ),
+            form.fields,
+        )
+        assertTrue(PlaylistEditField.PASSWORD in form.storedFields)
+
+        gateway.updatePlaylist(PlaylistEditUpdate(name = "Renamed")).successValue()
+        assertEquals("Renamed", backend.updateRequest?.name)
+        assertEquals(null, backend.updateRequest?.password)
+
+        val progress = mutableListOf<PlaylistRefreshProgress>()
+        val refreshed = gateway.refreshPlaylist(onProgress = progress::add).successValue()
+        assertTrue(refreshed.catalogChanged)
+        assertEquals(PlaylistEpgRefreshOutcome.SUCCEEDED, refreshed.epg)
+        assertEquals(PlaylistRefreshProgress.Queued, progress[0])
+        assertEquals(PlaylistRefreshProgress.Running, progress[1])
+        assertEquals(
+            PlaylistRefreshProgress.Finished(refreshed),
+            progress.last(),
+        )
+
+        val deletion = gateway.playlistDeleteInfo().successValue()
+        assertEquals("This cannot be undone.", deletion.warning)
+        gateway.deletePlaylist().successValue()
+        assertEquals(1, backend.deleteCalls)
+
+        val account = gateway.providerAccount().successValue()
+        assertEquals(2, account.maxConnections)
+        assertEquals("Active", account.status)
     }
 
     @Test
@@ -553,18 +604,40 @@ private class FakeHubBackend : HubCatalogBackend {
     var resolvedFavoriteCalls = 0
     var contentCalls = 0
     var clearProgressCalls = 0
+    var deleteCalls = 0
+    var refreshStatusCalls = 0
     var groupKind: Pair<String, Int?>? = null
+    var updateRequest: PlaylistUpdateRequest? = null
+    var editDto = PlaylistEditDto(
+        id = 7,
+        name = "Provider",
+        mode = "xtream",
+        fields = listOf(
+            WirePlaylistEditField.NAME,
+            WirePlaylistEditField.SERVER,
+            WirePlaylistEditField.USERNAME,
+            WirePlaylistEditField.PASSWORD,
+        ),
+        storedFields = listOf(
+            WirePlaylistEditField.SERVER,
+            WirePlaylistEditField.USERNAME,
+            WirePlaylistEditField.PASSWORD,
+        ),
+    )
+    var refreshDto = PlaylistRefreshResultDto(
+        PlaylistDto(7, "Provider", "xtream", true, 123, 40),
+        catalogChanged = true,
+        epgStatus = PlaylistEpgRefreshStatus.SUCCEEDED,
+    )
+    var deleteInfoDto = PlaylistDeleteInfoDto(7, "Provider", "This cannot be undone.")
+    var accountDto = AccountInfoDto(1, 2, "Active", null, false, null, null, 456, false)
     var operationCapabilities = HubPlaylistCapabilities(
         mapOf(
-            WirePlaylistOperation.REFRESH to
-                HubPlaylistOperation.Browser("https://hub.example/browse/7?manage=playlist"),
-            WirePlaylistOperation.EDIT to
-                HubPlaylistOperation.Browser("https://hub.example/browse/7?manage=playlist"),
-            WirePlaylistOperation.DELETE to
-                HubPlaylistOperation.Browser("https://hub.example/browse/7?manage=playlist"),
+            WirePlaylistOperation.REFRESH to HubPlaylistOperation.InApp,
+            WirePlaylistOperation.EDIT to HubPlaylistOperation.InApp,
+            WirePlaylistOperation.DELETE to HubPlaylistOperation.InApp,
             WirePlaylistOperation.CLEAR_WATCH_PROGRESS to HubPlaylistOperation.InApp,
-            WirePlaylistOperation.VIEW_PROVIDER_ACCOUNT to
-                HubPlaylistOperation.Browser("https://hub.example/account/7"),
+            WirePlaylistOperation.VIEW_PROVIDER_ACCOUNT to HubPlaylistOperation.InApp,
         ),
     )
     val removedFavorites = mutableListOf<String>()
@@ -576,6 +649,37 @@ private class FakeHubBackend : HubCatalogBackend {
     }
 
     override suspend fun capabilities() = operationCapabilities.also { maybeFail() }
+
+    override suspend fun edit() = editDto.also { maybeFail() }
+
+    override suspend fun update(request: PlaylistUpdateRequest) {
+        maybeFail()
+        updateRequest = request
+    }
+
+    override suspend fun startRefresh(force: Boolean) =
+        PlaylistRefreshJobDto("refresh-1", PlaylistRefreshJobStatus.QUEUED)
+            .also { maybeFail() }
+
+    override suspend fun refreshStatus(refreshId: String) =
+        if (refreshStatusCalls++ == 0) {
+            PlaylistRefreshJobDto(refreshId, PlaylistRefreshJobStatus.RUNNING)
+        } else {
+            PlaylistRefreshJobDto(
+                refreshId,
+                PlaylistRefreshJobStatus.SUCCEEDED,
+                refreshDto,
+            )
+        }.also { maybeFail() }
+
+    override suspend fun deleteInfo() = deleteInfoDto.also { maybeFail() }
+
+    override suspend fun delete() {
+        maybeFail()
+        deleteCalls++
+    }
+
+    override suspend fun account(force: Boolean) = accountDto.also { maybeFail() }
 
     override suspend fun clearProgress() {
         maybeFail()

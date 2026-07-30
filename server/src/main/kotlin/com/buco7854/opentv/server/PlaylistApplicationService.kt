@@ -18,9 +18,17 @@ import com.buco7854.opentv.core.xtream.XtreamAuthException
 import com.buco7854.opentv.serverdata.db.PlaylistDeletionRow
 import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
 import com.buco7854.opentv.serverdata.db.deleteCatalogPlaylist
+import java.util.UUID
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** Playlist/catalog use cases with explicit actor and entitlement checks. */
 class PlaylistApplicationService(
@@ -36,7 +44,17 @@ class PlaylistApplicationService(
     private val userDatabase: OpenTvServerDatabase,
     private val downloads: DownloadManager,
     private val cleanup: UserStateCleanupCoordinator = NoopUserStateCleanupCoordinator,
-) {
+) : AutoCloseable {
+    private data class RefreshJob(
+        val playlistId: Long,
+        val status: String,
+        val result: PlaylistRefreshResultDto? = null,
+    )
+
+    private val refreshScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val refreshJobsMutex = Mutex()
+    private val refreshJobs = LinkedHashMap<String, RefreshJob>()
+
     suspend fun list(actor: Actor): List<PlaylistDto> {
         val access = auth.playlistAccess(actor)
         return storage.playlists.getAll()
@@ -59,19 +77,39 @@ class PlaylistApplicationService(
         return playlist(id).toApiDto()
     }
 
-    suspend fun update(actor: Actor, id: Long, request: PlaylistUpsertRequest): PlaylistDto {
+    suspend fun edit(actor: Actor, id: Long): PlaylistEditDto {
+        requireAdmin(actor)
+        return playlist(id).toEditDto()
+    }
+
+    suspend fun update(actor: Actor, id: Long, request: PlaylistUpdateRequest): PlaylistDto {
         requireAdmin(actor)
         content.updatePlaylist(id) {
-            val resolved = request.preservingSecretsFrom(playlist(id))
-            when (resolved.mode) {
+            val existing = playlist(id)
+            request.requireApplicableTo(existing.mode)
+            when (existing.mode) {
                 "xtream" -> playlists.updateXtream(
-                    id, resolved.name, resolved.server, resolved.username, resolved.password,
+                    id,
+                    request.name.orKeeping(existing.name),
+                    request.server.orKeeping(existing.xtreamBase),
+                    request.username.orKeeping(existing.xtreamUser),
+                    request.password.orKeeping(existing.xtreamPass),
                 )
-                "url" -> playlists.updateUrl(id, resolved.name, resolved.url, resolved.epgUrl)
-                "file" -> if (resolved.content.isNotBlank()) {
-                    playlists.replaceFromLines(id, resolved.name, resolved.content.lineSequence())
+                "url" -> playlists.updateUrl(
+                    id,
+                    request.name.orKeeping(existing.name),
+                    request.url.orKeeping(existing.url),
+                    request.epgUrl.orKeeping(existing.epgUrl),
+                )
+                "file" -> if (!request.content.isNullOrBlank()) {
+                    val replacement = requireNotNull(request.content)
+                    playlists.replaceFromLines(
+                        id,
+                        request.name.orKeeping(existing.name),
+                        replacement.lineSequence(),
+                    )
                 } else {
-                    playlists.rename(id, resolved.name)
+                    playlists.rename(id, request.name.orKeeping(existing.name))
                 }
                 else -> throw IllegalArgumentException("Unknown mode")
             }
@@ -87,6 +125,18 @@ class PlaylistApplicationService(
         completePlaylistDeletion(id)
     }
 
+    suspend fun deleteInfo(actor: Actor, id: Long): PlaylistDeleteInfoDto {
+        requireAdmin(actor)
+        val playlist = playlist(id)
+        return PlaylistDeleteInfoDto(
+            id = playlist.id,
+            name = playlist.name,
+            warning = "\"${playlist.name}\" and its cached guide data will be removed, " +
+                "along with every user's favorites, watch progress and downloads for it. " +
+                "This cannot be undone.",
+        )
+    }
+
     suspend fun reconcilePendingDeletions() {
         userDatabase.maintenance().pendingPlaylistDeletions().forEach {
             completePlaylistDeletion(it.playlistId)
@@ -96,11 +146,63 @@ class PlaylistApplicationService(
         storage.playlists.getAll().forEach { content.repairPlaylist(it.id) }
     }
 
-    suspend fun refresh(actor: Actor, id: Long, force: Boolean): PlaylistDto {
+    suspend fun refresh(actor: Actor, id: Long, force: Boolean): PlaylistRefreshResultDto {
         requireAdmin(actor)
-        content.refreshPlaylist(id) { playlists.refresh(id, force) }
-        runCatching { epg.refresh(id, force) }
-        return playlist(id).toApiDto()
+        val catalogChanged = content.refreshPlaylist(id) { playlists.refresh(id, force) }
+        val refreshed = playlist(id)
+        val epgStatus = if (refreshed.epgUrl == null) {
+            PlaylistEpgRefreshStatus.NOT_CONFIGURED
+        } else {
+            try {
+                epg.refresh(id, force)
+                PlaylistEpgRefreshStatus.SUCCEEDED
+            } catch (failure: Throwable) {
+                if (failure is kotlinx.coroutines.CancellationException) throw failure
+                PlaylistEpgRefreshStatus.FAILED
+            }
+        }
+        return PlaylistRefreshResultDto(refreshed.toApiDto(), catalogChanged, epgStatus)
+    }
+
+    suspend fun startRefresh(actor: Actor, id: Long, force: Boolean): PlaylistRefreshJobDto {
+        requireAdmin(actor)
+        playlist(id)
+        val refreshId = UUID.randomUUID().toString()
+        val queued = RefreshJob(id, PlaylistRefreshJobStatus.QUEUED)
+        refreshJobsMutex.withLock {
+            refreshJobs[refreshId] = queued
+            pruneRefreshJobs()
+        }
+        refreshScope.launch {
+            setRefreshJob(refreshId, queued.copy(status = PlaylistRefreshJobStatus.RUNNING))
+            try {
+                val result = refresh(actor, id, force)
+                setRefreshJob(
+                    refreshId,
+                    queued.copy(
+                        status = PlaylistRefreshJobStatus.SUCCEEDED,
+                        result = result,
+                    ),
+                )
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                refreshJobsMutex.withLock { refreshJobs.remove(refreshId) }
+                throw cancelled
+            } catch (_: Throwable) {
+                setRefreshJob(
+                    refreshId,
+                    queued.copy(status = PlaylistRefreshJobStatus.FAILED),
+                )
+            }
+        }
+        return PlaylistRefreshJobDto(refreshId, queued.status, queued.result)
+    }
+
+    suspend fun refreshStatus(actor: Actor, id: Long, refreshId: String): PlaylistRefreshJobDto {
+        requireAdmin(actor)
+        val job = refreshJobsMutex.withLock { refreshJobs[refreshId] }
+            ?.takeIf { it.playlistId == id }
+            ?: throw ResourceNotFound("playlist refresh")
+        return PlaylistRefreshJobDto(refreshId, job.status, job.result)
     }
 
     suspend fun clearProgress(actor: Actor, id: Long) = activity.clearResume(actor, id)
@@ -114,19 +216,13 @@ class PlaylistApplicationService(
                 if (!playlist.isXtreamNative) {
                     add(inAppOperation(PlaylistOperation.CORRECT_CATEGORY_TYPE))
                 }
-                val managementPath = "/browse/$id?manage=playlist"
                 if (playlist.url != null || playlist.xtreamBase != null) {
-                    add(browserOperation(PlaylistOperation.REFRESH, managementPath))
+                    add(inAppOperation(PlaylistOperation.REFRESH))
                 }
-                add(browserOperation(PlaylistOperation.EDIT, managementPath))
-                add(browserOperation(PlaylistOperation.DELETE, managementPath))
+                add(inAppOperation(PlaylistOperation.EDIT))
+                add(inAppOperation(PlaylistOperation.DELETE))
                 if (playlist.xtreamBase != null) {
-                    add(
-                        browserOperation(
-                            PlaylistOperation.VIEW_PROVIDER_ACCOUNT,
-                            "/account/$id",
-                        ),
-                    )
+                    add(inAppOperation(PlaylistOperation.VIEW_PROVIDER_ACCOUNT))
                 }
             }
         }
@@ -474,6 +570,27 @@ class PlaylistApplicationService(
             userDatabase.maintenance().finishPlaylistDeletion(id)
         }
     }
+
+    private suspend fun setRefreshJob(id: String, job: RefreshJob) {
+        refreshJobsMutex.withLock {
+            if (id in refreshJobs) refreshJobs[id] = job
+        }
+    }
+
+    /** Retain bounded terminal history without ever evicting a refresh in flight. */
+    private fun pruneRefreshJobs() {
+        while (refreshJobs.size > MAX_REFRESH_JOBS) {
+            val completed = refreshJobs.entries.firstOrNull {
+                it.value.status == PlaylistRefreshJobStatus.SUCCEEDED ||
+                    it.value.status == PlaylistRefreshJobStatus.FAILED
+            } ?: return
+            refreshJobs.remove(completed.key)
+        }
+    }
+
+    override fun close() {
+        refreshScope.cancel()
+    }
 }
 
 data class ListingRequest(
@@ -516,28 +633,54 @@ private fun Playlist.toApiDto() = PlaylistDto(
     id, name, mode, xtreamBase != null, lastRefreshedMs, channelCount,
 )
 
+private fun Playlist.toEditDto(): PlaylistEditDto {
+    val fields = when (mode) {
+        "xtream" -> listOf(
+            PlaylistEditField.NAME,
+            PlaylistEditField.SERVER,
+            PlaylistEditField.USERNAME,
+            PlaylistEditField.PASSWORD,
+        )
+        "url" -> listOf(
+            PlaylistEditField.NAME,
+            PlaylistEditField.URL,
+            PlaylistEditField.EPG_URL,
+        )
+        else -> listOf(PlaylistEditField.NAME, PlaylistEditField.CONTENT)
+    }
+    val storedFields = buildList {
+        if (!xtreamBase.isNullOrBlank()) add(PlaylistEditField.SERVER)
+        if (!xtreamUser.isNullOrBlank()) add(PlaylistEditField.USERNAME)
+        if (!xtreamPass.isNullOrBlank()) add(PlaylistEditField.PASSWORD)
+        if (!url.isNullOrBlank()) add(PlaylistEditField.URL)
+        if (!epgUrl.isNullOrBlank()) add(PlaylistEditField.EPG_URL)
+        if (mode == "file" && channelCount > 0) add(PlaylistEditField.CONTENT)
+    }
+    return PlaylistEditDto(id, name, mode, fields, storedFields)
+}
+
 private fun inAppOperation(operation: String) = PlaylistOperationCapabilityDto(
     operation = operation,
     execution = PlaylistOperationExecution.IN_APP,
 )
 
-private fun browserOperation(operation: String, path: String) =
-    PlaylistOperationCapabilityDto(
-        operation = operation,
-        execution = PlaylistOperationExecution.BROWSER,
-        browserPath = path,
-    )
-
-internal fun PlaylistUpsertRequest.preservingSecretsFrom(existing: Playlist): PlaylistUpsertRequest =
+private fun PlaylistUpdateRequest.requireApplicableTo(mode: String) {
     when (mode) {
-        "xtream" -> copy(
-            server = server.ifBlank { existing.xtreamBase.orEmpty() },
-            username = username.ifBlank { existing.xtreamUser.orEmpty() },
-            password = password.ifBlank { existing.xtreamPass.orEmpty() },
-        )
-        "url" -> copy(
-            url = url.ifBlank { existing.url.orEmpty() },
-            epgUrl = epgUrl.ifBlank { existing.epgUrl.orEmpty() },
-        )
-        else -> this
+        "xtream" -> require(url == null && epgUrl == null && content == null) {
+            "M3U and file fields do not apply to an Xtream playlist"
+        }
+        "url" -> require(
+            server == null && username == null && password == null && content == null,
+        ) { "Xtream and file fields do not apply to an M3U playlist" }
+        "file" -> require(
+            server == null && username == null && password == null &&
+                url == null && epgUrl == null,
+        ) { "Provider fields do not apply to a file playlist" }
+        else -> throw IllegalArgumentException("Unknown mode")
     }
+}
+
+private fun String?.orKeeping(existing: String?): String =
+    this?.trim()?.takeIf(String::isNotEmpty) ?: existing.orEmpty()
+
+private const val MAX_REFRESH_JOBS = 128

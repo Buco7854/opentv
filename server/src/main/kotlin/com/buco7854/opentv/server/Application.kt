@@ -62,6 +62,7 @@ class ServerRuntime(
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
+        graph.apiServices.playlists.close()
         graph.sessions.close()
         graph.downloads.close()
         graph.liveRelay.close()

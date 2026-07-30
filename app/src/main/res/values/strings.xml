@@ -42,6 +42,8 @@
     <string name="shell_playlist_actions">Playlist actions</string>
     <string name="shell_no_playlist_actions">No actions available</string>
     <string name="shell_add_playlist">Add playlist</string>
+    <string name="shell_edit_playlist">Edit playlist</string>
+    <string name="playlist_credentials_hidden">Stored provider details are hidden. Leave a field blank to keep its current value, or enter a replacement.</string>
     <string name="shell_servers">Servers</string>
     <plurals name="shell_item_count">
         <item quantity="one">%1$d item</item>
@@ -67,6 +69,8 @@
     <string name="playlist_replaced">Playlist replaced</string>
     <string name="playlist_replace_failed">Replace failed: %1$s</string>
     <string name="playlist_refreshed">Playlist and guide refreshed</string>
+    <string name="playlist_refreshing">Refreshing on the server…</string>
+    <string name="playlist_removed">Playlist removed</string>
     <string name="playlist_refresh_failed">Refresh failed: %1$s</string>
     <string name="playlist_clear_progress">Clear watch progress</string>
     <string name="playlist_clear_progress_title">Clear watch progress?</string>
@@ -370,6 +374,7 @@
     <string name="hub_open_in_browser_qr">Scan to open on your phone</string>
     <string name="hub_handoff_rejected">The server offered a link outside its own address, so it wasn\'t opened.</string>
     <string name="hub_sign_out">Sign out</string>
+    <string name="hub_status_signed_out">Signed out</string>
     <string name="hub_remove">Remove server</string>
     <string name="hub_remove_confirm">Remove this server? Downloads already saved on this device are kept.</string>
     <string name="hub_sign_in_again">Sign in again</string>

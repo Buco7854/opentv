@@ -42,6 +42,8 @@
     <string name="shell_playlist_actions">Actions de la playlist</string>
     <string name="shell_no_playlist_actions">Aucune action disponible</string>
     <string name="shell_add_playlist">Ajouter une playlist</string>
+    <string name="shell_edit_playlist">Modifier la playlist</string>
+    <string name="playlist_credentials_hidden">Les informations du fournisseur enregistrées sont masquées. Laissez un champ vide pour conserver sa valeur actuelle, ou saisissez un remplacement.</string>
     <string name="shell_servers">Serveurs</string>
     <plurals name="shell_item_count">
         <item quantity="one">%1$d élément</item>
@@ -67,6 +69,8 @@
     <string name="playlist_replaced">Playlist remplacée</string>
     <string name="playlist_replace_failed">Échec du remplacement : %1$s</string>
     <string name="playlist_refreshed">Playlist et guide actualisés</string>
+    <string name="playlist_refreshing">Actualisation sur le serveur…</string>
+    <string name="playlist_removed">Playlist supprimée</string>
     <string name="playlist_refresh_failed">Échec de l\'actualisation : %1$s</string>
     <string name="playlist_clear_progress">Effacer la progression</string>
     <string name="playlist_clear_progress_title">Effacer la progression ?</string>
@@ -370,6 +374,7 @@
     <string name="hub_open_in_browser_qr">Scannez pour ouvrir sur votre téléphone</string>
     <string name="hub_handoff_rejected">Le serveur a proposé un lien en dehors de sa propre adresse ; il n\'a pas été ouvert.</string>
     <string name="hub_sign_out">Se déconnecter</string>
+    <string name="hub_status_signed_out">Déconnecté</string>
     <string name="hub_remove">Supprimer le serveur</string>
     <string name="hub_remove_confirm">Supprimer ce serveur ? Les téléchargements déjà enregistrés sur cet appareil sont conservés.</string>
     <string name="hub_sign_in_again">Se reconnecter</string>

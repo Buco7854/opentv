@@ -1,9 +1,10 @@
 package com.buco7854.opentv.server
 
 import com.buco7854.opentv.contract.GroupKindRequest
+import com.buco7854.opentv.contract.PlaylistEditField
 import com.buco7854.opentv.contract.PlaylistOperation
 import com.buco7854.opentv.contract.PlaylistOperationExecution
-import com.buco7854.opentv.contract.PlaylistUpsertRequest
+import com.buco7854.opentv.contract.PlaylistUpdateRequest
 import com.buco7854.opentv.core.log.CoreLog
 import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.core.model.ChannelKind
@@ -29,10 +30,14 @@ import com.buco7854.opentv.serverdata.db.UserRow
 import java.net.URI
 import java.nio.file.Files
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class PlaylistCapabilitiesTest {
     @Test
@@ -85,25 +90,14 @@ class PlaylistCapabilitiesTest {
             adminM3u.keys,
         )
         assertEquals(
-            "/browse/$m3u?manage=playlist",
-            adminM3u.getValue(PlaylistOperation.REFRESH).browserPath,
-        )
-        assertEquals(
-            "/browse/$m3u?manage=playlist",
-            adminM3u.getValue(PlaylistOperation.EDIT).browserPath,
-        )
-        assertEquals(
-            "/browse/$m3u?manage=playlist",
-            adminM3u.getValue(PlaylistOperation.DELETE).browserPath,
-        )
-        assertEquals(
-            "/account/$m3u",
-            adminM3u.getValue(PlaylistOperation.VIEW_PROVIDER_ACCOUNT).browserPath,
-        )
-        assertEquals(
-            PlaylistOperationExecution.BROWSER,
+            PlaylistOperationExecution.IN_APP,
             adminM3u.getValue(PlaylistOperation.EDIT).execution,
         )
+        assertEquals(
+            setOf(PlaylistOperationExecution.IN_APP),
+            adminM3u.values.map { it.execution }.toSet(),
+        )
+        assertEquals(setOf(null), adminM3u.values.map { it.browserPath }.toSet())
 
         val adminFile = fixture.service.capabilities(fixture.admin, file).byOperation()
         assertEquals(
@@ -116,6 +110,7 @@ class PlaylistCapabilitiesTest {
             adminFile.keys,
             "a file import has nothing to refresh and no provider account panel",
         )
+        assertTrue(adminFile.values.all { it.execution == PlaylistOperationExecution.IN_APP })
 
         val adminXtream = fixture.service.capabilities(fixture.admin, xtream).byOperation()
         assertEquals(
@@ -129,6 +124,7 @@ class PlaylistCapabilitiesTest {
             adminXtream.keys,
             "native Xtream categories come from the provider and cannot be corrected",
         )
+        assertTrue(adminXtream.values.all { it.execution == PlaylistOperationExecution.IN_APP })
 
         assertFailsWith<ForbiddenApiException> {
             fixture.service.capabilities(fixture.outsider, m3u)
@@ -143,6 +139,11 @@ class PlaylistCapabilitiesTest {
             )
             fixture.grant(VIEWER, playlistId)
             val channelId = fixture.channel(playlistId, "Documentaries")
+            val otherPlaylistId = fixture.playlist(
+                Playlist(name = "Other", url = "https://provider.example/other.m3u"),
+            )
+            fixture.grant(VIEWER, otherPlaylistId)
+            val otherChannelId = fixture.channel(otherPlaylistId, "Movies")
             fixture.database.content().insert(
                 ContentIdentityRow(
                     contentId = "content-1",
@@ -154,12 +155,37 @@ class PlaylistCapabilitiesTest {
                     retired = false,
                 ),
             )
+            fixture.database.content().insert(
+                ContentIdentityRow(
+                    contentId = "content-2",
+                    playlistId = otherPlaylistId,
+                    kind = ChannelKind.MOVIE,
+                    providerFingerprint = "fingerprint-2",
+                    currentChannelId = otherChannelId,
+                    lastSeenAtMs = NOW,
+                    retired = false,
+                ),
+            )
             fixture.database.activity().upsertResume(
                 UserResumeRow(VIEWER, "content-1", 20_000, 60_000, NOW),
+            )
+            fixture.database.activity().upsertResume(
+                UserResumeRow(OUTSIDER, "content-1", 30_000, 60_000, NOW),
+            )
+            fixture.database.activity().upsertResume(
+                UserResumeRow(VIEWER, "content-2", 40_000, 60_000, NOW),
             )
 
             fixture.service.clearProgress(fixture.viewer, playlistId)
             assertNull(fixture.database.activity().resume(VIEWER, "content-1"))
+            assertEquals(
+                30_000,
+                fixture.database.activity().resume(OUTSIDER, "content-1")?.positionMs,
+            )
+            assertEquals(
+                40_000,
+                fixture.database.activity().resume(VIEWER, "content-2")?.positionMs,
+            )
 
             // A grant is not enough: reclassifying changes what every other viewer sees.
             assertFailsWith<ForbiddenApiException> {
@@ -201,7 +227,7 @@ class PlaylistCapabilitiesTest {
                 Playlist(
                     name = "Xtream",
                     url = null,
-                    xtreamBase = "https://provider.example",
+                    xtreamBase = "https://provider.example:443",
                     xtreamUser = "user",
                     xtreamPass = "pass",
                 ),
@@ -227,11 +253,20 @@ class PlaylistCapabilitiesTest {
                 fixture.service.refresh(fixture.viewer, playlistId, force = true)
             }
             assertFailsWith<ForbiddenApiException> {
+                fixture.service.startRefresh(fixture.viewer, playlistId, force = true)
+            }
+            assertFailsWith<ForbiddenApiException> {
+                fixture.service.edit(fixture.viewer, playlistId)
+            }
+            assertFailsWith<ForbiddenApiException> {
                 fixture.service.update(
                     fixture.viewer,
                     playlistId,
-                    PlaylistUpsertRequest(mode = "xtream", name = "Renamed"),
+                    PlaylistUpdateRequest(name = "Renamed"),
                 )
+            }
+            assertFailsWith<ForbiddenApiException> {
+                fixture.service.deleteInfo(fixture.viewer, playlistId)
             }
             assertFailsWith<ForbiddenApiException> {
                 fixture.service.delete(fixture.viewer, playlistId)
@@ -242,10 +277,87 @@ class PlaylistCapabilitiesTest {
         }
 
     @Test
-    fun aStaleAdminSnapshotCannotAdvertiseBrowserOperationsOrBypassGrants() =
+    fun currentAdministratorCanUseEveryNativeAdministrationOperationWithoutSecretResponses() =
+        withFixture { fixture ->
+            val credentialUrl =
+                "https://provider.example/get.php?username=alice&password=url-secret"
+            val epgUrl =
+                "https://provider.example/xmltv.php?username=alice&password=url-secret"
+            val m3u = fixture.playlist(
+                Playlist(name = "M3U", url = credentialUrl, epgUrl = epgUrl),
+            )
+            val xtream = fixture.playlist(
+                Playlist(
+                    name = "Xtream",
+                    url = null,
+                    xtreamBase = "https://provider.example:443",
+                    xtreamUser = "alice",
+                    xtreamPass = "stored-password",
+                ),
+            )
+            val deleting = fixture.playlist(Playlist(name = "Old", url = null))
+
+            val xtreamForm = fixture.service.edit(fixture.admin, xtream)
+            assertEquals(
+                setOf(
+                    PlaylistEditField.NAME,
+                    PlaylistEditField.SERVER,
+                    PlaylistEditField.USERNAME,
+                    PlaylistEditField.PASSWORD,
+                ),
+                xtreamForm.fields.toSet(),
+            )
+            assertTrue(PlaylistEditField.PASSWORD in xtreamForm.storedFields)
+            val updatedXtream = fixture.service.update(
+                fixture.admin,
+                xtream,
+                PlaylistUpdateRequest(name = "Renamed", password = ""),
+            )
+            assertEquals("Renamed", updatedXtream.name)
+            assertEquals("stored-password", fixture.storage.playlists.get(xtream)?.xtreamPass)
+
+            val m3uForm = fixture.service.edit(fixture.admin, m3u)
+            val updatedM3u = fixture.service.update(
+                fixture.admin,
+                m3u,
+                PlaylistUpdateRequest(name = "Renamed M3U"),
+            )
+            assertEquals(credentialUrl, fixture.storage.playlists.get(m3u)?.url)
+            assertEquals(epgUrl, fixture.storage.playlists.get(m3u)?.epgUrl)
+
+            fixture.service.refresh(fixture.admin, m3u, force = true)
+            val deletion = fixture.service.deleteInfo(fixture.admin, deleting)
+            assertTrue("every user's favorites, watch progress and downloads" in deletion.warning)
+            val account = fixture.service.account(fixture.admin, xtream, force = true)
+            assertEquals("Active", account.status)
+            fixture.service.delete(fixture.admin, deleting)
+            assertNull(fixture.storage.playlists.get(deleting))
+
+            val responseBodies = listOf(
+                Json.encodeToString(xtreamForm),
+                Json.encodeToString(updatedXtream),
+                Json.encodeToString(m3uForm),
+                Json.encodeToString(updatedM3u),
+            )
+            responseBodies.forEach { body ->
+                assertFalse("stored-password" in body, body)
+                assertFalse("url-secret" in body, body)
+                assertFalse(credentialUrl in body, body)
+                assertFalse(epgUrl in body, body)
+            }
+        }
+
+    @Test
+    fun aStaleAdminSnapshotCannotAdvertiseOrUseNativeAdministrationOperations() =
         withFixture { fixture ->
             val playlistId = fixture.playlist(
-                Playlist(name = "M3U", url = "https://provider.example/list.m3u"),
+                Playlist(
+                    name = "M3U",
+                    url = "https://provider.example/list.m3u",
+                    xtreamBase = "https://provider.example",
+                    xtreamUser = "user",
+                    xtreamPass = "pass",
+                ),
             )
             fixture.grant(ADMIN, playlistId)
             val stored = requireNotNull(fixture.database.users().get(ADMIN))
@@ -258,15 +370,38 @@ class PlaylistCapabilitiesTest {
                 setOf(PlaylistOperation.CLEAR_WATCH_PROGRESS),
                 operations.keys,
                 "a demoted administrator loses category correction too, not just the " +
-                    "browser-delegated operations",
+                    "other native administration operations",
             )
+
+            assertFailsWith<ForbiddenApiException> {
+                fixture.service.refresh(fixture.admin, playlistId, force = true)
+            }
+            assertFailsWith<ForbiddenApiException> {
+                fixture.service.startRefresh(fixture.admin, playlistId, force = true)
+            }
+            assertFailsWith<ForbiddenApiException> {
+                fixture.service.edit(fixture.admin, playlistId)
+            }
+            assertFailsWith<ForbiddenApiException> {
+                fixture.service.update(
+                    fixture.admin,
+                    playlistId,
+                    PlaylistUpdateRequest(name = "Renamed"),
+                )
+            }
+            assertFailsWith<ForbiddenApiException> {
+                fixture.service.deleteInfo(fixture.admin, playlistId)
+            }
+            assertFailsWith<ForbiddenApiException> {
+                fixture.service.delete(fixture.admin, playlistId)
+            }
+            assertFailsWith<ForbiddenApiException> {
+                fixture.service.account(fixture.admin, playlistId, force = true)
+            }
 
             fixture.database.grants().revoke(ADMIN, playlistId)
             assertFailsWith<ForbiddenApiException> {
                 fixture.service.capabilities(fixture.admin, playlistId)
-            }
-            assertFailsWith<ForbiddenApiException> {
-                fixture.service.refresh(fixture.admin, playlistId, force = true)
             }
         }
 
@@ -321,7 +456,19 @@ class PlaylistCapabilitiesTest {
             ).forEach { database.users().insert(it) }
             val fetcher = ConditionalFetcher { _, _, _ -> ConditionalFetch.NotModified }
             val log = CoreLog { _, _ -> }
-            val xtreamApi = XtreamApi { _ -> error("provider access is not used") }
+            val xtreamApi = XtreamApi {
+                """
+                    {
+                      "user_info": {
+                        "auth": 1,
+                        "active_cons": "1",
+                        "max_connections": "2",
+                        "status": "Active"
+                      },
+                      "server_info": {"timezone": "UTC"}
+                    }
+                """.trimIndent()
+            }
             val account = AccountRepository(xtreamApi, log)
             val playlists = PlaylistRepository(storage, xtreamApi, fetcher, log, account)
             val epg = EpgRepository(storage, fetcher)

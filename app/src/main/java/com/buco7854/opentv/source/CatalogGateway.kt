@@ -20,6 +20,27 @@ interface CatalogGateway {
     suspend fun correctCategoryType(groupTitle: String, kind: Int?): CatalogResult<Unit> =
         CatalogResult.Failed(UnsupportedOperationException("Category correction is not available"))
 
+    suspend fun playlistEditForm(): CatalogResult<PlaylistEditForm> =
+        CatalogResult.Failed(UnsupportedOperationException("Playlist editing is not available"))
+
+    suspend fun updatePlaylist(update: PlaylistEditUpdate): CatalogResult<Unit> =
+        CatalogResult.Failed(UnsupportedOperationException("Playlist editing is not available"))
+
+    suspend fun refreshPlaylist(
+        force: Boolean = true,
+        onProgress: (PlaylistRefreshProgress) -> Unit = {},
+    ): CatalogResult<PlaylistRefreshResult> =
+        CatalogResult.Failed(UnsupportedOperationException("Playlist refresh is not available"))
+
+    suspend fun playlistDeleteInfo(): CatalogResult<PlaylistDeleteInfo> =
+        CatalogResult.Failed(UnsupportedOperationException("Playlist deletion is not available"))
+
+    suspend fun deletePlaylist(): CatalogResult<Unit> =
+        CatalogResult.Failed(UnsupportedOperationException("Playlist deletion is not available"))
+
+    suspend fun providerAccount(force: Boolean = true): CatalogResult<ProviderAccountInfo> =
+        CatalogResult.Failed(UnsupportedOperationException("Provider account is not available"))
+
     /**
      * Source capabilities may depend on persisted source configuration.
      *

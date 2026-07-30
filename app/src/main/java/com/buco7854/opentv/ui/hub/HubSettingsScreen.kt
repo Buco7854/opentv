@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.R
 import com.buco7854.opentv.core.model.HubSource
+import com.buco7854.opentv.ui.components.OtvButton
 import com.buco7854.opentv.ui.components.OtvTextButton
 import com.buco7854.opentv.ui.components.Pill
 import com.buco7854.opentv.ui.components.RequestInitialFocusOnTv
@@ -64,7 +65,12 @@ import kotlinx.coroutines.launch
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HubSettingsScreen(hubId: Long, onBack: () -> Unit, onRemoved: () -> Unit) {
+fun HubSettingsScreen(
+    hubId: Long,
+    onBack: () -> Unit,
+    onRemoved: () -> Unit,
+    onSignIn: () -> Unit,
+) {
     val graph = OpenTvApp.graph
     val accounts = graph.hubAccounts
     val context = LocalContext.current
@@ -183,11 +189,16 @@ fun HubSettingsScreen(hubId: Long, onBack: () -> Unit, onRemoved: () -> Unit) {
                 }
             }
 
-            // These open the server's own web UI rather than being rebuilt natively, so
-            // they are navigation, not actions. As full-width filled buttons they read as
-            // three competing primary calls to action stacked down the page; as rows in a
-            // card they read as a settings list, which is what they are.
-            Card(modifier = Modifier.fillMaxWidth()) {
+            // Every entry below needs a session. Signed out, they would open the server's
+            // login page instead of the page they name, so offer signing in and nothing else.
+            val signedOut = hub.userId == null
+            if (signedOut) {
+                OtvButton(onClick = onSignIn, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.hub_sign_in_again))
+                }
+            }
+
+            if (!signedOut) Card(modifier = Modifier.fillMaxWidth()) {
                 Column {
                     BrowserEntry(
                         icon = Icons.Outlined.Person,
@@ -215,16 +226,17 @@ fun HubSettingsScreen(hubId: Long, onBack: () -> Unit, onRemoved: () -> Unit) {
             }
 
             HorizontalDivider()
-            OtvTextButton(
-                // Nothing on this screen reflects an ended session, and the sign-out
-                // itself must outlive the composition: leaving would otherwise cancel
-                // the logout before the local token is forgotten.
-                onClick = {
-                    graph.applicationScope.launch { accounts.signOut(hubId) }
-                    onBack()
-                },
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text(stringResource(R.string.hub_sign_out)) }
+            if (!signedOut) {
+                OtvTextButton(
+                    // The sign-out must outlive this composition: leaving would otherwise
+                    // cancel it before the local session is forgotten.
+                    onClick = {
+                        graph.applicationScope.launch { accounts.signOut(hubId) }
+                        onBack()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text(stringResource(R.string.hub_sign_out)) }
+            }
             OtvTextButton(
                 onClick = { confirmRemove = true },
                 danger = true,

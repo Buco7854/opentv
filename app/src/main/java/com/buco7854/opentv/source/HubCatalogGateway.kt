@@ -1,5 +1,6 @@
 package com.buco7854.opentv.source
 
+import com.buco7854.opentv.contract.AccountInfoDto
 import com.buco7854.opentv.contract.ChannelDto
 import com.buco7854.opentv.contract.ChannelPageDto
 import com.buco7854.opentv.contract.EpisodePageDto
@@ -8,6 +9,14 @@ import com.buco7854.opentv.contract.FavoritesResolvedDto
 import com.buco7854.opentv.contract.GroupCountDto
 import com.buco7854.opentv.contract.GuideEntryDto
 import com.buco7854.opentv.contract.ProgrammeDto
+import com.buco7854.opentv.contract.PlaylistDeleteInfoDto
+import com.buco7854.opentv.contract.PlaylistEditDto
+import com.buco7854.opentv.contract.PlaylistEditField as WirePlaylistEditField
+import com.buco7854.opentv.contract.PlaylistEpgRefreshStatus
+import com.buco7854.opentv.contract.PlaylistRefreshJobDto
+import com.buco7854.opentv.contract.PlaylistRefreshJobStatus
+import com.buco7854.opentv.contract.PlaylistRefreshResultDto
+import com.buco7854.opentv.contract.PlaylistUpdateRequest
 import com.buco7854.opentv.contract.ResumePointDto
 import com.buco7854.opentv.contract.SearchResultsDto
 import com.buco7854.opentv.contract.SeriesGroupPageDto
@@ -24,6 +33,7 @@ import com.buco7854.opentv.hub.HubRegistry
 import com.buco7854.opentv.hub.HubUnauthorizedException
 import com.buco7854.opentv.hub.HubUnreachableException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 
 class HubCatalogGateway internal constructor(
     override val source: SourceId.Hub,
@@ -34,6 +44,11 @@ class HubCatalogGateway internal constructor(
 
     override suspend fun traits(): SourceTraits {
         val capabilities = backend.capabilities().toCatalogCapabilities()
+        val edit = if (PlaylistOperation.EDIT in capabilities.operations) {
+            backend.edit()
+        } else {
+            null
+        }
         return SourceTraits(
             hasXtreamSeries =
                 PlaylistOperation.CORRECT_CATEGORY_TYPE !in capabilities.operations,
@@ -43,10 +58,10 @@ class HubCatalogGateway internal constructor(
             favoritesAreServerSide = true,
             resumeIsServerSide = true,
             supportsRefresh = PlaylistOperation.REFRESH in capabilities.operations,
-            supportsSourceEditing = false,
-            usesXtreamCredentials = false,
-            usesM3uUrl = false,
-            isFileImport = false,
+            supportsSourceEditing = edit != null,
+            usesXtreamCredentials = edit?.mode == "xtream",
+            usesM3uUrl = edit?.mode == "url",
+            isFileImport = edit?.mode == "file",
         )
     }
 
@@ -64,6 +79,65 @@ class HubCatalogGateway internal constructor(
     ): CatalogResult<Unit> = hubCall {
         backend.setGroupKind(groupTitle, kind)
     }
+
+    override suspend fun playlistEditForm(): CatalogResult<PlaylistEditForm> = hubCall {
+        backend.edit().toCatalogEditForm()
+    }
+
+    override suspend fun updatePlaylist(update: PlaylistEditUpdate): CatalogResult<Unit> = hubCall {
+        backend.update(update.toWire())
+    }
+
+    override suspend fun refreshPlaylist(
+        force: Boolean,
+        onProgress: (PlaylistRefreshProgress) -> Unit,
+    ): CatalogResult<PlaylistRefreshResult> = hubCall {
+        var job = backend.startRefresh(force)
+        var lastStatus: String? = null
+        while (true) {
+            if (job.status != lastStatus) {
+                when (job.status) {
+                    PlaylistRefreshJobStatus.QUEUED ->
+                        onProgress(PlaylistRefreshProgress.Queued)
+                    PlaylistRefreshJobStatus.RUNNING ->
+                        onProgress(PlaylistRefreshProgress.Running)
+                }
+                lastStatus = job.status
+            }
+            when (job.status) {
+                PlaylistRefreshJobStatus.SUCCEEDED -> {
+                    val result = requireNotNull(job.result) {
+                        "A successful playlist refresh must carry its result"
+                    }.toCatalogRefreshResult()
+                    onProgress(PlaylistRefreshProgress.Finished(result))
+                    return@hubCall result
+                }
+                PlaylistRefreshJobStatus.FAILED -> throw PlaylistRefreshFailedException()
+                PlaylistRefreshJobStatus.QUEUED,
+                PlaylistRefreshJobStatus.RUNNING -> {
+                    delay(REFRESH_POLL_INTERVAL_MS)
+                    job = backend.refreshStatus(job.id)
+                }
+                else -> throw IllegalArgumentException(
+                    "Unknown playlist refresh job status: ${job.status}",
+                )
+            }
+        }
+        error("unreachable")
+    }
+
+    override suspend fun playlistDeleteInfo(): CatalogResult<PlaylistDeleteInfo> = hubCall {
+        backend.deleteInfo().toCatalogDeleteInfo()
+    }
+
+    override suspend fun deletePlaylist(): CatalogResult<Unit> = hubCall {
+        backend.delete()
+    }
+
+    override suspend fun providerAccount(force: Boolean): CatalogResult<ProviderAccountInfo> =
+        hubCall {
+            backend.account(force).toCatalogAccount()
+        }
 
     override suspend fun groups(kind: Int): CatalogResult<List<CatalogGroup>> = hubCall {
         backend.groups(kind).map { CatalogGroup(it.groupTitle, it.count) }
@@ -355,6 +429,13 @@ private fun ContentRef.hubContentId(): String =
 internal interface HubCatalogBackend {
     val baseUrl: String
     suspend fun capabilities(): HubPlaylistCapabilities
+    suspend fun edit(): PlaylistEditDto
+    suspend fun update(request: PlaylistUpdateRequest)
+    suspend fun startRefresh(force: Boolean): PlaylistRefreshJobDto
+    suspend fun refreshStatus(refreshId: String): PlaylistRefreshJobDto
+    suspend fun deleteInfo(): PlaylistDeleteInfoDto
+    suspend fun delete()
+    suspend fun account(force: Boolean): AccountInfoDto
     suspend fun clearProgress()
     suspend fun setGroupKind(groupTitle: String, kind: Int?)
     suspend fun groups(kind: Int): List<GroupCountDto>
@@ -396,6 +477,22 @@ private class RegistryHubCatalogBackend(
 
     override suspend fun capabilities() =
         call { playlistCapabilities(it, source.playlistId) }
+    override suspend fun edit() =
+        call { playlistEdit(it, source.playlistId) }
+    override suspend fun update(request: PlaylistUpdateRequest) {
+        call { updatePlaylist(it, source.playlistId, request) }
+    }
+    override suspend fun startRefresh(force: Boolean) =
+        call { startPlaylistRefresh(it, source.playlistId, force) }
+    override suspend fun refreshStatus(refreshId: String) =
+        call { playlistRefreshStatus(it, source.playlistId, refreshId) }
+    override suspend fun deleteInfo() =
+        call { playlistDeleteInfo(it, source.playlistId) }
+    override suspend fun delete() {
+        call { deletePlaylist(it, source.playlistId) }
+    }
+    override suspend fun account(force: Boolean) =
+        call { playlistAccount(it, source.playlistId, force) }
     override suspend fun clearProgress() =
         call { clearPlaylistProgress(it, source.playlistId) }
     override suspend fun setGroupKind(groupTitle: String, kind: Int?) =
@@ -448,6 +545,69 @@ private fun HubPlaylistCapabilities.toCatalogCapabilities(): PlaylistCapabilitie
             mappedOperation to mappedAvailability
         }.toMap(),
     )
+
+private fun PlaylistEditDto.toCatalogEditForm() = PlaylistEditForm(
+    id = id,
+    name = name,
+    mode = when (mode) {
+        "xtream" -> PlaylistEditMode.XTREAM
+        "url" -> PlaylistEditMode.M3U_URL
+        "file" -> PlaylistEditMode.FILE
+        else -> throw IllegalArgumentException("Unknown playlist edit mode: $mode")
+    },
+    fields = fields.mapTo(linkedSetOf(), ::playlistEditField),
+    storedFields = storedFields.mapTo(linkedSetOf(), ::playlistEditField),
+)
+
+private fun playlistEditField(field: String): PlaylistEditField = when (field) {
+    WirePlaylistEditField.NAME -> PlaylistEditField.NAME
+    WirePlaylistEditField.SERVER -> PlaylistEditField.SERVER
+    WirePlaylistEditField.USERNAME -> PlaylistEditField.USERNAME
+    WirePlaylistEditField.PASSWORD -> PlaylistEditField.PASSWORD
+    WirePlaylistEditField.URL -> PlaylistEditField.URL
+    WirePlaylistEditField.EPG_URL -> PlaylistEditField.EPG_URL
+    WirePlaylistEditField.CONTENT -> PlaylistEditField.CONTENT
+    else -> throw IllegalArgumentException("Unknown playlist edit field: $field")
+}
+
+private fun PlaylistEditUpdate.toWire() = PlaylistUpdateRequest(
+    name = name,
+    server = server,
+    username = username,
+    password = password,
+    url = url,
+    epgUrl = epgUrl,
+    content = content,
+)
+
+private fun PlaylistRefreshResultDto.toCatalogRefreshResult() = PlaylistRefreshResult(
+    catalogChanged = catalogChanged,
+    epg = when (epgStatus) {
+        PlaylistEpgRefreshStatus.SUCCEEDED -> PlaylistEpgRefreshOutcome.SUCCEEDED
+        PlaylistEpgRefreshStatus.FAILED -> PlaylistEpgRefreshOutcome.FAILED
+        PlaylistEpgRefreshStatus.NOT_CONFIGURED -> PlaylistEpgRefreshOutcome.NOT_CONFIGURED
+        else -> throw IllegalArgumentException("Unknown EPG refresh status: $epgStatus")
+    },
+    lastRefreshedMs = playlist.lastRefreshedMs,
+    channelCount = playlist.channelCount,
+)
+
+private fun PlaylistDeleteInfoDto.toCatalogDeleteInfo() =
+    PlaylistDeleteInfo(id, name, warning)
+
+private fun AccountInfoDto.toCatalogAccount() = ProviderAccountInfo(
+    activeConnections = activeConnections,
+    maxConnections = maxConnections,
+    status = status,
+    expiresAtMs = expiresAtMs,
+    isTrial = isTrial,
+    createdAtMs = createdAtMs,
+    timezone = timezone,
+    fetchedAtMs = fetchedAtMs,
+    stale = stale,
+)
+
+private const val REFRESH_POLL_INTERVAL_MS = 500L
 
 private fun ChannelDto.toCatalogItem(progress: Float?, imageUrl: String?) = CatalogItem(
     ref = ContentRef.HubContent(contentId),

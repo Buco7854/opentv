@@ -172,9 +172,19 @@ class HubSessionVaultTest {
     }
 
     @Test
-    fun signOutCancellationDoesNotContinueAsASuccessfulLocalSignOut() = runTest {
+    fun signOutCancellationCannotUndoCompletedLocalSignOut() = runTest {
         val store = RecordingHubStore().apply {
-            upsert(HubSource(name = "Home", baseUrl = "https://hub.example", addedMs = 1))
+            upsert(
+                HubSource(
+                    name = "Home",
+                    baseUrl = "https://hub.example",
+                    userId = "user-1",
+                    username = "alice",
+                    role = "USER",
+                    addedMs = 1,
+                    lastSeenMs = 2,
+                ),
+            )
         }
         val logoutStarted = CompletableDeferred<Unit>()
         val registry = HubRegistry(
@@ -188,6 +198,7 @@ class HubSessionVaultTest {
             vault,
         )
         vault.store(RecordingHubStore.ID, "session")
+        val client = checkNotNull(registry.clientFor(RecordingHubStore.ID))
         var returnedNormally = false
 
         val signOut = launch {
@@ -200,7 +211,89 @@ class HubSessionVaultTest {
 
         assertTrue(signOut.isCancelled)
         assertFalse(returnedNormally)
-        assertEquals("session", vault.token(RecordingHubStore.ID))
+        assertNull(vault.token(RecordingHubStore.ID))
+        assertEquals(HubHealth.SIGNED_OUT, client.health.value)
+        assertNull(store.get(RecordingHubStore.ID)?.username)
+    }
+
+    @Test
+    fun signOutMakesLocalStateObservableBeforeRemoteLogoutFinishes() = runTest {
+        val store = RecordingHubStore()
+        val id = store.upsert(
+            HubSource(
+                name = "Home",
+                baseUrl = "https://hub.example",
+                userId = "user-1",
+                username = "alice",
+                role = "USER",
+                addedMs = 1,
+                lastSeenMs = 2,
+            ),
+        )
+        val logoutStarted = CompletableDeferred<Unit>()
+        val releaseLogout = CompletableDeferred<Unit>()
+        var logoutAuthorization: String? = null
+        val registry = HubRegistry(
+            store,
+            HubApi(
+                HttpTransport { request ->
+                    logoutAuthorization = request.headers["Authorization"]
+                    logoutStarted.complete(Unit)
+                    releaseLogout.await()
+                    HttpResponseSpec(204, emptyMap(), "")
+                },
+            ),
+            vault,
+        )
+        vault.store(id, "session")
+        val client = checkNotNull(registry.clientFor(id))
+
+        val signOut = launch { registry.signOut(id) }
+        logoutStarted.await()
+
+        assertNull(vault.token(id))
+        assertEquals(HubHealth.SIGNED_OUT, client.health.value)
+        assertNull(store.get(id)?.username)
+        assertEquals("Bearer session", logoutAuthorization)
+
+        releaseLogout.complete(Unit)
+        signOut.join()
+    }
+
+    @Test
+    fun signOutClearsTheCachedIdentityThatMakesTheHubAppearSignedIn() = runTest {
+        val store = RecordingHubStore()
+        val id = store.upsert(
+            HubSource(
+                name = "Home",
+                baseUrl = "https://hub.example",
+                userId = "user-1",
+                username = "alice",
+                role = "USER",
+                addedMs = 1,
+                lastSeenMs = 2,
+            ),
+        )
+        vault.store(id, "session")
+        val registry = HubRegistry(
+            store,
+            HubApi(HttpTransport { HttpResponseSpec(204, emptyMap(), "") }),
+            vault,
+        )
+        val client = checkNotNull(registry.clientFor(id))
+
+        registry.signOut(id)
+
+        assertNull(vault.token(id))
+        assertEquals(HubHealth.SIGNED_OUT, client.health.value)
+        assertNull(store.get(id)?.userId)
+        assertNull(store.get(id)?.username)
+        assertNull(store.get(id)?.role)
+        assertNull(store.get(id)?.lastSeenMs)
+        assertNull(client.source.userId)
+        assertNull(client.source.username)
+        assertNull(client.source.role)
+        assertNull(client.source.lastSeenMs)
     }
 
     @Test

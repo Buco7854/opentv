@@ -22,7 +22,13 @@ internal fun Route.playlistRoutes(service: PlaylistApplicationService) = route("
         get("/capabilities") {
             call.respond(service.capabilities(call.actor, call.id()))
         }
+        get("/edit") {
+            call.respond(service.edit(call.actor, call.id()))
+        }
         put { call.respond(service.update(call.actor, call.id(), call.receive())) }
+        get("/delete-info") {
+            call.respond(service.deleteInfo(call.actor, call.id()))
+        }
         delete {
             service.delete(call.actor, call.id())
             call.respond(HttpStatusCode.NoContent)
@@ -33,6 +39,23 @@ internal fun Route.playlistRoutes(service: PlaylistApplicationService) = route("
                     call.actor, call.id(),
                     call.request.queryParameters["force"] == "true",
                 )
+            )
+        }
+        post("/refresh-jobs") {
+            call.respond(
+                service.startRefresh(
+                    call.actor, call.id(),
+                    call.request.queryParameters["force"] == "true",
+                ),
+            )
+        }
+        get("/refresh-jobs/{refreshId}") {
+            call.respond(
+                service.refreshStatus(
+                    call.actor,
+                    call.id(),
+                    call.requiredParameter("refreshId"),
+                ),
             )
         }
         post("/clear-progress") {

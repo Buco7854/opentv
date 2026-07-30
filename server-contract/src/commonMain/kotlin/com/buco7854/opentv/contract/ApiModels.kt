@@ -116,6 +116,21 @@ data class PlaylistUpsertRequest(
     val content: String = "",
 )
 
+/**
+ * Write-only playlist changes. Null or blank provider fields keep the stored value.
+ * Provider fields intentionally have no matching value-bearing response DTO.
+ */
+@Serializable
+data class PlaylistUpdateRequest(
+    val name: String? = null,
+    val server: String? = null,
+    val username: String? = null,
+    val password: String? = null,
+    val url: String? = null,
+    val epgUrl: String? = null,
+    val content: String? = null,
+)
+
 @Serializable
 data class PlaylistDto(
     val id: Long,
@@ -124,6 +139,61 @@ data class PlaylistDto(
     val hasXtreamPanel: Boolean,
     val lastRefreshedMs: Long,
     val channelCount: Int,
+)
+
+@Serializable
+data class PlaylistEditDto(
+    val id: Long,
+    val name: String,
+    val mode: String,
+    /** Fields the client should render. */
+    val fields: List<String>,
+    /** Hidden fields with a stored value. The value itself never leaves the server. */
+    val storedFields: List<String>,
+)
+
+object PlaylistEditField {
+    const val NAME = "NAME"
+    const val SERVER = "SERVER"
+    const val USERNAME = "USERNAME"
+    const val PASSWORD = "PASSWORD"
+    const val URL = "URL"
+    const val EPG_URL = "EPG_URL"
+    const val CONTENT = "CONTENT"
+}
+
+@Serializable
+data class PlaylistRefreshResultDto(
+    val playlist: PlaylistDto,
+    val catalogChanged: Boolean,
+    val epgStatus: String,
+)
+
+object PlaylistEpgRefreshStatus {
+    const val SUCCEEDED = "SUCCEEDED"
+    const val FAILED = "FAILED"
+    const val NOT_CONFIGURED = "NOT_CONFIGURED"
+}
+
+@Serializable
+data class PlaylistRefreshJobDto(
+    val id: String,
+    val status: String,
+    val result: PlaylistRefreshResultDto? = null,
+)
+
+object PlaylistRefreshJobStatus {
+    const val QUEUED = "QUEUED"
+    const val RUNNING = "RUNNING"
+    const val SUCCEEDED = "SUCCEEDED"
+    const val FAILED = "FAILED"
+}
+
+@Serializable
+data class PlaylistDeleteInfoDto(
+    val id: Long,
+    val name: String,
+    val warning: String,
 )
 
 @Serializable

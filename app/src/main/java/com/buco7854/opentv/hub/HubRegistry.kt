@@ -200,15 +200,23 @@ class HubRegistry(
 
     suspend fun signOut(hubId: Long) {
         val client = clientFor(hubId) ?: return
-        // Best effort: a hub that cannot be reached still gets forgotten locally.
+        val credentials = client.credentials()
+        mutationMutex.withLock {
+            client.forgetToken()
+            store.clearIdentity(hubId)
+            client.source = client.source.copy(
+                userId = null,
+                username = null,
+                role = null,
+                lastSeenMs = null,
+            )
+        }
+        // Best effort: local sign-out is immediate even if the hub cannot be reached.
         try {
-            client.call { logout(it) }
+            api.logout(credentials)
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (_: Throwable) {
-            Unit
-        }
-        client.forgetToken()
+        } catch (_: Throwable) { }
     }
 
     suspend fun remove(hubId: Long) {

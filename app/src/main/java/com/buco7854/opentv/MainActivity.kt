@@ -237,6 +237,7 @@ fun AppShell(
             onOpenLog = { panelOpen = false; nav.navigate(Routes.LOG) },
             onConnectHub = { panelOpen = false; nav.navigate(Routes.HUB_SIGN_IN) },
             onOpenHub = { panelOpen = false; nav.navigate(Routes.hubSettings(it)) },
+            onSignInHub = { panelOpen = false; nav.navigate(Routes.hubSignIn(it)) },
         )
     }
 }
@@ -346,6 +347,9 @@ fun AppNav(nav: NavHostController, onActivePlaylist: (Long) -> Unit) {
                 hubId = entry.arguments!!.getLong("hubId"),
                 onBack = { nav.popBackStack() },
                 onRemoved = { nav.popBackStack() },
+                onSignIn = {
+                    nav.navigate(Routes.hubSignIn(entry.arguments!!.getLong("hubId")))
+                },
             )
         }
         composable(Routes.LOG) {

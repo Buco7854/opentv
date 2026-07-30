@@ -83,9 +83,14 @@ import com.buco7854.opentv.ui.components.PlaylistDialog
 import com.buco7854.opentv.ui.components.focusHighlight
 import com.buco7854.opentv.ui.hub.HandoffResult
 import com.buco7854.opentv.ui.hub.HubBrowserHandoff
+import com.buco7854.opentv.ui.hub.HubPlaylistEditDialog
+import com.buco7854.opentv.ui.hub.ProviderAccountDialog
 import com.buco7854.opentv.ui.home.HomeViewModel
 import com.buco7854.opentv.source.CatalogResult
 import com.buco7854.opentv.source.PlaylistCapabilities
+import com.buco7854.opentv.source.PlaylistDeleteInfo
+import com.buco7854.opentv.source.PlaylistEditForm
+import com.buco7854.opentv.source.ProviderAccountInfo
 import com.buco7854.opentv.source.PlaylistOperation
 import com.buco7854.opentv.source.PlaylistOperationAvailability
 import com.buco7854.opentv.source.SourceId
@@ -225,6 +230,7 @@ fun PlaylistsPanel(
     onOpenLog: () -> Unit,
     onConnectHub: () -> Unit,
     onOpenHub: (Long) -> Unit,
+    onSignInHub: (Long) -> Unit,
     viewModel: HomeViewModel = viewModel(),
 ) {
     val playlists by viewModel.playlists.collectAsStateWithLifecycle(initialValue = null)
@@ -293,7 +299,16 @@ fun PlaylistsPanel(
                 )
             }
             items(hubs, key = { "hub-${it.id}" }) { hub ->
-                PanelHubRow(hub = hub, onClick = { onOpenHub(hub.id) })
+                // Signing out clears the stored identity, so an absent user id is this
+                // server saying it no longer has a session -- show that plainly and send
+                // the row to sign-in rather than to settings for an account we do not have.
+                val signedOut = hub.userId == null
+                PanelHubRow(
+                    hub = hub,
+                    signedOut = signedOut,
+                    onClick = { if (signedOut) onSignInHub(hub.id) else onOpenHub(hub.id) },
+                )
+                if (signedOut) return@items
                 catalogSources.filter {
                     (it.sourceId as? SourceId.Hub)?.hubId == hub.id
                 }.forEach { source ->
@@ -514,7 +529,7 @@ private fun PanelSectionHeader(
 }
 
 @Composable
-private fun PanelHubRow(hub: HubSource, onClick: () -> Unit) {
+private fun PanelHubRow(hub: HubSource, signedOut: Boolean, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -532,11 +547,20 @@ private fun PanelHubRow(hub: HubSource, onClick: () -> Unit) {
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(hub.name, style = MaterialTheme.typography.titleSmall)
-            hub.username?.let {
+            val subtitle = if (signedOut) {
+                stringResource(R.string.hub_status_signed_out)
+            } else {
+                hub.username
+            }
+            subtitle?.let {
                 Text(
                     it,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (signedOut) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                 )
             }
         }
@@ -567,7 +591,17 @@ private fun PanelHubPlaylistRow(
     var capabilities by remember(source.sourceId) {
         mutableStateOf<HubPlaylistActions>(HubPlaylistActions.Loading)
     }
+    var action by remember(source.sourceId) { mutableStateOf<HubRowAction?>(null) }
+    var editForm by remember(source.sourceId) { mutableStateOf<PlaylistEditForm?>(null) }
+    var accountInfo by remember(source.sourceId) { mutableStateOf<ProviderAccountInfo?>(null) }
+    var deleteInfo by remember(source.sourceId) { mutableStateOf<PlaylistDeleteInfo?>(null) }
+    var working by remember(source.sourceId) { mutableStateOf(false) }
     val rejectedMessage = stringResource(R.string.hub_handoff_rejected)
+    val failedMessage = stringResource(R.string.source_load_failed)
+    val refreshStartedMessage = stringResource(R.string.playlist_refreshing)
+    val refreshedMessage = stringResource(R.string.playlist_refreshed)
+    val savedMessage = stringResource(R.string.playlist_updated)
+    val deletedMessage = stringResource(R.string.playlist_removed)
     val clearedMessage = stringResource(R.string.playlist_progress_cleared)
     val clearFailedMessage = stringResource(R.string.watch_together_action_failed)
     // Fetched when the menu is first opened rather than for every row up front: this is a
@@ -665,18 +699,21 @@ private fun PanelHubPlaylistRow(
                     label = stringResource(R.string.account_title),
                     icon = Icons.Outlined.Person,
                     onBrowser = ::openInBrowser,
+                    onInApp = { menuOpen = false; action = HubRowAction.ACCOUNT },
                 )
                 HubPlaylistMenuItem(
                     availability = available[PlaylistOperation.REFRESH],
                     label = stringResource(R.string.common_refresh),
                     icon = Icons.Outlined.Refresh,
                     onBrowser = ::openInBrowser,
+                    onInApp = { menuOpen = false; action = HubRowAction.REFRESH },
                 )
                 HubPlaylistMenuItem(
                     availability = available[PlaylistOperation.EDIT],
                     label = stringResource(R.string.common_edit),
                     icon = Icons.Outlined.Edit,
                     onBrowser = ::openInBrowser,
+                    onInApp = { menuOpen = false; action = HubRowAction.EDIT },
                 )
                 available[PlaylistOperation.CLEAR_WATCH_PROGRESS]?.let {
                     DropdownMenuItem(
@@ -691,9 +728,110 @@ private fun PanelHubPlaylistRow(
                     icon = Icons.Outlined.Delete,
                     danger = true,
                     onBrowser = ::openInBrowser,
+                    onInApp = { menuOpen = false; action = HubRowAction.DELETE },
                 )
             }
         }
+    }
+
+    LaunchedEffect(action) {
+        val requested = action ?: return@LaunchedEffect
+        val gateway = OpenTvApp.graph.catalogFor(source.sourceId)
+        when (requested) {
+            HubRowAction.ACCOUNT -> {
+                val result = gateway.providerAccount(force = false)
+                if (result is CatalogResult.Success) {
+                    accountInfo = result.value
+                } else {
+                    onNotify(failedMessage)
+                    action = null
+                }
+            }
+            HubRowAction.EDIT -> {
+                val result = gateway.playlistEditForm()
+                if (result is CatalogResult.Success) {
+                    editForm = result.value
+                } else {
+                    onNotify(failedMessage)
+                    action = null
+                }
+            }
+            HubRowAction.DELETE -> {
+                val result = gateway.playlistDeleteInfo()
+                if (result is CatalogResult.Success) {
+                    deleteInfo = result.value
+                } else {
+                    onNotify(failedMessage)
+                    action = null
+                }
+            }
+            HubRowAction.REFRESH -> {
+                action = null
+                onNotify(refreshStartedMessage)
+                OpenTvApp.graph.applicationScope.launch {
+                    val result = gateway.refreshPlaylist(force = true) {}
+                    onNotify(
+                        if (result is CatalogResult.Success) {
+                            refreshedMessage
+                        } else {
+                            failedMessage
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    editForm?.let { form ->
+        HubPlaylistEditDialog(
+            form = form,
+            busy = working,
+            onDismiss = { editForm = null; action = null },
+            onSave = { update ->
+                working = true
+                OpenTvApp.graph.applicationScope.launch {
+                    val saved = OpenTvApp.graph.catalogFor(source.sourceId).updatePlaylist(update)
+                    working = false
+                    editForm = null
+                    action = null
+                    onNotify(if (saved is CatalogResult.Success) savedMessage else failedMessage)
+                }
+            },
+        )
+    }
+
+    accountInfo?.let { info ->
+        ProviderAccountDialog(info = info, onDismiss = { accountInfo = null; action = null })
+    }
+
+    deleteInfo?.let { info ->
+        AlertDialog(
+            onDismissRequest = { deleteInfo = null; action = null },
+            title = { Text(stringResource(R.string.playlist_delete_title)) },
+            // The server supplies this copy, so the warning cannot drift from what
+            // deletion actually does on the server that performs it.
+            text = { Text(info.warning) },
+            confirmButton = {
+                OtvTextButton(
+                    danger = true,
+                    onClick = {
+                        deleteInfo = null
+                        action = null
+                        OpenTvApp.graph.applicationScope.launch {
+                            val done = OpenTvApp.graph.catalogFor(source.sourceId).deletePlaylist()
+                            onNotify(
+                                if (done is CatalogResult.Success) deletedMessage else failedMessage,
+                            )
+                        }
+                    },
+                ) { Text(stringResource(R.string.common_delete)) }
+            },
+            dismissButton = {
+                OtvTextButton(onClick = { deleteInfo = null; action = null }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
     }
 
     if (confirmClear) {
@@ -741,17 +879,24 @@ private fun HubPlaylistMenuItem(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     danger: Boolean = false,
     onBrowser: (String) -> Unit,
+    onInApp: () -> Unit = {},
 ) {
-    val url = (availability as? PlaylistOperationAvailability.Browser)?.url ?: return
+    // Absent means the server does not offer this to this user, so draw nothing at all.
+    if (availability == null) return
+    val url = (availability as? PlaylistOperationAvailability.Browser)?.url
     DropdownMenuItem(
         text = { Text(label) },
         leadingIcon = { Icon(icon, contentDescription = null) },
-        trailingIcon = {
-            Icon(
-                Icons.AutoMirrored.Outlined.OpenInNew,
-                contentDescription = stringResource(R.string.hub_opens_in_browser),
-                modifier = Modifier.size(16.dp),
-            )
+        trailingIcon = if (url == null) {
+            null
+        } else {
+            {
+                Icon(
+                    Icons.AutoMirrored.Outlined.OpenInNew,
+                    contentDescription = stringResource(R.string.hub_opens_in_browser),
+                    modifier = Modifier.size(16.dp),
+                )
+            }
         },
         colors = if (danger) {
             MenuDefaults.itemColors(
@@ -761,9 +906,12 @@ private fun HubPlaylistMenuItem(
         } else {
             MenuDefaults.itemColors()
         },
-        onClick = { onBrowser(url) },
+        onClick = { if (url != null) onBrowser(url) else onInApp() },
     )
 }
+
+/** Which management dialog a hub playlist row currently has open. */
+private enum class HubRowAction { ACCOUNT, REFRESH, EDIT, DELETE }
 
 @Composable
 private fun PanelActionRow(
