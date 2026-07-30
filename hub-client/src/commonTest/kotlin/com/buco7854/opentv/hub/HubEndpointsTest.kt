@@ -2,6 +2,7 @@ package com.buco7854.opentv.hub
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -97,5 +98,25 @@ class HubEndpointsTest {
         assertFalse(HubEndpoints.isSameOrigin("http://tv.lan:8080", "http://tv.lan:9999/link"))
         assertFalse(HubEndpoints.isSameOrigin("https://tv.example", "javascript:alert(1)"))
         assertFalse(HubEndpoints.isSameOrigin("https://tv.example", "not a url"))
+    }
+
+    @Test
+    fun browserPathsStayWithinTheConnectedHubDeployment() {
+        val target = HubEndpoints.webPath(
+            "https://tv.example/opentv",
+            "/browse/7?manage=playlist",
+        )
+
+        assertEquals(
+            "https://tv.example/opentv/browse/7?manage=playlist",
+            target,
+        )
+        assertTrue(HubEndpoints.isSameOrigin("https://tv.example/opentv", target))
+        assertFailsWith<IllegalArgumentException> {
+            HubEndpoints.webPath("https://tv.example", "//evil.example/admin")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            HubEndpoints.webPath("https://tv.example", "https://evil.example/admin")
+        }
     }
 }

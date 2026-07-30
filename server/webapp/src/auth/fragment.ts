@@ -4,6 +4,15 @@ import { useLocation, useNavigate } from 'react-router';
 const captured = new Map<string, string | null>();
 const OIDC_PENDING_KEY = 'auth.oidcPendingAt';
 const OIDC_HANDOFF_MAX_AGE_MS = 5 * 60_000;
+const DEVICE_LINK_PENDING_KEY = 'auth.deviceLinkPending';
+const DEVICE_LINK_MAX_AGE_MS = 5 * 60_000;
+const DEVICE_LINK_MAX_TOKEN_LENGTH = 512;
+
+export interface PendingDeviceLink {
+  linkToken: string;
+  browserSignIn: boolean;
+  automaticApproval: boolean;
+}
 
 export function fragmentToken(name: string): string | null {
   const known = captured.get(name);
@@ -89,4 +98,85 @@ export function useFragmentToken(name: string): string | null {
     if (hash) navigate(`${pathname}${search}`, { replace: true });
   }, [hash, name, navigate, pathname, search]);
   return token;
+}
+
+/**
+ * Captures a device-link secret before auth routing clears the address bar.
+ *
+ * The secret remains tab-local in sessionStorage so an OIDC round trip can return to it.
+ * It is never put in a query, cookie, or server-side redirect. When storage is unavailable,
+ * the caller still gets the in-memory value and password/passkey navigation can retain the
+ * original fragment through router state.
+ */
+export function capturePendingDeviceLink(
+  allowAutomaticApproval = true,
+): PendingDeviceLink | null {
+  const linkToken = consumeFragmentToken('t');
+  const mode = consumeFragmentToken('mode');
+  if (!linkToken) return readPendingDeviceLink();
+  if (linkToken.length > DEVICE_LINK_MAX_TOKEN_LENGTH) return null;
+  const previous = readPendingDeviceLink();
+  const browserSignIn = mode === 'sign-in';
+  const pending: PendingDeviceLink = {
+    linkToken,
+    browserSignIn,
+    // Preserve the initial decision across password/passkey navigation, which returns
+    // with the fragment after installing the new bearer. A link opened while a bearer
+    // already existed must retain the explicit approval screen.
+    automaticApproval: previous?.linkToken === linkToken
+      ? previous.automaticApproval
+      : browserSignIn && allowAutomaticApproval,
+  };
+  try {
+    sessionStorage.setItem(
+      DEVICE_LINK_PENDING_KEY,
+      JSON.stringify({ ...pending, startedAt: Date.now() }),
+    );
+  } catch {
+    // The route can still carry this instance through password/passkey sign-in.
+  }
+  return pending;
+}
+
+export function readPendingDeviceLink(): PendingDeviceLink | null {
+  let parsed: {
+    linkToken?: unknown;
+    browserSignIn?: unknown;
+    automaticApproval?: unknown;
+    startedAt?: unknown;
+  } | null = null;
+  try {
+    const stored = sessionStorage.getItem(DEVICE_LINK_PENDING_KEY);
+    if (stored !== null) parsed = JSON.parse(stored);
+  } catch {
+    return null;
+  }
+  const linkToken = typeof parsed?.linkToken === 'string' ? parsed.linkToken : '';
+  const startedAt = typeof parsed?.startedAt === 'number' ? parsed.startedAt : Number.NaN;
+  const age = Date.now() - startedAt;
+  if (!linkToken
+      || linkToken.length > DEVICE_LINK_MAX_TOKEN_LENGTH
+      || !Number.isFinite(startedAt)
+      || age < 0
+      || age > DEVICE_LINK_MAX_AGE_MS) {
+    clearPendingDeviceLink();
+    return null;
+  }
+  return {
+    linkToken,
+    browserSignIn: parsed?.browserSignIn === true,
+    automaticApproval: parsed?.automaticApproval === true,
+  };
+}
+
+export function clearPendingDeviceLink(expectedToken?: string) {
+  try {
+    if (expectedToken) {
+      const current = readPendingDeviceLink();
+      if (current?.linkToken !== expectedToken) return;
+    }
+    sessionStorage.removeItem(DEVICE_LINK_PENDING_KEY);
+  } catch {
+    // Storage was unavailable when the intent was captured too.
+  }
 }

@@ -37,6 +37,7 @@ const renderLogin = () => render(
 
 describe('LoginScreen', () => {
   beforeEach(() => {
+    sessionStorage.clear();
     capabilities.mockReturnValue(caps());
     supported.mockReturnValue(true);
     beginHandoff.mockReturnValue('handoff-correlation');

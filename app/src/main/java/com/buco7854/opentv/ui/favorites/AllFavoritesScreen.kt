@@ -56,7 +56,10 @@ import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.R
 import com.buco7854.opentv.core.model.ChannelKind
@@ -228,10 +231,20 @@ fun AllFavoritesScreen(
         }
     }
 
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(60_000)
+    // Refresh on arrival, not only after the first minute. The aggregate is
+    // application-scoped, so favouriting from a detail screen and coming here would
+    // otherwise show the previously cached (often empty) sections for a full minute --
+    // the server has the favourite, the screen just never asked again. The timer also
+    // follows the lifecycle: a hub answers this over the network, and a backgrounded
+    // app must not keep polling a server nobody is looking at.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             favorites.refresh()
+            while (true) {
+                delay(60_000)
+                favorites.refresh()
+            }
         }
     }
 

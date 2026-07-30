@@ -9,6 +9,10 @@ import com.buco7854.opentv.contract.FavoritesResolvedDto
 import com.buco7854.opentv.contract.MediaGrantDto
 import com.buco7854.opentv.contract.PlaybackCreateRequest
 import com.buco7854.opentv.contract.PlaybackLeaseDto
+import com.buco7854.opentv.contract.PlaylistCapabilitiesDto
+import com.buco7854.opentv.contract.PlaylistOperation
+import com.buco7854.opentv.contract.PlaylistOperationCapabilityDto
+import com.buco7854.opentv.contract.PlaylistOperationExecution
 import com.buco7854.opentv.contract.ProgrammeDto
 import com.buco7854.opentv.contract.ServerInfoDto
 import com.buco7854.opentv.contract.SessionHeartbeatDto
@@ -409,6 +413,99 @@ class HubApiTest {
         assertEquals("$BASE/api/v1/playlists/7/favorites/resolved", request.url)
         assertEquals("Bearer t", request.headers["Authorization"])
         assertEquals("native", request.headers["X-OpenTV-Client"])
+    }
+
+    @Test
+    fun playlistCapabilitiesResolveBrowserPathsAgainstTheConnectedHub() = runTest {
+        val transport = FakeTransport(
+            ok(
+                serverBody(
+                    PlaylistCapabilitiesDto.serializer(),
+                    PlaylistCapabilitiesDto(
+                        listOf(
+                            PlaylistOperationCapabilityDto(
+                                PlaylistOperation.CLEAR_WATCH_PROGRESS,
+                                PlaylistOperationExecution.IN_APP,
+                            ),
+                            PlaylistOperationCapabilityDto(
+                                PlaylistOperation.EDIT,
+                                PlaylistOperationExecution.BROWSER,
+                                "/browse/7?manage=playlist",
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val capabilities = HubApi(transport).playlistCapabilities(
+            HubCredentials("$BASE/opentv", "t"),
+            7,
+        )
+
+        assertTrue(
+            capabilities[PlaylistOperation.CLEAR_WATCH_PROGRESS] ===
+                HubPlaylistOperation.InApp,
+        )
+        assertEquals(
+            HubPlaylistOperation.Browser("$BASE/opentv/browse/7?manage=playlist"),
+            capabilities[PlaylistOperation.EDIT],
+        )
+        assertEquals(
+            "$BASE/opentv/api/v1/playlists/7/capabilities",
+            transport.seen.single().url,
+        )
+        assertTrue(
+            HubEndpoints.isSameOrigin(
+                "$BASE/opentv",
+                (capabilities[PlaylistOperation.EDIT] as HubPlaylistOperation.Browser).url,
+            ),
+        )
+    }
+
+    @Test
+    fun playlistCapabilitiesRejectAnOffOriginBrowserTarget() = runTest {
+        val response = ok(
+            serverBody(
+                PlaylistCapabilitiesDto.serializer(),
+                PlaylistCapabilitiesDto(
+                    listOf(
+                        PlaylistOperationCapabilityDto(
+                            PlaylistOperation.EDIT,
+                            PlaylistOperationExecution.BROWSER,
+                            "https://evil.example/admin",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            HubApi(FakeTransport(response)).playlistCapabilities(
+                HubCredentials(BASE, "t"),
+                7,
+            )
+        }
+    }
+
+    @Test
+    fun playlistMutationsUseTheCapabilityOwnedEndpoints() = runTest {
+        val transport = FakeTransport(
+            HttpResponseSpec(204, emptyMap(), ""),
+            HttpResponseSpec(204, emptyMap(), ""),
+        )
+        val api = HubApi(transport)
+        val credentials = HubCredentials(BASE, "t")
+
+        api.clearPlaylistProgress(credentials, 7)
+        api.setPlaylistGroupKind(credentials, 7, "News & Sport", 1)
+
+        assertEquals("POST", transport.seen[0].method)
+        assertEquals("$BASE/api/v1/playlists/7/clear-progress", transport.seen[0].url)
+        assertNull(transport.seen[0].body)
+        assertEquals("PUT", transport.seen[1].method)
+        assertEquals("$BASE/api/v1/playlists/7/group-kind", transport.seen[1].url)
+        assertEquals("""{"groupTitle":"News & Sport","kind":1}""", transport.seen[1].body)
     }
 
     @Test

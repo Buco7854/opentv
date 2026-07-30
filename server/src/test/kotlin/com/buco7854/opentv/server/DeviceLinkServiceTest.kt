@@ -77,6 +77,46 @@ class DeviceLinkServiceTest {
     }
 
     @Test
+    fun sameDeviceBrowserSignInUsesTheSameClaimAndApprovalRules() = runTest {
+        withFixture {
+            // Starting the request is unauthenticated. The browser authenticates normally,
+            // then these existing authenticated operations claim and approve it.
+            val started = links.start(
+                DeviceLinkStartRequestDto(
+                    deviceName = "Android phone",
+                    browserSignIn = true,
+                ),
+                "OpenTV Android",
+                "192.0.2.39",
+                URI("https://tv.example"),
+            )
+            assertEquals(
+                "https://tv.example/link#t=${started.linkToken}&mode=sign-in",
+                started.verificationUriComplete,
+            )
+
+            val lookup = links.lookup(
+                actor,
+                DeviceLinkTokenRequestDto(started.linkToken),
+                "192.0.2.39",
+            )
+            assertTrue(lookup.browserSignIn)
+            links.approve(
+                actor,
+                DeviceLinkTokenRequestDto(started.linkToken),
+                "192.0.2.39",
+            )
+
+            val approved = links.poll(DeviceLinkPollRequestDto(started.pollToken)).status
+
+            assertEquals("APPROVED", approved.status)
+            assertEquals(actor.userId, approved.flow?.user?.id)
+            assertEquals(ClientKind.LINKED_DEVICE, approved.flow?.user?.clientKind)
+            assertNotNull(approved.flow?.sessionToken)
+        }
+    }
+
+    @Test
     fun lookupClaimsTheRequestAndMovesItToScanned() = runTest {
         withFixture {
             val started = links.start(
@@ -135,6 +175,26 @@ class DeviceLinkServiceTest {
             clock.now += started.intervalMs
             val scanned = links.poll(DeviceLinkPollRequestDto(started.pollToken))
             assertEquals(actor.username, scanned.status.preview?.username)
+        }
+    }
+
+    @Test
+    fun aDifferentAccountCannotApproveAClaimedRequest() = runTest {
+        withFixture {
+            val started = links.start(DeviceLinkStartRequestDto(), null, "192.0.2.42")
+            val second = secondActor()
+            val request = DeviceLinkTokenRequestDto(started.linkToken)
+            links.lookup(actor, request, "198.51.100.12")
+
+            assertFailsWith<InvalidChallengeException> {
+                links.approve(second, request, "198.51.100.13")
+            }
+
+            clock.now += started.intervalMs
+            val scanned = links.poll(DeviceLinkPollRequestDto(started.pollToken)).status
+            assertEquals("SCANNED", scanned.status)
+            assertEquals(actor.username, scanned.preview?.username)
+            assertNull(scanned.flow)
         }
     }
 
@@ -235,6 +295,55 @@ class DeviceLinkServiceTest {
             assertEquals(actor.displayName, denied.status.preview?.displayName)
             assertNull(denied.status.flow)
             assertNull(denied.status.flow?.sessionToken)
+        }
+    }
+
+    @Test
+    fun aReplayedApprovedPollCannotMintASecondSession() = runTest {
+        withFixture {
+            val started = links.start(DeviceLinkStartRequestDto("Car"), null, "192.0.2.47")
+            val request = DeviceLinkTokenRequestDto(started.linkToken)
+            links.lookup(actor, request, "198.51.100.17")
+            links.approve(actor, request, "198.51.100.17")
+
+            val first = links.poll(DeviceLinkPollRequestDto(started.pollToken)).status
+            clock.now += first.intervalMs
+            val replay = links.poll(DeviceLinkPollRequestDto(started.pollToken)).status
+
+            assertEquals("APPROVED", first.status)
+            assertNotNull(first.flow?.sessionToken)
+            assertEquals("EXPIRED", replay.status)
+            assertNull(replay.flow)
+            assertEquals(
+                1,
+                db.sessions().activeForUser(actor.userId)
+                    .count { it.clientKind == ClientKind.LINKED_DEVICE },
+            )
+        }
+    }
+
+    @Test
+    fun cancellationInvalidatesTheServerRequest() = runTest {
+        withFixture {
+            val started = links.start(
+                DeviceLinkStartRequestDto("Phone", browserSignIn = true),
+                null,
+                "192.0.2.47",
+            )
+            links.cancel(DeviceLinkPollRequestDto(started.pollToken))
+            links.cancel(DeviceLinkPollRequestDto(started.pollToken))
+
+            assertFailsWith<InvalidChallengeException> {
+                links.lookup(
+                    actor,
+                    DeviceLinkTokenRequestDto(started.linkToken),
+                    "198.51.100.17",
+                )
+            }
+            assertEquals(
+                "EXPIRED",
+                links.poll(DeviceLinkPollRequestDto(started.pollToken)).status.status,
+            )
         }
     }
 

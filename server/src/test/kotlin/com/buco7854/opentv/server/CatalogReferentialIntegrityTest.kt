@@ -157,6 +157,7 @@ class CatalogReferentialIntegrityTest {
     fun playlist_deletion_waits_for_an_in_flight_refresh_before_cascading() = runBlocking {
         withFixture { fixture ->
             val seeded = fixture.seedContent()
+            fixture.db.users().insert(fixture.adminRow())
             val enteredCatalogGap = CountDownLatch(1)
             val finishRefresh = CountDownLatch(1)
             fixture.body = BlockingBody(

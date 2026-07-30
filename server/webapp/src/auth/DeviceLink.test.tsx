@@ -141,6 +141,16 @@ describe('DeviceLinkScreen', () => {
     expect(screen.getByRole('button', { name: 'Show a new code' })).toBeTruthy();
   });
 
+  it('reports a refused request without adopting a session', async () => {
+    vi.mocked(authApi.linkPoll).mockResolvedValue(status('DENIED'));
+    renderScreen();
+
+    await until(showing('Request refused'));
+
+    expect(screen.getByText('The other device turned this sign-in down.')).toBeTruthy();
+    expect(acceptFlow).not.toHaveBeenCalled();
+  });
+
   it('does not let an old QR render overwrite a restarted link request', async () => {
     const oldQr = deferred<string>();
     qr

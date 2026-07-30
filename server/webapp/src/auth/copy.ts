@@ -3,6 +3,7 @@ import { getLocale } from '../i18n';
 const en = {
   loginTitle: 'Sign in',
   loginSubtitle: 'Use your OpenTV account to continue.',
+  browserLinkLoginSubtitle: 'Sign in to finish linking the OpenTV app on this device.',
   username: 'Username',
   password: 'Password',
   signIn: 'Sign in',
@@ -173,6 +174,7 @@ type Key = keyof typeof en;
 const fr: Record<Key, string> = {
   loginTitle: 'Connexion',
   loginSubtitle: 'Utilisez votre compte OpenTV pour continuer.',
+  browserLinkLoginSubtitle: "Connectez-vous pour terminer l'association de l'application OpenTV sur cet appareil.",
   username: "Nom d'utilisateur",
   password: 'Mot de passe',
   signIn: 'Se connecter',

@@ -31,7 +31,11 @@ interface HubAuthGateway {
     suspend fun recovery(baseUrl: String, challenge: String, code: String): AuthFlowDto
     suspend fun totpEnrollmentStart(baseUrl: String, challenge: String): TotpEnrollmentDto
     suspend fun totpEnrollmentComplete(baseUrl: String, challenge: String, code: String): AuthFlowDto
-    suspend fun linkStart(baseUrl: String, deviceName: String): DeviceLinkStartDto
+    suspend fun linkStart(
+        baseUrl: String,
+        deviceName: String,
+        browserSignIn: Boolean,
+    ): DeviceLinkStartDto
     suspend fun linkPoll(baseUrl: String, pollToken: String): DeviceLinkStatusDto
 }
 
@@ -58,8 +62,11 @@ class ApiHubAuthGateway(
     override suspend fun totpEnrollmentComplete(baseUrl: String, challenge: String, code: String): AuthFlowDto =
         api.totpEnrollComplete(baseUrl, challenge, code)
 
-    override suspend fun linkStart(baseUrl: String, deviceName: String) =
-        api.linkStart(baseUrl, deviceName)
+    override suspend fun linkStart(
+        baseUrl: String,
+        deviceName: String,
+        browserSignIn: Boolean,
+    ) = api.linkStart(baseUrl, deviceName, browserSignIn)
 
     override suspend fun linkPoll(baseUrl: String, pollToken: String) =
         api.linkPoll(baseUrl, pollToken)
@@ -148,8 +155,7 @@ sealed interface HubSignInState {
         val deviceLinkAvailable: Boolean
             get() = capabilities.deviceLinkEnabled
         val browserSignInAvailable: Boolean
-            get() = capabilities.deviceLinkEnabled &&
-                (capabilities.oidcEnabled || capabilities.passkeyLoginEnabled)
+            get() = capabilities.deviceLinkEnabled
     }
 
     data class Password(
@@ -347,15 +353,14 @@ class HubSignInViewModel(
 
     fun startDeviceLink(mode: DeviceLinkMode = DeviceLinkMode.LINK_THIS_DEVICE) {
         val offered = capabilities ?: return
-        val available = offered.deviceLinkEnabled && (
-            mode == DeviceLinkMode.LINK_THIS_DEVICE ||
-                offered.oidcEnabled ||
-                offered.passkeyLoginEnabled
-            )
-        if (!available || activeJob?.isActive == true) return
+        if (!offered.deviceLinkEnabled || activeJob?.isActive == true) return
         launch {
             try {
-                val link = gateway.linkStart(baseUrl, deviceName)
+                val link = gateway.linkStart(
+                    baseUrl,
+                    deviceName,
+                    browserSignIn = mode == DeviceLinkMode.BROWSER_SIGN_IN,
+                )
                 mutableState.value = link.toState(DeviceLinkPhase.PENDING, mode)
                 pollLink(link, mode)
             } catch (error: Throwable) {

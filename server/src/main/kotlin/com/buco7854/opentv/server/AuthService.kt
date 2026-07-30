@@ -792,14 +792,31 @@ class AuthService(
      * One snapshot of the playlists [actor] may see. List endpoints take it once instead of
      * re-reading entitlements for every row; a single check costs the same as it always did.
      */
-    suspend fun playlistAccess(actor: Actor): PlaylistAccess = PlaylistAccess(
-        admin = actor.isAdmin,
-        granted = if (actor.isAdmin) emptySet() else db.grants().forUser(actor.userId).toSet(),
-        deleting = db.maintenance().pendingPlaylistDeletions().mapTo(mutableSetOf()) { it.playlistId },
-    )
+    suspend fun playlistAccess(actor: Actor): PlaylistAccess {
+        // Actor is a request-start snapshot. Intersect it with persisted authority so a
+        // demotion already committed while this request was waiting cannot retain admin access.
+        val user = db.users().get(actor.userId)
+            ?.takeIf { it.status == UserStatus.ACTIVE }
+            ?: throw UnauthenticatedApiException()
+        val admin = actor.isAdmin && accounts.effectiveRole(user) == UserRole.ADMIN
+        return PlaylistAccess(
+            admin = admin,
+            granted = if (admin) emptySet() else db.grants().forUser(actor.userId).toSet(),
+            deleting = db.maintenance().pendingPlaylistDeletions()
+                .mapTo(mutableSetOf()) { it.playlistId },
+        )
+    }
 
     suspend fun hasPlaylistAccess(actor: Actor, playlistId: Long): Boolean =
         playlistAccess(actor).allows(playlistId)
+
+    internal suspend fun hasCurrentAdminAuthority(actor: Actor): Boolean {
+        if (!actor.isAdmin) return false
+        val user = db.users().get(actor.userId)
+            ?.takeIf { it.status == UserStatus.ACTIVE }
+            ?: throw UnauthenticatedApiException()
+        return accounts.effectiveRole(user) == UserRole.ADMIN
+    }
 
     internal suspend fun requireActiveActor(actor: Actor) = sessionService.requireActive(actor)
 

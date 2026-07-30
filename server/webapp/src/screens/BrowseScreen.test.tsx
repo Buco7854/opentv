@@ -1,7 +1,9 @@
 import { act, fireEvent, render } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { AccountInfo, api, ChannelKind, GroupCount, PlaylistDetail } from '../api';
+import {
+  AccountInfo, api, ChannelKind, GroupCount, PlaylistDetail, PlaylistOperation,
+} from '../api';
 import { t } from '../i18n';
 import { BrowseScreen } from './BrowseScreen';
 
@@ -51,6 +53,7 @@ describe('BrowseScreen', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.spyOn(api, 'playlistDetail').mockResolvedValue(detail);
+    vi.spyOn(api, 'playlistCapabilities').mockResolvedValue({ operations: [] });
     vi.spyOn(api, 'groups').mockImplementation(async (_id, kind) =>
       (kind === ChannelKind.LIVE ? liveGroups : movieGroups));
     vi.spyOn(api, 'channels').mockResolvedValue([]);
@@ -120,7 +123,35 @@ describe('BrowseScreen', () => {
     view.unmount();
   });
 
+  it('offers category correction when the server capability permits it', async () => {
+    vi.mocked(api.playlistCapabilities).mockResolvedValue({
+      operations: [{
+        operation: PlaylistOperation.CORRECT_CATEGORY_TYPE,
+        execution: 'IN_APP',
+        browserPath: null,
+      }],
+    });
+    const setGroupKind = vi.spyOn(api, 'setGroupKind').mockResolvedValue(null);
+    const view = renderBrowse();
+
+    fireEvent.click(view.getByText('movies tab'));
+    await view.findByText('Action');
+    fireEvent.click(view.getAllByRole('button', { name: t('browse.correctCategory') })[0]!);
+    fireEvent.click(await view.findByRole('button', { name: t('browse.correctSeries') }));
+    await act(async () => {});
+
+    expect(setGroupKind).toHaveBeenCalledWith(1, 'Action', ChannelKind.SERIES);
+    view.unmount();
+  });
+
   it('labels stale connection figures as earlier data', async () => {
+    vi.mocked(api.playlistCapabilities).mockResolvedValue({
+      operations: [{
+        operation: PlaylistOperation.VIEW_PROVIDER_ACCOUNT,
+        execution: 'BROWSER',
+        browserPath: '/account/1',
+      }],
+    });
     vi.mocked(api.playlistDetail).mockResolvedValue({
       ...detail,
       playlist: {

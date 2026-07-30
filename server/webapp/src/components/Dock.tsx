@@ -3,7 +3,9 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
-import { api, DownloadStatus, Playlist } from '../api';
+import {
+  api, DownloadStatus, Playlist, PlaylistCapabilities, PlaylistOperation,
+} from '../api';
 import { reportError, reportErrorAs, reportSuccess } from '../errors';
 import { useDownloads } from '../hooks';
 import { getLocale, t } from '../i18n';
@@ -66,6 +68,14 @@ export function Dock() {
   const tab = new URLSearchParams(search).get('t') ?? '0';
   const inBrowse = pathname.startsWith('/browse/');
   const goBrowse = (target: number) => navigate(`/browse/${active}?t=${target}`);
+  const managePlaylist = new URLSearchParams(search).get('manage') === 'playlist';
+  useEffect(() => {
+    if (!managePlaylist || active == null) return;
+    setPanelOpen(true);
+    const next = new URLSearchParams(search);
+    next.delete('manage');
+    navigate({ pathname, search: next.size ? `?${next}` : '' }, { replace: true });
+  }, [active, managePlaylist, navigate, pathname, search, setPanelOpen]);
 
   return (
     <>
@@ -113,7 +123,11 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
   const [pendingDelete, setPendingDelete] = useState<Playlist | null>(null);
   const [pendingClearProgress, setPendingClearProgress] = useState<Playlist | null>(null);
   // Playlist whose actions menu is open, plus its anchor button.
-  const [actionsFor, setActionsFor] = useState<{ playlist: Playlist; anchor: HTMLElement } | null>(null);
+  const [actionsFor, setActionsFor] = useState<{
+    playlist: Playlist;
+    anchor: HTMLElement;
+    capabilities: PlaylistCapabilities;
+  } | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
   // Escape closes.
@@ -172,13 +186,18 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
                     <div className="sub">{meta}</div>
                   </div>
                 </button>
-                {admin && (
-                  <IconBtn name="more" label={t('playlists.actions')} className="muted"
-                           onClick={(e) => {
-                             const anchor = e.currentTarget as HTMLElement;
-                             setActionsFor((cur) => cur?.playlist.id === p.id ? null : { playlist: p, anchor });
-                           }} />
-                )}
+                <IconBtn name="more" label={t('playlists.actions')} className="muted"
+                         onClick={(e) => {
+                           const anchor = e.currentTarget as HTMLElement;
+                           if (actionsFor?.playlist.id === p.id) {
+                             setActionsFor(null);
+                             return;
+                           }
+                           setActionsFor(null);
+                           void api.playlistCapabilities(p.id)
+                             .then((capabilities) => setActionsFor({ playlist: p, anchor, capabilities }))
+                             .catch(reportError);
+                         }} />
               </div>
             );
           })}
@@ -222,15 +241,17 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
         </div>
       </div>
 
-      {admin && actionsFor && (() => {
+      {actionsFor && (() => {
         const p = actionsFor.playlist;
+        const available = new Set(
+          actionsFor.capabilities.operations.map((capability) => capability.operation),
+        );
         const options: MenuOption[] = [];
-        if (p.hasXtreamPanel) {
+        if (available.has(PlaylistOperation.VIEW_PROVIDER_ACCOUNT)) {
           options.push({ icon: 'person', label: t('playlists.account'),
                          onSelect: () => { onClose(); navigate(`/account/${p.id}`); } });
         }
-        // File imports can't be refreshed; M3U-by-URL and Xtream can.
-        if (p.mode !== 'file') {
+        if (available.has(PlaylistOperation.REFRESH)) {
           options.push({ icon: 'refresh', label: t('playlists.refresh'), onSelect: async () => {
             toast(t('playlists.refreshing'));
             try {
@@ -242,15 +263,21 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
             }
           } });
         }
-        options.push({ icon: 'edit', label: t('playlists.edit.action'), onSelect: () => setDialog(p) });
-        options.push({ icon: 'replay', label: t('playlists.clearProgress.action'),
-                       onSelect: () => setPendingClearProgress(p) });
-        options.push({ icon: 'del', label: t('playlists.delete.action'), danger: true,
-                       onSelect: () => setPendingDelete(p) });
+        if (available.has(PlaylistOperation.EDIT)) {
+          options.push({ icon: 'edit', label: t('playlists.edit.action'), onSelect: () => setDialog(p) });
+        }
+        if (available.has(PlaylistOperation.CLEAR_WATCH_PROGRESS)) {
+          options.push({ icon: 'replay', label: t('playlists.clearProgress.action'),
+                         onSelect: () => setPendingClearProgress(p) });
+        }
+        if (available.has(PlaylistOperation.DELETE)) {
+          options.push({ icon: 'del', label: t('playlists.delete.action'), danger: true,
+                         onSelect: () => setPendingDelete(p) });
+        }
         return <Menu anchor={actionsFor.anchor} options={options} onDismiss={() => setActionsFor(null)} />;
       })()}
 
-      {admin && dialog && (
+      {dialog && (
         <PlaylistDialog
           editing={dialog === 'add' ? null : dialog}
           onDismiss={() => setDialog(null)}

@@ -12,6 +12,7 @@ import com.buco7854.opentv.serverdata.db.AuthSessionRow
 import com.buco7854.opentv.serverdata.db.ContentIdentityRow
 import com.buco7854.opentv.serverdata.db.DownloadBlobRow
 import com.buco7854.opentv.serverdata.db.UserDownloadRow
+import com.buco7854.opentv.serverdata.db.UserPlaylistGrantRow
 import com.buco7854.opentv.serverdata.db.UserRow
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -288,6 +289,10 @@ class DownloadFileRouteTest {
             db.sessions().insert(session("session-b", "owner", 2))
             db.sessions().insert(session("session-other", "other", 3))
             val playlistId = storage.playlists.insert(Playlist(name = "Provider", url = null))
+            db.grants().grant(UserPlaylistGrantRow("owner", playlistId, 1))
+            if (sharedOther) {
+                db.grants().grant(UserPlaylistGrantRow("other", playlistId, 1))
+            }
             db.content().upsert(
                 ContentIdentityRow("content-1", playlistId, 1, "opaque", null, 1, false),
             )

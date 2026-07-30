@@ -209,31 +209,57 @@ private fun UrlEntryStep(state: HubSignInState.UrlEntry, onSubmit: (String) -> U
 
 @Composable
 private fun MethodChooserStep(state: HubSignInState.MethodChooser, viewModel: HubSignInViewModel) {
-    Text(stringResource(R.string.hub_choose_method), style = MaterialTheme.typography.titleMedium)
-    state.error?.let { ErrorText(failureMessage(it)) }
-    if (state.passwordAvailable) {
-        OtvButton(onClick = viewModel::selectPassword, modifier = Modifier.fillMaxWidth()) {
-            Text(stringResource(R.string.hub_method_password))
+    val context = LocalContext.current
+    val handoff = remember(context) { HubBrowserHandoff(context) }
+    val browserFirst = state.browserSignInAvailable && handoff.hasBrowser()
+
+    // Browser-first. Asking which mechanism to use puts a question to the user that the
+    // server has already answered: whatever it supports, its own login page offers. Going
+    // there directly also means a method the server gains later needs no Android release.
+    // Auto-start once per address, so coming back from the browser step lands on a real
+    // chooser rather than bouncing straight out again.
+    var autoStarted by remember(state.baseUrl) { mutableStateOf(false) }
+    LaunchedEffect(state.baseUrl, browserFirst) {
+        if (browserFirst && !autoStarted && state.error == null) {
+            autoStarted = true
+            viewModel.startDeviceLink(DeviceLinkMode.BROWSER_SIGN_IN)
         }
     }
-    if (state.deviceLinkAvailable) {
-        OtvButton(
-            onClick = { viewModel.startDeviceLink(DeviceLinkMode.LINK_THIS_DEVICE) },
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text(stringResource(R.string.hub_method_link)) }
-        Text(
-            stringResource(R.string.hub_method_link_description),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-    if (state.browserSignInAvailable) {
+
+    Text(stringResource(R.string.hub_choose_method), style = MaterialTheme.typography.titleMedium)
+    state.error?.let { ErrorText(failureMessage(it)) }
+
+    if (browserFirst) {
         OtvButton(
             onClick = { viewModel.startDeviceLink(DeviceLinkMode.BROWSER_SIGN_IN) },
             modifier = Modifier.fillMaxWidth(),
         ) { Text(stringResource(R.string.hub_method_browser)) }
         Text(
             stringResource(R.string.hub_method_browser_description),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    // The remaining routes stay reachable but stop competing for attention. A password-only
+    // server reached without a browser still lands here with password as the primary action.
+    if (state.passwordAvailable) {
+        if (browserFirst) {
+            OtvTextButton(onClick = viewModel::selectPassword, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.hub_method_password))
+            }
+        } else {
+            OtvButton(onClick = viewModel::selectPassword, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.hub_method_password))
+            }
+        }
+    }
+    if (state.deviceLinkAvailable) {
+        OtvTextButton(
+            onClick = { viewModel.startDeviceLink(DeviceLinkMode.LINK_THIS_DEVICE) },
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(stringResource(R.string.hub_method_link)) }
+        Text(
+            stringResource(R.string.hub_method_link_description),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -378,20 +404,42 @@ private fun ColumnScope.DeviceLinkStep(state: HubSignInState.DeviceLink, hubBase
         ErrorText(stringResource(R.string.hub_handoff_rejected))
         return
     }
-    Text(stringResource(R.string.hub_link_scan), style = MaterialTheme.typography.bodyMedium)
-    QrCode(
-        content = state.verificationUri,
-        contentDescription = null,
-        modifier = Modifier.align(Alignment.CenterHorizontally),
-    )
+
+    // Browser sign-in means this device's own browser, so open it rather than showing a
+    // QR code for a second device to scan. The QR is still the answer where opening
+    // fails or makes no sense — a television, or a device with no browser at all.
+    val browserMode = state.mode == DeviceLinkMode.BROWSER_SIGN_IN
+    var showQr by remember(state.verificationUri) { mutableStateOf(!browserMode) }
+    var opened by remember(state.verificationUri) { mutableStateOf(false) }
+    LaunchedEffect(state.verificationUri) {
+        if (!browserMode || opened) return@LaunchedEffect
+        opened = true
+        when (handoff.open(hubBaseUrl, state.verificationUri)) {
+            HandoffResult.Opened -> Unit
+            is HandoffResult.ShowQrInstead -> showQr = true
+            HandoffResult.Rejected -> rejected = true
+        }
+    }
+
     Text(
-        state.verificationUri,
+        stringResource(if (showQr) R.string.hub_link_scan else R.string.hub_link_browser_waiting),
         style = MaterialTheme.typography.bodyMedium,
-        fontFamily = FontFamily.Monospace,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        textAlign = TextAlign.Center,
-        modifier = Modifier.fillMaxWidth(),
     )
+    if (showQr) {
+        QrCode(
+            content = state.verificationUri,
+            contentDescription = null,
+            modifier = Modifier.align(Alignment.CenterHorizontally),
+        )
+        Text(
+            state.verificationUri,
+            style = MaterialTheme.typography.bodyMedium,
+            fontFamily = FontFamily.Monospace,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
     Text(
         // Naming the scanning account lets the user refuse an approval that is
         // not theirs; whoever holds the link can approve with their own account.

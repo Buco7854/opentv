@@ -157,6 +157,20 @@ class PlaylistRefreshTest {
         val storage = persistence.catalog
         val userDatabase = persistence.database
         try {
+            userDatabase.users().insert(
+                UserRow(
+                    "admin",
+                    "admin",
+                    "admin",
+                    "Admin",
+                    UserStatus.ACTIVE,
+                    UserRole.ADMIN,
+                    false,
+                    1_000L,
+                    1_000L,
+                    null,
+                ),
+            )
             lateinit var fixture: Fixture
             val fetcher = ConditionalFetcher { _, _, _ ->
                 fixture.fetches++

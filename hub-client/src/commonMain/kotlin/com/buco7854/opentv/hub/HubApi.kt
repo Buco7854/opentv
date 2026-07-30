@@ -22,7 +22,9 @@ import com.buco7854.opentv.contract.MediaGrantDto
 import com.buco7854.opentv.contract.PasswordLoginRequestDto
 import com.buco7854.opentv.contract.PlaybackCreateRequest
 import com.buco7854.opentv.contract.PlaybackLeaseDto
+import com.buco7854.opentv.contract.PlaylistCapabilitiesDto
 import com.buco7854.opentv.contract.PlaylistDto
+import com.buco7854.opentv.contract.GroupKindRequest
 import com.buco7854.opentv.contract.ProgrammeDto
 import com.buco7854.opentv.contract.RecoveryCompleteRequestDto
 import com.buco7854.opentv.contract.ResumePointDto
@@ -89,11 +91,30 @@ class HubApi(
     suspend fun totpEnrollComplete(base: String, challenge: String, code: String): AuthFlowDto =
         authFlow(base, HubEndpoints.totpEnrollComplete(base), TotpCompleteRequestDto.serializer(), TotpCompleteRequestDto(challenge, code))
 
-    suspend fun linkStart(base: String, deviceName: String?): DeviceLinkStartDto =
-        post(HubCredentials(base), HubEndpoints.linkStart(base), DeviceLinkStartRequestDto.serializer(), DeviceLinkStartRequestDto(deviceName), DeviceLinkStartDto.serializer())
+    suspend fun linkStart(
+        base: String,
+        deviceName: String?,
+        browserSignIn: Boolean = false,
+    ): DeviceLinkStartDto =
+        post(
+            HubCredentials(base),
+            HubEndpoints.linkStart(base),
+            DeviceLinkStartRequestDto.serializer(),
+            DeviceLinkStartRequestDto(deviceName, browserSignIn),
+            DeviceLinkStartDto.serializer(),
+        )
 
     suspend fun linkPoll(base: String, pollToken: String): DeviceLinkStatusDto =
         post(HubCredentials(base), HubEndpoints.linkPoll(base), DeviceLinkPollRequestDto.serializer(), DeviceLinkPollRequestDto(pollToken), DeviceLinkStatusDto.serializer())
+
+    suspend fun linkCancel(base: String, pollToken: String) {
+        postNoContent(
+            HubCredentials(base),
+            HubEndpoints.linkCancel(base),
+            DeviceLinkPollRequestDto.serializer(),
+            DeviceLinkPollRequestDto(pollToken),
+        )
+    }
 
     suspend fun me(credentials: HubCredentials): CurrentUserDto =
         get(credentials, HubEndpoints.me(credentials.baseUrl), CurrentUserDto.serializer())
@@ -106,6 +127,34 @@ class HubApi(
 
     suspend fun playlists(c: HubCredentials): List<PlaylistDto> =
         getList(c, HubEndpoints.playlists(c.baseUrl), PlaylistDto.serializer())
+
+    suspend fun playlistCapabilities(
+        c: HubCredentials,
+        playlistId: Long,
+    ): HubPlaylistCapabilities =
+        get(
+            c,
+            HubEndpoints.playlistCapabilities(c.baseUrl, playlistId),
+            PlaylistCapabilitiesDto.serializer(),
+        ).forHub(c.baseUrl)
+
+    suspend fun clearPlaylistProgress(c: HubCredentials, playlistId: Long) {
+        send(c, "POST", HubEndpoints.playlistClearProgress(c.baseUrl, playlistId), null)
+    }
+
+    suspend fun setPlaylistGroupKind(
+        c: HubCredentials,
+        playlistId: Long,
+        groupTitle: String,
+        kind: Int?,
+    ) {
+        send(
+            c,
+            "PUT",
+            HubEndpoints.playlistGroupKind(c.baseUrl, playlistId),
+            body(GroupKindRequest.serializer(), GroupKindRequest(groupTitle, kind)),
+        )
+    }
 
     suspend fun groups(c: HubCredentials, playlistId: Long, kind: Int): List<GroupCountDto> =
         getList(c, HubEndpoints.groups(c.baseUrl, playlistId, kind), GroupCountDto.serializer())

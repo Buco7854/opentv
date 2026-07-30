@@ -105,6 +105,34 @@ class PlaylistApplicationService(
 
     suspend fun clearProgress(actor: Actor, id: Long) = activity.clearResume(actor, id)
 
+    suspend fun capabilities(actor: Actor, id: Long): PlaylistCapabilitiesDto {
+        requireAccess(actor, id)
+        val playlist = playlist(id)
+        val operations = buildList {
+            add(inAppOperation(PlaylistOperation.CLEAR_WATCH_PROGRESS))
+            if (!playlist.isXtreamNative) {
+                add(inAppOperation(PlaylistOperation.CORRECT_CATEGORY_TYPE))
+            }
+            if (auth.hasCurrentAdminAuthority(actor)) {
+                val managementPath = "/browse/$id?manage=playlist"
+                if (playlist.url != null || playlist.xtreamBase != null) {
+                    add(browserOperation(PlaylistOperation.REFRESH, managementPath))
+                }
+                add(browserOperation(PlaylistOperation.EDIT, managementPath))
+                add(browserOperation(PlaylistOperation.DELETE, managementPath))
+                if (playlist.xtreamBase != null) {
+                    add(
+                        browserOperation(
+                            PlaylistOperation.VIEW_PROVIDER_ACCOUNT,
+                            "/account/$id",
+                        ),
+                    )
+                }
+            }
+        }
+        return PlaylistCapabilitiesDto(operations)
+    }
+
     suspend fun detail(actor: Actor, id: Long): PlaylistDetailDto {
         requireAccess(actor, id)
         val playlist = playlist(id)
@@ -281,7 +309,19 @@ class PlaylistApplicationService(
     }
 
     suspend fun setGroupKind(actor: Actor, id: Long, request: GroupKindRequest) {
-        requireAdmin(actor)
+        requireAccess(actor, id)
+        require(!playlist(id).isXtreamNative) {
+            "Native Xtream categories cannot be reclassified"
+        }
+        require(request.groupTitle.length <= MAX_GROUP_TITLE_CHARS) {
+            "groupTitle must be at most $MAX_GROUP_TITLE_CHARS characters"
+        }
+        require(
+            request.kind == null ||
+                request.kind == ChannelKind.LIVE ||
+                request.kind == ChannelKind.MOVIE ||
+                request.kind == ChannelKind.SERIES,
+        ) { "Unknown category type" }
         content.mutatePlaylist(id) {
             playlists.setGroupOverride(id, request.groupTitle, request.kind)
         }
@@ -414,8 +454,8 @@ class PlaylistApplicationService(
         if (!auth.hasPlaylistAccess(actor, id)) throw ForbiddenApiException()
     }
 
-    private fun requireAdmin(actor: Actor) {
-        if (!actor.isAdmin) throw ForbiddenApiException()
+    private suspend fun requireAdmin(actor: Actor) {
+        if (!auth.hasCurrentAdminAuthority(actor)) throw ForbiddenApiException()
     }
 
     private suspend fun playlist(id: Long): Playlist =
@@ -462,6 +502,7 @@ private fun searchMatchTier(name: String, term: String): Int {
 }
 
 private const val MAX_SEARCH_QUERY_CHARS = 80
+private const val MAX_GROUP_TITLE_CHARS = 500
 private val Playlist.mode: String get() = when {
     url != null -> "url"
     xtreamBase != null -> "xtream"
@@ -471,6 +512,18 @@ private val Playlist.mode: String get() = when {
 private fun Playlist.toApiDto() = PlaylistDto(
     id, name, mode, xtreamBase != null, lastRefreshedMs, channelCount,
 )
+
+private fun inAppOperation(operation: String) = PlaylistOperationCapabilityDto(
+    operation = operation,
+    execution = PlaylistOperationExecution.IN_APP,
+)
+
+private fun browserOperation(operation: String, path: String) =
+    PlaylistOperationCapabilityDto(
+        operation = operation,
+        execution = PlaylistOperationExecution.BROWSER,
+        browserPath = path,
+    )
 
 internal fun PlaylistUpsertRequest.preservingSecretsFrom(existing: Playlist): PlaylistUpsertRequest =
     when (mode) {

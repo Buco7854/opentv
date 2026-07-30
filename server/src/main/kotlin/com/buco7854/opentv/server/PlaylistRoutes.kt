@@ -19,6 +19,9 @@ internal fun Route.playlistRoutes(service: PlaylistApplicationService) = route("
 
     route("/{id}") {
         get { call.respond(service.detail(call.actor, call.id())) }
+        get("/capabilities") {
+            call.respond(service.capabilities(call.actor, call.id()))
+        }
         put { call.respond(service.update(call.actor, call.id(), call.receive())) }
         delete {
             service.delete(call.actor, call.id())

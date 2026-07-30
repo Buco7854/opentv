@@ -6,9 +6,8 @@ import { ReactNode, useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import {
   api, canShowGuide, Channel, ChannelKind, ChannelListItem, GroupCount, hasCatchup,
-  Programme,
+  PlaylistOperation, Programme,
 } from '../api';
-import { useAuth } from '../auth/AuthProvider';
 import { mediaTags } from '../components/Badges';
 import { asyncFallback, EmptyState } from '../components/Common';
 import { DownloadStateIcon } from '../components/DownloadStateIcon';
@@ -34,11 +33,17 @@ export function BrowseScreen() {
   const [search, setSearch] = useSearchParams();
   const tab = Number(search.get('t') ?? ChannelKind.LIVE);
   const group = search.get('g');
-  const { user } = useAuth();
-  const isAdmin = user?.role === 'ADMIN';
-
   const { playChannel, playCatchup } = usePlayer();
   const { data: detail, reload: reloadDetail } = useAsync(() => api.playlistDetail(playlistId), [playlistId]);
+  const { data: capabilities } = useAsync(
+    () => api.playlistCapabilities(playlistId),
+    [playlistId],
+  );
+  const hasOperation = (operation: PlaylistOperation) =>
+    capabilities?.operations.some((capability) => capability.operation === operation) ?? false;
+  const canRefresh = hasOperation(PlaylistOperation.REFRESH);
+  const canViewProviderAccount = hasOperation(PlaylistOperation.VIEW_PROVIDER_ACCOUNT);
+  const canCorrectCategoryType = hasOperation(PlaylistOperation.CORRECT_CATEGORY_TYPE);
   const { favoriteContentIds, toggleFavorite } = useFavorites(playlistId);
   const downloads = useDownloads();
   const [filter, setFilter] = useState('');
@@ -60,10 +65,10 @@ export function BrowseScreen() {
 
   // Background refresh (throttled server-side).
   useEffect(() => {
-    if (!isAdmin) return;
+    if (!canRefresh) return;
     api.refreshPlaylist(playlistId, false).then(reloadGuideIds, (cause: unknown) =>
       reportErrorAs((message) => t('browse.refreshFailed', { message }), cause));
-  }, [isAdmin, playlistId, reloadGuideIds]);
+  }, [canRefresh, playlistId, reloadGuideIds]);
 
   const groupsRequest = useAsync(
     async () => ({ tab, items: await api.groups(playlistId, tab) }),
@@ -152,7 +157,7 @@ export function BrowseScreen() {
       <ScreenHeader
         title={title}
         onBack={atRoot ? undefined : () => setTabGroup(tab, null)}
-        subtitle={detail?.playlist.hasXtreamPanel && isAdmin
+        subtitle={detail?.playlist.hasXtreamPanel && canViewProviderAccount
           ? <ConnectionLine playlistId={playlistId} />
           : `${sectionNames[tab as 0 | 1 | 2] ?? ''} · ${counts[tab as 0 | 1 | 2] ?? 0}`}
         actions={
@@ -175,7 +180,7 @@ export function BrowseScreen() {
           <>
             <GroupList
               groups={pagedGroups.pageItems}
-              onCorrect={isXtreamNative || !isAdmin ? null : setCorrectingGroup}
+              onCorrect={isXtreamNative || !canCorrectCategoryType ? null : setCorrectingGroup}
               onSelect={(g) => setTabGroup(tab, g)}
             />
             <Pager {...pagedGroups} onPage={pagedGroups.setPage} />
@@ -272,7 +277,7 @@ export function BrowseScreen() {
           onPlayCatchup={(cid, s, e) => playCatchup(cid, s, e)}
         />
       )}
-      {isAdmin && correctingGroup && (
+      {canCorrectCategoryType && correctingGroup && (
         <GroupKindDialog
           groupTitle={correctingGroup}
           onDismiss={() => setCorrectingGroup(null)}

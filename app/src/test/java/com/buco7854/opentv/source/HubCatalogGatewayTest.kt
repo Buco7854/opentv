@@ -10,6 +10,10 @@ import com.buco7854.opentv.contract.FavoritesResolvedDto
 import com.buco7854.opentv.contract.GroupCountDto
 import com.buco7854.opentv.contract.GuideEntryDto
 import com.buco7854.opentv.contract.ProgrammeDto
+import com.buco7854.opentv.contract.PlaylistCapabilitiesDto
+import com.buco7854.opentv.contract.PlaylistOperationCapabilityDto
+import com.buco7854.opentv.contract.PlaylistOperationExecution
+import com.buco7854.opentv.contract.PlaylistOperation as WirePlaylistOperation
 import com.buco7854.opentv.contract.ResumePointDto
 import com.buco7854.opentv.contract.SearchResultsDto
 import com.buco7854.opentv.contract.SeriesGroupPageDto
@@ -26,6 +30,8 @@ import com.buco7854.opentv.core.storage.FavoriteStore
 import com.buco7854.opentv.core.storage.HubSourceStore
 import com.buco7854.opentv.core.storage.Storage
 import com.buco7854.opentv.hub.HubApi
+import com.buco7854.opentv.hub.HubPlaylistCapabilities
+import com.buco7854.opentv.hub.HubPlaylistOperation
 import com.buco7854.opentv.hub.HubRegistry
 import com.buco7854.opentv.hub.HubSessionVault
 import com.buco7854.opentv.hub.HubUnauthorizedException
@@ -148,12 +154,28 @@ class HubCatalogGatewayTest {
         assertFalse(
             gateway.setFavorite(ContentRef.HubContent("stable/1"), false).successValue(),
         )
+        gateway.playlistCapabilities().successValue()
+        gateway.clearWatchProgress().successValue()
+        gateway.correctCategoryType("News & Sport", ChannelKind.MOVIE).successValue()
 
         assertTrue(
             transport.seen.any {
                 it.method == "PUT" &&
                     it.url == "https://hub.example/api/v1/playlists/7/favorites" &&
                     it.body == """{"contentId":"stable/1"}"""
+            },
+        )
+        assertTrue(
+            transport.seen.any {
+                it.method == "POST" &&
+                    it.url == "https://hub.example/api/v1/playlists/7/clear-progress"
+            },
+        )
+        assertTrue(
+            transport.seen.any {
+                it.method == "PUT" &&
+                    it.url == "https://hub.example/api/v1/playlists/7/group-kind" &&
+                    it.body == """{"groupTitle":"News & Sport","kind":1}"""
             },
         )
         assertTrue(
@@ -216,6 +238,42 @@ class HubCatalogGatewayTest {
         assertTrue(traits.resumeIsServerSide)
         assertTrue(traits.supportsRefresh)
         assertFalse(traits.supportsSourceEditing)
+    }
+
+    @Test
+    fun playlistCapabilitiesExposeInAppCallsAndSameHubBrowserTargets() = runTest {
+        val backend = FakeHubBackend().apply {
+            operationCapabilities = HubPlaylistCapabilities(
+                mapOf(
+                    WirePlaylistOperation.CLEAR_WATCH_PROGRESS to HubPlaylistOperation.InApp,
+                    WirePlaylistOperation.CORRECT_CATEGORY_TYPE to HubPlaylistOperation.InApp,
+                    WirePlaylistOperation.EDIT to
+                        HubPlaylistOperation.Browser("https://hub.example/browse/7?manage=playlist"),
+                ),
+            )
+        }
+        val gateway = HubCatalogGateway(SourceId.Hub(3, 7), backend)
+
+        val capabilities = gateway.playlistCapabilities().successValue()
+        assertSame(
+            PlaylistOperationAvailability.InApp,
+            capabilities[PlaylistOperation.CLEAR_WATCH_PROGRESS],
+        )
+        assertSame(
+            PlaylistOperationAvailability.InApp,
+            capabilities[PlaylistOperation.CORRECT_CATEGORY_TYPE],
+        )
+        assertEquals(
+            PlaylistOperationAvailability.Browser(
+                "https://hub.example/browse/7?manage=playlist",
+            ),
+            capabilities[PlaylistOperation.EDIT],
+        )
+
+        gateway.clearWatchProgress().successValue()
+        gateway.correctCategoryType("Documentaries", ChannelKind.MOVIE).successValue()
+        assertEquals(1, backend.clearProgressCalls)
+        assertEquals("Documentaries" to ChannelKind.MOVIE, backend.groupKind)
     }
 
     @Test
@@ -465,12 +523,39 @@ private class FakeHubBackend : HubCatalogBackend {
     var resumeCalls = 0
     var resolvedFavoriteCalls = 0
     var contentCalls = 0
+    var clearProgressCalls = 0
+    var groupKind: Pair<String, Int?>? = null
+    var operationCapabilities = HubPlaylistCapabilities(
+        mapOf(
+            WirePlaylistOperation.REFRESH to
+                HubPlaylistOperation.Browser("https://hub.example/browse/7?manage=playlist"),
+            WirePlaylistOperation.EDIT to
+                HubPlaylistOperation.Browser("https://hub.example/browse/7?manage=playlist"),
+            WirePlaylistOperation.DELETE to
+                HubPlaylistOperation.Browser("https://hub.example/browse/7?manage=playlist"),
+            WirePlaylistOperation.CLEAR_WATCH_PROGRESS to HubPlaylistOperation.InApp,
+            WirePlaylistOperation.VIEW_PROVIDER_ACCOUNT to
+                HubPlaylistOperation.Browser("https://hub.example/account/7"),
+        ),
+    )
     val removedFavorites = mutableListOf<String>()
     val addedFavorites = mutableListOf<String>()
     val localWriteAttempts = mutableListOf<String>()
 
     private fun maybeFail() {
         failure?.let { throw it }
+    }
+
+    override suspend fun capabilities() = operationCapabilities.also { maybeFail() }
+
+    override suspend fun clearProgress() {
+        maybeFail()
+        clearProgressCalls++
+    }
+
+    override suspend fun setGroupKind(groupTitle: String, kind: Int?) {
+        maybeFail()
+        groupKind = groupTitle to kind
     }
 
     override suspend fun groups(kind: Int): List<GroupCountDto> {
@@ -548,6 +633,26 @@ private class RecordingHubTransport : HttpTransport {
             return HttpResponseSpec(204, emptyMap(), "")
         }
         val body = when {
+            "/capabilities" in request.url ->
+                SERVER_JSON.encodeToString(
+                    PlaylistCapabilitiesDto(
+                        listOf(
+                            PlaylistOperationCapabilityDto(
+                                WirePlaylistOperation.CLEAR_WATCH_PROGRESS,
+                                PlaylistOperationExecution.IN_APP,
+                            ),
+                            PlaylistOperationCapabilityDto(
+                                WirePlaylistOperation.CORRECT_CATEGORY_TYPE,
+                                PlaylistOperationExecution.IN_APP,
+                            ),
+                            PlaylistOperationCapabilityDto(
+                                WirePlaylistOperation.EDIT,
+                                PlaylistOperationExecution.BROWSER,
+                                "/browse/7?manage=playlist",
+                            ),
+                        ),
+                    ),
+                )
             "/channels?" in request.url ->
                 SERVER_JSON.encodeToString(ChannelPageDto(emptyList(), 0, 0, 50))
             "/series-groups?" in request.url ->

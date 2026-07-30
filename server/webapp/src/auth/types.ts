@@ -41,11 +41,16 @@ export interface AuthFlow {
 }
 
 export interface DeviceLinkStart {
-  pollToken: string;
-  linkToken: string;
-  verificationUriComplete: string;
-  expiresAtMs: number;
-  intervalMs: number;
+    pollToken: string;
+    linkToken: string;
+    verificationUriComplete: string;
+    expiresAtMs: number;
+    intervalMs: number;
+}
+
+export interface DeviceLinkStartRequest {
+  deviceName?: string | null;
+  browserSignIn?: boolean;
 }
 
 export type DeviceLinkState = 'PENDING' | 'SCANNED' | 'APPROVED' | 'DENIED' | 'EXPIRED';
@@ -69,6 +74,7 @@ export interface DeviceLinkRequest {
   ip: string | null;
   requestedAtMs: number;
   expiresAtMs: number;
+  browserSignIn: boolean;
 }
 
 export interface TotpStatus {

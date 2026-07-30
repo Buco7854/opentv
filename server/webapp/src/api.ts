@@ -33,6 +33,28 @@ export interface Playlist {
   channelCount: number;
 }
 
+export const PlaylistOperation = {
+  REFRESH: 'REFRESH',
+  EDIT: 'EDIT',
+  DELETE: 'DELETE',
+  CLEAR_WATCH_PROGRESS: 'CLEAR_WATCH_PROGRESS',
+  CORRECT_CATEGORY_TYPE: 'CORRECT_CATEGORY_TYPE',
+  VIEW_PROVIDER_ACCOUNT: 'VIEW_PROVIDER_ACCOUNT',
+} as const;
+export type PlaylistOperation = typeof PlaylistOperation[keyof typeof PlaylistOperation];
+
+export type PlaylistOperationExecution = 'IN_APP' | 'BROWSER';
+
+export interface PlaylistOperationCapability {
+  operation: PlaylistOperation;
+  execution: PlaylistOperationExecution;
+  browserPath: string | null;
+}
+
+export interface PlaylistCapabilities {
+  operations: PlaylistOperationCapability[];
+}
+
 export interface Channel {
   contentId: string;
   id: number;
@@ -471,6 +493,8 @@ function listXtreamSeries(
 export const api = {
   serverInfo: () => j<ServerInfoDto>('/server-info'),
   playlists: () => j<Playlist[]>('/playlists'),
+  playlistCapabilities: (id: number) =>
+    j<PlaylistCapabilities>(`/playlists/${id}/capabilities`),
   addPlaylist: (req: PlaylistUpsertRequest) => j<Playlist>('/playlists', post(req)),
   updatePlaylist: (id: number, req: PlaylistUpsertRequest) => j<Playlist>(`/playlists/${id}`, put(req)),
   deletePlaylist: (id: number) => j<null>(`/playlists/${id}`, { method: 'DELETE' }),

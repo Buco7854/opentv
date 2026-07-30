@@ -204,7 +204,16 @@ data class WebAuthnCredentialDto(
 
 @Serializable data class WebAuthnCredentialDeleteRequestDto(val id: String)
 
-@Serializable data class DeviceLinkStartRequestDto(val deviceName: String? = null)
+@Serializable
+data class DeviceLinkStartRequestDto(
+    val deviceName: String? = null,
+    /**
+     * The requesting device will open the verification URI in a browser on that same
+     * device. The server binds this intent into the challenge; an ordinary QR link cannot
+     * opt itself into automatic completion by adding a fragment parameter.
+     */
+    val browserSignIn: Boolean = false,
+)
 
 @Serializable
 data class DeviceLinkStartDto(
@@ -241,4 +250,5 @@ data class DeviceLinkLookupDto(
     val ip: String?,
     val requestedAtMs: Long,
     val expiresAtMs: Long,
+    val browserSignIn: Boolean,
 )

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { EmptyState } from '../components/Common';
 import { Icon } from '../components/Icons';
@@ -10,43 +10,80 @@ import { authApi } from './api';
 import { ErrorNotice, errorMessage } from './AuthUi';
 import { useAuth } from './AuthProvider';
 import { authText as tx } from './copy';
-import { useFragmentToken } from './fragment';
+import { clearPendingDeviceLink, PendingDeviceLink } from './fragment';
 import { DeviceLinkRequest } from './types';
 import './auth.css';
 
 const stamp = (ms: number) =>
   new Date(ms).toLocaleString(getLocale(), { dateStyle: 'medium', timeStyle: 'short' });
 
-export function LinkApprovalScreen() {
+interface LoadedLink {
+  request: DeviceLinkRequest;
+  approved: boolean;
+}
+
+// StrictMode replays the effect. Coalesce the authenticated lookup + automatic approval so
+// one browser landing cannot race itself into a successful approval followed by an error.
+const automaticLoads = new Map<string, Promise<LoadedLink>>();
+
+function loadLink(pending: PendingDeviceLink): Promise<LoadedLink> {
+  if (!pending.automaticApproval) {
+    return authApi.linkLookup({ linkToken: pending.linkToken })
+      .then((request) => ({ request, approved: false }));
+  }
+  const current = automaticLoads.get(pending.linkToken);
+  if (current) return current;
+  const started = authApi.linkLookup({ linkToken: pending.linkToken })
+    .then(async (request) => {
+      // Both sides must agree. The fragment is merely browser routing input; the
+      // authenticated lookup reports the mode bound into the server challenge.
+      if (!request.browserSignIn) return { request, approved: false };
+      await authApi.linkApprove({ linkToken: pending.linkToken });
+      return { request, approved: true };
+    })
+    .finally(() => automaticLoads.delete(pending.linkToken));
+  automaticLoads.set(pending.linkToken, started);
+  return started;
+}
+
+export function LinkApprovalScreen({ pending }: { pending: PendingDeviceLink | null }) {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const linkToken = useFragmentToken('t');
   const [request, setRequest] = useState<DeviceLinkRequest | null>(null);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<'approved' | 'denied' | null>(null);
 
   useEffect(() => {
-    if (!linkToken) {
+    if (!pending) {
       setBusy(false);
       return undefined;
     }
     let active = true;
-    authApi.linkLookup({ linkToken })
-      .then((found) => { if (active) setRequest(found); })
+    loadLink(pending)
+      .then((loaded) => {
+        if (!active) return;
+        setRequest(loaded.request);
+        if (loaded.approved) {
+          clearPendingDeviceLink(pending.linkToken);
+          setDone('approved');
+          reportSuccess(tx('linkApproved'));
+        }
+      })
       .catch(() => { if (active) setError(tx('linkNotFound')); })
       .finally(() => { if (active) setBusy(false); });
     return () => { active = false; };
-  }, [linkToken]);
+  }, [pending]);
 
-  const decide = async (approve: boolean) => {
-    if (!linkToken) return;
+  const decide = useCallback(async (approve: boolean) => {
+    if (!pending) return;
     setBusy(true);
     setError(null);
     try {
       await (approve
-        ? authApi.linkApprove({ linkToken })
-        : authApi.linkDeny({ linkToken }));
+        ? authApi.linkApprove({ linkToken: pending.linkToken })
+        : authApi.linkDeny({ linkToken: pending.linkToken }));
+      clearPendingDeviceLink(pending.linkToken);
       setDone(approve ? 'approved' : 'denied');
       if (approve) reportSuccess(tx('linkApproved'));
     } catch (requestError) {
@@ -54,6 +91,11 @@ export function LinkApprovalScreen() {
     } finally {
       setBusy(false);
     }
+  }, [pending]);
+
+  const leave = () => {
+    if (pending) clearPendingDeviceLink(pending.linkToken);
+    navigate('/');
   };
 
   const browser = request?.userAgent ? deviceLabel(request.userAgent) : null;
@@ -64,7 +106,7 @@ export function LinkApprovalScreen() {
       <ScreenHeader
         title={tx('linkApproveTitle')}
         subtitle={<span className="subtitle">{tx('linkApproveSubtitle')}</span>}
-        onBack={() => navigate('/')}
+        onBack={leave}
       />
       <div className="mx-auto flex max-w-[520px] flex-col gap-3 px-4 pb-6">
         <ErrorNotice message={error} />
@@ -73,7 +115,7 @@ export function LinkApprovalScreen() {
           <EmptyState
             title={done === 'approved' ? tx('linkApproved') : tx('linkDeniedDone')}
             subtitle={done === 'approved' ? tx('linkApprovedBody') : tx('linkDeniedDoneBody')}
-            action={<button className="btn" onClick={() => navigate('/')}>{tx('continue')}</button>}
+            action={<button className="btn" onClick={leave}>{tx('continue')}</button>}
           >
             <div className="empty-home-art">
               <Icon name={done === 'approved' ? 'check' : 'close'} />

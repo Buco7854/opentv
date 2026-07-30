@@ -14,7 +14,7 @@ import { AuthLayout } from './AuthLayout';
 import { ChoiceRow, ErrorNotice, errorMessage, reportAuthError } from './AuthUi';
 import { useAuth } from './AuthProvider';
 import { authText as tx } from './copy';
-import { beginOidcHandoff, useFragmentToken } from './fragment';
+import { beginOidcHandoff, readPendingDeviceLink, useFragmentToken } from './fragment';
 import { MfaStep, RecoveryCodesPanel, RecoveryCodesScreen, TotpSetup } from './TwoFactor';
 import { AuthFlow, TotpStatus, WebAuthnCredential } from './types';
 import {
@@ -100,8 +100,15 @@ export function LoginScreen() {
     returnTo?: unknown;
     reauthenticate?: boolean;
   } | null;
-  const returnTo = safeReturnTo(locationState?.returnTo);
+  const pendingDeviceLink = readPendingDeviceLink();
+  const returnTo = locationState?.returnTo === undefined && pendingDeviceLink
+    ? '/link'
+    : safeReturnTo(locationState?.returnTo);
   const reauthenticate = locationState?.reauthenticate === true;
+  const browserLinkSignIn = pendingDeviceLink?.browserSignIn === true || (
+    returnTo.startsWith('/link#')
+      && new URLSearchParams(returnTo.split('#')[1] ?? '').get('mode') === 'sign-in'
+  );
 
   useEffect(() => {
     if (auth.phase === 'authenticated' && !reauthenticate) navigate(returnTo, { replace: true });
@@ -211,7 +218,7 @@ export function LoginScreen() {
   return (
     <AuthFlowScreen
       title={tx('loginTitle')}
-      subtitle={tx('loginSubtitle')}
+      subtitle={tx(browserLinkSignIn ? 'browserLinkLoginSubtitle' : 'loginSubtitle')}
       returnTo={returnTo}
       initialFlow={null}
       footer={

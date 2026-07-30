@@ -33,10 +33,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.buco7854.opentv.R
 import com.buco7854.opentv.contract.RoomMemberDto
@@ -427,7 +429,7 @@ internal fun WatchTogetherNoticeOverlay(notice: WatchTogetherNotice) {
                     message,
                     style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier
-                        .heightIn(max = (LocalConfiguration.current.screenHeightDp * 0.5f).dp)
+                        .heightIn(max = halfContainerHeight())
                         .verticalScroll(scroll)
                         .padding(horizontal = 20.dp, vertical = 14.dp),
                 )
@@ -466,4 +468,10 @@ internal fun WatchTogetherLoadingOverlay() {
             }
         }
     }
+}
+
+/** Half the height of the window the overlay is drawn in, not of the physical screen. */
+@Composable
+private fun halfContainerHeight(): Dp = with(LocalDensity.current) {
+    (LocalWindowInfo.current.containerSize.height / 2).toDp()
 }

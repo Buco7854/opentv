@@ -14,9 +14,12 @@ import com.buco7854.opentv.contract.SeriesGroupPageDto
 import com.buco7854.opentv.contract.SeriesHitDto
 import com.buco7854.opentv.contract.XtreamSeriesPageDto
 import com.buco7854.opentv.contract.XtreamSeriesDetailDto
+import com.buco7854.opentv.contract.PlaylistOperation as WirePlaylistOperation
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.hub.HubCredentials
 import com.buco7854.opentv.hub.HubEndpoints
+import com.buco7854.opentv.hub.HubPlaylistCapabilities
+import com.buco7854.opentv.hub.HubPlaylistOperation
 import com.buco7854.opentv.hub.HubRegistry
 import com.buco7854.opentv.hub.HubUnauthorizedException
 import com.buco7854.opentv.hub.HubUnreachableException
@@ -29,20 +32,38 @@ class HubCatalogGateway internal constructor(
     constructor(source: SourceId.Hub, registry: HubRegistry) :
         this(source, RegistryHubCatalogBackend(source, registry))
 
-    private val sourceTraits = SourceTraits(
-        hasXtreamSeries = true,
-        hasGuide = true,
-        hasAccountPanel = true,
-        favoritesAreServerSide = true,
-        resumeIsServerSide = true,
-        supportsRefresh = true,
-        supportsSourceEditing = false,
-        usesXtreamCredentials = false,
-        usesM3uUrl = false,
-        isFileImport = false,
-    )
+    override suspend fun traits(): SourceTraits {
+        val capabilities = backend.capabilities().toCatalogCapabilities()
+        return SourceTraits(
+            hasXtreamSeries =
+                PlaylistOperation.CORRECT_CATEGORY_TYPE !in capabilities.operations,
+            hasGuide = true,
+            hasAccountPanel =
+                PlaylistOperation.VIEW_PROVIDER_ACCOUNT in capabilities.operations,
+            favoritesAreServerSide = true,
+            resumeIsServerSide = true,
+            supportsRefresh = PlaylistOperation.REFRESH in capabilities.operations,
+            supportsSourceEditing = false,
+            usesXtreamCredentials = false,
+            usesM3uUrl = false,
+            isFileImport = false,
+        )
+    }
 
-    override suspend fun traits(): SourceTraits = sourceTraits
+    override suspend fun playlistCapabilities(): CatalogResult<PlaylistCapabilities> = hubCall {
+        backend.capabilities().toCatalogCapabilities()
+    }
+
+    override suspend fun clearWatchProgress(): CatalogResult<Unit> = hubCall {
+        backend.clearProgress()
+    }
+
+    override suspend fun correctCategoryType(
+        groupTitle: String,
+        kind: Int?,
+    ): CatalogResult<Unit> = hubCall {
+        backend.setGroupKind(groupTitle, kind)
+    }
 
     override suspend fun groups(kind: Int): CatalogResult<List<CatalogGroup>> = hubCall {
         backend.groups(kind).map { CatalogGroup(it.groupTitle, it.count) }
@@ -333,6 +354,9 @@ private fun ContentRef.hubContentId(): String =
 
 internal interface HubCatalogBackend {
     val baseUrl: String
+    suspend fun capabilities(): HubPlaylistCapabilities
+    suspend fun clearProgress()
+    suspend fun setGroupKind(groupTitle: String, kind: Int?)
     suspend fun groups(kind: Int): List<GroupCountDto>
     suspend fun channels(kind: Int, group: String, offset: Int, limit: Int, filter: String): ChannelPageDto
     suspend fun seriesGroups(group: String, offset: Int, limit: Int, filter: String): SeriesGroupPageDto
@@ -370,6 +394,12 @@ private class RegistryHubCatalogBackend(
         return client.call(block)
     }
 
+    override suspend fun capabilities() =
+        call { playlistCapabilities(it, source.playlistId) }
+    override suspend fun clearProgress() =
+        call { clearPlaylistProgress(it, source.playlistId) }
+    override suspend fun setGroupKind(groupTitle: String, kind: Int?) =
+        call { setPlaylistGroupKind(it, source.playlistId, groupTitle, kind) }
     override suspend fun groups(kind: Int) = call { groups(it, source.playlistId, kind) }
     override suspend fun channels(kind: Int, group: String, offset: Int, limit: Int, filter: String) =
         call { channels(it, source.playlistId, kind, group, offset, limit, filter) }
@@ -394,6 +424,30 @@ private class RegistryHubCatalogBackend(
     override suspend fun content(contentId: String) = call { content(it, contentId) }
     override suspend fun guide(contentId: String) = call { contentGuide(it, contentId) }
 }
+
+private fun HubPlaylistCapabilities.toCatalogCapabilities(): PlaylistCapabilities =
+    PlaylistCapabilities(
+        operations.mapNotNull { (operation, availability) ->
+            val mappedOperation = when (operation) {
+                WirePlaylistOperation.REFRESH -> PlaylistOperation.REFRESH
+                WirePlaylistOperation.EDIT -> PlaylistOperation.EDIT
+                WirePlaylistOperation.DELETE -> PlaylistOperation.DELETE
+                WirePlaylistOperation.CLEAR_WATCH_PROGRESS ->
+                    PlaylistOperation.CLEAR_WATCH_PROGRESS
+                WirePlaylistOperation.CORRECT_CATEGORY_TYPE ->
+                    PlaylistOperation.CORRECT_CATEGORY_TYPE
+                WirePlaylistOperation.VIEW_PROVIDER_ACCOUNT ->
+                    PlaylistOperation.VIEW_PROVIDER_ACCOUNT
+                else -> null
+            } ?: return@mapNotNull null
+            val mappedAvailability = when (availability) {
+                HubPlaylistOperation.InApp -> PlaylistOperationAvailability.InApp
+                is HubPlaylistOperation.Browser ->
+                    PlaylistOperationAvailability.Browser(availability.url)
+            }
+            mappedOperation to mappedAvailability
+        }.toMap(),
+    )
 
 private fun ChannelDto.toCatalogItem(progress: Float?, imageUrl: String?) = CatalogItem(
     ref = ContentRef.HubContent(contentId),

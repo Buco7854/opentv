@@ -41,6 +41,7 @@
     <string name="shell_playlists">Playlists</string>
     <string name="shell_playlist_actions">Playlist actions</string>
     <string name="shell_add_playlist">Add playlist</string>
+    <string name="shell_servers">Servers</string>
     <plurals name="shell_item_count">
         <item quantity="one">%1$d item</item>
         <item quantity="other">%1$d items</item>
@@ -328,9 +329,10 @@
     <string name="hub_choose_method">How would you like to sign in?</string>
     <string name="hub_method_password">Username and password</string>
     <string name="hub_method_link">Link this device</string>
+    <string name="hub_link_browser_waiting">Finish signing in in your browser, then come back here.</string>
     <string name="hub_method_link_description">Approve from a device that is already signed in.</string>
     <string name="hub_method_browser">Sign in with a browser</string>
-    <string name="hub_method_browser_description">For single sign-on and passkeys.</string>
+    <string name="hub_method_browser_description">Sign in on your server\'s own page, however it asks.</string>
     <string name="hub_sign_in">Sign in</string>
     <string name="hub_signing_in">Signing in\u2026</string>
     <string name="hub_bad_credentials">Wrong username or password.</string>
@@ -359,6 +361,7 @@
     <string name="hub_remove_download_after_pull">Remove from server after download</string>
     <string name="hub_remove_download_after_pull_description">Off by default because the server file may be shared with other users.</string>
     <string name="hub_open_account">Account and security</string>
+    <string name="hub_opens_in_browser">Opens in your browser</string>
     <string name="hub_open_account_description">Manage your password, two-factor authentication and sessions in a browser.</string>
     <string name="hub_open_admin">Administration</string>
     <string name="hub_open_admin_description">Manage users, playlists and activity in a browser.</string>

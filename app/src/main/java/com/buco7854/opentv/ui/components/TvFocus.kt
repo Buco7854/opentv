@@ -23,8 +23,18 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
 
-/** D-pad focus treatment: focused cards scale up and gain a ring. */
+/**
+ * D-pad focus treatment: focused cards scale up and gain a ring.
+ *
+ * Television only. A phone reaches everything by touch and already has Material's own
+ * focus and error styling; drawing a second ring on top of that is not a nicer version
+ * of it, it is a competing one. It showed worst on text fields, which take focus the
+ * moment they are tapped: the ring enclosed the field *and* its supporting text at a
+ * different corner radius, in white over the red of an error state, and nudged the whole
+ * field 3% larger as the keyboard opened.
+ */
 fun Modifier.focusHighlight(shape: Shape = RoundedCornerShape(16.dp)): Modifier = composed {
+    if (!isTelevisionUiMode(LocalConfiguration.current.uiMode)) return@composed this
     var focused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (focused) 1.03f else 1f, label = "focusScale")
     this

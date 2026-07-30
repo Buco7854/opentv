@@ -88,6 +88,27 @@ data class SourceTraits(
     val isFileImport: Boolean,
 )
 
+enum class PlaylistOperation {
+    REFRESH,
+    EDIT,
+    DELETE,
+    CLEAR_WATCH_PROGRESS,
+    CORRECT_CATEGORY_TYPE,
+    VIEW_PROVIDER_ACCOUNT,
+}
+
+sealed interface PlaylistOperationAvailability {
+    data object InApp : PlaylistOperationAvailability
+    data class Browser(val url: String) : PlaylistOperationAvailability
+}
+
+data class PlaylistCapabilities(
+    val operations: Map<PlaylistOperation, PlaylistOperationAvailability>,
+) {
+    operator fun get(operation: PlaylistOperation): PlaylistOperationAvailability? =
+        operations[operation]
+}
+
 sealed interface CatalogResult<out T> {
     data class Success<T>(val value: T) : CatalogResult<T>
     data object SignedOut : CatalogResult<Nothing>

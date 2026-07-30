@@ -24,6 +24,7 @@ private data class DeviceLinkPayload(
     val deviceName: String?,
     val userAgent: String?,
     val ip: String?,
+    val browserSignIn: Boolean = false,
     val scannedAtMs: Long? = null,
     val approvedAtMs: Long? = null,
     val deniedAtMs: Long? = null,
@@ -80,6 +81,7 @@ class DeviceLinkService(
                 deviceName = deviceName,
                 userAgent = cleanAgent,
                 ip = clientIp.takeIf(String::isNotBlank),
+                browserSignIn = request.browserSignIn,
             )
             try {
                 db.challenges().insert(
@@ -96,10 +98,11 @@ class DeviceLinkService(
                     ),
                 )
                 val verificationUri = base.toString().trimEnd('/') + "/link"
+                val mode = if (request.browserSignIn) "&mode=sign-in" else ""
                 return@withLock DeviceLinkStartDto(
                     pollToken = pollToken,
                     linkToken = linkToken,
-                    verificationUriComplete = "$verificationUri#t=$linkToken",
+                    verificationUriComplete = "$verificationUri#t=$linkToken$mode",
                     expiresAtMs = expiresAtMs,
                     intervalMs = PENDING_POLL_INTERVAL_MS,
                 )
@@ -194,6 +197,23 @@ class DeviceLinkService(
         )
     }
 
+    /**
+     * Best-effort owner cancellation. Invalid, expired and already-consumed poll tokens are
+     * deliberately indistinguishable and idempotent. A concurrent successful poll and cancel
+     * still have exactly one winner because both consume the same challenge row atomically.
+     */
+    suspend fun cancel(request: DeviceLinkPollRequestDto) = mutation.withLock {
+        val token = request.pollToken.trim()
+        if (token.isEmpty() || token.length > MAX_TOKEN_LENGTH) return@withLock
+        val row = db.challenges().byToken(
+            ChallengeKind.DEVICE_LINK,
+            AuthCrypto.hashToken(token),
+        ) ?: return@withLock
+        if (row.consumedAtMs == null && row.expiresAtMs > clock()) {
+            db.challenges().consume(row.id, clock())
+        }
+    }
+
     suspend fun lookup(
         actor: Actor,
         request: DeviceLinkTokenRequestDto,
@@ -220,6 +240,7 @@ class DeviceLinkService(
             ip = updated.ip,
             requestedAtMs = resolved.row.createdAtMs,
             expiresAtMs = resolved.row.expiresAtMs,
+            browserSignIn = updated.browserSignIn,
         )
     }
 

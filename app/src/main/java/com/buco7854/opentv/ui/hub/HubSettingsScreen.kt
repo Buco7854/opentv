@@ -1,15 +1,24 @@
 package com.buco7854.opentv.ui.hub
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.OpenInNew
+import androidx.compose.material.icons.outlined.AdminPanelSettings
+import androidx.compose.material.icons.outlined.Devices
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -32,12 +41,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.R
 import com.buco7854.opentv.core.model.HubSource
-import com.buco7854.opentv.ui.components.OtvButton
 import com.buco7854.opentv.ui.components.OtvTextButton
 import com.buco7854.opentv.ui.components.Pill
 import com.buco7854.opentv.ui.components.RequestInitialFocusOnTv
@@ -174,24 +183,35 @@ fun HubSettingsScreen(hubId: Long, onBack: () -> Unit, onRemoved: () -> Unit) {
                 }
             }
 
-            BrowserEntry(
-                title = stringResource(R.string.hub_open_account),
-                description = stringResource(R.string.hub_open_account_description),
-                onClick = { openPage(accounts.webSecurity(hub)) },
-            )
-
-            if (accounts.canAdminister(hub)) {
-                HorizontalDivider()
-                BrowserEntry(
-                    title = stringResource(R.string.hub_open_admin),
-                    description = stringResource(R.string.hub_open_admin_description),
-                    onClick = { openPage(accounts.webAdmin(hub)) },
-                )
-                BrowserEntry(
-                    title = stringResource(R.string.hub_open_sessions),
-                    description = null,
-                    onClick = { openPage(accounts.webSessions(hub)) },
-                )
+            // These open the server's own web UI rather than being rebuilt natively, so
+            // they are navigation, not actions. As full-width filled buttons they read as
+            // three competing primary calls to action stacked down the page; as rows in a
+            // card they read as a settings list, which is what they are.
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column {
+                    BrowserEntry(
+                        icon = Icons.Outlined.Person,
+                        title = stringResource(R.string.hub_open_account),
+                        description = stringResource(R.string.hub_open_account_description),
+                        onClick = { openPage(accounts.webSecurity(hub)) },
+                    )
+                    if (accounts.canAdminister(hub)) {
+                        HorizontalDivider()
+                        BrowserEntry(
+                            icon = Icons.Outlined.AdminPanelSettings,
+                            title = stringResource(R.string.hub_open_admin),
+                            description = stringResource(R.string.hub_open_admin_description),
+                            onClick = { openPage(accounts.webAdmin(hub)) },
+                        )
+                        HorizontalDivider()
+                        BrowserEntry(
+                            icon = Icons.Outlined.Devices,
+                            title = stringResource(R.string.hub_open_sessions),
+                            description = null,
+                            onClick = { openPage(accounts.webSessions(hub)) },
+                        )
+                    }
+                }
             }
 
             HorizontalDivider()
@@ -251,16 +271,48 @@ fun HubSettingsScreen(hubId: Long, onBack: () -> Unit, onRemoved: () -> Unit) {
     }
 }
 
+/** A row that hands off to the server's web UI, marked as leaving the app. */
 @Composable
-private fun BrowserEntry(title: String, description: String?, onClick: () -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        OtvButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) { Text(title) }
-        description?.let {
-            Text(
-                it,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+private fun BrowserEntry(
+    icon: ImageVector,
+    title: String,
+    description: String?,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .focusHighlight(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(Modifier.width(14.dp))
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            description?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
+        Spacer(Modifier.width(12.dp))
+        Icon(
+            Icons.AutoMirrored.Outlined.OpenInNew,
+            contentDescription = stringResource(R.string.hub_opens_in_browser),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+        )
     }
 }

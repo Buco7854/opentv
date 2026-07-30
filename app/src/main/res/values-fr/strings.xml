@@ -41,6 +41,7 @@
     <string name="shell_playlists">Playlists</string>
     <string name="shell_playlist_actions">Actions de la playlist</string>
     <string name="shell_add_playlist">Ajouter une playlist</string>
+    <string name="shell_servers">Serveurs</string>
     <plurals name="shell_item_count">
         <item quantity="one">%1$d élément</item>
         <item quantity="other">%1$d éléments</item>
@@ -328,9 +329,10 @@
     <string name="hub_choose_method">Comment souhaitez-vous vous connecter ?</string>
     <string name="hub_method_password">Nom d\'utilisateur et mot de passe</string>
     <string name="hub_method_link">Associer cet appareil</string>
+    <string name="hub_link_browser_waiting">Terminez la connexion dans votre navigateur, puis revenez ici.</string>
     <string name="hub_method_link_description">Approuvez depuis un appareil déjà connecté.</string>
     <string name="hub_method_browser">Se connecter avec un navigateur</string>
-    <string name="hub_method_browser_description">Pour l\'authentification unique et les clés d\'accès.</string>
+    <string name="hub_method_browser_description">Connectez-vous sur la page de votre serveur, comme il le demande.</string>
     <string name="hub_sign_in">Se connecter</string>
     <string name="hub_signing_in">Connexion\u2026</string>
     <string name="hub_bad_credentials">Nom d\'utilisateur ou mot de passe incorrect.</string>
@@ -359,6 +361,7 @@
     <string name="hub_remove_download_after_pull">Supprimer du serveur après le téléchargement</string>
     <string name="hub_remove_download_after_pull_description">Désactivé par défaut, car le fichier du serveur peut être partagé avec d\'autres utilisateurs.</string>
     <string name="hub_open_account">Compte et sécurité</string>
+    <string name="hub_opens_in_browser">S\'ouvre dans votre navigateur</string>
     <string name="hub_open_account_description">Gérez votre mot de passe, l\'authentification à deux facteurs et vos sessions dans un navigateur.</string>
     <string name="hub_open_admin">Administration</string>
     <string name="hub_open_admin_description">Gérez les utilisateurs, les playlists et l\'activité dans un navigateur.</string>

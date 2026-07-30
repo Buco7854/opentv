@@ -1,7 +1,8 @@
 import { ApiError, browserApiHttp, post } from '../api/http';
 import {
   AuthCapabilities, AuthFlow, CurrentUser, DeviceLinkRequest, DeviceLinkStart,
-  DeviceLinkStatus, TotpEnrollment, TotpStatus, WebAuthnCredential, WebAuthnOptions,
+  DeviceLinkStartRequest, DeviceLinkStatus, TotpEnrollment, TotpStatus,
+  WebAuthnCredential, WebAuthnOptions,
 } from './types';
 
 function isAuthFlow(value: unknown): value is AuthFlow {
@@ -83,10 +84,15 @@ export const authApi = {
     ),
   completePasskeyLogin: (challenge: string, credential: string) =>
     flow('/auth/webauthn/login/complete', { challenge, credential }),
-  linkStart: (deviceName?: string) =>
-    browserApiHttp.json<DeviceLinkStart>(
-      '/auth/link/start', post(deviceName ? { deviceName } : {}), PUBLIC_AUTH,
-    ),
+  linkStart: (deviceName?: string, browserSignIn = false) => {
+    const request: DeviceLinkStartRequest = {
+      ...(deviceName ? { deviceName } : {}),
+      ...(browserSignIn ? { browserSignIn: true } : {}),
+    };
+    return browserApiHttp.json<DeviceLinkStart>(
+      '/auth/link/start', post(request), PUBLIC_AUTH,
+    );
+  },
   linkPoll: (pollToken: string) =>
     browserApiHttp.json<DeviceLinkStatus>(
       '/auth/link/poll', post({ pollToken }), PUBLIC_AUTH,

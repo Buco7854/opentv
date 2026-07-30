@@ -32,11 +32,21 @@ object HubEndpoints {
     fun recovery(base: String) = api(base, "/auth/recovery")
     fun linkStart(base: String) = api(base, "/auth/link/start")
     fun linkPoll(base: String) = api(base, "/auth/link/poll")
+    fun linkCancel(base: String) = api(base, "/auth/link/cancel")
     fun me(base: String) = api(base, "/auth/me")
     fun logout(base: String) = api(base, "/auth/logout")
 
     // Catalog (server-paged; query built via [listing])
     fun playlists(base: String) = api(base, "/playlists")
+    fun playlistCapabilities(base: String, playlistId: Long) =
+        api(base, "/playlists/$playlistId/capabilities")
+
+    fun playlistClearProgress(base: String, playlistId: Long) =
+        api(base, "/playlists/$playlistId/clear-progress")
+
+    fun playlistGroupKind(base: String, playlistId: Long) =
+        api(base, "/playlists/$playlistId/group-kind")
+
     fun groups(base: String, playlistId: Long, kind: Int) =
         api(base, "/playlists/$playlistId/groups?kind=$kind")
 
@@ -126,6 +136,18 @@ object HubEndpoints {
     fun webSecurity(base: String) = normalizeBaseUrl(base) + "/security"
     fun webAdmin(base: String) = normalizeBaseUrl(base) + "/admin"
     fun webSessions(base: String) = normalizeBaseUrl(base) + "/sessions"
+
+    /** Resolves a server-owned root-relative web path within this hub's deployment base. */
+    fun webPath(base: String, path: String): String {
+        require(path.startsWith("/") && !path.startsWith("//")) {
+            "Hub browser path must be root-relative"
+        }
+        val target = normalizeBaseUrl(base) + path
+        require(isSameOrigin(base, target)) {
+            "Hub browser path must stay on the connected hub"
+        }
+        return target
+    }
 
     /**
      * True when [target] belongs to the same origin as [base].

@@ -6,6 +6,21 @@ interface CatalogGateway {
     val source: SourceId
 
     /**
+     * Per-user playlist operations. Unlisted operations must not be rendered.
+     *
+     * Local playlist management still lives in the local application layer;
+     * hub gateways override this boundary with server-authoritative capabilities.
+     */
+    suspend fun playlistCapabilities(): CatalogResult<PlaylistCapabilities> =
+        CatalogResult.Success(PlaylistCapabilities(emptyMap()))
+
+    suspend fun clearWatchProgress(): CatalogResult<Unit> =
+        CatalogResult.Failed(UnsupportedOperationException("Clearing progress is not available"))
+
+    suspend fun correctCategoryType(groupTitle: String, kind: Int?): CatalogResult<Unit> =
+        CatalogResult.Failed(UnsupportedOperationException("Category correction is not available"))
+
+    /**
      * Source capabilities may depend on persisted source configuration.
      *
      * Keeping this boundary suspending lets platform stores resolve that

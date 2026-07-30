@@ -136,6 +136,33 @@ data class PlaylistDetailDto(
 )
 
 @Serializable
+data class PlaylistCapabilitiesDto(
+    val operations: List<PlaylistOperationCapabilityDto>,
+)
+
+@Serializable
+data class PlaylistOperationCapabilityDto(
+    val operation: String,
+    val execution: String,
+    /** Same-server web path. Hub clients resolve it against the connected hub. */
+    val browserPath: String? = null,
+)
+
+object PlaylistOperation {
+    const val REFRESH = "REFRESH"
+    const val EDIT = "EDIT"
+    const val DELETE = "DELETE"
+    const val CLEAR_WATCH_PROGRESS = "CLEAR_WATCH_PROGRESS"
+    const val CORRECT_CATEGORY_TYPE = "CORRECT_CATEGORY_TYPE"
+    const val VIEW_PROVIDER_ACCOUNT = "VIEW_PROVIDER_ACCOUNT"
+}
+
+object PlaylistOperationExecution {
+    const val IN_APP = "IN_APP"
+    const val BROWSER = "BROWSER"
+}
+
+@Serializable
 data class ChannelPageDto(
     val items: List<ChannelListItemDto>,
     val total: Int,

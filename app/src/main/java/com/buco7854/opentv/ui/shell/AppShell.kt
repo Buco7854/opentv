@@ -35,6 +35,7 @@ import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.VideoLibrary
+import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.automirrored.outlined.PlaylistPlay
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -54,6 +55,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -61,6 +63,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -78,9 +81,16 @@ import com.buco7854.opentv.ui.components.OtvTextButton
 import com.buco7854.opentv.ui.components.OtvProgressBar
 import com.buco7854.opentv.ui.components.PlaylistDialog
 import com.buco7854.opentv.ui.components.focusHighlight
+import com.buco7854.opentv.ui.hub.HandoffResult
+import com.buco7854.opentv.ui.hub.HubBrowserHandoff
 import com.buco7854.opentv.ui.home.HomeViewModel
+import com.buco7854.opentv.source.CatalogResult
+import com.buco7854.opentv.source.PlaylistCapabilities
+import com.buco7854.opentv.source.PlaylistOperation
+import com.buco7854.opentv.source.PlaylistOperationAvailability
 import com.buco7854.opentv.source.SourceId
 import com.buco7854.opentv.ui.home.CatalogSourceEntry
+import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
 
@@ -223,6 +233,7 @@ fun PlaylistsPanel(
     val busy by viewModel.busy.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
     val addFocusRequester = remember { FocusRequester() }
     RequestInitialFocusOnTv(addFocusRequester)
 
@@ -242,20 +253,12 @@ fun PlaylistsPanel(
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(stringResource(R.string.shell_playlists), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-            IconButton(
-                onClick = { showAdd = true },
-                modifier = Modifier
-                    .focusRequester(addFocusRequester)
-                    .focusHighlight(),
-            ) {
-                Icon(Icons.Outlined.Add, contentDescription = stringResource(R.string.shell_add_playlist))
-            }
-        }
+        PanelSectionHeader(
+            title = stringResource(R.string.shell_playlists),
+            addDescription = stringResource(R.string.shell_add_playlist),
+            onAdd = { showAdd = true },
+            addFocusRequester = addFocusRequester,
+        )
         if (busy) OtvProgressBar(Modifier.fillMaxWidth().padding(horizontal = 20.dp))
         LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
             items(playlists.orEmpty(), key = { it.id }) { playlist ->
@@ -276,6 +279,14 @@ fun PlaylistsPanel(
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
                     color = MaterialTheme.colorScheme.outlineVariant,
                 )
+                // Servers get the same header-plus-plus affordance as playlists. Adding one
+                // used to be a row carrying the very same icon as the servers listed above
+                // it, which read as another server rather than as the way to add one.
+                PanelSectionHeader(
+                    title = stringResource(R.string.shell_servers),
+                    addDescription = stringResource(R.string.hub_add_title),
+                    onAdd = onConnectHub,
+                )
             }
             items(hubs, key = { "hub-${it.id}" }) { hub ->
                 PanelHubRow(hub = hub, onClick = { onOpenHub(hub.id) })
@@ -284,13 +295,12 @@ fun PlaylistsPanel(
                 }.forEach { source ->
                     PanelHubPlaylistRow(
                         source = source,
+                        hubBaseUrl = hub.baseUrl,
                         selected = source.sourceId == activeSourceId,
                         onClick = { onOpenSource(source.sourceId) },
+                        onNotify = { message -> scope.launch { snackbar.showSnackbar(message) } },
                     )
                 }
-            }
-            item {
-                PanelActionRow(Icons.Outlined.Dns, stringResource(R.string.hub_add_title), onConnectHub)
             }
             item {
                 HorizontalDivider(
@@ -471,6 +481,34 @@ private fun PanelPlaylistRow(
     }
 }
 
+/** "Playlists" and "Servers" both read as a title with a plus to add one of that thing. */
+@Composable
+private fun PanelSectionHeader(
+    title: String,
+    addDescription: String,
+    onAdd: () -> Unit,
+    addFocusRequester: FocusRequester? = null,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            title,
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.weight(1f),
+        )
+        IconButton(
+            onClick = onAdd,
+            modifier = Modifier
+                .then(addFocusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
+                .focusHighlight(),
+        ) {
+            Icon(Icons.Outlined.Add, contentDescription = addDescription)
+        }
+    }
+}
+
 @Composable
 private fun PanelHubRow(hub: HubSource, onClick: () -> Unit) {
     Row(
@@ -501,19 +539,55 @@ private fun PanelHubRow(hub: HubSource, onClick: () -> Unit) {
     }
 }
 
+/**
+ * A server-backed playlist row.
+ *
+ * It offers the same operations a local playlist does, but the server decides which:
+ * clearing your own watch progress is yours to do, while refreshing, editing or deleting
+ * change a catalog everyone on that server shares, so they belong to an administrator and
+ * open the server's own pages. The capability list is fetched per playlist and is never
+ * inferred from a locally cached role — the server enforces it regardless of what we draw.
+ */
 @Composable
 private fun PanelHubPlaylistRow(
     source: CatalogSourceEntry,
+    hubBaseUrl: String,
     selected: Boolean,
     onClick: () -> Unit,
+    onNotify: (String) -> Unit,
 ) {
+    val context = LocalContext.current
+    val handoff = remember(context) { HubBrowserHandoff(context) }
+    var menuOpen by remember { mutableStateOf(false) }
+    var confirmClear by remember { mutableStateOf(false) }
+    var capabilities by remember(source.sourceId) {
+        mutableStateOf<PlaylistCapabilities?>(null)
+    }
+    val rejectedMessage = stringResource(R.string.hub_handoff_rejected)
+    val clearedMessage = stringResource(R.string.playlist_progress_cleared)
+    val clearFailedMessage = stringResource(R.string.watch_together_action_failed)
+    // Fetched when the menu is first opened rather than for every row up front: this is a
+    // network round trip per playlist, and most rows are never asked.
+    LaunchedEffect(menuOpen, source.sourceId) {
+        if (!menuOpen || capabilities != null) return@LaunchedEffect
+        val result = OpenTvApp.graph.catalogFor(source.sourceId).playlistCapabilities()
+        capabilities = (result as? CatalogResult.Success)?.value
+    }
+
+    fun openInBrowser(url: String) {
+        menuOpen = false
+        if (handoff.open(hubBaseUrl, url) == HandoffResult.Rejected) {
+            onNotify(rejectedMessage)
+        }
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(start = 24.dp, top = 2.dp, bottom = 2.dp)
             .focusHighlight(RoundedCornerShape(10.dp))
             .pressablePill(active = selected, activeAlpha = 0.12f, onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .padding(start = 12.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
@@ -528,8 +602,129 @@ private fun PanelHubPlaylistRow(
             style = MaterialTheme.typography.titleSmall,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Box {
+            IconButton(onClick = { menuOpen = true }) {
+                Icon(
+                    Icons.Outlined.MoreVert,
+                    contentDescription = stringResource(R.string.shell_playlist_actions),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            DropdownMenu(
+                expanded = menuOpen,
+                onDismissRequest = { menuOpen = false },
+                shape = OtvMenuDefaults.shape,
+                containerColor = OtvMenuDefaults.containerColor,
+                border = OtvMenuDefaults.border,
+            ) {
+                val available = capabilities
+                if (available == null) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.common_loading)) },
+                        enabled = false,
+                        onClick = {},
+                    )
+                    return@DropdownMenu
+                }
+                HubPlaylistMenuItem(
+                    availability = available[PlaylistOperation.VIEW_PROVIDER_ACCOUNT],
+                    label = stringResource(R.string.account_title),
+                    icon = Icons.Outlined.Person,
+                    onBrowser = ::openInBrowser,
+                )
+                HubPlaylistMenuItem(
+                    availability = available[PlaylistOperation.REFRESH],
+                    label = stringResource(R.string.common_refresh),
+                    icon = Icons.Outlined.Refresh,
+                    onBrowser = ::openInBrowser,
+                )
+                HubPlaylistMenuItem(
+                    availability = available[PlaylistOperation.EDIT],
+                    label = stringResource(R.string.common_edit),
+                    icon = Icons.Outlined.Edit,
+                    onBrowser = ::openInBrowser,
+                )
+                available[PlaylistOperation.CLEAR_WATCH_PROGRESS]?.let {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.playlist_clear_progress)) },
+                        leadingIcon = { Icon(Icons.Outlined.Restore, contentDescription = null) },
+                        onClick = { menuOpen = false; confirmClear = true },
+                    )
+                }
+                HubPlaylistMenuItem(
+                    availability = available[PlaylistOperation.DELETE],
+                    label = stringResource(R.string.common_delete),
+                    icon = Icons.Outlined.Delete,
+                    danger = true,
+                    onBrowser = ::openInBrowser,
+                )
+            }
+        }
+    }
+
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text(stringResource(R.string.playlist_clear_progress_title)) },
+            text = {
+                Text(stringResource(R.string.playlist_clear_progress_message, source.title))
+            },
+            confirmButton = {
+                OtvTextButton(
+                    onClick = {
+                        confirmClear = false
+                        // Application-scoped: closing the panel must not cancel a write
+                        // that has already left for the server.
+                        OpenTvApp.graph.applicationScope.launch {
+                            val gateway = OpenTvApp.graph.catalogFor(source.sourceId)
+                            val cleared = gateway.clearWatchProgress() is CatalogResult.Success
+                            onNotify(if (cleared) clearedMessage else clearFailedMessage)
+                        }
+                    },
+                ) { Text(stringResource(R.string.playlist_clear_progress)) }
+            },
+            dismissButton = {
+                OtvTextButton(onClick = { confirmClear = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
         )
     }
+}
+
+/** Renders one capability, marking the ones that leave for the server's own web pages. */
+@Composable
+private fun HubPlaylistMenuItem(
+    availability: PlaylistOperationAvailability?,
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    danger: Boolean = false,
+    onBrowser: (String) -> Unit,
+) {
+    val url = (availability as? PlaylistOperationAvailability.Browser)?.url ?: return
+    DropdownMenuItem(
+        text = { Text(label) },
+        leadingIcon = { Icon(icon, contentDescription = null) },
+        trailingIcon = {
+            Icon(
+                Icons.AutoMirrored.Outlined.OpenInNew,
+                contentDescription = stringResource(R.string.hub_opens_in_browser),
+                modifier = Modifier.size(16.dp),
+            )
+        },
+        colors = if (danger) {
+            MenuDefaults.itemColors(
+                textColor = MaterialTheme.colorScheme.error,
+                leadingIconColor = MaterialTheme.colorScheme.error,
+            )
+        } else {
+            MenuDefaults.itemColors()
+        },
+        onClick = { onBrowser(url) },
+    )
 }
 
 @Composable

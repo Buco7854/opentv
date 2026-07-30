@@ -32,6 +32,8 @@ const MIRRORS: ReadonlyArray<readonly [string, string]> = [
   ['PlaylistUpsertRequest', 'PlaylistUpsertRequest'],
   ['PlaylistDto', 'Playlist'],
   ['PlaylistDetailDto', 'PlaylistDetail'],
+  ['PlaylistCapabilitiesDto', 'PlaylistCapabilities'],
+  ['PlaylistOperationCapabilityDto', 'PlaylistOperationCapability'],
   ['ChannelPageDto', 'ListingPage'],
   ['SeriesGroupPageDto', 'ListingPage'],
   ['XtreamSeriesPageDto', 'ListingPage'],
@@ -85,6 +87,7 @@ const MIRRORS: ReadonlyArray<readonly [string, string]> = [
   ['WebAuthnSelectionDto', 'WebAuthnSelection'],
   ['WebAuthnOptionsDto', 'WebAuthnOptions'],
   ['WebAuthnCredentialDto', 'WebAuthnCredential'],
+  ['DeviceLinkStartRequestDto', 'DeviceLinkStartRequest'],
   ['DeviceLinkStartDto', 'DeviceLinkStart'],
   ['DeviceLinkPreviewDto', 'DeviceLinkPreview'],
   ['DeviceLinkStatusDto', 'DeviceLinkStatus'],
@@ -110,6 +113,7 @@ const INPUT_MIRRORS = new Set([
   'PlaybackCreateRequest',
   'PlaylistUpsertRequest',
   'UpdateUserRequestDto',
+  'DeviceLinkStartRequestDto',
 ]);
 
 function matchingParen(source: string, open: number): number {
@@ -269,6 +273,8 @@ const TS_STRING_TYPES = new Set([
   'ClientKind',
   'DeviceLinkState',
   'DownloadStatus',
+  'PlaylistOperation',
+  'PlaylistOperationExecution',
   'PlaylistMode',
   'ResidentKeyRequirement',
   'SessionCommandType',

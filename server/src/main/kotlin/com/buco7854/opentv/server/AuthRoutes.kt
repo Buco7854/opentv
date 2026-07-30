@@ -122,6 +122,10 @@ internal fun Route.publicAuthRoutes(
             val result = deviceLink.poll(call.receive())
             call.respond(result.status)
         }
+        post("/link/cancel") {
+            deviceLink.cancel(call.receive())
+            call.respond(HttpStatusCode.NoContent)
+        }
         get("/oidc/start") {
             val secure = origins.secure(call)
             val start = oidc.start(
@@ -186,6 +190,7 @@ private val PUBLIC_AUTH_BODY_PATHS = setOf(
     "/api/v1/auth/webauthn/login/complete",
     "/api/v1/auth/link/start",
     "/api/v1/auth/link/poll",
+    "/api/v1/auth/link/cancel",
 )
 
 internal fun requestBodyLimit(path: String): Long =

@@ -38,6 +38,9 @@ class HubServerException(val status: Int, override val code: String?, message: S
 class HubApiException(val status: Int, override val code: String?, message: String) :
     HubException(message)
 
+/** A successful response did not satisfy the hub protocol's security contract. */
+class HubProtocolException(message: String) : HubException(message)
+
 /** Maps a non-2xx hub response to its typed exception. 409 is NOT an error here:
  *  auth flows return it with an AuthFlow body and callers decode that themselves. */
 fun hubFailure(response: HttpResponseSpec): HubException {

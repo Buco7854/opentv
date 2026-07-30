@@ -471,7 +471,11 @@ class HubSignInViewModelTest {
             return enrollmentCompleteCall(challenge, code)
         }
 
-        override suspend fun linkStart(baseUrl: String, deviceName: String) = link
+        override suspend fun linkStart(
+            baseUrl: String,
+            deviceName: String,
+            browserSignIn: Boolean,
+        ) = link
 
         override suspend fun linkPoll(baseUrl: String, pollToken: String): DeviceLinkStatusDto {
             pollCalls++
