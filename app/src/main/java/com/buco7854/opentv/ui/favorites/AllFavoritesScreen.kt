@@ -174,7 +174,8 @@ fun AllFavoritesScreen(
     val seriesLabel = stringResource(R.string.common_series)
 
     val visible = state.sections.filter { filter == null || it.source == filter }
-    val showHeaders = state.hasMultipleSources
+    // Filter chips only earn their space when there is more than one source to switch between.
+    val showFilters = state.hasMultipleSources
 
     LaunchedEffect(state.sections) {
         filter = retainedFavoriteFilter(filter, state.sections)
@@ -357,7 +358,7 @@ fun AllFavoritesScreen(
             val anyLoading = state.loading || state.sections.any { it.loading }
             if (anyLoading) OtvProgressBar(Modifier.fillMaxWidth())
 
-            if (showHeaders && !selectMode) {
+            if (showFilters && !selectMode) {
                 SourceFilterChips(state.sections, filter) { filter = it }
             }
             if (television && !selectMode && state.sections.isNotEmpty()) {
@@ -388,61 +389,50 @@ fun AllFavoritesScreen(
                 verticalArrangement = Arrangement.spacedBy(if (gridView) 12.dp else 0.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                visible.forEach { section ->
-                    // A source appears once it has something to say -- favourites, or a
-                    // failure worth acting on. One that is still loading, or that simply has
-                    // no favourites, would otherwise contribute a heading over nothing.
-                    if (section.items.isEmpty() && section.error == null) return@forEach
-                    if (showHeaders) {
-                        item(key = "h-${section.source.encode()}", span = { GridItemSpan(maxLineSpan) }) {
-                            SectionTitle(section)
-                        }
+                // Sources are a filter, not a layout: the chips above switch between them
+                // and default to all, so a heading per source only split one list into
+                // several. Kind stays, because that is what people actually scan by.
+                visible.filter { it.error != null }.forEach { section ->
+                    item(
+                        key = "e-${section.source.encode()}",
+                        span = { GridItemSpan(maxLineSpan) },
+                    ) {
+                        SectionFailure(
+                            error = section.error!!,
+                            onRetry = { favorites.retry(section.source) },
+                            onSignIn = { onSignIn(section.source) },
+                        )
                     }
-                    when {
-                        section.error != null -> item(
-                            key = "e-${section.source.encode()}",
-                            span = { GridItemSpan(maxLineSpan) },
-                        ) {
-                            SectionFailure(
-                                error = section.error!!,
-                                onRetry = { favorites.retry(section.source) },
-                                onSignIn = { onSignIn(section.source) },
-                            )
-                        }
-
-                        else -> {
-                            listOf(
-                                ChannelKind.LIVE to liveLabel,
-                                ChannelKind.MOVIE to moviesLabel,
-                                ChannelKind.SERIES to seriesLabel,
-                            ).forEach { (kind, label) ->
-                                val kindItems = section.items.filter { it.kind == kind }
-                                if (kindItems.isEmpty()) return@forEach
-                                val kindKey = "${section.source.encode()}-$kind"
-                                item(
-                                    key = "kh-$kindKey",
-                                    span = { GridItemSpan(maxLineSpan) },
-                                ) {
-                                    KindSectionTitle(
-                                        title = label,
-                                        count = kindItems.size,
-                                        expanded = expanded(kindKey),
-                                        onToggle = {
-                                            expandedSections[kindKey] = !expanded(kindKey)
-                                        },
-                                    )
-                                }
-                                if (!expanded(kindKey)) return@forEach
-                                items(
-                                    kindItems,
-                                    key = { keyOf(section.source, it) },
-                                    span = {
-                                        if (gridView) GridItemSpan(1)
-                                        else GridItemSpan(maxLineSpan)
-                                    },
-                                ) { item ->
-                                    val key = keyOf(section.source, item)
-                                    val entry = FavKey(section.source, item)
+                }
+                val entries = visible.flatMap { section ->
+                    section.items.map { section.source to it }
+                }
+                listOf(
+                    ChannelKind.LIVE to liveLabel,
+                    ChannelKind.MOVIE to moviesLabel,
+                    ChannelKind.SERIES to seriesLabel,
+                ).forEach { (kind, label) ->
+                    val kindItems = entries.filter { (_, item) -> item.kind == kind }
+                    if (kindItems.isEmpty()) return@forEach
+                    val kindKey = "kind-$kind"
+                    item(key = "kh-$kindKey", span = { GridItemSpan(maxLineSpan) }) {
+                        KindSectionTitle(
+                            title = label,
+                            count = kindItems.size,
+                            expanded = expanded(kindKey),
+                            onToggle = { expandedSections[kindKey] = !expanded(kindKey) },
+                        )
+                    }
+                    if (!expanded(kindKey)) return@forEach
+                    items(
+                        kindItems,
+                        key = { (source, item) -> keyOf(source, item) },
+                        span = {
+                            if (gridView) GridItemSpan(1) else GridItemSpan(maxLineSpan)
+                        },
+                    ) { (source, item) ->
+                                    val key = keyOf(source, item)
+                                    val entry = FavKey(source, item)
                                     val isSelected = selected.containsKey(key)
                                     fun toggleSelect() {
                                         if (selected.remove(key) == null) selected[key] = entry
@@ -466,7 +456,7 @@ fun AllFavoritesScreen(
                                             fallback = kindIcon(item.kind),
                                             onClick = {
                                                 if (selectMode) toggleSelect()
-                                                else onOpen(section.source, item)
+                                                else onOpen(source, item)
                                             },
                                             selected = isSelected.takeIf { selectMode },
                                             onLongClick = {
@@ -497,7 +487,7 @@ fun AllFavoritesScreen(
                                             nowAiringProgress = airingProgress,
                                             onClick = {
                                                 if (selectMode) toggleSelect()
-                                                else onOpen(section.source, item)
+                                                else onOpen(source, item)
                                             },
                                             isFavorite = true.takeIf { !selectMode },
                                             onToggleFavorite = { removeWithUndo(listOf(entry)) },
@@ -508,23 +498,20 @@ fun AllFavoritesScreen(
                                                 selected[key] = entry
                                             },
                                             downloadState = if (item.kind == ChannelKind.MOVIE) {
-                                                downloadIdentityKey(section.source, item.ref)
+                                                downloadIdentityKey(source, item.ref)
                                                     ?.let(downloadsByKey::get)
                                             } else null,
                                             onDownload = if (item.kind == ChannelKind.MOVIE) {
-                                                { download(section.source, item) }
+                                                { download(source, item) }
                                             } else null,
                                             onGuide = if (
                                                 item.kind == ChannelKind.LIVE && item.hasGuide
                                             ) {
-                                                { guideTarget = section.source to item }
+                                                { guideTarget = source to item }
                                             } else null,
                                             guideHighlight = item.hasCatchup,
                                         )
                                     }
-                                }
-                            }
-                        }
                     }
                 }
             }
@@ -644,15 +631,6 @@ private fun SourceFilterChips(
             )
         }
     }
-}
-
-@Composable
-private fun SectionTitle(section: FavoritesSection) {
-    Text(
-        if (section.error != null) section.title else "${section.title} · ${section.items.size}",
-        style = MaterialTheme.typography.titleMedium,
-        modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
-    )
 }
 
 @Composable
