@@ -418,7 +418,6 @@ fun AppNav(nav: NavHostController, onActivePlaylist: (Long) -> Unit) {
         }
         composable(Routes.ALL_FAVORITES) {
             AllFavoritesScreen(
-                onBack = { nav.popBackStack() },
                 onOpen = { source, item ->
                     when (item.kind) {
                         ChannelKind.MOVIE -> nav.navigate(Routes.movie(source, item.ref))

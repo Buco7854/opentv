@@ -260,6 +260,7 @@ internal fun localSourceTraits(playlist: Playlist?): SourceTraits {
     val isM3uUrl = playlist?.url != null
     val isFile = playlist != null && playlist.url == null && playlist.xtreamBase == null
     return SourceTraits(
+        title = playlist?.name,
         hasXtreamSeries = isXtream,
         hasGuide = true,
         hasAccountPanel = playlist?.xtreamBase != null,

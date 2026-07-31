@@ -76,6 +76,8 @@ data class CatalogDetail(
 )
 
 data class SourceTraits(
+    /** Display name of this playlist, when the gateway can obtain it. */
+    val title: String? = null,
     val hasXtreamSeries: Boolean,
     val hasGuide: Boolean,
     val hasAccountPanel: Boolean,

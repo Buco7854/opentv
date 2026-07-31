@@ -379,7 +379,12 @@ fun PlaylistsPanel(
         AlertDialog(
             onDismissRequest = { pendingClearProgress = null },
             title = { Text(stringResource(R.string.playlist_clear_progress_title)) },
-            text = { Text(stringResource(R.string.playlist_clear_progress_message, playlist.name)) },
+            text = {
+                Text(
+                    stringResource(R.string.playlist_clear_progress_message, playlist.name),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
             confirmButton = {
                 OtvTextButton(onClick = { viewModel.clearProgress(playlist.id); pendingClearProgress = null }, danger = true) {
                     Text(stringResource(R.string.playlist_clear_progress))
@@ -820,7 +825,10 @@ private fun PanelHubPlaylistRow(
             onDismissRequest = { confirmClear = false },
             title = { Text(stringResource(R.string.playlist_clear_progress_title)) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                     ServerPlaylistNotice()
                     Text(stringResource(R.string.playlist_clear_progress_message, source.title))
                 }

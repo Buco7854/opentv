@@ -130,7 +130,6 @@ internal fun shouldExitFavoriteSelection(selectedBefore: Int, retained: Int): Bo
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AllFavoritesScreen(
-    onBack: () -> Unit,
     onOpen: (SourceId, CatalogItem) -> Unit,
     onPlay: (SourceId, CatalogItem, Boolean) -> Unit,
     onPlayHubCatchup: (SourceId, CatalogItem, CatalogGuideEntry) -> Unit,
@@ -262,18 +261,22 @@ fun AllFavoritesScreen(
                     )
                 },
                 navigationIcon = {
-                    IconButton(
-                        onClick = { if (selectMode) exitSelect() else onBack() },
-                        modifier = Modifier
-                            .focusRequester(backFocusRequester)
-                            .focusHighlight(),
-                    ) {
-                        Icon(
-                            if (selectMode) Icons.Outlined.Close else Icons.AutoMirrored.Outlined.ArrowBack,
-                            contentDescription = stringResource(
-                                if (selectMode) R.string.common_close else R.string.common_back,
-                            ),
-                        )
+                    // Only in selection mode, where it closes the selection. Favourites is a
+                    // dock section reached by clearing the back stack, so an arrow outside
+                    // selection has nothing to pop and did nothing when pressed. Browse
+                    // applies the same rule: it shows an arrow only when leaving a group.
+                    if (selectMode) {
+                        IconButton(
+                            onClick = ::exitSelect,
+                            modifier = Modifier
+                                .focusRequester(backFocusRequester)
+                                .focusHighlight(),
+                        ) {
+                            Icon(
+                                Icons.Outlined.Close,
+                                contentDescription = stringResource(R.string.common_close),
+                            )
+                        }
                     }
                 },
                 actions = {
@@ -524,7 +527,12 @@ fun AllFavoritesScreen(
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
             title = { Text(stringResource(R.string.favorites_remove_title)) },
-            text = { Text(stringResource(R.string.favorites_remove_message, entries.size)) },
+            text = {
+                Text(
+                    stringResource(R.string.favorites_remove_message, entries.size),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
             confirmButton = {
                 OtvTextButton(
                     danger = true,

@@ -78,7 +78,10 @@ fun PlaylistDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(if (isEdit) R.string.playlist_edit_title else R.string.playlist_add_title)) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
                 if (!isEdit) {
                     Row(
                         modifier = Modifier
@@ -321,7 +324,10 @@ fun ConfirmDeletePlaylistDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.playlist_delete_title)) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 if (serverHosted) ServerPlaylistNotice()
                 Text(message)
             }

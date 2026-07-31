@@ -20,6 +20,8 @@ data class AccountUiState(
     val playlist: Playlist? = null,
     /** Screen title; a server-hosted playlist has no local [Playlist] to take it from. */
     val title: String? = null,
+    /** Which server a hosted playlist belongs to, shown under its name. */
+    val serverName: String? = null,
     /** Whether there is a provider account API to ask at all. */
     val hasProviderAccount: Boolean = false,
     val info: AccountInfo? = null,
@@ -79,10 +81,20 @@ class AccountViewModel(
                     }
                 }
                 is SourceId.Hub -> {
-                    // The provider belongs to the server, so name the server.
+                    // Name the playlist, as the local case does; the server is context under
+                    // it. A bare server address says nothing about which of its playlists
+                    // these connection figures belong to.
                     val hub = graph.storage.hubSources.get(source.hubId)
+                    val title = runCatching {
+                        graph.catalogFor(source).traits().title
+                    }.getOrNull()
                     _state.update {
-                        it.copy(title = hub?.name, hasProviderAccount = true, loading = false)
+                        it.copy(
+                            title = title ?: hub?.name,
+                            serverName = hub?.name?.takeIf { _ -> title != null },
+                            hasProviderAccount = true,
+                            loading = false,
+                        )
                     }
                 }
                 is SourceId.HubConnection -> _state.update { it.copy(loading = false) }

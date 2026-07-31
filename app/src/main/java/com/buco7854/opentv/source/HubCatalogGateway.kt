@@ -50,6 +50,9 @@ class HubCatalogGateway internal constructor(
             null
         }
         return SourceTraits(
+            // Only an administrator fetches the edit form, and only an administrator can
+            // reach the surfaces that show a title, so this is present exactly when needed.
+            title = edit?.name,
             hasXtreamSeries =
                 PlaylistOperation.CORRECT_CATEGORY_TYPE !in capabilities.operations,
             hasGuide = true,

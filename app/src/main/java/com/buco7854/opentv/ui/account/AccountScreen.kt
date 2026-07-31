@@ -42,6 +42,7 @@ import com.buco7854.opentv.core.xtream.AccountInfo
 import com.buco7854.opentv.ui.components.EmptyState
 import com.buco7854.opentv.ui.components.OtvProgressBar
 import com.buco7854.opentv.ui.components.Pill
+import androidx.compose.ui.text.style.TextOverflow
 import com.buco7854.opentv.source.SourceId
 import com.buco7854.opentv.ui.components.sourceViewModel
 import java.text.DateFormat
@@ -79,6 +80,17 @@ fun AccountScreen(source: SourceId, onBack: () -> Unit) {
                                 it,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        state.serverName?.let {
+                            Text(
+                                it,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
                     }
