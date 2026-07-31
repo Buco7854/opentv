@@ -44,6 +44,7 @@
     <string name="shell_add_playlist">Add playlist</string>
     <string name="shell_edit_playlist">Edit playlist</string>
     <string name="playlist_credentials_hidden">Stored provider details are hidden. Leave a field blank to keep its current value, or enter a replacement.</string>
+    <string name="playlist_server_scope_notice">This is a playlist on the server. The change applies there, for everyone who uses it — not only on this device.</string>
     <string name="shell_servers">Servers</string>
     <plurals name="shell_item_count">
         <item quantity="one">%1$d item</item>

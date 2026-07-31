@@ -115,7 +115,7 @@ object Routes {
     fun search(sourceId: SourceId) = "search/${Uri.encode(sourceId.encode())}"
     fun movie(sourceId: SourceId, ref: ContentRef) =
         "movie/${Uri.encode(sourceId.encode())}/${Uri.encode(ref.encode())}"
-    fun account(playlistId: Long) = "account/$playlistId"
+    fun account(source: SourceId) = "account/${Uri.encode(source.encode())}"
     fun episode(sourceId: SourceId, ref: ContentRef) =
         "episode/${Uri.encode(sourceId.encode())}/${Uri.encode(ref.encode())}"
     const val ALL_FAVORITES = "favorites"
@@ -311,13 +311,15 @@ fun AppNav(nav: NavHostController, onActivePlaylist: (Long) -> Unit) {
             )
         }
         composable(
-            route = "account/{playlistId}",
-            arguments = listOf(navArgument("playlistId") { type = NavType.LongType }),
+            route = "account/{source}",
+            arguments = listOf(navArgument("source") { type = NavType.StringType }),
         ) { entry ->
-            AccountScreen(
-                playlistId = entry.arguments!!.getLong("playlistId"),
-                onBack = { nav.popBackStack() },
-            )
+            val source = entry.arguments!!.getString("source")?.let(SourceId::decode)
+            if (source == null) {
+                nav.popBackStack()
+            } else {
+                AccountScreen(source = source, onBack = { nav.popBackStack() })
+            }
         }
         // Registered before "hub/{hubId}" so the literal path wins the match.
         composable(
@@ -406,8 +408,7 @@ fun AppNav(nav: NavHostController, onActivePlaylist: (Long) -> Unit) {
                 },
                 onOpenAccount = {
                     when (sourceId) {
-                        is SourceId.LocalPlaylist ->
-                            nav.navigate(Routes.account(sourceId.playlistId))
+                        is SourceId.LocalPlaylist -> nav.navigate(Routes.account(sourceId))
                         is SourceId.Hub -> nav.navigate(Routes.hubSettings(sourceId.hubId))
                         is SourceId.HubConnection -> Unit
                     }

@@ -42,7 +42,8 @@ import com.buco7854.opentv.core.xtream.AccountInfo
 import com.buco7854.opentv.ui.components.EmptyState
 import com.buco7854.opentv.ui.components.OtvProgressBar
 import com.buco7854.opentv.ui.components.Pill
-import com.buco7854.opentv.ui.components.playlistViewModel
+import com.buco7854.opentv.source.SourceId
+import com.buco7854.opentv.ui.components.sourceViewModel
 import java.text.DateFormat
 import java.util.Date
 
@@ -51,13 +52,17 @@ private const val DAY_MS = 86_400_000L
 internal fun accountDaysLeft(expiryMs: Long, nowMs: Long): Int =
     Math.floorDiv(expiryMs - nowMs, DAY_MS).toInt()
 
-/** Account / connection-monitoring page for one playlist. Refresh forces past the repo's 60s cache. */
+/**
+ * Account / connection-monitoring page for one playlist, local or server-hosted.
+ *
+ * A server-hosted playlist's provider figures come from the server rather than from the
+ * provider directly, but they answer the same question, so this page is shared.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AccountScreen(playlistId: Long, onBack: () -> Unit) {
-    val viewModel = playlistViewModel(playlistId, ::AccountViewModel)
+fun AccountScreen(source: SourceId, onBack: () -> Unit) {
+    val viewModel = sourceViewModel(source, ::AccountViewModel)
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val playlist = state.playlist
     val info = state.info
     val updatedAtMs = state.updatedAtMs
     val busy = state.refreshing
@@ -69,9 +74,9 @@ fun AccountScreen(playlistId: Long, onBack: () -> Unit) {
                 title = {
                     Column {
                         Text(stringResource(R.string.account_title))
-                        playlist?.let {
+                        state.title?.let {
                             Text(
-                                it.name,
+                                it,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -91,7 +96,7 @@ fun AccountScreen(playlistId: Long, onBack: () -> Unit) {
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                     } else {
-                        IconButton(onClick = { viewModel.refresh() }, enabled = playlist?.xtreamBase != null) {
+                        IconButton(onClick = { viewModel.refresh() }, enabled = state.hasProviderAccount) {
                             Icon(Icons.Outlined.Refresh, contentDescription = stringResource(R.string.account_refresh_info))
                         }
                     }
@@ -109,7 +114,7 @@ fun AccountScreen(playlistId: Long, onBack: () -> Unit) {
                 CircularProgressIndicator(color = MaterialTheme.colorScheme.onSurface)
             }
 
-            playlist?.xtreamBase == null -> Column(Modifier.padding(padding)) {
+            !state.hasProviderAccount -> Column(Modifier.padding(padding)) {
                 EmptyState(
                     stringResource(R.string.account_no_api_title),
                     stringResource(R.string.account_no_api_subtitle),

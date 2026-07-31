@@ -8,6 +8,9 @@ import com.buco7854.opentv.R
 import com.buco7854.opentv.core.model.Playlist
 import com.buco7854.opentv.core.repo.AccountInfoResult
 import com.buco7854.opentv.core.xtream.AccountInfo
+import com.buco7854.opentv.source.CatalogResult
+import com.buco7854.opentv.source.ProviderAccountInfo
+import com.buco7854.opentv.source.SourceId
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -15,6 +18,10 @@ import kotlinx.coroutines.launch
 
 data class AccountUiState(
     val playlist: Playlist? = null,
+    /** Screen title; a server-hosted playlist has no local [Playlist] to take it from. */
+    val title: String? = null,
+    /** Whether there is a provider account API to ask at all. */
+    val hasProviderAccount: Boolean = false,
     val info: AccountInfo? = null,
     val updatedAtMs: Long? = null,
     val loading: Boolean = true,
@@ -51,7 +58,7 @@ internal fun AccountUiState.withAccountInfo(
  */
 class AccountViewModel(
     app: Application,
-    private val playlistId: Long,
+    private val source: SourceId,
 ) : AndroidViewModel(app) {
     private val graph = OpenTvApp.graph
     private val _state = MutableStateFlow(AccountUiState())
@@ -59,18 +66,43 @@ class AccountViewModel(
 
     init {
         viewModelScope.launch {
-            val playlist = graph.storage.playlists.get(playlistId)
-            _state.update { it.copy(playlist = playlist, loading = false) }
-            if (playlist?.xtreamBase != null) refresh(force = false)
+            when (source) {
+                is SourceId.LocalPlaylist -> {
+                    val playlist = graph.storage.playlists.get(source.playlistId)
+                    _state.update {
+                        it.copy(
+                            playlist = playlist,
+                            title = playlist?.name,
+                            hasProviderAccount = playlist?.xtreamBase != null,
+                            loading = false,
+                        )
+                    }
+                }
+                is SourceId.Hub -> {
+                    // The provider belongs to the server, so name the server.
+                    val hub = graph.storage.hubSources.get(source.hubId)
+                    _state.update {
+                        it.copy(title = hub?.name, hasProviderAccount = true, loading = false)
+                    }
+                }
+                is SourceId.HubConnection -> _state.update { it.copy(loading = false) }
+            }
+            if (_state.value.hasProviderAccount) refresh(force = false)
         }
     }
 
     fun refresh(force: Boolean = true) {
-        val playlist = _state.value.playlist ?: return
-        if (_state.value.refreshing) return
+        if (!_state.value.hasProviderAccount || _state.value.refreshing) return
         _state.update { it.copy(refreshing = true, error = null) }
         viewModelScope.launch {
-            val result = graph.account.accountInfo(playlist, force)
+            // Both sides answer the same question -- how many connections, until when -- so
+            // the server-hosted case is mapped onto the same result the local one returns
+            // and the screen never learns which kind of playlist it is showing.
+            val result = when (source) {
+                is SourceId.LocalPlaylist ->
+                    graph.account.accountInfo(requireNotNull(_state.value.playlist), force)
+                else -> graph.catalogFor(source).providerAccount(force).toAccountInfoResult()
+            }
             _state.update {
                 it.withAccountInfo(
                     result = result,
@@ -81,3 +113,24 @@ class AccountViewModel(
         }
     }
 }
+
+private fun CatalogResult<ProviderAccountInfo>.toAccountInfoResult(): AccountInfoResult =
+    when (this) {
+        is CatalogResult.Success -> {
+            val info = AccountInfo(
+                activeConnections = value.activeConnections,
+                maxConnections = value.maxConnections,
+                status = value.status,
+                expiresAtMs = value.expiresAtMs,
+                isTrial = value.isTrial,
+                createdAtMs = value.createdAtMs,
+                timezone = value.timezone,
+            )
+            if (value.stale) {
+                AccountInfoResult.Stale(info, value.fetchedAtMs)
+            } else {
+                AccountInfoResult.Fresh(info, value.fetchedAtMs)
+            }
+        }
+        else -> AccountInfoResult.Unavailable(null)
+    }

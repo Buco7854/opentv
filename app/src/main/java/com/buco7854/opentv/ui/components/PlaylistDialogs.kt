@@ -25,7 +25,9 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import com.buco7854.opentv.R
 import com.buco7854.opentv.core.model.Playlist
 import com.buco7854.opentv.core.xtream.Xtream
@@ -113,48 +115,31 @@ fun PlaylistDialog(
                     }
                 }
                 if (mode != HUB_MODE) {
-                    OutlinedTextField(
+                    PlaylistField(
+                        label = R.string.playlist_field_name,
                         value = name,
                         onValueChange = { name = it },
-                        label = { Text(stringResource(R.string.playlist_field_name)) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
                     )
                 }
                 when (mode) {
                     0 -> {
-                        OutlinedTextField(
+                        PlaylistField(
+                            label = R.string.playlist_field_server,
                             value = server,
                             onValueChange = { server = it },
-                            label = { Text(stringResource(R.string.playlist_field_server)) },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
                         )
-                        OutlinedTextField(
+                        PlaylistField(
+                            label = R.string.playlist_field_username,
                             value = username,
                             onValueChange = { username = it },
-                            label = { Text(stringResource(R.string.playlist_field_username)) },
-                            singleLine = true,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .autofill(
-                                    types = listOf(AutofillType.Username),
-                                    onFill = { username = it },
-                                ),
+                            autofillType = AutofillType.Username,
                         )
-                        OutlinedTextField(
+                        PlaylistField(
+                            label = R.string.playlist_field_password,
                             value = password,
                             onValueChange = { password = it },
-                            label = { Text(stringResource(R.string.playlist_field_password)) },
-                            singleLine = true,
-                            visualTransformation = PasswordVisualTransformation(),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .autofill(
-                                    types = listOf(AutofillType.Password),
-                                    onFill = { password = it },
-                                ),
+                            autofillType = AutofillType.Password,
+                            secret = true,
                         )
                         if (!isEdit) {
                             Text(
@@ -165,19 +150,15 @@ fun PlaylistDialog(
                         }
                     }
                     1 -> {
-                        OutlinedTextField(
+                        PlaylistField(
+                            label = R.string.playlist_field_m3u_url,
                             value = url,
                             onValueChange = { url = it },
-                            label = { Text(stringResource(R.string.playlist_field_m3u_url)) },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
                         )
-                        OutlinedTextField(
+                        PlaylistField(
+                            label = R.string.playlist_field_epg_url,
                             value = epg,
                             onValueChange = { epg = it },
-                            label = { Text(stringResource(R.string.playlist_field_epg_url)) },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
                         )
                     }
                     HUB_MODE -> {
@@ -267,18 +248,84 @@ fun PlaylistDialog(
     }
 }
 
+/**
+ * One input in a playlist form, shared by the local and server-hosted variants.
+ *
+ * They ask for the same things -- a name, a provider address, a login -- and differ only in
+ * where the values are kept, so the inputs themselves have no business being written twice.
+ */
+/**
+ * States that an action lands on the server, not on this device.
+ *
+ * Local and server-hosted playlists reach the same menu with the same words, so nothing in
+ * "Edit" or "Delete" says that one changes a catalog every other user of that server browses.
+ * Bold on purpose: it is the difference between undoing a mistake and apologising for one.
+ */
+@Composable
+fun ServerPlaylistNotice(modifier: Modifier = Modifier) {
+    Text(
+        stringResource(R.string.playlist_server_scope_notice),
+        style = MaterialTheme.typography.bodySmall,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.error,
+        modifier = modifier,
+    )
+}
+
+@Composable
+fun PlaylistField(
+    label: Int,
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    autofillType: AutofillType? = null,
+    secret: Boolean = false,
+) {
+    val base = modifier.fillMaxWidth()
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(stringResource(label)) },
+        singleLine = true,
+        visualTransformation = if (secret) {
+            PasswordVisualTransformation()
+        } else {
+            VisualTransformation.None
+        },
+        keyboardOptions = if (secret) {
+            KeyboardOptions(keyboardType = KeyboardType.Password)
+        } else {
+            KeyboardOptions.Default
+        },
+        modifier = if (autofillType == null) {
+            base
+        } else {
+            base.autofill(types = listOf(autofillType), onFill = onValueChange)
+        },
+    )
+}
+
 @Composable
 fun ConfirmDeletePlaylistDialog(
-    playlist: Playlist,
+    /** Already-resolved copy: a server-hosted playlist is warned about in the server's words. */
+    message: String,
+    focusKey: Any?,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
+    /** Server-hosted playlists say so: the deletion is not local to this device. */
+    serverHosted: Boolean = false,
 ) {
     val cancelFocusRequester = remember { FocusRequester() }
-    RequestInitialFocusOnTv(cancelFocusRequester, playlist.id)
+    RequestInitialFocusOnTv(cancelFocusRequester, focusKey)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.playlist_delete_title)) },
-        text = { Text(stringResource(R.string.playlist_delete_text, playlist.name)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (serverHosted) ServerPlaylistNotice()
+                Text(message)
+            }
+        },
         confirmButton = { OtvTextButton(onClick = onConfirm, danger = true) { Text(stringResource(R.string.common_remove)) } },
         dismissButton = {
             OtvTextButton(

@@ -80,17 +80,16 @@ import com.buco7854.opentv.ui.components.OtvMenuDefaults
 import com.buco7854.opentv.ui.components.OtvTextButton
 import com.buco7854.opentv.ui.components.OtvProgressBar
 import com.buco7854.opentv.ui.components.PlaylistDialog
+import com.buco7854.opentv.ui.components.ServerPlaylistNotice
 import com.buco7854.opentv.ui.components.focusHighlight
 import com.buco7854.opentv.ui.hub.HandoffResult
 import com.buco7854.opentv.ui.hub.HubBrowserHandoff
 import com.buco7854.opentv.ui.hub.HubPlaylistEditDialog
-import com.buco7854.opentv.ui.hub.ProviderAccountDialog
 import com.buco7854.opentv.ui.home.HomeViewModel
 import com.buco7854.opentv.source.CatalogResult
 import com.buco7854.opentv.source.PlaylistCapabilities
 import com.buco7854.opentv.source.PlaylistDeleteInfo
 import com.buco7854.opentv.source.PlaylistEditForm
-import com.buco7854.opentv.source.ProviderAccountInfo
 import com.buco7854.opentv.source.PlaylistOperation
 import com.buco7854.opentv.source.PlaylistOperationAvailability
 import com.buco7854.opentv.source.SourceId
@@ -224,7 +223,7 @@ fun PlaylistsPanel(
     activeSourceId: SourceId?,
     onDismiss: () -> Unit,
     onOpenSource: (SourceId) -> Unit,
-    onOpenAccount: (Long) -> Unit,
+    onOpenAccount: (SourceId) -> Unit,
     onOpenDownloads: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenLog: () -> Unit,
@@ -278,7 +277,7 @@ fun PlaylistsPanel(
                     refreshEnabled = !busy,
                     onClick = { onOpenSource(SourceId.LocalPlaylist(playlist.id)) },
                     onRefresh = { viewModel.refresh(playlist.id) },
-                    onOpenAccount = { onOpenAccount(playlist.id) },
+                    onOpenAccount = { onOpenAccount(SourceId.LocalPlaylist(playlist.id)) },
                     onEdit = { editing = playlist },
                     onClearProgress = { pendingClearProgress = playlist },
                     onDelete = { pendingDelete = playlist },
@@ -317,6 +316,7 @@ fun PlaylistsPanel(
                         hubBaseUrl = hub.baseUrl,
                         selected = source.sourceId == activeSourceId,
                         onClick = { onOpenSource(source.sourceId) },
+                        onOpenAccount = { onOpenAccount(source.sourceId) },
                         onNotify = { message -> scope.launch { snackbar.showSnackbar(message) } },
                     )
                 }
@@ -368,7 +368,8 @@ fun PlaylistsPanel(
 
     pendingDelete?.let { playlist ->
         ConfirmDeletePlaylistDialog(
-            playlist = playlist,
+            message = stringResource(R.string.playlist_delete_text, playlist.name),
+            focusKey = playlist.id,
             onConfirm = { viewModel.delete(playlist.id); pendingDelete = null },
             onDismiss = { pendingDelete = null },
         )
@@ -582,6 +583,7 @@ private fun PanelHubPlaylistRow(
     hubBaseUrl: String,
     selected: Boolean,
     onClick: () -> Unit,
+    onOpenAccount: () -> Unit,
     onNotify: (String) -> Unit,
 ) {
     val context = LocalContext.current
@@ -593,7 +595,6 @@ private fun PanelHubPlaylistRow(
     }
     var action by remember(source.sourceId) { mutableStateOf<HubRowAction?>(null) }
     var editForm by remember(source.sourceId) { mutableStateOf<PlaylistEditForm?>(null) }
-    var accountInfo by remember(source.sourceId) { mutableStateOf<ProviderAccountInfo?>(null) }
     var deleteInfo by remember(source.sourceId) { mutableStateOf<PlaylistDeleteInfo?>(null) }
     var working by remember(source.sourceId) { mutableStateOf(false) }
     val rejectedMessage = stringResource(R.string.hub_handoff_rejected)
@@ -739,13 +740,8 @@ private fun PanelHubPlaylistRow(
         val gateway = OpenTvApp.graph.catalogFor(source.sourceId)
         when (requested) {
             HubRowAction.ACCOUNT -> {
-                val result = gateway.providerAccount(force = false)
-                if (result is CatalogResult.Success) {
-                    accountInfo = result.value
-                } else {
-                    onNotify(failedMessage)
-                    action = null
-                }
+                action = null
+                onOpenAccount()
             }
             HubRowAction.EDIT -> {
                 val result = gateway.playlistEditForm()
@@ -800,37 +796,22 @@ private fun PanelHubPlaylistRow(
         )
     }
 
-    accountInfo?.let { info ->
-        ProviderAccountDialog(info = info, onDismiss = { accountInfo = null; action = null })
-    }
-
     deleteInfo?.let { info ->
-        AlertDialog(
-            onDismissRequest = { deleteInfo = null; action = null },
-            title = { Text(stringResource(R.string.playlist_delete_title)) },
+        ConfirmDeletePlaylistDialog(
             // The server supplies this copy, so the warning cannot drift from what
             // deletion actually does on the server that performs it.
-            text = { Text(info.warning) },
-            confirmButton = {
-                OtvTextButton(
-                    danger = true,
-                    onClick = {
-                        deleteInfo = null
-                        action = null
-                        OpenTvApp.graph.applicationScope.launch {
-                            val done = OpenTvApp.graph.catalogFor(source.sourceId).deletePlaylist()
-                            onNotify(
-                                if (done is CatalogResult.Success) deletedMessage else failedMessage,
-                            )
-                        }
-                    },
-                ) { Text(stringResource(R.string.common_delete)) }
-            },
-            dismissButton = {
-                OtvTextButton(onClick = { deleteInfo = null; action = null }) {
-                    Text(stringResource(R.string.common_cancel))
+            message = info.warning,
+            focusKey = info.id,
+            onConfirm = {
+                deleteInfo = null
+                action = null
+                OpenTvApp.graph.applicationScope.launch {
+                    val done = OpenTvApp.graph.catalogFor(source.sourceId).deletePlaylist()
+                    onNotify(if (done is CatalogResult.Success) deletedMessage else failedMessage)
                 }
             },
+            onDismiss = { deleteInfo = null; action = null },
+            serverHosted = true,
         )
     }
 
@@ -839,7 +820,10 @@ private fun PanelHubPlaylistRow(
             onDismissRequest = { confirmClear = false },
             title = { Text(stringResource(R.string.playlist_clear_progress_title)) },
             text = {
-                Text(stringResource(R.string.playlist_clear_progress_message, source.title))
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    ServerPlaylistNotice()
+                    Text(stringResource(R.string.playlist_clear_progress_message, source.title))
+                }
             },
             confirmButton = {
                 OtvTextButton(
