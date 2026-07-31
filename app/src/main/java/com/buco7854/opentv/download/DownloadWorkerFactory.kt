@@ -10,6 +10,7 @@ import com.buco7854.opentv.core.storage.DownloadStore
 import com.buco7854.opentv.core.storage.PlaylistStore
 import com.buco7854.opentv.core.xtream.AccountInfo
 import com.buco7854.opentv.data.prefs.PlayerSettings
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
@@ -26,6 +27,7 @@ class DownloadWorkerDependencies(
     val activePlaybackHost: StateFlow<String?>,
     val hubDownloads: HubDownloadWorkerAccess,
     val hubPollIntervalMs: Long = 2_000,
+    val hubPollDelay: suspend (Long) -> Unit = { delay(it) },
     val hubStallTimeoutMs: Long = 10 * 60_000,
     val nowMs: () -> Long = SystemClock::elapsedRealtime,
     val withDownloadSlot: suspend (Int, suspend () -> Unit) -> Unit = { limit, block ->

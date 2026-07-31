@@ -12,6 +12,8 @@ import com.buco7854.opentv.core.model.Playlist
 import com.buco7854.opentv.core.storage.DownloadStore
 import com.buco7854.opentv.core.storage.PlaylistStore
 import com.buco7854.opentv.data.prefs.PlayerSettings
+import com.buco7854.opentv.hub.HubException
+import com.buco7854.opentv.hub.HubGoneException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.flow.Flow
@@ -24,7 +26,9 @@ import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okio.Buffer
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -73,6 +77,25 @@ class DownloadWorkerTest {
         assertEquals("finished-file", File(requireNotNull(store.get(id)).filePath).readText())
         assertEquals(DownloadStatus.DONE, store.get(id)?.status)
         assertNull(server.takeRequest().getHeader("Authorization"))
+    }
+
+    @Test
+    fun `completed hub file larger than the copy buffer streams in one request`() = runBlocking {
+        val bytes = ByteArray(3 * 256 * 1024 + 17) { (it % 251).toByte() }
+        server.enqueue(MockResponse().setResponseCode(200).setBody(Buffer().write(bytes)))
+        val url = server.url("/api/v1/downloads/server-1/file?token=short").toString()
+        val id = hubRow(url, totalBytes = bytes.size.toLong())
+        hubAccess.states += state(
+            url,
+            status = "DONE",
+            downloaded = bytes.size.toLong(),
+            total = bytes.size.toLong(),
+        )
+
+        assertSuccess(worker(id).doWork())
+
+        assertEquals(1, server.requestCount)
+        assertArrayEquals(bytes, File(requireNotNull(store.get(id)).filePath).readBytes())
     }
 
     @Test
@@ -349,6 +372,88 @@ class DownloadWorkerTest {
     }
 
     @Test
+    fun `a failing transfer backs off even while the server keeps fetching`() = runBlocking {
+        val url = server.url("/api/v1/downloads/server-1/file?token=short").toString()
+        val id = hubRow(url, totalBytes = 9)
+        // The read fails, but the server's own fetch advances -- which is exactly the
+        // combination that would otherwise count as progress and retry with no pause.
+        server.enqueue(MockResponse().setResponseCode(500))
+        server.enqueue(MockResponse().setResponseCode(500))
+        server.enqueue(MockResponse().setResponseCode(200).setBody("abcdefghi"))
+        hubAccess.states += state(url, status = "RUNNING", downloaded = 3, total = 9)
+        hubAccess.states += state(url, status = "RUNNING", downloaded = 6, total = 9)
+        hubAccess.states += state(url, status = "DONE", downloaded = 9, total = 9)
+
+        val idleDelays = mutableListOf<Long>()
+        worker(id, hubPollIntervalMs = 500L) { idleDelays += it }.doWork()
+
+        assertEquals(
+            "each failed request must be followed by a back-off, not an immediate retry",
+            2,
+            idleDelays.size,
+        )
+    }
+
+    @Test
+    fun `productive hub snapshots are not gated by the idle poll interval`() = runBlocking {
+        val url = server.url("/api/v1/downloads/server-1/file?token=short").toString()
+        val id = hubRow(url, totalBytes = 9)
+        server.enqueue(MockResponse().setResponseCode(200).setBody("abc"))
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(206)
+                .setHeader("Content-Range", "bytes 3-5/6")
+                .setBody("def"),
+        )
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(206)
+                .setHeader("Content-Range", "bytes 6-8/9")
+                .setBody("ghi"),
+        )
+        hubAccess.states += state(url, status = "RUNNING", downloaded = 3, total = 9)
+        hubAccess.states += state(url, status = "RUNNING", downloaded = 6, total = 9)
+        hubAccess.states += state(url, status = "DONE", downloaded = 9, total = 9)
+        val pollIntervalMs = 500L
+
+        val idleDelays = mutableListOf<Long>()
+        val result = worker(id, pollIntervalMs) { idleDelays += it }.doWork()
+
+        assertSuccess(result)
+        assertTrue(idleDelays.isEmpty())
+        assertEquals(listOf(0, 1, 2), List(3) { server.takeRequest().sequenceNumber })
+        assertEquals("abcdefghi", File(requireNotNull(store.get(id)).filePath).readText())
+    }
+
+    @Test
+    fun `empty hub snapshot waits before polling again`() = runBlocking {
+        val url = server.url("/api/v1/downloads/server-1/file?token=short").toString()
+        val id = hubRow(url, totalBytes = 6)
+        val path = File(requireNotNull(store.get(id)).filePath)
+        path.writeText("abc")
+        store.update(requireNotNull(store.get(id)).copy(downloadedBytes = 3))
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(416)
+                .setHeader("Content-Range", "bytes */3"),
+        )
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(206)
+                .setHeader("Content-Range", "bytes 3-5/6")
+                .setBody("def"),
+        )
+        hubAccess.states += state(url, status = "RUNNING", downloaded = 3, total = 6)
+        hubAccess.states += state(url, status = "DONE", downloaded = 6, total = 6)
+        val idleDelays = mutableListOf<Long>()
+
+        assertSuccess(worker(id, 500) { idleDelays += it }.doWork())
+
+        assertEquals(listOf(500L), idleDelays)
+        assertEquals("abcdef", path.readText())
+    }
+
+    @Test
     fun `hub pull waits for server DONE after the local snapshot reaches its declared size`() =
         runBlocking {
             val url = server.url("/api/v1/downloads/server-1/file?token=short").toString()
@@ -558,6 +663,25 @@ class DownloadWorkerTest {
     }
 
     @Test
+    fun `server association removed during a pull keeps partial bytes and becomes hub gone`() =
+        runBlocking {
+            val url = server.url("/api/v1/downloads/server-1/file?token=short").toString()
+            val id = hubRow(url, totalBytes = 6)
+            val path = File(requireNotNull(store.get(id)).filePath)
+            path.writeText("abc")
+            server.enqueue(MockResponse().setResponseCode(404))
+            hubAccess.refreshError = HubGoneException(
+                "download_missing",
+                "The server download no longer exists",
+            )
+
+            assertSuccess(worker(id).doWork())
+
+            assertEquals(DownloadStatus.HUB_GONE, store.get(id)?.status)
+            assertEquals("abc", path.readText())
+        }
+
+    @Test
     fun `unrelated gone response is not treated as session revocation`() = runBlocking {
         val url = server.url("/api/v1/downloads/server-1/file?token=short").toString()
         val id = hubRow(url, totalBytes = 6)
@@ -603,7 +727,11 @@ class DownloadWorkerTest {
         error: String? = null,
     ) = HubDownloadFileState(url, status, total, downloaded, error)
 
-    private fun worker(downloadId: Long): DownloadWorker {
+    private fun worker(
+        downloadId: Long,
+        hubPollIntervalMs: Long = 1,
+        hubPollDelay: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
+    ): DownloadWorker {
         val dependencies = DownloadWorkerDependencies(
             downloads = store,
             playlists = ThrowingPlaylistStore,
@@ -613,7 +741,8 @@ class DownloadWorkerTest {
             userAgent = { "OpenTV-Test" },
             activePlaybackHost = MutableStateFlow(server.hostName),
             hubDownloads = hubAccess,
-            hubPollIntervalMs = 1,
+            hubPollIntervalMs = hubPollIntervalMs,
+            hubPollDelay = hubPollDelay,
             withDownloadSlot = { _, _ -> error("hub pulls must not consume the provider gate") },
         )
         return worker(downloadId, dependencies)
@@ -663,6 +792,7 @@ private class FakeHubWorkerAccess : HubDownloadWorkerAccess {
     val states = ArrayDeque<HubDownloadFileState>()
     val refreshes = mutableListOf<Pair<Long, String>>()
     val completed = mutableListOf<Pair<Long, String>>()
+    var refreshError: HubException? = null
 
     override suspend fun prepare(downloadId: Long) = HubPreparationResult.Complete
 
@@ -671,6 +801,7 @@ private class FakeHubWorkerAccess : HubDownloadWorkerAccess {
         serverDownloadId: String,
     ): HubDownloadFileState {
         refreshes += hubSourceId to serverDownloadId
+        refreshError?.let { throw it }
         return states.removeFirst()
     }
 

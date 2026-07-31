@@ -138,11 +138,19 @@ class DownloadRepository(
 
     suspend fun delete(item: Download): String? {
         scheduler.cancel(item.id)
+        val current = store.get(item.id) ?: item
         val deleted = withContext(Dispatchers.IO) {
-            DownloadStorage.delete(context, item.filePath)
+            DownloadStorage.delete(context, current.filePath)
         }
         if (!deleted) return context.getString(R.string.downloads_delete_failed)
-        store.delete(item.id)
+        val hubSourceId = current.hubSourceId
+        val serverDownloadId = current.serverDownloadId
+        if (hubSourceId != null && serverDownloadId != null) {
+            // Persist the remote intent before dropping the only local row that names it.
+            // Network cleanup runs independently so an unreachable hub never blocks deletion.
+            hubDownloads.localDownloadDeleted(hubSourceId, serverDownloadId)
+        }
+        store.delete(current.id)
         return null
     }
 

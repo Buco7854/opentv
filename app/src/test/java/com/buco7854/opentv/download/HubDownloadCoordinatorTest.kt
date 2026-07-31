@@ -110,15 +110,49 @@ class HubDownloadCoordinatorTest {
     }
 
     @Test
+    fun `remove-after-download cleanup survives an outage and retries in foreground`() = runTest {
+        val preferences = HubDownloadPreferences(FakeSharedPreferences()).apply {
+            setRemoveFromServerAfterDownload(4, true)
+        }
+        val remote = FakeHubDownloadRemote().apply {
+            error = HubUnreachableException("offline")
+        }
+        val coordinator = HubDownloadCoordinator(
+            FakeDownloadStore(),
+            remote,
+            FakeDownloadScheduler(),
+            preferences,
+            this,
+        )
+
+        coordinator.localPullCompleted(4, "server-1")
+
+        assertEquals(
+            listOf(PendingHubDownloadDelete(4, "server-1")),
+            preferences.pendingServerDeletes(),
+        )
+
+        remote.error = null
+        coordinator.setForeground(true)
+        runCurrent()
+        coordinator.setForeground(false)
+
+        assertEquals(listOf(4L to "server-1"), remote.deleted)
+        assertTrue(preferences.pendingServerDeletes().isEmpty())
+    }
+
+    @Test
     fun `preferences discard entries for removed hubs`() {
         val preferences = HubDownloadPreferences(FakeSharedPreferences())
         preferences.setRemoveFromServerAfterDownload(4, true)
         preferences.setRemoveFromServerAfterDownload(5, true)
+        preferences.enqueueServerDelete(5, "server-1")
 
         preferences.pruneMissingHubs(setOf(4))
 
         assertTrue(preferences.removeFromServerAfterDownload(4))
         assertFalse(preferences.removeFromServerAfterDownload(5))
+        assertTrue(preferences.pendingServerDeletes().isEmpty())
     }
 
     @Test

@@ -18,7 +18,9 @@ import com.buco7854.opentv.core.model.Download
 import com.buco7854.opentv.core.model.DownloadStatus
 import com.buco7854.opentv.core.storage.DownloadStore
 import com.buco7854.opentv.data.prefs.PlayerPrefs
+import com.buco7854.opentv.hub.HubUnreachableException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
@@ -206,6 +208,123 @@ class DownloadRepositoryTest {
         }
     }
 
+    @Test
+    fun `deleting a hub download also deletes its server association`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val store = RepositoryDownloadStore()
+        val scheduler = RepositoryScheduler()
+        val remote = RecordingHubRemote()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val coordinator = HubDownloadCoordinator(
+            store,
+            remote,
+            scheduler,
+            HubDownloadPreferences(
+                context.getSharedPreferences(
+                    "repository-hub-delete-${System.nanoTime()}",
+                    Context.MODE_PRIVATE,
+                ),
+            ),
+            scope,
+        )
+        val repository = DownloadRepository(
+            context,
+            store,
+            PlayerPrefs(context),
+            scheduler,
+            coordinator,
+        )
+        val local = File(context.cacheDir, "hub-delete-${System.nanoTime()}.mp4")
+        local.writeText("downloaded")
+        val id = store.insert(
+            Download(
+                title = "Hub movie",
+                url = "https://hub.invalid/api/v1/downloads/server-1/file?token=short",
+                filePath = local.absolutePath,
+                status = DownloadStatus.DONE,
+                hubSourceId = 4,
+                contentId = "content-1",
+                serverDownloadId = "server-1",
+            ),
+        )
+
+        try {
+            assertNull(repository.delete(requireNotNull(store.get(id))))
+
+            assertNull(store.get(id))
+            assertTrue(!local.exists())
+            assertEquals(listOf(4L to "server-1"), remote.deleted)
+        } finally {
+            scope.cancel()
+            local.delete()
+        }
+    }
+
+    @Test
+    fun `unreachable hub does not block local delete and its server cleanup is retried`() =
+        runBlocking {
+            val context = ApplicationProvider.getApplicationContext<Context>()
+            val store = RepositoryDownloadStore()
+            val scheduler = RepositoryScheduler()
+            val remote = RecordingHubRemote().apply {
+                error = HubUnreachableException("offline")
+            }
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            val preferences = HubDownloadPreferences(
+                context.getSharedPreferences(
+                    "repository-hub-delete-retry-${System.nanoTime()}",
+                    Context.MODE_PRIVATE,
+                ),
+            )
+            val coordinator = HubDownloadCoordinator(
+                store,
+                remote,
+                scheduler,
+                preferences,
+                scope,
+            )
+            val repository = DownloadRepository(
+                context,
+                store,
+                PlayerPrefs(context),
+                scheduler,
+                coordinator,
+            )
+            val local = File(context.cacheDir, "hub-delete-retry-${System.nanoTime()}.mp4")
+            local.writeText("downloaded")
+            val id = store.insert(
+                Download(
+                    title = "Hub movie",
+                    url = "https://hub.invalid/api/v1/downloads/server-1/file?token=short",
+                    filePath = local.absolutePath,
+                    status = DownloadStatus.DONE,
+                    hubSourceId = 4,
+                    contentId = "content-1",
+                    serverDownloadId = "server-1",
+                ),
+            )
+
+            try {
+                assertNull(repository.delete(requireNotNull(store.get(id))))
+
+                assertNull(store.get(id))
+                assertTrue(!local.exists())
+                assertEquals(
+                    listOf(PendingHubDownloadDelete(4, "server-1")),
+                    preferences.pendingServerDeletes(),
+                )
+
+                remote.error = null
+                assertTrue(coordinator.retryPendingServerDeletes())
+
+                assertEquals(listOf(4L to "server-1"), remote.deleted)
+                assertTrue(preferences.pendingServerDeletes().isEmpty())
+            } finally {
+                scope.cancel()
+                local.delete()
+            }
+        }
+
     private fun deleteFixture(context: Context, preferencesName: String): DeleteFixture {
         val store = RepositoryDownloadStore()
         val scheduler = RepositoryScheduler()
@@ -342,4 +461,18 @@ private object UnusedHubRemote : HubDownloadRemote {
     override suspend fun action(hubSourceId: Long, serverDownloadId: String, action: String) =
         error("not used")
     override suspend fun delete(hubSourceId: Long, serverDownloadId: String) = error("not used")
+}
+
+private class RecordingHubRemote : HubDownloadRemote {
+    val deleted = mutableListOf<Pair<Long, String>>()
+    var error: Throwable? = null
+
+    override suspend fun downloads(hubSourceId: Long): HubDownloadSnapshot = error("not used")
+    override suspend fun enqueue(hubSourceId: Long, contentId: String) = error("not used")
+    override suspend fun action(hubSourceId: Long, serverDownloadId: String, action: String) =
+        error("not used")
+    override suspend fun delete(hubSourceId: Long, serverDownloadId: String) {
+        error?.let { throw it }
+        deleted += hubSourceId to serverDownloadId
+    }
 }

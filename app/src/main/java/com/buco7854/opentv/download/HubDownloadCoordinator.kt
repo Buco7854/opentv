@@ -5,10 +5,12 @@ import com.buco7854.opentv.contract.DownloadDto
 import com.buco7854.opentv.core.model.Download
 import com.buco7854.opentv.core.model.DownloadStatus
 import com.buco7854.opentv.core.storage.DownloadStore
+import com.buco7854.opentv.diag.ErrorLog
 import com.buco7854.opentv.hub.HubCapacityException
 import com.buco7854.opentv.hub.HubEndpoints
 import com.buco7854.opentv.hub.HubException
 import com.buco7854.opentv.hub.HubGoneException
+import com.buco7854.opentv.hub.HubNotFoundException
 import com.buco7854.opentv.hub.HubRegistry
 import com.buco7854.opentv.hub.HubUnauthorizedException
 import com.buco7854.opentv.hub.HubUnreachableException
@@ -38,10 +40,7 @@ class HubDownloadPreferences(
     @Synchronized
     fun pruneMissingHubs(existingHubIds: Set<Long>) {
         val staleKeys = preferences.all.keys.filter { storedKey ->
-            storedKey.removePrefix(KEY_PREFIX)
-                .takeIf { storedKey.startsWith(KEY_PREFIX) }
-                ?.toLongOrNull()
-                ?.let { it !in existingHubIds } == true
+            hubId(storedKey)?.let { it !in existingHubIds } == true
         }
         if (staleKeys.isNotEmpty()) {
             preferences.edit().apply {
@@ -50,13 +49,57 @@ class HubDownloadPreferences(
         }
     }
 
+    @Synchronized
+    internal fun enqueueServerDelete(hubSourceId: Long, serverDownloadId: String) {
+        preferences.edit()
+            .putBoolean(pendingDeleteKey(hubSourceId, serverDownloadId), true)
+            .commit()
+    }
+
+    @Synchronized
+    internal fun pendingServerDeletes(): List<PendingHubDownloadDelete> =
+        preferences.all.keys.mapNotNull(::pendingDelete)
+
+    @Synchronized
+    internal fun completeServerDelete(delete: PendingHubDownloadDelete) {
+        preferences.edit()
+            .remove(pendingDeleteKey(delete.hubSourceId, delete.serverDownloadId))
+            .apply()
+    }
+
     private fun key(hubSourceId: Long) = "remove-after-download-$hubSourceId"
+
+    private fun pendingDeleteKey(hubSourceId: Long, serverDownloadId: String) =
+        "$PENDING_DELETE_PREFIX$hubSourceId-$serverDownloadId"
+
+    private fun hubId(storedKey: String): Long? = when {
+        storedKey.startsWith(KEY_PREFIX) ->
+            storedKey.removePrefix(KEY_PREFIX).toLongOrNull()
+        storedKey.startsWith(PENDING_DELETE_PREFIX) ->
+            storedKey.removePrefix(PENDING_DELETE_PREFIX).substringBefore('-').toLongOrNull()
+        else -> null
+    }
+
+    private fun pendingDelete(storedKey: String): PendingHubDownloadDelete? {
+        if (!storedKey.startsWith(PENDING_DELETE_PREFIX)) return null
+        val value = storedKey.removePrefix(PENDING_DELETE_PREFIX)
+        val separator = value.indexOf('-')
+        if (separator <= 0 || separator == value.lastIndex) return null
+        val hubSourceId = value.substring(0, separator).toLongOrNull() ?: return null
+        return PendingHubDownloadDelete(hubSourceId, value.substring(separator + 1))
+    }
 
     companion object {
         const val PREFS_NAME = "hub_downloads"
         private const val KEY_PREFIX = "remove-after-download-"
+        private const val PENDING_DELETE_PREFIX = "pending-server-delete-"
     }
 }
+
+internal data class PendingHubDownloadDelete(
+    val hubSourceId: Long,
+    val serverDownloadId: String,
+)
 
 internal data class HubDownloadSnapshot(
     val baseUrl: String,
@@ -145,6 +188,7 @@ class HubDownloadCoordinator internal constructor(
 
     private val rowLocks = KeyedMutexPool<Long>()
     private val enqueueLocks = KeyedMutexPool<String>()
+    private val serverDeleteLock = Mutex()
     private var foregroundJob: Job? = null
 
     suspend fun enqueue(
@@ -192,6 +236,9 @@ class HubDownloadCoordinator internal constructor(
             while (isActive) {
                 val pending = store.getByStatuses(FOREGROUND_POLL_STATUSES)
                 var nextPoll = pollIntervalMs
+                if (!retryPendingServerDeletes()) {
+                    nextPoll = maxOf(nextPoll, DEFAULT_RETRY_MS)
+                }
                 pending.forEach { row ->
                     when (val result = prepare(row.id)) {
                         is HubPreparationResult.RetryAfter ->
@@ -321,8 +368,31 @@ class HubDownloadCoordinator internal constructor(
 
     override suspend fun localPullCompleted(hubSourceId: Long, serverDownloadId: String) {
         if (preferences.removeFromServerAfterDownload(hubSourceId)) {
-            remote.delete(hubSourceId, serverDownloadId)
+            preferences.enqueueServerDelete(hubSourceId, serverDownloadId)
+            retryPendingServerDeletes()
         }
+    }
+
+    fun localDownloadDeleted(hubSourceId: Long, serverDownloadId: String) {
+        preferences.enqueueServerDelete(hubSourceId, serverDownloadId)
+        scope.launch { retryPendingServerDeletes() }
+    }
+
+    internal suspend fun retryPendingServerDeletes(): Boolean = serverDeleteLock.withLock {
+        preferences.pendingServerDeletes().forEach { pending ->
+            try {
+                remote.delete(pending.hubSourceId, pending.serverDownloadId)
+                preferences.completeServerDelete(pending)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: HubNotFoundException) {
+                // The association was already removed, including by remove-after-download.
+                preferences.completeServerDelete(pending)
+            } catch (error: Throwable) {
+                ErrorLog.log("Remove hub download from server", error)
+            }
+        }
+        preferences.pendingServerDeletes().isEmpty()
     }
 
     private suspend fun sync(

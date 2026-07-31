@@ -371,7 +371,7 @@ class DownloadWorker(
     ) {
         var item = initial
         var tokenRefreshAttempts = 0
-        var lastServerBytes = -1L
+        var lastServerBytes = initial.downloadedBytes
         var lastProgressAtMs = dependencies.nowMs()
         while (true) {
             val before = DownloadStorage.length(applicationContext, item.filePath)
@@ -480,14 +480,21 @@ class DownloadWorker(
             }
 
             val nowMs = dependencies.nowMs()
-            if (localBytes > before || state.downloadedBytes > lastServerBytes) {
+            val madeProgress = localBytes > before || state.downloadedBytes > lastServerBytes
+            if (madeProgress) {
                 lastProgressAtMs = nowMs
             }
             lastServerBytes = state.downloadedBytes
             if (nowMs - lastProgressAtMs >= dependencies.hubStallTimeoutMs) {
                 throw requestFailure ?: IOException("Server download stopped making progress")
             }
-            delay(dependencies.hubPollIntervalMs)
+            // Back off when there was nothing new to read -- and always after a failed
+            // request. A transfer that keeps failing while the server keeps fetching would
+            // otherwise satisfy "progress" on the server's byte count alone and retry with
+            // no pause at all, turning a transient 5xx into a tight loop against the server.
+            if (requestFailure != null || !madeProgress) {
+                dependencies.hubPollDelay(dependencies.hubPollIntervalMs)
+            }
         }
     }
 
