@@ -240,6 +240,17 @@ Downloads are private user associations over a shared physical content blob.
 Removing a playlist grant hides and suspends its user associations. Removing
 the final association removes the physical transfer/file.
 
+Deleting a download in the Android app removes your association on the server
+too, so a file you have deleted does not keep occupying server storage. It is
+your association only: another user who downloaded the same title keeps theirs,
+and the shared file survives until its last reference goes. The intent is
+recorded before the local file is removed, so an unreachable server delays the
+cleanup rather than losing it. A per-server setting can also release your
+association automatically as soon as a download finishes pulling; it is off by
+default, because keeping it lets your other devices pull the same file without
+the server fetching it again. A completed copy on your device stays usable even
+if its server association is later removed.
+
 Playback begins with `POST /api/v1/playback`. The response contains a
 server-issued lease and lease-scoped media URLs. Media, image, download-file,
 and WebSocket URLs use purpose-limited capabilities instead of
