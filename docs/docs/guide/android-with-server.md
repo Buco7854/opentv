@@ -30,8 +30,15 @@ The app then offers only the sign-in methods your server actually enables:
   app shows a QR code; scan it with the signed-in device and approve. On a phone
   you can also tap **Open on this device** to approve in your own browser.
 - **Sign in with a browser**, for single sign-on and passkeys, which complete in
-  a browser. The app shows a code to scan; once you finish in the browser the app
-  signs itself in.
+  a browser. On a phone the app opens its own browser directly. A QR code is the
+  fallback on a TV, on a device without a browser, or when the browser cannot be
+  opened. Once you finish in the browser the app signs itself in.
+
+After approval, an Android browser may return through the fixed
+`opentv://sign-in` link. That link is only a wake-up signal: it carries no token,
+account identity or other secret. The app's authenticated polling request remains
+authoritative, so intercepting or losing the return link can change only how soon
+the next poll happens, not who signs in.
 
 On Android TV, device linking is the easy path: the TV displays the code and you
 scan it with your phone. Nothing needs typing on a remote, and the sign-in,
@@ -44,12 +51,19 @@ transfer; after moving to another device, connect and sign in again.
 
 ## Your account and administration
 
-Account settings and server administration are not rebuilt inside the app. They
-open your server's own pages in a browser instead, so there is one place to
-manage them and nothing to keep in step. The app opens only pages on that
-server's own origin. On Android 11 and newer it checks browser availability
-before offering the handoff; the app declares HTTP and HTTPS browser intents for
-Android's package-visibility rules.
+Playlist administration that belongs next to a source is available directly in
+the app: when the server grants the operation, an administrator can refresh,
+edit or delete that server playlist, and correct an M3U category's type. The app
+uses the form fields and deletion warning returned by the server rather than
+reconstructing those rules locally. For source-panel actions, a capability can
+instead direct the operation to the server's browser UI, which lets a future
+server move it without an Android release.
+
+Account settings and the broader server administration UI still open the
+server's own pages in a browser, so those security and deployment controls stay
+in one place. The app opens only pages on that server's own origin. On Android
+11 and newer it checks browser availability before offering the handoff; the app
+declares HTTP and HTTPS browser intents for Android's package-visibility rules.
 
 From the server's entry in the sources panel you get **Account and security**
 (password, two-factor, sessions), and, if your account is an administrator,
@@ -75,6 +89,22 @@ Audio track and subtitle selection work either way.
 If someone else is watching the same thing, the player offers to watch together.
 The host approves who joins and can hand out control, so anyone with control can
 play, pause and seek for everyone.
+
+Watching together also works between your own devices, and for the same title it
+is the only thing that works. One account cannot play the same title twice
+independently: start something already playing on another of your devices and
+the app offers to join that session instead. Joining your own device needs no
+approval, since you are both ends of it. Declining ends the attempt on the new
+device rather than starting a second stream, and you can start it again once the
+other device stops.
+
+The reason is your provider's connection limit. Two devices watching one live
+channel together share a single connection to your provider, so joining costs
+nothing extra, where two independent plays would have cost two. A movie is
+different: viewers of a movie are rarely at the same position, so a room of
+fully capable devices still plays each one directly and still costs a connection
+each. On a provider that allows only one connection, joining a movie therefore
+reports that capacity is full, which is the same answer by a different route.
 
 Everyone stays in sync automatically. If one person's device cannot play the
 original stream, the whole room switches to a converted one so nobody is left

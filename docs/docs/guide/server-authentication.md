@@ -208,6 +208,13 @@ are conditional database updates. Polling an approved request atomically
 consumes it while inserting the linked session, so decision races and poll
 replays cannot mint multiple sessions. Denial and expiry never issue a session.
 
+For same-device Android browser sign-in, the completed web page may navigate to
+the fixed `opentv://sign-in` return. It is deliberately only a wake-up signal: it
+has no query, fragment, token or account data. Any app can claim a custom scheme,
+so the Android client still obtains the session only by polling with the opaque
+token it kept in memory. A missing or intercepted return changes latency only;
+polling remains authoritative.
+
 The linked session inherits the approving session's authentication method and
 is marked `LINKED_DEVICE`. This preserves password-disable revocation policy.
 The server rechecks request expiry and the approving account's active status at
@@ -243,13 +250,25 @@ the final association removes the physical transfer/file.
 Deleting a download in the Android app removes your association on the server
 too, so a file you have deleted does not keep occupying server storage. It is
 your association only: another user who downloaded the same title keeps theirs,
-and the shared file survives until its last reference goes. The intent is
-recorded before the local file is removed, so an unreachable server delays the
-cleanup rather than losing it. A per-server setting can also release your
-association automatically as soon as a download finishes pulling; it is off by
-default, because keeping it lets your other devices pull the same file without
-the server fetching it again. A completed copy on your device stays usable even
-if its server association is later removed.
+and the shared file survives until its last reference goes. The release is
+recorded before anything local is destroyed, so an unreachable server delays the
+cleanup rather than losing it.
+
+Disconnecting a server is the one case where a pending release can be abandoned,
+and the app is deliberate about it. Removing a server forgets its token, and a
+release cannot be performed without one, so the app first tries to finish any
+pending releases while the token still exists, sharing a short best-effort budget
+with the sign-out. Removal is never blocked by an unreachable server. Whatever
+could not be completed is then discarded along with the credentials, and the app
+tells you how many associations are left on that server so you can clear them
+from its own pages. The alternative would be keeping a token for a server you
+asked to remove, which is a worse trade than an honest message.
+
+A per-server setting can also release your association automatically as soon as a
+download finishes pulling; it is off by default, because keeping it lets your
+other devices pull the same file without the server fetching it again. A
+completed copy on your device stays usable even if its server association is
+later removed.
 
 Playback begins with `POST /api/v1/playback`. The response contains a
 server-issued lease and lease-scoped media URLs. Media, image, download-file,

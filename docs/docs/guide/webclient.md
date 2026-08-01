@@ -29,12 +29,14 @@ Every channel, movie and series shown is a placeholder, for illustration only.
   <figcaption>Movies as a poster grid, with quality badges and the bottom dock. Screenshots follow your theme.</figcaption>
 </figure>
 
-The web UI is a touch-first cockpit: a bottom dock with the active playlist's
-Live / Movies / Series / Favorites / Search, and a panel (the burger) that holds
-your playlists plus Now watching, downloads and settings. Playback opens as a
-fullscreen player. It ships dark, light and system-following themes and works on
-big landscape touchscreens (including in-car browsers) down to phones, where the
-dock becomes a tab bar.
+The web UI is a touch-first cockpit: a bottom dock with Live / Movies / Series /
+Search for the active playlist plus account-wide Favorites, and a panel (the
+burger) that holds your playlists plus Now watching, downloads and settings.
+Favorites from every playlist granted to your account appear together, with a
+playlist filter when you want one source. Playback opens as a fullscreen player.
+It ships dark, light and system-following themes and works on big landscape
+touchscreens (including in-car browsers) down to phones, where the dock becomes
+a tab bar.
 
 The server supports local password accounts with TOTP or WebAuthn MFA, OIDC
 SSO, administrator/user roles, playlist assignments, and revocable playback
