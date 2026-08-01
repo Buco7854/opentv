@@ -22,14 +22,14 @@ straight away rather than failing at sign-in.
 
 The app then offers only the sign-in methods your server actually enables:
 
-- **Username and password** — including two-factor codes and recovery codes. If
+- **Username and password**, including two-factor codes and recovery codes. If
   your server requires two-factor authentication and you have not set it up yet,
   the app walks you through enrolling, showing a QR code for your authenticator
   app.
-- **Link this device** — approve from a device that is already signed in. The
+- **Link this device**: approve from a device that is already signed in. The
   app shows a QR code; scan it with the signed-in device and approve. On a phone
   you can also tap **Open on this device** to approve in your own browser.
-- **Sign in with a browser** — for single sign-on and passkeys, which complete in
+- **Sign in with a browser**, for single sign-on and passkeys, which complete in
   a browser. The app shows a code to scan; once you finish in the browser the app
   signs itself in.
 
@@ -63,12 +63,12 @@ Browsers can only play a narrow set of formats and cannot select every muxed
 track directly. Android tells the server which codecs this device actually
 decodes and that ExoPlayer selects tracks in band. When the video and all audio
 tracks are decodable, the app direct-plays the original even when it has several
-audio tracks or subtitles — no remux, less work for your server, and no quality
+audio tracks or subtitles: no remux, less work for your server, and no quality
 loss.
 
-Where a file does need converting — a codec your device lacks, or catch-up — the
-server prepares it and the app plays that instead. Audio track and subtitle
-selection work either way.
+Where a file does need converting, because of a codec your device lacks or
+because it is catch-up, the server prepares it and the app plays that instead.
+Audio track and subtitle selection work either way.
 
 ## Watch together
 
@@ -97,9 +97,10 @@ Favorites and watch progress for a server live **on that server**, so they follo
 you to every device signed in to it. Local playlists keep their favorites and
 progress on the device, as they always have.
 
-The favorites screen shows everything together, grouped by source. If a server
-is unreachable its section says so and offers a retry, while your other
-favorites still appear.
+The favorites screen shows everything together in one list, grouped by type
+rather than by where it came from, with chips to narrow to a single source when
+you want that. If a server is unreachable it says so and offers a retry, while
+your other favorites still appear.
 
 ## Downloads
 
@@ -119,12 +120,12 @@ only when no other user refers to it.
 
 ## If something goes wrong
 
-- **"Couldn't reach the server"** — the app could not contact it. Check the
+- **"Couldn't reach the server"**: the app could not contact it. Check the
   address and that your device is on a network that can reach it. Server sources
   are not cached, so nothing from that server appears until it is reachable.
-- **"Signed out"** — your session ended or was revoked. Sign in again from the
+- **"Signed out"**: your session ended or was revoked. Sign in again from the
   server's entry in the sources panel.
-- **"Playback capacity"** — your provider's connection limit is reached; try
+- **"Playback capacity"**: your provider's connection limit is reached; try
   again shortly.
-- **Playback stopped with "Playback ended"** — an administrator ended the
+- **Playback stopped with "Playback ended"**: an administrator ended the
   stream, or your session was revoked.

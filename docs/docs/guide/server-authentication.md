@@ -8,7 +8,7 @@ the same session token as `Authorization: Bearer` on protected HTTP requests.
 One file rather than two is what lets the server enforce, in the database
 itself, that a grant or a content identity cannot outlive the playlist it
 refers to: deleting a playlist cascades to its grants and identities in a
-single transaction. It also means the file is *not* disposable — see
+single transaction. It also means the file is *not* disposable; see
 [account recovery](#account-recovery) before moving it aside.
 
 The bundled web client stores its bearer in `localStorage`. There are no
@@ -187,7 +187,7 @@ server; faster polling returns `429` and `Retry-After`.
 
 The same mechanism serves two situations. A **second device** scans the QR and
 approves from an account that is already signed in. **One device on its own**
-starts the request, opens the link in its own browser, and signs in there — this
+starts the request, opens the link in its own browser, and signs in there. This
 is how Android signs in by default, and it is why the app no longer rebuilds each
 authentication method natively. A request started this way is marked as browser
 sign-in, and the web client completes the approval by itself only when it landed
@@ -225,8 +225,8 @@ alter existing accounts.
 Server favorites, resume points, downloads, and playback use immutable
 server-issued `contentId` values. They no longer use the shared Android
 favorites/resume/download stores. Those Android-shaped `favorites`, `resume` and
-`downloads` tables still exist in the file — they are part of the shared catalog
-schema — but the server never reads or writes them, so an operator may leave
+`downloads` tables still exist in the file, as part of the shared catalog
+schema, but the server never reads or writes them, so an operator may leave
 them alone. Removing their rows during an offline maintenance window is
 optional; back up `opentv.db` first.
 
@@ -296,7 +296,8 @@ contracts:
 
 Android uses the same bearer-protected API and reports itself as a native client.
 It signs in through your server's own web login by default, so whatever that
-server accepts — password, TOTP, passkey, single sign-on — works without the app
+server accepts, whether password, TOTP, passkey or single sign-on, works
+without the app
 implementing it, and a method you enable later needs no app update. No provider
 refresh token is stored on Android. The in-app password form remains for a
 password-only server, or a device with no browser, and QR device linking remains
@@ -306,7 +307,7 @@ Playlists reached through a server offer the same operations as local ones, and
 the app performs them itself: refresh, edit, delete and provider account are all
 native. What differs is who may use them. Clearing your watch progress is yours,
 because it is your own. Everything else edits what other people see and is
-administrative — including correcting a category's type, since the override is
+administrative, including correcting a category's type, since the override is
 stored on the playlist and re-applied at every refresh, so it changes the catalog
 for everyone who can see it. Native Xtream categories cannot be reclassified at
 all; the provider owns them.
@@ -343,7 +344,8 @@ Use recovery options in this order:
    Because accounts and catalog share one file, this step discards **both**.
    You lose users, grants, activity, sessions and download associations, and
    also every playlist, channel, guide and metadata row. The catalog half is
-   re-fetchable — re-add each playlist and let it refresh — but the account
+   re-fetchable, by re-adding each playlist and letting it refresh, but the
+   account
    half is not, so prefer step 3 whenever a backup exists. Unreferenced
    physical download files may require manual cleanup.
 

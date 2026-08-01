@@ -86,8 +86,11 @@ programmes are tappable to replay.
 
 ## Search and favorites
 
-Search runs across live, movies and series at once. Favorites keep channels,
-movies and series in their own place, keyed so they survive refreshes.
+Search runs across live, movies and series at once. Favorites are yours rather
+than any one playlist's, so the page lists them from every playlist you have
+access to, grouped by type, with chips to narrow to a single playlist. Entries
+stay keyed to the playlist they came from, so the same title favorited in two
+playlists remains two entries and survives refreshes.
 
 <div className="screens-grid">
   <figure className="doc-screen">
