@@ -8,6 +8,8 @@ import com.buco7854.opentv.source.CatalogSearchResult
 import com.buco7854.opentv.source.ContentRef
 import com.buco7854.opentv.source.SourceId
 import com.buco7854.opentv.ui.CatalogGatewayFake
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.CompletableDeferred
@@ -25,6 +27,42 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SearchViewModelTest {
+    @Test
+    fun `opening search for an absent local source initializes on Main immediate`() = runTest {
+        Dispatchers.setMain(Dispatchers.Unconfined)
+        var viewModel: SearchViewModel? = null
+        try {
+            val absentSource = CatalogGatewayFake(SourceId.LocalPlaylist(404))
+
+            viewModel = SearchViewModel(absentSource.source, absentSource)
+
+            assertEquals(emptySet<String>(), viewModel.favoriteKeys.value)
+            assertEquals(emptySet<String>(), viewModel.guideIds.value)
+        } finally {
+            viewModel?.viewModelScope?.cancel()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun `opening search for a hub without a session is a signed out state`() = runTest {
+        Dispatchers.setMain(Dispatchers.Unconfined)
+        var viewModel: SearchViewModel? = null
+        try {
+            val missingSession = CatalogGatewayFake(SourceId.Hub(404, 7)).apply {
+                favoriteBlock = { _, _ -> CatalogResult.SignedOut }
+                guideIdsResult = CatalogResult.SignedOut
+            }
+
+            viewModel = SearchViewModel(missingSession.source, missingSession)
+
+            assertEquals(CatalogLoadError.SignedOut, viewModel.state.value.error)
+        } finally {
+            viewModel?.viewModelScope?.cancel()
+            Dispatchers.resetMain()
+        }
+    }
+
     @Test
     fun `local search keeps live movie and collapsed series groupings`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))

@@ -298,6 +298,24 @@ data class FavoritesResolvedDto(
     val series: List<SeriesHitDto> = emptyList(),
 )
 
+@Serializable
+data class UserFavoriteSeriesDto(
+    val contentId: String,
+    val playlistId: Long,
+    val seriesKey: String,
+    val count: Int,
+    val logo: String? = null,
+    val groupTitle: String,
+    val xtreamSeriesId: String? = null,
+)
+
+@Serializable
+data class UserFavoritesResolvedDto(
+    val live: List<ChannelDto> = emptyList(),
+    val movies: List<ChannelDto> = emptyList(),
+    val series: List<UserFavoriteSeriesDto> = emptyList(),
+)
+
 @Serializable data class GroupKindRequest(val groupTitle: String, val kind: Int? = null)
 @Serializable data class SettingsDto(val userAgent: String = "", val downloadLimit: Int = 1, val pageSize: Int = 50)
 @Serializable data class EnqueueDownloadRequest(val contentId: String)

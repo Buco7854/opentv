@@ -6,7 +6,6 @@ import com.buco7854.opentv.data.db.PlaylistRow
 import com.buco7854.opentv.serverdata.DownloadBlobStatus
 import com.buco7854.opentv.serverdata.UserRole
 import com.buco7854.opentv.serverdata.UserStatus
-import com.buco7854.opentv.serverdata.createOpenTvServerDatabase
 import com.buco7854.opentv.serverdata.db.ContentIdentityRow
 import com.buco7854.opentv.serverdata.db.DownloadBlobRow
 import com.buco7854.opentv.serverdata.db.UserDownloadRow
@@ -17,6 +16,9 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import java.net.InetSocketAddress
 import java.nio.file.Files
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
@@ -139,6 +141,33 @@ class DownloadManagerTransferTest {
         assertEquals("abc", Files.readString(target))
     }
 
+    @Test
+    fun `close cancels a blocked provider read before database teardown`() = withFixture { fixture ->
+        val releaseResponse = CountDownLatch(1)
+        fixture.server.createContext("/movie") { exchange ->
+            exchange.sendResponseHeaders(200, 2)
+            try {
+                exchange.responseBody.write('a'.code)
+                exchange.responseBody.flush()
+                releaseResponse.await(10, TimeUnit.SECONDS)
+            } finally {
+                exchange.close()
+            }
+        }
+        fixture.server.start()
+
+        fixture.manager.enqueue("owner", fixture.identity, fixture.channel(fixture.url("/movie")))
+        fixture.awaitDownloadedBytes(1)
+
+        val closing = CompletableFuture.runAsync(fixture.manager::close)
+        try {
+            closing.get(2, TimeUnit.SECONDS)
+        } finally {
+            releaseResponse.countDown()
+            runCatching { closing.get(2, TimeUnit.SECONDS) }
+        }
+    }
+
     private fun withFixture(block: suspend (Fixture) -> Unit) = runBlocking {
         val fixture = Fixture()
         try {
@@ -149,8 +178,9 @@ class DownloadManagerTransferTest {
     }
 
     private class Fixture {
-        private val dir = Files.createTempDirectory("download-manager-transfer")
-        private val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
+        private val persistence = ServerTestPersistence("download-manager-transfer")
+        private val dir = persistence.directory
+        private val db = persistence.database
         val server: HttpServer = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         val manager = DownloadManager(
             db = db,
@@ -166,6 +196,8 @@ class DownloadManagerTransferTest {
         val downloadPath = dir.resolve("user-downloads/movie.bin")
 
         init {
+            persistence.closeBeforeDatabase { server.stop(0) }
+            persistence.closeBeforeDatabase(manager::close)
             runBlocking {
                 db.playlistDao().insert(PlaylistRow(id = 1, name = "Provider", url = null))
                 db.users().insert(
@@ -241,11 +273,14 @@ class DownloadManagerTransferTest {
             error("unreachable")
         }
 
+        suspend fun awaitDownloadedBytes(expected: Long) = withTimeout(10_000) {
+            while (db.downloads().blobForContent(identity.contentId)?.downloadedBytes != expected) {
+                delay(10)
+            }
+        }
+
         fun close() {
-            manager.close()
-            server.stop(0)
-            db.close()
-            dir.toFile().deleteRecursively()
+            persistence.close()
         }
     }
 }

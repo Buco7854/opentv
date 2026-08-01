@@ -1,6 +1,5 @@
 package com.buco7854.opentv.server
 
-import com.buco7854.opentv.serverdata.createOpenTvServerDatabase
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.install
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
@@ -11,7 +10,6 @@ import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
 import java.net.URI
 import java.nio.file.Files
-import java.nio.file.Path
 
 /**
  * The public authentication routes mounted the way production mounts them, over a real
@@ -21,8 +19,9 @@ import java.nio.file.Path
 internal fun withPublicAuthServer(
     block: suspend ApplicationTestBuilder.(bootstrapToken: String) -> Unit,
 ) = testApplication {
-    val dir: Path = Files.createTempDirectory("opentv-public-auth")
-    val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
+    val persistence = ServerTestPersistence("opentv-public-auth")
+    val dir = persistence.directory
+    val db = persistence.database
     try {
         val config = publicAuthTestConfig()
         val auth = AuthService(db, config, dir)
@@ -46,8 +45,7 @@ internal fun withPublicAuthServer(
         }
         block(bootstrapToken)
     } finally {
-        db.close()
-        dir.toFile().deleteRecursively()
+        persistence.close()
     }
 }
 

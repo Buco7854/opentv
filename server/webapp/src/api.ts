@@ -245,6 +245,16 @@ export interface SeriesHit {
   xtreamSeriesId: string | null;
 }
 
+export interface UserFavoriteSeries {
+  contentId: string;
+  playlistId: number;
+  seriesKey: string;
+  count: number;
+  logo: string | null;
+  groupTitle: string;
+  xtreamSeriesId: string | null;
+}
+
 export interface SearchResults { live: Channel[]; movies: Channel[]; series: SeriesHit[] }
 
 export interface PlaylistDetail {
@@ -461,6 +471,11 @@ export interface Session {
 
 export interface XtreamSeriesDetail { series: XtreamSeries; episodes: Channel[]; error: string | null }
 export interface FavoritesResolved { live: Channel[]; movies: Channel[]; series: SeriesHit[] }
+export interface UserFavoritesResolved {
+  live: Channel[];
+  movies: Channel[];
+  series: UserFavoriteSeries[];
+}
 export interface Settings { userAgent: string; downloadLimit: number; pageSize: number }
 
 /**
@@ -564,6 +579,7 @@ export const api = {
   removeFavorite: (id: number, contentId: string) =>
     j<null>(`/playlists/${id}/favorites?contentId=${encodeURIComponent(contentId)}`, { method: 'DELETE' }),
   favoritesResolved: (id: number) => j<FavoritesResolved>(`/playlists/${id}/favorites/resolved`),
+  userFavoritesResolved: () => j<UserFavoritesResolved>('/favorites/resolved'),
   episodes: (id: number, seriesKey: string, offset: number, limit: number, season?: number) =>
     j<EpisodePage>(
       `/playlists/${id}/series/${encodeURIComponent(seriesKey)}/episodes`

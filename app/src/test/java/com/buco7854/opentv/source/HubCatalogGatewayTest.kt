@@ -231,6 +231,21 @@ class HubCatalogGatewayTest {
     }
 
     @Test
+    fun productionAdapterMapsAMissingHubRowToSignedOut() = runTest {
+        val store = ReadOnlyHubStore(HubSource(99, "Other", "https://hub.example", addedMs = 1))
+        val registry = HubRegistry(
+            store,
+            HubApi(RecordingHubTransport()),
+            HubSessionVault(TestPrefs(), PlainCipher),
+        )
+
+        val result = HubCatalogGateway(SourceId.Hub(3, 7), registry).search("news")
+
+        assertSame(CatalogResult.SignedOut, result)
+        assertTrue(store.writeAttempts.isEmpty())
+    }
+
+    @Test
     fun hubGatewayCannotAcquireALocalFavoriteStore() {
         val forbidden = setOf(
             FavoriteRepository::class.java,

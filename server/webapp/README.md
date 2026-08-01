@@ -6,8 +6,8 @@ which the server ships as an SPA (unknown non-API client paths fall back to
 `index.html`, so URLs like `/browse/3` are real paths; `/api/v1` always
 terminates with JSON).
 
-- `npm run dev` — dev server on :5173, proxying `/api/v1` to a server on :8080.
-- `npm run build` — typecheck + production build into the server resources.
+- `npm run dev`: dev server on :5173, proxying `/api/v1` to a server on :8080.
+- `npm run build`: typecheck + production build into the server resources.
 - The Gradle `:server` build runs `npm run ci-build` automatically; pass
   `-PwebappPrebuilt` to skip it when the output already exists (Docker/CI).
 
@@ -18,7 +18,7 @@ browsers) and scaling down to phones, where the dock doubles as a tab bar:
 
 - A **persistent bottom dock**: a burger opens the floating **playlists
   panel** (switch, add, edit, refresh, account); the center icons are the
-  active playlist's "apps" — Live, Movies, Series, Favorites, Search; the
+  active playlist's "apps": Live, Movies, Series, Favorites, Search; the
   right side holds
   Downloads and Settings (moved into the panel on narrow screens). `/` forwards into the
   active playlist.
@@ -29,13 +29,13 @@ browsers) and scaling down to phones, where the dock doubles as a tab bar:
 
 ## Design system
 
-Three themes — dark (pure black canvas), light (white canvas), and system
-(default, follows the OS) — driven entirely by runtime CSS variables switched
+Three themes, dark (pure black canvas), light (white canvas), and system
+(default, follows the OS), driven entirely by runtime CSS variables switched
 on `<html data-theme>`:
 
 - **Canvas**: black or white; content floats on quiet gray panels with
   hairline borders and backdrop blur for overlays.
-- **Color**: neutral grays plus exactly three accents — blue for the primary
+- **Color**: neutral grays plus exactly three accents, blue for the primary
   action, green for success/live/now-airing, red for errors.
 - **Type**: Inter Variable for UI; Barlow for display titles, media-card
   titles and media-card titles (spaced caps).
@@ -49,7 +49,7 @@ All tokens live in the `:root` / `[data-theme]` blocks at the top of
 `src/index.css` (Tailwind utilities map onto them via `@theme inline`); each
 component's styles are one labelled block in the same file, paired with one
 React file in `src/components/`. Change the look in the token blocks; change a
-component in its block — nothing is styled inline in screens.
+component in its block; nothing is styled inline in screens.
 
 Structure and boundaries:
 
@@ -66,7 +66,7 @@ Structure and boundaries:
 - `src/hooks.ts` owns reusable server-state behavior. Downloads use one shared
   polling store, so screens must use `useDownloads` rather than starting their
   own timers.
-- `src/components/` — Material.tsx (bars, buttons, dialogs, sheets, fields,
+- `src/components/`: Material.tsx (bars, buttons, dialogs, sheets, fields,
   segmented controls), plus one file per widget (rows, grids, badges, cast,
   guide, download states).
 - `src/screens/` contains route adapters. All screens are lazy route

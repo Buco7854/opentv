@@ -19,13 +19,11 @@ import com.buco7854.opentv.serverdata.AuthMethod
 import com.buco7854.opentv.serverdata.ClientKind
 import com.buco7854.opentv.serverdata.UserRole
 import com.buco7854.opentv.serverdata.UserStatus
-import com.buco7854.opentv.serverdata.createOpenTvServerStorage
 import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
 import com.buco7854.opentv.serverdata.db.UserFavoriteRow
 import com.buco7854.opentv.serverdata.db.UserRow
 import java.io.IOException
 import java.net.URI
-import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
@@ -241,9 +239,9 @@ class CatalogReferentialIntegrityTest {
     }
 
     private suspend fun <T> withFixture(block: suspend (Fixture) -> T): T {
-        val dir = Files.createTempDirectory("catalog-referential-integrity")
-        val persistence = createOpenTvServerStorage(dir.resolve("opentv.db").toString())
-        val storage = persistence.catalog
+        val persistence = ServerTestPersistence("catalog-referential-integrity")
+        val dir = persistence.directory
+        val storage = persistence.storage
         val db = persistence.database
         try {
             lateinit var fixture: Fixture
@@ -258,6 +256,15 @@ class CatalogReferentialIntegrityTest {
             val content = ContentIdentityService(db, storage)
             val settings = ServerSettings(dir, pageSize = 50)
             val auth = AuthService(db, authConfig(), dir)
+            val downloads = DownloadManager(
+                db,
+                ServerHttp(),
+                settings,
+                dir,
+                ProviderConnections(),
+                connectionLimit = { Int.MAX_VALUE },
+            )
+            persistence.closeBeforeDatabase(downloads::close)
             val service = PlaylistApplicationService(
                 storage,
                 playlists,
@@ -269,20 +276,13 @@ class CatalogReferentialIntegrityTest {
                 content,
                 UserActivityService(db, auth, content),
                 db,
-                DownloadManager(
-                    db,
-                    ServerHttp(),
-                    settings,
-                    dir,
-                    ProviderConnections(),
-                    connectionLimit = { Int.MAX_VALUE },
-                ),
+                downloads,
             )
+            persistence.closeBeforeDatabase(service::close)
             fixture = Fixture(storage, db, content, service)
             return block(fixture)
         } finally {
-            storage.close()
-            dir.toFile().deleteRecursively()
+            persistence.close()
         }
     }
 

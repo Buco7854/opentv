@@ -1,61 +1,117 @@
-// Sectioned favorites resolved against the current channel tables. Mirrors
-// FavoritesScreen.kt.
+// One user-owned favorites list across every granted playlist. Playlist is a
+// filter; kind remains the list's grouping, matching the Android client.
 
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router';
+import { useNavigate } from 'react-router';
 import { api, canShowGuide, Channel, ChannelKind, hasCatchup, Programme } from '../api';
 import { mediaTags } from '../components/Badges';
 import { asyncFallback, EmptyState } from '../components/Common';
 import { DownloadStateIcon } from '../components/DownloadStateIcon';
 import { GuideSheet } from '../components/GuideSheet';
 import { MediaListRow } from '../components/MediaListRow';
-import { ConfirmDialog, IconBtn, Pager, ScreenHeader, toast } from '../components/Primitives';
+import {
+  ConfirmDialog, IconBtn, Pager, ScreenHeader, Segmented, toast,
+} from '../components/Primitives';
 import { GENERIC, reportError } from '../errors';
-import { useAsync, useDownloads, useGuideIds, usePaged } from '../hooks';
+import { useAsync, useDownloads, usePaged } from '../hooks';
 import { t } from '../i18n';
+import { useLibrary } from '../library';
 import { usePlayer } from '../player/PlayerNavigation';
 
-/** Stable selection key for any favorite. */
-const favKey = (kind: 'live' | 'movie' | 'series', id: string) => `${kind}:${id}`;
+const ALL_PLAYLISTS = 'all' as const;
+type PlaylistFilter = typeof ALL_PLAYLISTS | number;
+type Fav = { playlistId: number; contentId: string };
+
+/** Playlist stays in every interaction key even though content ids are globally stable. */
+const favKey = (kind: 'live' | 'movie' | 'series', favorite: Fav) =>
+  `${kind}:${favorite.playlistId}:${favorite.contentId}`;
+
+const EMPTY_GUIDE_IDS = new Set<string>();
 
 export function FavoritesScreen() {
-  const playlistId = Number(useParams().playlistId);
   const navigate = useNavigate();
   const { playChannel, playCatchup } = usePlayer();
-  const favorites = useAsync(() => api.favoritesResolved(playlistId), [playlistId]);
+  const { playlists } = useLibrary();
+  const favorites = useAsync(api.userFavoritesResolved, []);
   const { data: resolved, reload } = favorites;
-  const { guideIds } = useGuideIds(playlistId);
   const downloads = useDownloads();
+  const [filter, setFilter] = useState<PlaylistFilter>(ALL_PLAYLISTS);
   const [guideChannel, setGuideChannel] = useState<Channel | null>(null);
-  const [nowAiring, setNowAiring] = useState<Record<string, Programme>>({});
-  type Fav = { contentId: string };
+  const [guideIds, setGuideIds] = useState<Record<number, Set<string>>>({});
+  const [nowAiring, setNowAiring] = useState<Record<number, Record<string, Programme>>>({});
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Map<string, Fav>>(new Map());
   const [pendingDelete, setPendingDelete] = useState(false);
 
+  const playlistIds = useMemo(() => {
+    const ids = new Set<number>();
+    resolved?.live.forEach((item) => ids.add(item.playlistId));
+    resolved?.movies.forEach((item) => ids.add(item.playlistId));
+    resolved?.series.forEach((item) => ids.add(item.playlistId));
+    return ids;
+  }, [resolved]);
+  const filterPlaylists = useMemo(() => {
+    const known = (playlists ?? []).filter((playlist) => playlistIds.has(playlist.id));
+    const knownIds = new Set(known.map((playlist) => playlist.id));
+    return [
+      ...known.map(({ id, name }) => ({ id, name })),
+      ...[...playlistIds]
+        .filter((id) => !knownIds.has(id))
+        .map((id) => ({ id, name: String(id) })),
+    ];
+  }, [playlistIds, playlists]);
+
+  useEffect(() => {
+    if (filter !== ALL_PLAYLISTS && !playlistIds.has(filter)) setFilter(ALL_PLAYLISTS);
+  }, [filter, playlistIds]);
+
+  const visible = useMemo(() => ({
+    live: (resolved?.live ?? []).filter((item) =>
+      filter === ALL_PLAYLISTS || item.playlistId === filter),
+    movies: (resolved?.movies ?? []).filter((item) =>
+      filter === ALL_PLAYLISTS || item.playlistId === filter),
+    series: (resolved?.series ?? []).filter((item) =>
+      filter === ALL_PLAYLISTS || item.playlistId === filter),
+  }), [filter, resolved]);
+
+  const livePlaylistIds = useMemo(
+    () => [...new Set((resolved?.live ?? []).map((item) => item.playlistId))].sort((a, b) => a - b),
+    [resolved],
+  );
+  const livePlaylistKey = livePlaylistIds.join(',');
   useEffect(() => {
     let cancelled = false;
-    const load = () => api.nowAiring(playlistId).then((d) => { if (!cancelled) setNowAiring(d); }).catch(() => {});
-    load();
-    const timer = setInterval(load, 60_000);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, [playlistId]);
-  // Switching playlists clears the selection.
-  useEffect(() => { setSelectMode(false); setSelected(new Map()); }, [playlistId]);
+    setGuideIds({});
+    setNowAiring({});
+    livePlaylistIds.forEach((playlistId) => {
+      api.guideIds(playlistId).then((ids) => {
+        if (!cancelled) {
+          setGuideIds((current) => ({ ...current, [playlistId]: new Set(ids) }));
+        }
+      }).catch(() => {});
+      api.nowAiring(playlistId).then((airing) => {
+        if (!cancelled) {
+          setNowAiring((current) => ({ ...current, [playlistId]: airing }));
+        }
+      }).catch(() => {});
+    });
+    return () => { cancelled = true; };
+  // The sorted value is the dependency; a new array with the same ids must not refetch.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [livePlaylistKey]);
 
-  // Unfavorite with an Undo toast that re-adds it. A removal that failed must not be
-  // confirmed: the heart is still filled and offering Undo would be a lie.
-  const remove = async (contentId: string) => {
+  // Unfavorite through the playlist that owns this row. Undo uses that same identity.
+  const remove = async (favorite: Fav) => {
     const undo = async () => {
       try {
-        await api.addFavorite(playlistId, contentId);
+        await api.addFavorite(favorite.playlistId, favorite.contentId);
       } catch (cause) {
         reportError(cause, { [GENERIC]: () => t('favorites.saveFailed') });
       }
       reload();
     };
     try {
-      await api.removeFavorite(playlistId, contentId);
+      await api.removeFavorite(favorite.playlistId, favorite.contentId);
     } catch (cause) {
       reportError(cause, { [GENERIC]: () => t('favorites.saveFailed') });
       reload();
@@ -68,50 +124,63 @@ export function FavoritesScreen() {
     });
   };
 
-  const pagedLive = usePaged(resolved?.live ?? [], `live:${playlistId}`);
-  const pagedMovies = usePaged(resolved?.movies ?? [], `movies:${playlistId}`);
-  const pagedSeries = usePaged(resolved?.series ?? [], `series:${playlistId}`);
-
+  const pagedLive = usePaged(visible.live, `live:${filter}`);
+  const pagedMovies = usePaged(visible.movies, `movies:${filter}`);
+  const pagedSeries = usePaged(visible.series, `series:${filter}`);
   const isEmpty = resolved && !resolved.live.length && !resolved.movies.length && !resolved.series.length;
   const now = Date.now();
 
-  // All favorites keyed by selection key, for select-all.
+  // Select-all follows the active playlist filter, as on Android.
   const allEntries = useMemo(() => {
     const map = new Map<string, Fav>();
-    resolved?.live.forEach((c) => map.set(favKey('live', String(c.id)), { contentId: c.contentId }));
-    resolved?.movies.forEach((c) => map.set(favKey('movie', String(c.id)), { contentId: c.contentId }));
-    resolved?.series.forEach((s) => {
-      const routeKey = s.xtreamSeriesId != null ? `x:${s.xtreamSeriesId}` : s.seriesKey;
-      map.set(favKey('series', routeKey), { contentId: s.contentId });
+    visible.live.forEach((item) => {
+      const favorite = { playlistId: item.playlistId, contentId: item.contentId };
+      map.set(favKey('live', favorite), favorite);
+    });
+    visible.movies.forEach((item) => {
+      const favorite = { playlistId: item.playlistId, contentId: item.contentId };
+      map.set(favKey('movie', favorite), favorite);
+    });
+    visible.series.forEach((item) => {
+      const favorite = { playlistId: item.playlistId, contentId: item.contentId };
+      map.set(favKey('series', favorite), favorite);
     });
     return map;
+  }, [visible]);
+
+  useEffect(() => {
+    const available = new Set<string>();
+    resolved?.live.forEach((item) => available.add(favKey('live', item)));
+    resolved?.movies.forEach((item) => available.add(favKey('movie', item)));
+    resolved?.series.forEach((item) => available.add(favKey('series', item)));
+    setSelected((current) => new Map([...current].filter(([key]) => available.has(key))));
   }, [resolved]);
 
-  const toggle = (selKey: string, fav: Fav) => {
-    setSelected((prev) => {
-      const next = new Map(prev);
-      if (next.has(selKey)) next.delete(selKey); else next.set(selKey, fav);
+  const toggle = (selectionKey: string, favorite: Fav) => {
+    setSelected((current) => {
+      const next = new Map(current);
+      if (next.has(selectionKey)) next.delete(selectionKey); else next.set(selectionKey, favorite);
       return next;
     });
   };
-  const allSelected = allEntries.size > 0 && selected.size === allEntries.size;
+  const allSelected = allEntries.size > 0 && [...allEntries.keys()].every((key) => selected.has(key));
   const exitSelect = () => { setSelectMode(false); setSelected(new Map()); };
-  // Long-press enters select mode with that item already selected.
-  const startSelect = (selKey: string, fav: Fav) => { setSelectMode(true); setSelected(new Map([[selKey, fav]])); };
+  const startSelect = (selectionKey: string, favorite: Fav) => {
+    setSelectMode(true);
+    setSelected(new Map([[selectionKey, favorite]]));
+  };
 
   const deleteSelected = async () => {
-    const favs = [...new Map([...selected.values()].map((f) => [f.contentId, f])).values()];
+    const entries = [...selected.values()];
     const results = await Promise.allSettled(
-      favs.map((f) => api.removeFavorite(playlistId, f.contentId)),
+      entries.map((favorite) => api.removeFavorite(favorite.playlistId, favorite.contentId)),
     );
+    setPendingDelete(false);
     exitSelect();
     reload();
-    // Undo offers back exactly what left, and a partial failure is reported once.
-    const removed = favs.filter((_, index) => results[index]?.status === 'fulfilled');
+    const removed = entries.filter((_, index) => results[index]?.status === 'fulfilled');
     const rejected = results.find((result) => result.status === 'rejected');
-    if (rejected) {
-      reportError(rejected.reason, { [GENERIC]: () => t('favorites.saveFailed') });
-    }
+    if (rejected) reportError(rejected.reason, { [GENERIC]: () => t('favorites.saveFailed') });
     if (removed.length === 0) return;
     toast(t('favorites.removedN', { count: removed.length }), {
       tone: 'success',
@@ -119,12 +188,10 @@ export function FavoritesScreen() {
         label: t('common.undo'),
         onClick: () => {
           void Promise.allSettled(
-            removed.map((f) => api.addFavorite(playlistId, f.contentId)),
+            removed.map((favorite) => api.addFavorite(favorite.playlistId, favorite.contentId)),
           ).then((undone) => {
             const failure = undone.find((result) => result.status === 'rejected');
-            if (failure) {
-              reportError(failure.reason, { [GENERIC]: () => t('favorites.saveFailed') });
-            }
+            if (failure) reportError(failure.reason, { [GENERIC]: () => t('favorites.saveFailed') });
             reload();
           });
         },
@@ -132,9 +199,8 @@ export function FavoritesScreen() {
     });
   };
 
-  // In select mode a row click toggles selection, else runs the action.
-  const rowClick = (selKey: string, fav: Fav, open: () => void) =>
-    () => (selectMode ? toggle(selKey, fav) : open());
+  const rowClick = (selectionKey: string, favorite: Fav, open: () => void) =>
+    () => (selectMode ? toggle(selectionKey, favorite) : open());
 
   const headerActions = !resolved || isEmpty ? undefined : selectMode ? (
     <>
@@ -145,7 +211,8 @@ export function FavoritesScreen() {
       <IconBtn name="close" label={t('common.cancel')} className="muted" onClick={exitSelect} />
     </>
   ) : (
-    <IconBtn name="checklist" label={t('favorites.select')} className="muted" onClick={() => setSelectMode(true)} />
+    <IconBtn name="checklist" label={t('favorites.select')} className="muted"
+             onClick={() => setSelectMode(true)} />
   );
 
   return (
@@ -155,83 +222,109 @@ export function FavoritesScreen() {
         actions={headerActions}
       />
       {asyncFallback(favorites)}
-      {isEmpty && (
-        <EmptyState title={t('favorites.emptyTitle')} subtitle={t('favorites.emptySub')} />
-      )}
+      {isEmpty && <EmptyState title={t('favorites.emptyTitle')} subtitle={t('favorites.emptySub')} />}
       {resolved && !isEmpty && (
-        <div className="list">
-          {resolved.live.length > 0 &&
-            <div className="section-header cursor-default">{t('nav.live')} · {resolved.live.length}</div>}
-          {pagedLive.pageItems.map((c) => {
-            const airing = c.tvgId ? nowAiring[c.tvgId] : undefined;
-            const sk = favKey('live', String(c.id));
-            return (
-              <MediaListRow
-                key={c.id} title={c.name} subtitle={c.groupTitle} logo={c.logo} kind={c.kind}
-                tags={mediaTags(c.name, 1)}
-                airing={airing?.title}
-                airingProgress={airing
-                  ? Math.min(1, Math.max(0, (now - airing.startMs) / Math.max(1, airing.endMs - airing.startMs)))
-                  : null}
-                isFavorite onToggleFavorite={() => remove(c.contentId)}
-                onGuide={canShowGuide(c, guideIds) ? () => setGuideChannel(c) : null}
-                guideHighlight={hasCatchup(c)}
-                selectable={selectMode} selected={selected.has(sk)}
-                onLongPress={selectMode ? undefined : () => startSelect(sk, { contentId: c.contentId })}
-                onClick={rowClick(sk, { contentId: c.contentId }, () => playChannel(c.id))}
+        <>
+          {filterPlaylists.length > 1 && !selectMode && (
+            <div className="search-wrap">
+              <Segmented<PlaylistFilter>
+                className="scroll"
+                options={[
+                  [ALL_PLAYLISTS, t('favorites.filterAll')],
+                  ...filterPlaylists.map(({ id, name }) => [id, name] as [number, string]),
+                ]}
+                selected={filter}
+                onSelect={setFilter}
               />
-            );
-          })}
-          <Pager page={pagedLive.page} pages={pagedLive.pages} onPage={pagedLive.setPage} />
+            </div>
+          )}
+          <div className="list">
+            {visible.live.length > 0 &&
+              <div className="section-header cursor-default">{t('nav.live')} · {visible.live.length}</div>}
+            {pagedLive.pageItems.map((channel) => {
+              const favorite = { playlistId: channel.playlistId, contentId: channel.contentId };
+              const selectionKey = favKey('live', favorite);
+              const airing = channel.tvgId
+                ? nowAiring[channel.playlistId]?.[channel.tvgId]
+                : undefined;
+              return (
+                <MediaListRow
+                  key={selectionKey} title={channel.name} subtitle={channel.groupTitle}
+                  logo={channel.logo} kind={channel.kind} tags={mediaTags(channel.name, 1)}
+                  airing={airing?.title}
+                  airingProgress={airing
+                    ? Math.min(1, Math.max(0, (now - airing.startMs) / Math.max(1, airing.endMs - airing.startMs)))
+                    : null}
+                  isFavorite onToggleFavorite={() => remove(favorite)}
+                  onGuide={canShowGuide(
+                    channel,
+                    guideIds[channel.playlistId] ?? EMPTY_GUIDE_IDS,
+                  ) ? () => setGuideChannel(channel) : null}
+                  guideHighlight={hasCatchup(channel)}
+                  selectable={selectMode} selected={selected.has(selectionKey)}
+                  onLongPress={selectMode ? undefined : () => startSelect(selectionKey, favorite)}
+                  onClick={rowClick(selectionKey, favorite, () => playChannel(channel.contentId))}
+                />
+              );
+            })}
+            <Pager page={pagedLive.page} pages={pagedLive.pages} onPage={pagedLive.setPage} />
 
-          {resolved.movies.length > 0 &&
-            <div className="section-header cursor-default">{t('nav.movies')} · {resolved.movies.length}</div>}
-          {pagedMovies.pageItems.map((c) => {
-            const sk = favKey('movie', String(c.id));
-            return (
-              <MediaListRow
-                key={c.id} title={c.name} subtitle={c.groupTitle} logo={c.logo} kind={c.kind}
-                tags={mediaTags(c.name, 1)}
-                isFavorite onToggleFavorite={() => remove(c.contentId)}
-                downloadSlot={
-                  <DownloadStateIcon state={downloads.byContentId.get(c.contentId)}
-                                     onDownload={() => api.enqueueDownload(c.contentId)} onChanged={downloads.refresh} />
-                }
-                selectable={selectMode} selected={selected.has(sk)}
-                onLongPress={selectMode ? undefined : () => startSelect(sk, { contentId: c.contentId })}
-                onClick={rowClick(sk, { contentId: c.contentId }, () => navigate(`/movie/${c.contentId}`))}
-              />
-            );
-          })}
-          <Pager page={pagedMovies.page} pages={pagedMovies.pages} onPage={pagedMovies.setPage} />
+            {visible.movies.length > 0 &&
+              <div className="section-header cursor-default">{t('nav.movies')} · {visible.movies.length}</div>}
+            {pagedMovies.pageItems.map((channel) => {
+              const favorite = { playlistId: channel.playlistId, contentId: channel.contentId };
+              const selectionKey = favKey('movie', favorite);
+              return (
+                <MediaListRow
+                  key={selectionKey} title={channel.name} subtitle={channel.groupTitle}
+                  logo={channel.logo} kind={channel.kind} tags={mediaTags(channel.name, 1)}
+                  isFavorite onToggleFavorite={() => remove(favorite)}
+                  downloadSlot={
+                    <DownloadStateIcon state={downloads.byContentId.get(channel.contentId)}
+                                       onDownload={() => api.enqueueDownload(channel.contentId)}
+                                       onChanged={downloads.refresh} />
+                  }
+                  selectable={selectMode} selected={selected.has(selectionKey)}
+                  onLongPress={selectMode ? undefined : () => startSelect(selectionKey, favorite)}
+                  onClick={rowClick(
+                    selectionKey,
+                    favorite,
+                    () => navigate(`/movie/${channel.contentId}`),
+                  )}
+                />
+              );
+            })}
+            <Pager page={pagedMovies.page} pages={pagedMovies.pages} onPage={pagedMovies.setPage} />
 
-          {resolved.series.length > 0 &&
-            <div className="section-header cursor-default">{t('nav.series')} · {resolved.series.length}</div>}
-          {pagedSeries.pageItems.map((s) => {
-            const routeKey = s.xtreamSeriesId != null ? `x:${s.xtreamSeriesId}` : s.seriesKey;
-            const sk = favKey('series', routeKey);
-            return (
-              <MediaListRow
-                key={routeKey} title={s.seriesKey}
-                subtitle={s.groupTitle + (s.count > 0 ? ` · ${t('browse.episodes', { count: s.count })}` : '')}
-                logo={s.logo} kind={ChannelKind.SERIES} chevron
-                isFavorite onToggleFavorite={() => remove(s.contentId)}
-                selectable={selectMode} selected={selected.has(sk)}
-                onLongPress={selectMode ? undefined : () => startSelect(sk, { contentId: s.contentId })}
-                onClick={rowClick(sk, { contentId: s.contentId }, () => s.xtreamSeriesId != null
-                  ? navigate(`/xseries/${playlistId}/${encodeURIComponent(s.xtreamSeriesId)}`)
-                  : navigate(`/series/${playlistId}/${encodeURIComponent(s.seriesKey)}`))}
-              />
-            );
-          })}
-          <Pager page={pagedSeries.page} pages={pagedSeries.pages} onPage={pagedSeries.setPage} />
-        </div>
+            {visible.series.length > 0 &&
+              <div className="section-header cursor-default">{t('nav.series')} · {visible.series.length}</div>}
+            {pagedSeries.pageItems.map((series) => {
+              const favorite = { playlistId: series.playlistId, contentId: series.contentId };
+              const selectionKey = favKey('series', favorite);
+              return (
+                <MediaListRow
+                  key={selectionKey} title={series.seriesKey}
+                  subtitle={series.groupTitle
+                    + (series.count > 0 ? ` · ${t('browse.episodes', { count: series.count })}` : '')}
+                  logo={series.logo} kind={ChannelKind.SERIES} chevron
+                  isFavorite onToggleFavorite={() => remove(favorite)}
+                  selectable={selectMode} selected={selected.has(selectionKey)}
+                  onLongPress={selectMode ? undefined : () => startSelect(selectionKey, favorite)}
+                  onClick={rowClick(selectionKey, favorite, () => series.xtreamSeriesId != null
+                    ? navigate(`/xseries/${series.playlistId}/${encodeURIComponent(series.xtreamSeriesId)}`)
+                    : navigate(`/series/${series.playlistId}/${encodeURIComponent(series.seriesKey)}`))}
+                />
+              );
+            })}
+            <Pager page={pagedSeries.page} pages={pagedSeries.pages} onPage={pagedSeries.setPage} />
+          </div>
+        </>
       )}
 
       {pendingDelete && (
         <ConfirmDialog
           title={t('favorites.deleteTitle')}
-          message={t('favorites.deleteMessage', { count: new Set([...selected.values()].map((f) => f.contentId)).size })}
+          message={t('favorites.deleteMessage', { count: selected.size })}
           confirmLabel={t('favorites.removeConfirm')}
           onConfirm={deleteSelected}
           onDismiss={() => setPendingDelete(false)}
@@ -242,7 +335,7 @@ export function FavoritesScreen() {
         <GuideSheet
           channel={guideChannel}
           onDismiss={() => setGuideChannel(null)}
-          onPlayCatchup={(cid, s, e) => playCatchup(cid, s, e)}
+          onPlayCatchup={(channelId, start, end) => playCatchup(channelId, start, end)}
         />
       )}
     </>

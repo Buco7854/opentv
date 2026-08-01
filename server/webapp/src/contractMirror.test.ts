@@ -47,6 +47,8 @@ const MIRRORS: ReadonlyArray<readonly [string, string]> = [
   ['SearchResultsDto', 'SearchResults'],
   ['XtreamSeriesDetailDto', 'XtreamSeriesDetail'],
   ['FavoritesResolvedDto', 'FavoritesResolved'],
+  ['UserFavoriteSeriesDto', 'UserFavoriteSeries'],
+  ['UserFavoritesResolvedDto', 'UserFavoritesResolved'],
   ['SettingsDto', 'Settings'],
   ['SessionHeartbeatDto', 'SessionHeartbeat'],
   ['SyncStateDto', 'SyncState'],

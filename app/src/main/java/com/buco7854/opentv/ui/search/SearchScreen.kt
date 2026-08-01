@@ -143,15 +143,6 @@ class SearchViewModel private constructor(
     private fun str(resId: Int, vararg args: Any) =
         application?.getString(resId, *args).orEmpty()
 
-    /** Debounced to throttle DB hits while typing. */
-    init {
-        viewModelScope.launch {
-            query.debounce(250).distinctUntilChanged().collect(::requestSearch)
-        }
-        observeFavorites()
-        reloadGuideIds()
-    }
-
     /** Same favourite affordance as the browse rows. */
     private val mutableFavoriteKeys = MutableStateFlow<Set<String>>(emptySet())
     val favoriteKeys: StateFlow<Set<String>> = mutableFavoriteKeys
@@ -215,6 +206,17 @@ class SearchViewModel private constructor(
 
     private val mutableGuideIds = MutableStateFlow<Set<String>>(emptySet())
     val guideIds: StateFlow<Set<String>> = mutableGuideIds
+
+    /** Debounced to throttle DB hits while typing. */
+    init {
+        // viewModelScope uses Main.immediate. Every field touched by these coroutines must be
+        // initialized before launch because their bodies can enter before construction returns.
+        viewModelScope.launch {
+            query.debounce(250).distinctUntilChanged().collect(::requestSearch)
+        }
+        observeFavorites()
+        reloadGuideIds()
+    }
 
     private fun requestSearch(raw: String) {
         val generation = ++searchGeneration

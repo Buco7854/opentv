@@ -21,14 +21,12 @@ import com.buco7854.opentv.serverdata.AuthMethod
 import com.buco7854.opentv.serverdata.ClientKind
 import com.buco7854.opentv.serverdata.UserRole
 import com.buco7854.opentv.serverdata.UserStatus
-import com.buco7854.opentv.serverdata.createOpenTvServerStorage
 import com.buco7854.opentv.serverdata.db.ContentIdentityRow
 import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
 import com.buco7854.opentv.serverdata.db.UserPlaylistGrantRow
 import com.buco7854.opentv.serverdata.db.UserResumeRow
 import com.buco7854.opentv.serverdata.db.UserRow
 import java.net.URI
-import java.nio.file.Files
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -444,9 +442,9 @@ class PlaylistCapabilitiesTest {
     }
 
     private fun withFixture(block: suspend (Fixture) -> Unit) = runTest {
-        val directory = Files.createTempDirectory("playlist-capabilities")
-        val persistence = createOpenTvServerStorage(directory.resolve("opentv.db").toString())
-        val storage = persistence.catalog
+        val persistence = ServerTestPersistence("playlist-capabilities")
+        val directory = persistence.directory
+        val storage = persistence.storage
         val database = persistence.database
         try {
             listOf(
@@ -475,6 +473,15 @@ class PlaylistCapabilitiesTest {
             val content = ContentIdentityService(database, storage) { NOW }
             val auth = AuthService(database, authConfig(), directory)
             val settings = ServerSettings(directory, pageSize = 50)
+            val downloads = DownloadManager(
+                database,
+                ServerHttp(),
+                settings,
+                directory,
+                ProviderConnections(),
+                connectionLimit = { Int.MAX_VALUE },
+            )
+            persistence.closeBeforeDatabase(downloads::close)
             val service = PlaylistApplicationService(
                 storage,
                 playlists,
@@ -486,19 +493,12 @@ class PlaylistCapabilitiesTest {
                 content,
                 UserActivityService(database, auth, content) { NOW },
                 database,
-                DownloadManager(
-                    database,
-                    ServerHttp(),
-                    settings,
-                    directory,
-                    ProviderConnections(),
-                    connectionLimit = { Int.MAX_VALUE },
-                ),
+                downloads,
             )
+            persistence.closeBeforeDatabase(service::close)
             block(Fixture(storage, database, service))
         } finally {
-            storage.close()
-            directory.toFile().deleteRecursively()
+            persistence.close()
         }
     }
 

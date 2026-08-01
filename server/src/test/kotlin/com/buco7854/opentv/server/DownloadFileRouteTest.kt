@@ -7,7 +7,6 @@ import com.buco7854.opentv.serverdata.ClientKind
 import com.buco7854.opentv.serverdata.DownloadBlobStatus
 import com.buco7854.opentv.serverdata.UserRole
 import com.buco7854.opentv.serverdata.UserStatus
-import com.buco7854.opentv.serverdata.createOpenTvServerStorage
 import com.buco7854.opentv.serverdata.db.AuthSessionRow
 import com.buco7854.opentv.serverdata.db.ContentIdentityRow
 import com.buco7854.opentv.serverdata.db.DownloadBlobRow
@@ -260,9 +259,9 @@ class DownloadFileRouteTest {
         sharedOther: Boolean = false,
         block: suspend ApplicationTestBuilder.(Fixture) -> Unit,
     ) = testApplication {
-        val dir = Files.createTempDirectory("download-file-route")
-        val persistence = createOpenTvServerStorage(dir.resolve("opentv.db").toString())
-        val storage = persistence.catalog
+        val persistence = ServerTestPersistence("download-file-route")
+        val dir = persistence.directory
+        val storage = persistence.storage
         val db = persistence.database
         val settings = ServerSettings(dir, pageSize = 50)
         val cipher = StreamCipher(settings.streamKey)
@@ -274,6 +273,7 @@ class DownloadFileRouteTest {
             ProviderConnections(),
             connectionLimit = { Int.MAX_VALUE },
         )
+        persistence.closeBeforeDatabase(manager::close)
         try {
             val path = if (unsafePath) {
                 dir.resolve("escape.bin")
@@ -350,9 +350,7 @@ class DownloadFileRouteTest {
             }
             block(fixture)
         } finally {
-            manager.close()
-            storage.close()
-            dir.toFile().deleteRecursively()
+            persistence.close()
         }
     }
 

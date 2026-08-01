@@ -140,7 +140,7 @@ function AuthenticatedApp() {
                 <Route path="/" element={<HomeScreen />} />
                 <Route path="/browse/:playlistId" element={forPlaylist(<BrowseScreen />)} />
                 <Route path="/search/:playlistId" element={forPlaylist(<SearchScreen />)} />
-                <Route path="/favorites/:playlistId" element={forPlaylist(<FavoritesScreen />)} />
+                <Route path="/favorites" element={<FavoritesScreen />} />
                 <Route path="/movie/:channelId" element={<MovieDetailScreen />} />
                 <Route path="/episode/:channelId" element={<EpisodeDetailScreen />} />
                 <Route path="/series/:playlistId/:seriesKey" element={forPlaylist(<SeriesDetailScreen />)} />

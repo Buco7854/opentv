@@ -75,6 +75,7 @@ fun Route.api(
             )
             adminAuthRoutes(graph.auth)
             playlistRoutes(graph.apiServices.playlists)
+            favoriteRoutes(graph.apiServices.playlists)
             libraryRoutes(graph.apiServices.library)
             downloadRoutes(graph.apiServices.downloads)
             sessionRoutes(graph.apiServices.sessions, graph.trustedProxies)

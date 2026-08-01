@@ -5,7 +5,6 @@ import com.buco7854.opentv.data.db.PlaylistRow
 import com.buco7854.opentv.serverdata.DownloadBlobStatus
 import com.buco7854.opentv.serverdata.UserRole
 import com.buco7854.opentv.serverdata.UserStatus
-import com.buco7854.opentv.serverdata.createOpenTvServerDatabase
 import com.buco7854.opentv.serverdata.db.ContentIdentityRow
 import com.buco7854.opentv.serverdata.db.DownloadBlobRow
 import com.buco7854.opentv.serverdata.db.UserDownloadRow
@@ -105,8 +104,9 @@ class DownloadManagerCleanupAdversarialTest {
     }
 
     private class Fixture {
-        private val dir = Files.createTempDirectory("download-cleanup-review")
-        val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
+        private val persistence = ServerTestPersistence("download-cleanup-review")
+        private val dir = persistence.directory
+        val db = persistence.database
         val manager = DownloadManager(
             db = db,
             http = ServerHttp(),
@@ -119,6 +119,7 @@ class DownloadManagerCleanupAdversarialTest {
         val downloadPath = dir.resolve("user-downloads/movie.bin")
 
         init {
+            persistence.closeBeforeDatabase(manager::close)
             runBlocking {
                 db.playlistDao().insert(PlaylistRow(id = playlistId, name = "Provider", url = null))
                 db.users().insert(
@@ -202,9 +203,7 @@ class DownloadManagerCleanupAdversarialTest {
         }
 
         fun close() {
-            manager.close()
-            db.close()
-            dir.toFile().deleteRecursively()
+            persistence.close()
         }
     }
 }

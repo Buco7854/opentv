@@ -106,12 +106,12 @@ class LiveRelay(
             }
         }
 
-        /** Cut a member's stream (left or kicked); its response ends and the client falls back to
-         *  solo. No-op if this relay doesn't hold that session. */
+        /** Cut a member's stream (left, kicked, or lease ended). Unlike an ordinary transport
+         *  reconnect, an explicit lifecycle drop has no reason to retain an empty upstream read. */
         fun drop(sid: String) {
             synchronized(lifecycle) {
                 members.remove(sid)?.cancel()
-                closeWhenIdle()
+                if (members.isEmpty()) stop()
             }
         }
 

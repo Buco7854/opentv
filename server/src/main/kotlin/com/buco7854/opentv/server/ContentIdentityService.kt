@@ -424,6 +424,14 @@ class ContentIdentityService(
     private fun m3uSeriesKey(seriesKey: String) =
         IdentityKey(ChannelKind.SERIES, fingerprint("m3u:series:${seriesKey.trim()}"))
 
+    /** Matches already-resolved favorite identities to series catalog rows without another
+     * identity query for every playlist represented on the favorites page. */
+    internal fun xtreamSeriesFingerprint(seriesId: Long): String =
+        xtreamSeriesKey(seriesId).fingerprint
+
+    internal fun m3uSeriesFingerprint(seriesKey: String): String =
+        m3uSeriesKey(seriesKey).fingerprint
+
     private fun newIdentity(
         playlistId: Long,
         key: IdentityKey,

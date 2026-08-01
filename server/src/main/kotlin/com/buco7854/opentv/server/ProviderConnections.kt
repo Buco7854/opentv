@@ -13,12 +13,13 @@ fun providerKeyOf(url: String): String =
  * downloads all draw on it, because an Xtream panel counts them together against its
  * max_connections - the panel can't tell a live stream from a movie, so neither do we.
  *
- * A connection is identified by its content ([shareKey]): two viewers of the same VOD share
- * one (the remux reads it once), while each live viewer needs its own. A new stream is refused
- * once the provider's distinct streams fill the cap - refusing the newcomer rather than cutting
- * off whoever is already watching - though it may still evict background downloads to make room.
- * A download only takes a free slot and never evicts. Evictions run outside the lock so an
- * evicted holder can take its own locks without deadlocking.
+ * A connection is identified by its prepared pipeline ([shareKey]). Viewers share only when the
+ * playback registry deliberately gives them the same group (currently a watch-together room);
+ * two otherwise-independent leases, even for the same content, have separate keys and seats. A
+ * new stream is refused once the provider's distinct streams fill the cap - refusing the newcomer
+ * rather than cutting off whoever is already watching - though it may still evict background
+ * downloads to make room. A download only takes a free slot and never evicts. Evictions run
+ * outside the lock so an evicted holder can take its own locks without deadlocking.
  */
 class ProviderConnections(
     private val clock: ServerClock = ServerClock.SYSTEM,

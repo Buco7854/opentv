@@ -491,6 +491,91 @@ class PlaylistApplicationService(
         }
     }
 
+    /** Every favorite owned by [actor], across the playlists currently visible to them. */
+    suspend fun resolvedFavorites(actor: Actor): UserFavoritesResolvedDto {
+        // Hold the granted catalogs stable across the identity and catalog reads. The same
+        // current entitlement snapshot filters both the gates and every favorite row.
+        val access = auth.playlistAccess(actor)
+        val playlistIds = storage.playlists.getAll()
+            .filter { access.allows(it.id) }
+            .map(Playlist::id)
+            .sorted()
+        suspend fun resolve(index: Int): UserFavoritesResolvedDto =
+            if (index == playlistIds.size) {
+                resolveUserFavorites(actor, access)
+            } else {
+                content.withStablePlaylist(playlistIds[index]) { resolve(index + 1) }
+            }
+        return resolve(0)
+    }
+
+    private suspend fun resolveUserFavorites(
+        actor: Actor,
+        access: PlaylistAccess,
+    ): UserFavoritesResolvedDto {
+        val favorites = activity.authorizedFavorites(actor.userId, access)
+        val channels = favorites.mapNotNull { it.currentChannelId }
+            .distinct()
+            .chunked(FAVORITE_RESOLUTION_BATCH_SIZE)
+            .flatMap { storage.channels.getMany(it) }
+            .associateBy { it.id }
+        val resolvedChannels = favorites.mapNotNull { favorite ->
+            channels[favorite.currentChannelId]?.let { favorite to it }
+        }
+        val live = resolvedChannels.filter { it.second.kind == ChannelKind.LIVE }
+            .map { (favorite, channel) ->
+                channel.toDto(cipher, favorite.contentId, actor.userId)
+            }
+        val movies = resolvedChannels.filter { it.second.kind == ChannelKind.MOVIE }
+            .map { (favorite, channel) ->
+                channel.toDto(cipher, favorite.contentId, actor.userId)
+            }
+        val series = resolveUserFavoriteSeries(
+            actor,
+            favorites.filter { it.kind == ChannelKind.SERIES },
+        )
+        return UserFavoritesResolvedDto(live, movies, series)
+    }
+
+    private suspend fun resolveUserFavoriteSeries(
+        actor: Actor,
+        favorites: List<AuthorizedFavorite>,
+    ): List<UserFavoriteSeriesDto> {
+        val resolved = mutableMapOf<String, UserFavoriteSeriesDto>()
+        favorites.groupBy(AuthorizedFavorite::playlistId).forEach { (playlistId, playlistFavorites) ->
+            val byFingerprint = playlistFavorites.associateBy(AuthorizedFavorite::providerFingerprint)
+            storage.xtreamSeries.observeAll(playlistId).first().forEach { entry ->
+                val favorite = byFingerprint[content.xtreamSeriesFingerprint(entry.seriesId)]
+                    ?: return@forEach
+                resolved[favorite.contentId] = UserFavoriteSeriesDto(
+                    contentId = favorite.contentId,
+                    playlistId = playlistId,
+                    seriesKey = entry.name,
+                    count = 0,
+                    logo = cipher.encryptOrNull(entry.cover, actor.userId, playlistId),
+                    groupTitle = entry.categoryName,
+                    xtreamSeriesId = entry.seriesId.toString(),
+                )
+            }
+            storage.channels.observeAllSeries(playlistId).first()
+                .filterNot { it.seriesKey.startsWith("xs:") }
+                .forEach { entry ->
+                    val favorite = byFingerprint[content.m3uSeriesFingerprint(entry.seriesKey)]
+                        ?: return@forEach
+                    resolved[favorite.contentId] = UserFavoriteSeriesDto(
+                        contentId = favorite.contentId,
+                        playlistId = playlistId,
+                        seriesKey = entry.seriesKey,
+                        count = entry.count,
+                        logo = cipher.encryptOrNull(entry.logo, actor.userId, playlistId),
+                        groupTitle = entry.groupTitle,
+                    )
+                }
+        }
+        return favorites.mapNotNull { resolved[it.contentId] }
+            .sortedBy { it.seriesKey.lowercase() }
+    }
+
     suspend fun episodes(
         actor: Actor,
         id: Long,
@@ -623,6 +708,7 @@ private fun searchMatchTier(name: String, term: String): Int {
 
 private const val MAX_SEARCH_QUERY_CHARS = 80
 private const val MAX_GROUP_TITLE_CHARS = 500
+private const val FAVORITE_RESOLUTION_BATCH_SIZE = 500
 private val Playlist.mode: String get() = when {
     url != null -> "url"
     xtreamBase != null -> "xtream"

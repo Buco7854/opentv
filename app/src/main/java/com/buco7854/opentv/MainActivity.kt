@@ -1,5 +1,6 @@
 package com.buco7854.opentv
 
+import android.app.Application
 import android.net.Uri
 import android.content.Intent
 import android.os.Bundle
@@ -28,7 +29,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.source.CatalogItem
@@ -61,6 +64,11 @@ import com.buco7854.opentv.ui.shell.OpenTvDock
 import com.buco7854.opentv.ui.shell.PlaylistsPanel
 import com.buco7854.opentv.hub.BrowserSignInReturn
 import com.buco7854.opentv.ui.theme.OpenTvTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -153,12 +161,49 @@ object Routes {
         hubId?.let { "$HUB_SIGN_IN?hubId=$it" } ?: HUB_SIGN_IN
 }
 
+internal data class CatalogSourceAvailability(
+    val localPlaylistIds: List<Long>,
+    val signedInHubIds: Set<Long>,
+) {
+    fun contains(source: SourceId): Boolean = when (source) {
+        is SourceId.LocalPlaylist -> source.playlistId in localPlaylistIds
+        is SourceId.Hub -> source.hubId in signedInHubIds
+        is SourceId.HubConnection -> false
+    }
+
+    val fallback: SourceId?
+        get() = localPlaylistIds.firstOrNull()?.let(SourceId::LocalPlaylist)
+}
+
+internal class CatalogSourceAvailabilityViewModel(app: Application) : AndroidViewModel(app) {
+    private val graph = OpenTvApp.graph
+
+    val availability = combine(
+        graph.playlists.playlists,
+        graph.hubAccounts.sources,
+    ) { playlists, hubs ->
+        // Vault decryption can consult Android Keystore. Keep it off the UI thread while the
+        // shell decides whether a remembered hub still has a usable local session.
+        withContext(Dispatchers.IO) {
+            CatalogSourceAvailability(
+                localPlaylistIds = playlists.map { it.id },
+                signedInHubIds = hubs.mapNotNullTo(mutableSetOf()) { hub ->
+                    hub.id.takeIf { graph.hubVault.token(hub.id) != null }
+                },
+            )
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+}
+
 /** Dock-first shell mirroring the web client's phone layout. */
 @Composable
 fun AppShell(
     viewModel: AppShellViewModel = viewModel(),
 ) {
     val nav = rememberNavController()
+    val availabilityViewModel: CatalogSourceAvailabilityViewModel = viewModel()
+    val sourceAvailability by
+        availabilityViewModel.availability.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val activePlaylistId = settings?.activePlaylistId ?: -1L
     var panelOpen by remember { mutableStateOf(false) }
@@ -168,17 +213,38 @@ fun AppShell(
     val routeSource = backStack?.arguments?.getString("source")
         ?.let(SourceId::decode)
     var rememberedSource by rememberSaveable { mutableStateOf<String?>(null) }
-    LaunchedEffect(routeSource) {
-        routeSource?.let { rememberedSource = it.encode() }
-    }
-    val activeSource = activeCatalogSource(routeSource, rememberedSource, activePlaylistId)
-    val dockHidden = route?.startsWith("player") == true
 
     // Dock destinations replace the stack like tabs; details push on top.
     fun navigateSection(target: String) = nav.navigate(target) {
         popUpTo(0) { inclusive = true }
         launchSingleTop = true
     }
+
+    LaunchedEffect(routeSource, sourceAvailability) {
+        val availability = sourceAvailability ?: return@LaunchedEffect
+        routeSource
+            ?.takeIf(availability::contains)
+            ?.let { rememberedSource = it.encode() }
+    }
+    val activeSource = activeCatalogSource(
+        routeSource,
+        rememberedSource,
+        activePlaylistId,
+        sourceAvailability,
+    )
+    LaunchedEffect(routeSource, sourceAvailability, activeSource) {
+        val availability = sourceAvailability ?: return@LaunchedEffect
+        if (routeSource == null || availability.contains(routeSource)) return@LaunchedEffect
+        rememberedSource = activeSource?.encode()
+        navigateSection(activeSource?.let(Routes::browse) ?: Routes.HOME)
+    }
+    LaunchedEffect(activePlaylistId, sourceAvailability) {
+        val availability = sourceAvailability ?: return@LaunchedEffect
+        if (activePlaylistId > 0 && activePlaylistId !in availability.localPlaylistIds) {
+            viewModel.setActivePlaylist(availability.localPlaylistIds.firstOrNull() ?: -1L)
+        }
+    }
+    val dockHidden = route?.startsWith("player") == true
 
     val activeSection = when {
         route?.startsWith("browse/") == true -> {
@@ -216,7 +282,11 @@ fun AppShell(
         },
     ) { padding ->
         androidx.compose.foundation.layout.Box(Modifier.padding(padding)) {
-            AppNav(nav, onActivePlaylist = viewModel::setActivePlaylist)
+            AppNav(
+                nav,
+                onActivePlaylist = viewModel::setActivePlaylist,
+                sourceAvailability = sourceAvailability,
+            )
         }
     }
 
@@ -246,12 +316,22 @@ internal fun activeCatalogSource(
     routeSource: SourceId?,
     rememberedSource: String?,
     activePlaylistId: Long,
-): SourceId? = routeSource
-    ?: rememberedSource?.let(SourceId::decode)
-    ?: activePlaylistId.takeIf { it > 0 }?.let(SourceId::LocalPlaylist)
+    availability: CatalogSourceAvailability?,
+): SourceId? {
+    availability ?: return null
+    return listOfNotNull(
+        routeSource,
+        rememberedSource?.let(SourceId::decode),
+        activePlaylistId.takeIf { it > 0 }?.let(SourceId::LocalPlaylist),
+    ).firstOrNull(availability::contains) ?: availability.fallback
+}
 
 @Composable
-fun AppNav(nav: NavHostController, onActivePlaylist: (Long) -> Unit) {
+internal fun AppNav(
+    nav: NavHostController,
+    onActivePlaylist: (Long) -> Unit,
+    sourceAvailability: CatalogSourceAvailability?,
+) {
     // Quick fades instead of the default slow cross-fade.
     val fadeSpec = tween<Float>(180)
 
@@ -317,9 +397,10 @@ fun AppNav(nav: NavHostController, onActivePlaylist: (Long) -> Unit) {
             val source = entry.arguments!!.getString("source")?.let(SourceId::decode)
             if (source == null) {
                 nav.popBackStack()
-            } else {
-                AccountScreen(source = source, onBack = { nav.popBackStack() })
+                return@composable
             }
+            if (sourceAvailability?.contains(source) != true) return@composable
+            AccountScreen(source = source, onBack = { nav.popBackStack() })
         }
         // Registered before "hub/{hubId}" so the literal path wins the match.
         composable(
@@ -371,6 +452,7 @@ fun AppNav(nav: NavHostController, onActivePlaylist: (Long) -> Unit) {
             val sourceId = entry.arguments!!.getString("source")
                 ?.let(SourceId::decode)
                 ?: return@composable
+            if (sourceAvailability?.contains(sourceId) != true) return@composable
             if (sourceId is SourceId.LocalPlaylist) {
                 LaunchedEffect(sourceId.playlistId) {
                     onActivePlaylist(sourceId.playlistId)
@@ -482,6 +564,7 @@ fun AppNav(nav: NavHostController, onActivePlaylist: (Long) -> Unit) {
             val sourceId = entry.arguments!!.getString("source")
                 ?.let(SourceId::decode)
                 ?: return@composable
+            if (sourceAvailability?.contains(sourceId) != true) return@composable
             val ref = entry.arguments!!.getString("content")
                 ?.let(ContentRef::decode)
                 ?: return@composable
@@ -505,6 +588,7 @@ fun AppNav(nav: NavHostController, onActivePlaylist: (Long) -> Unit) {
             val sourceId = entry.arguments!!.getString("source")
                 ?.let(SourceId::decode)
                 ?: return@composable
+            if (sourceAvailability?.contains(sourceId) != true) return@composable
             val ref = entry.arguments!!.getString("content")
                 ?.let(ContentRef::decode)
                 ?: return@composable
@@ -529,6 +613,7 @@ fun AppNav(nav: NavHostController, onActivePlaylist: (Long) -> Unit) {
             val sourceId = entry.arguments!!.getString("source")
                 ?.let(SourceId::decode)
                 ?: return@composable
+            if (sourceAvailability?.contains(sourceId) != true) return@composable
             val ref = entry.arguments!!.getString("content")
                 ?.let(ContentRef::decode)
                 ?: return@composable
@@ -557,6 +642,7 @@ fun AppNav(nav: NavHostController, onActivePlaylist: (Long) -> Unit) {
             val sourceId = entry.arguments!!.getString("source")
                 ?.let(SourceId::decode)
                 ?: return@composable
+            if (sourceAvailability?.contains(sourceId) != true) return@composable
             val ref = entry.arguments!!.getString("content")
                 ?.let(ContentRef::decode)
                 ?: return@composable
@@ -576,6 +662,7 @@ fun AppNav(nav: NavHostController, onActivePlaylist: (Long) -> Unit) {
             val sourceId = entry.arguments!!.getString("source")
                 ?.let(SourceId::decode)
                 ?: return@composable
+            if (sourceAvailability?.contains(sourceId) != true) return@composable
             SearchScreen(
                 sourceId = sourceId,
                 onBack = { nav.popBackStack() },

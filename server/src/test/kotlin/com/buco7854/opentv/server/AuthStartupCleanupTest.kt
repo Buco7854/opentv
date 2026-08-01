@@ -7,7 +7,6 @@ import com.buco7854.opentv.serverdata.ClientKind
 import com.buco7854.opentv.serverdata.DownloadBlobStatus
 import com.buco7854.opentv.serverdata.UserRole
 import com.buco7854.opentv.serverdata.UserStatus
-import com.buco7854.opentv.serverdata.createOpenTvServerDatabase
 import com.buco7854.opentv.serverdata.db.AuthSessionRow
 import com.buco7854.opentv.serverdata.db.ContentIdentityRow
 import com.buco7854.opentv.serverdata.db.DownloadBlobRow
@@ -16,7 +15,6 @@ import com.buco7854.opentv.serverdata.db.UserDownloadRow
 import com.buco7854.opentv.serverdata.db.UserRow
 import kotlinx.coroutines.runBlocking
 import java.net.URI
-import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -87,8 +85,9 @@ class AuthStartupCleanupTest {
         mfaRequiredRoles: Set<String>,
     ) {
         val now = 1_700_000_000_000L
-        private val dir = Files.createTempDirectory("auth-startup-cleanup")
-        val db = createOpenTvServerDatabase(dir.resolve("opentv.db").toString())
+        private val persistence = ServerTestPersistence("auth-startup-cleanup")
+        private val dir = persistence.directory
+        val db = persistence.database
         private val sessions = PlaybackSessionRegistry(reapInBackground = false)
         private val downloads = DownloadManager(
             db = db,
@@ -111,6 +110,8 @@ class AuthStartupCleanupTest {
         )
 
         init {
+            persistence.closeBeforeDatabase(downloads::close)
+            persistence.closeBeforeDatabase(sessions::close)
             runBlocking {
                 db.playlistDao().insert(PlaylistRow(id = 1, name = "Provider", url = null))
             }
@@ -229,10 +230,7 @@ class AuthStartupCleanupTest {
         }
 
         fun close() {
-            sessions.close()
-            downloads.close()
-            db.close()
-            dir.toFile().deleteRecursively()
+            persistence.close()
         }
     }
 

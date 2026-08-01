@@ -55,7 +55,7 @@ export function Dock() {
   );
 
   // Active playlist: a valid URL id, else a valid last-used id, else first.
-  const urlId = pathname.match(/^\/(?:browse|search|favorites|account|series|xseries)\/(\d+)/)?.[1];
+  const urlId = pathname.match(/^\/(?:browse|search|account|series|xseries)\/(\d+)/)?.[1];
   const requestedId = urlId ? Number(urlId) : null;
   const active = playlists?.find((playlist) => playlist.id === requestedId)?.id
     ?? playlists?.find((playlist) => playlist.id === prefs.activePlaylist)?.id
@@ -91,8 +91,8 @@ export function Dock() {
           <DockButton prefetch="browse" icon="videoLib" label={t('nav.series')} disabled={!active}
                       active={inBrowse && tab === '2'} onClick={() => goBrowse(2)} />
           <DockButton prefetch="favorites" icon="favoriteBorder" label={t('nav.favorites')} disabled={!active}
-                      active={pathname.startsWith('/favorites/')}
-                      onClick={() => navigate(`/favorites/${active}`)} />
+                      active={pathname === '/favorites'}
+                      onClick={() => navigate('/favorites')} />
           <DockButton prefetch="search" icon="search" label={t('nav.search')} disabled={!active}
                       active={pathname.startsWith('/search/')}
                       onClick={() => navigate(`/search/${active}`)} />

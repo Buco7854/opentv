@@ -160,6 +160,7 @@ const en = {
   'search.matchingEpisodes': '{count} matching episodes',
 
   'favorites.title': 'Favorites',
+  'favorites.filterAll': 'All',
   'favorites.emptyTitle': 'No favorites yet',
   'favorites.emptySub': 'Tap the heart on any channel, movie or series to keep it here.',
   'favorites.addAria': 'Add to favorites',
@@ -200,7 +201,7 @@ const en = {
   'downloads.download': 'Download',
   'downloads.downloaded': 'Downloaded',
   'downloads.pauseHint': 'Pause (right-click to delete)',
-  'downloads.queuedHint': 'Waiting for a free connection — right-click to delete',
+  'downloads.queuedHint': 'Waiting for a free connection. Right-click to delete',
   'downloads.resumeHint': 'Resume (right-click to delete)',
   'downloads.downloadedHint': 'Downloaded (click to delete)',
   'downloads.pauseAria': 'Pause download',
@@ -536,6 +537,7 @@ const fr: Catalog = {
   'search.matchingEpisodes': '{count} épisodes correspondants',
 
   'favorites.title': 'Favoris',
+  'favorites.filterAll': 'Tous',
   'favorites.emptyTitle': 'Aucun favori',
   'favorites.emptySub': 'Touchez le cœur sur une chaîne, un film ou une série pour la retrouver ici.',
   'favorites.addAria': 'Ajouter aux favoris',
@@ -576,7 +578,7 @@ const fr: Catalog = {
   'downloads.download': 'Télécharger',
   'downloads.downloaded': 'Téléchargé',
   'downloads.pauseHint': 'Pause (clic droit pour supprimer)',
-  'downloads.queuedHint': "En attente d'une connexion libre — clic droit pour supprimer",
+  'downloads.queuedHint': "En attente d'une connexion libre. Clic droit pour supprimer",
   'downloads.resumeHint': 'Reprendre (clic droit pour supprimer)',
   'downloads.downloadedHint': 'Téléchargé (cliquer pour supprimer)',
   'downloads.pauseAria': 'Mettre le téléchargement en pause',

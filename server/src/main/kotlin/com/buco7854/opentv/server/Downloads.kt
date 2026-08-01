@@ -13,9 +13,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
@@ -50,7 +52,7 @@ class DownloadManager(
     private val pumpMutex = Mutex()
 
     fun close() {
-        scope.cancel()
+        runBlocking { scope.coroutineContext[Job]?.cancelAndJoin() }
         jobs.clear()
     }
 
@@ -422,7 +424,9 @@ class DownloadManager(
             .header("User-Agent", http.userAgent)
             .apply { if (from > 0) header("Range", "bytes=$from-") }
             .build()
-        val response = http.client.send(request, HttpResponse.BodyHandlers.ofInputStream())
+        val response = runInterruptible {
+            http.client.send(request, HttpResponse.BodyHandlers.ofInputStream())
+        }
         if (response.statusCode() !in 200..299) {
             val recordedTotal = db.downloads().blob(id)?.totalBytes ?: 0
             val completeAfterCrash = response.statusCode() == 416 &&
@@ -475,7 +479,7 @@ class DownloadManager(
                 var responseBytes = 0L
                 while (true) {
                     coroutineContext.ensureActive()
-                    val count = input.read(buffer)
+                    val count = runInterruptible { input.read(buffer) }
                     if (count < 0) break
                     if (expectedResponseBytes != null &&
                         responseBytes + count > expectedResponseBytes

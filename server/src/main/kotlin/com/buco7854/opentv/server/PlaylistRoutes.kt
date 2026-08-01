@@ -134,6 +134,13 @@ internal fun Route.playlistRoutes(service: PlaylistApplicationService) = route("
     }
 }
 
+/** User-owned favorites are not scoped to the shell's currently selected playlist. */
+internal fun Route.favoriteRoutes(service: PlaylistApplicationService) = route("/favorites") {
+    get("/resolved") {
+        call.respond(service.resolvedFavorites(call.actor))
+    }
+}
+
 private fun ApplicationCall.listingRequest(includeFilter: Boolean = true): ListingRequest {
     val offset = request.queryParameters["offset"]?.toIntOrNull() ?: 0
     val limit = request.queryParameters["limit"]?.toIntOrNull() ?: DEFAULT_LISTING_LIMIT

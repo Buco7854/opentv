@@ -6,6 +6,15 @@ import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
 import com.buco7854.opentv.serverdata.db.UserFavoriteRow
 import com.buco7854.opentv.serverdata.db.UserResumeRow
 
+internal data class AuthorizedFavorite(
+    val contentId: String,
+    val playlistId: Long,
+    val kind: Int,
+    val providerFingerprint: String,
+    val currentChannelId: Long?,
+    val addedMs: Long,
+)
+
 class UserActivityService(
     private val db: OpenTvServerDatabase,
     private val auth: AuthService,
@@ -59,17 +68,33 @@ class UserActivityService(
     }
 
     suspend fun favorites(actor: Actor, playlistId: Long): List<FavoriteDto> {
-        if (!auth.hasPlaylistAccess(actor, playlistId)) throw ForbiddenApiException()
-        val rows = db.activity().favorites(actor.userId)
+        val access = auth.playlistAccess(actor)
+        if (!access.allows(playlistId)) throw ForbiddenApiException()
+        return authorizedFavorites(actor.userId, access)
+            .filter { it.playlistId == playlistId }
+            .map { it.toDto() }
+    }
+
+    /**
+     * Reads the user's favorite rows and their identities in batches, then applies one
+     * current entitlement snapshot. The work grows with favorites, not with playlists.
+     */
+    internal suspend fun authorizedFavorites(
+        userId: String,
+        access: PlaylistAccess,
+    ): List<AuthorizedFavorite> {
+        val rows = db.activity().favorites(userId)
         val identities = content.identitiesByContentId(rows.map { it.contentId })
         return rows.mapNotNull { favorite ->
-            val identity = identities[favorite.contentId]?.takeIf { it.playlistId == playlistId }
+            val identity = identities[favorite.contentId]
+                ?.takeIf { access.allows(it.playlistId) }
                 ?: return@mapNotNull null
-            FavoriteDto(
+            AuthorizedFavorite(
                 contentId = favorite.contentId,
-                playlistId = playlistId,
-                key = favorite.contentId,
+                playlistId = identity.playlistId,
                 kind = identity.kind,
+                providerFingerprint = identity.providerFingerprint,
+                currentChannelId = identity.currentChannelId,
                 addedMs = favorite.addedAtMs,
             )
         }
@@ -93,4 +118,12 @@ class UserActivityService(
     suspend fun prune() {
         db.activity().pruneResume(clock() - 90L * 24 * 60 * 60 * 1000)
     }
+
+    private fun AuthorizedFavorite.toDto() = FavoriteDto(
+        contentId = contentId,
+        playlistId = playlistId,
+        key = contentId,
+        kind = kind,
+        addedMs = addedMs,
+    )
 }

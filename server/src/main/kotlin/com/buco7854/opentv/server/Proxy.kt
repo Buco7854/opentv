@@ -461,16 +461,19 @@ class StreamProxy(
     }
 
     /**
-     * A room changes from per-lease HLS reads to one room read. Close any in-flight solo segment
+     * A room changes from per-lease reads to one room-owned live read. Close any in-flight solo
      * fetches before returning their logical seats, so the accounting never claims sharing while
-     * an old physical read is still owned by a member.
+     * an old physical provider request is still owned by a member.
      */
-    fun beginSharedHls(memberIds: Set<String>) {
+    fun beginSharedRead(memberIds: Set<String>) {
         memberIds.forEach { memberId ->
             drop(memberId)
             gate.release(memberId)
         }
     }
+
+    /** Kept as the focused HLS seam used by cache tests and older callers. */
+    fun beginSharedHls(memberIds: Set<String>) = beginSharedRead(memberIds)
 
     suspend fun handleSharedHls(
         call: ApplicationCall,

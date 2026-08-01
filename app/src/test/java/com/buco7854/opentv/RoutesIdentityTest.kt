@@ -101,11 +101,86 @@ class RoutesIdentityTest {
     @Test
     fun sourceLessDestinationsKeepTheLastHubForDockNavigation() {
         val hub = SourceId.Hub(3, 7)
+        val availability = CatalogSourceAvailability(
+            localPlaylistIds = listOf(11),
+            signedInHubIds = setOf(3),
+        )
 
-        assertEquals(hub, activeCatalogSource(null, hub.encode(), activePlaylistId = 11))
+        assertEquals(
+            hub,
+            activeCatalogSource(
+                null,
+                hub.encode(),
+                activePlaylistId = 11,
+                availability = availability,
+            ),
+        )
         assertEquals(
             SourceId.LocalPlaylist(11),
-            activeCatalogSource(null, null, activePlaylistId = 11),
+            activeCatalogSource(
+                null,
+                null,
+                activePlaylistId = 11,
+                availability = availability,
+            ),
+        )
+    }
+
+    @Test
+    fun staleLocalRouteAndPreferenceFallBackToTheFirstStoredPlaylist() {
+        val remaining = SourceId.LocalPlaylist(9)
+        val availability = CatalogSourceAvailability(
+            localPlaylistIds = listOf(remaining.playlistId, 12),
+            signedInHubIds = emptySet(),
+        )
+
+        assertEquals(
+            remaining,
+            activeCatalogSource(
+                routeSource = SourceId.LocalPlaylist(404),
+                rememberedSource = SourceId.LocalPlaylist(405).encode(),
+                activePlaylistId = 406,
+                availability = availability,
+            ),
+        )
+    }
+
+    @Test
+    fun absentHubRowOrSessionCannotRemainTheActiveCatalog() {
+        val fallback = SourceId.LocalPlaylist(9)
+        val unavailableHub = SourceId.Hub(3, 7)
+        val availability = CatalogSourceAvailability(
+            localPlaylistIds = listOf(fallback.playlistId),
+            signedInHubIds = emptySet(),
+        )
+
+        assertEquals(
+            fallback,
+            activeCatalogSource(unavailableHub, unavailableHub.encode(), -1, availability),
+        )
+        assertNull(
+            activeCatalogSource(
+                unavailableHub,
+                unavailableHub.encode(),
+                -1,
+                availability.copy(localPlaylistIds = emptyList()),
+            ),
+        )
+    }
+
+    @Test
+    fun activeCatalogWaitsForAvailabilityAndRetainsAUsableHub() {
+        val hub = SourceId.Hub(3, 7)
+
+        assertNull(activeCatalogSource(hub, null, -1, availability = null))
+        assertEquals(
+            hub,
+            activeCatalogSource(
+                hub,
+                null,
+                -1,
+                CatalogSourceAvailability(emptyList(), signedInHubIds = setOf(3)),
+            ),
         )
     }
 }

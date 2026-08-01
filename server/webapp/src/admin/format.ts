@@ -39,7 +39,7 @@ export const dateTime = (value: number | null) => value == null
   : new Intl.DateTimeFormat(adminLocale(), { dateStyle: 'medium', timeStyle: 'short' }).format(value);
 
 export const bytes = (value: number) => {
-  if (value < 0) return '—';
+  if (value < 0) return '-';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   const unit = value === 0
     ? 0

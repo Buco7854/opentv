@@ -125,6 +125,18 @@ class LocalCatalogGatewayTest {
     }
 
     @Test
+    fun missingPlaylistTraitsAndAnEmptySearchStayUsable() = runTest {
+        val gateway = LocalCatalogGateway(
+            source = SourceId.LocalPlaylist(404),
+            traits = localSourceTraits(null),
+            backend = FakeLocalBackend(),
+        )
+
+        assertNull(gateway.traits().title)
+        assertTrue(gateway.search("news").value().isEmpty)
+    }
+
+    @Test
     fun staleNumericIdCannotResolveAChannelFromAnotherSource() = runTest {
         val wrong = channel(
             id = 77,

@@ -18,7 +18,6 @@ import com.buco7854.opentv.serverdata.AuthMethod
 import com.buco7854.opentv.serverdata.ClientKind
 import com.buco7854.opentv.serverdata.UserRole
 import com.buco7854.opentv.serverdata.UserStatus
-import com.buco7854.opentv.serverdata.createOpenTvServerStorage
 import com.buco7854.opentv.serverdata.db.ContentIdentityRow
 import com.buco7854.opentv.serverdata.db.DefaultPlaylistRow
 import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
@@ -30,7 +29,6 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import java.net.URI
-import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -187,11 +185,10 @@ class PlaylistRefreshTest {
     }
 
     private fun withService(block: suspend (Fixture) -> Unit) = runTest {
-        val dir = Files.createTempDirectory("playlist-refresh")
-        val persistence = createOpenTvServerStorage(dir.resolve("opentv.db").toString())
-        val storage = persistence.catalog
+        val persistence = ServerTestPersistence("playlist-refresh")
+        val dir = persistence.directory
+        val storage = persistence.storage
         val userDatabase = persistence.database
-        var service: PlaylistApplicationService? = null
         try {
             userDatabase.users().insert(
                 UserRow(
@@ -222,6 +219,15 @@ class PlaylistRefreshTest {
             val config = authConfig()
             val auth = AuthService(userDatabase, config, dir)
             val settings = ServerSettings(dir, pageSize = 50)
+            val downloads = DownloadManager(
+                userDatabase,
+                ServerHttp(),
+                settings,
+                dir,
+                ProviderConnections(),
+                connectionLimit = { Int.MAX_VALUE },
+            )
+            persistence.closeBeforeDatabase(downloads::close)
             val createdService = PlaylistApplicationService(
                 storage,
                 playlists,
@@ -233,23 +239,14 @@ class PlaylistRefreshTest {
                 content,
                 UserActivityService(userDatabase, auth, content),
                 userDatabase,
-                DownloadManager(
-                    userDatabase,
-                    ServerHttp(),
-                    settings,
-                    dir,
-                    ProviderConnections(),
-                    connectionLimit = { Int.MAX_VALUE },
-                ),
+                downloads,
             )
-            service = createdService
+            persistence.closeBeforeDatabase(createdService::close)
             fixture = Fixture(storage, userDatabase, playlists, createdService, auth)
             fixture.body = playlistLines
             block(fixture)
         } finally {
-            service?.close()
-            storage.close()
-            dir.toFile().deleteRecursively()
+            persistence.close()
         }
     }
 

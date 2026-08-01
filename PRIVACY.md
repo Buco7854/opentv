@@ -9,7 +9,7 @@ or crash reporting. Nothing you enter is sent to us.**
 
 OpenTV can optionally connect to an **OpenTV server** that you or someone you
 trust runs. That server does have accounts, and it stores some of your data. It
-is still not ours — but it is not your device either, so it gets its own section
+is still not ours, but it is not your device either, so it gets its own section
 below. Everything above and below it applies whether or not you connect one.
 
 ## What the app stores on your device
@@ -60,7 +60,7 @@ someone else runs it, their policies apply in addition to this one.
 
 OpenTV only contacts:
 
-1. **Your IPTV provider** — the server in your playlist/Xtream login — to load
+1. **Your IPTV provider**, the server in your playlist/Xtream login, to load
    channels, the guide, account status, and to stream or download content.
 2. **Your OpenTV server**, if you have connected one, for its playlists, guide,
    playback, favourites, watch progress and downloads.
@@ -72,7 +72,7 @@ OpenTV only contacts:
    display logos and posters. Artwork from an OpenTV server is fetched through
    that server.
 
-The app sends **no data to the developer** — there is no OpenTV backend that we
+The app sends **no data to the developer**. There is no OpenTV backend that we
 operate, and no telemetry, crash reporting, or tracking SDK of any kind.
 
 ## Diagnostics
@@ -84,10 +84,10 @@ the log is transmitted anywhere unless you choose to copy and share it yourself.
 
 ## Permissions
 
-- **Internet / network state** — to load and play your streams.
-- **Notifications** — to show download progress. Declining only hides the
+- **Internet / network state**: to load and play your streams.
+- **Notifications**: to show download progress. Declining only hides the
   notification; downloads still run.
-- **Foreground service / wake lock** — to keep downloads running.
+- **Foreground service / wake lock**: to keep downloads running.
 
 ## Children
 

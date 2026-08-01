@@ -44,7 +44,7 @@
     <string name="shell_add_playlist">Ajouter une playlist</string>
     <string name="shell_edit_playlist">Modifier la playlist</string>
     <string name="playlist_credentials_hidden">Les informations du fournisseur enregistrées sont masquées. Laissez un champ vide pour conserver sa valeur actuelle, ou saisissez un remplacement.</string>
-    <string name="playlist_server_scope_notice">Cette playlist est hébergée sur le serveur. La modification s\'y applique, pour toutes les personnes qui l\'utilisent — pas seulement sur cet appareil.</string>
+    <string name="playlist_server_scope_notice">Cette playlist est hébergée sur le serveur. La modification s\'y applique, pour toutes les personnes qui l\'utilisent, pas seulement sur cet appareil.</string>
     <string name="shell_servers">Serveurs</string>
     <plurals name="shell_item_count">
         <item quantity="one">%1$d élément</item>

@@ -34,7 +34,7 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
             return@get
         }
         val members = media.sessions.roomMembers(leaseId)
-        media.proxy.beginSharedHls(members)
+        media.proxy.beginSharedRead(members)
         media.proxy.handleSharedHls(
             call = call,
             capability = authorized.capability,
@@ -62,7 +62,7 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
         val url = capability.url
         val group = media.sessions.shareGroup(sessionId)
         val capabilities = media.sessions.roomCapabilities(sessionId)
-        (media.sessions.roomMembers(sessionId) + sessionId).forEach { media.streamGate.release(it) }
+        media.proxy.beginSharedRead(media.sessions.roomMembers(sessionId) + sessionId)
         media.liveRelay.stream(
             call,
             url,

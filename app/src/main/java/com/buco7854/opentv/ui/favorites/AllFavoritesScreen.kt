@@ -389,7 +389,7 @@ fun AllFavoritesScreen(
             LazyVerticalGrid(
                 columns = if (gridView) GridCells.Adaptive(minSize = 112.dp) else GridCells.Fixed(1),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(if (gridView) 12.dp else 0.dp),
+                verticalArrangement = Arrangement.spacedBy(if (gridView) 12.dp else 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 // Sources are a filter, not a layout: the chips above switch between them
@@ -593,7 +593,9 @@ private fun KindSectionTitle(
             .fillMaxWidth()
             .focusHighlight(RoundedCornerShape(10.dp))
             .clickable(onClick = onToggle)
-            .padding(top = 8.dp, bottom = 2.dp),
+            // Breathing room above, so one kind's heading is not crowded by the previous
+            // kind's last row, and below, so the heading does not sit on its own cards.
+            .padding(top = 16.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
