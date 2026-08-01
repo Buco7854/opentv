@@ -35,6 +35,7 @@ function Harness() {
   return (
     <>
       <button onClick={() => navigate('/browse/1?t=1')}>movies tab</button>
+      <span data-testid="path">{location.pathname}</span>
       <span data-testid="query">{location.search}</span>
       <BrowseScreen />
     </>
@@ -45,9 +46,15 @@ const renderBrowse = () => render(
   <MemoryRouter initialEntries={['/browse/1?t=0']}>
     <Routes>
       <Route path="/browse/:playlistId" element={<Harness />} />
+      <Route path="*" element={<LocationMarker />} />
     </Routes>
   </MemoryRouter>,
 );
+
+function LocationMarker() {
+  const location = useLocation();
+  return <span data-testid="path">{location.pathname}</span>;
+}
 
 describe('BrowseScreen', () => {
   beforeEach(() => {
@@ -61,6 +68,11 @@ describe('BrowseScreen', () => {
     vi.spyOn(api, 'xtreamSeries').mockResolvedValue([]);
     vi.spyOn(api, 'nowAiring').mockResolvedValue({});
     vi.spyOn(api, 'guideIds').mockResolvedValue([]);
+    vi.spyOn(api, 'refreshPlaylist').mockResolvedValue({
+      playlist: detail.playlist,
+      catalogChanged: false,
+      epgStatus: 'NOT_CONFIGURED',
+    });
     vi.spyOn(api, 'favorites').mockResolvedValue([]);
     vi.spyOn(api, 'downloads').mockResolvedValue([]);
   });
@@ -148,8 +160,8 @@ describe('BrowseScreen', () => {
     vi.mocked(api.playlistCapabilities).mockResolvedValue({
       operations: [{
         operation: PlaylistOperation.VIEW_PROVIDER_ACCOUNT,
-        execution: 'BROWSER',
-        browserPath: '/account/1',
+        execution: 'IN_APP',
+        browserPath: null,
       }],
     });
     vi.mocked(api.playlistDetail).mockResolvedValue({
@@ -177,6 +189,56 @@ describe('BrowseScreen', () => {
 
     const figures = t('browse.connections', { active: 1, max: 2 });
     expect(await view.findByText(`${figures} · ${t('account.earlierData')}`)).toBeTruthy();
+    view.unmount();
+  });
+
+  it('follows browser capabilities instead of invoking their in-app operations', async () => {
+    vi.mocked(api.playlistCapabilities).mockResolvedValue({
+      operations: [
+        {
+          operation: PlaylistOperation.REFRESH,
+          execution: 'BROWSER',
+          browserPath: '/manage/provider',
+        },
+        {
+          operation: PlaylistOperation.VIEW_PROVIDER_ACCOUNT,
+          execution: 'BROWSER',
+          browserPath: '/manage/provider',
+        },
+      ],
+    });
+    vi.mocked(api.playlistDetail).mockResolvedValue({
+      ...detail,
+      playlist: { ...detail.playlist, hasXtreamPanel: true },
+    });
+    const account = vi.spyOn(api, 'account');
+    const view = renderBrowse();
+
+    fireEvent.click(await view.findByRole('button', { name: t('playlists.account') }));
+
+    expect((await view.findByTestId('path')).textContent).toBe('/manage/provider');
+    expect(api.refreshPlaylist).not.toHaveBeenCalled();
+    expect(account).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
+  it('routes browser-owned category correction without changing the category in-app', async () => {
+    vi.mocked(api.playlistCapabilities).mockResolvedValue({
+      operations: [{
+        operation: PlaylistOperation.CORRECT_CATEGORY_TYPE,
+        execution: 'BROWSER',
+        browserPath: '/manage/categories',
+      }],
+    });
+    const setGroupKind = vi.spyOn(api, 'setGroupKind').mockResolvedValue(null);
+    const view = renderBrowse();
+
+    fireEvent.click(view.getByText('movies tab'));
+    await view.findByText('Action');
+    fireEvent.click(view.getAllByRole('button', { name: t('browse.correctCategory') })[0]!);
+
+    expect((await view.findByTestId('path')).textContent).toBe('/manage/categories');
+    expect(setGroupKind).not.toHaveBeenCalled();
     view.unmount();
   });
 });

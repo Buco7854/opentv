@@ -60,7 +60,7 @@ export const prefs = {
     return value === 'light' || value === 'dark' ? value : 'system';
   },
   set theme(value: Theme) { storage.write('theme', value); },
-  /** Playlist the dock's Live/Movies/Series/Favorites/Search actions target. */
+  /** Playlist the dock's Live/Movies/Series/Search actions target; Favorites is account-wide. */
   get activePlaylist(): number | null {
     const value = Number(storage.read('activePlaylist'));
     return Number.isFinite(value) && value > 0 ? value : null;

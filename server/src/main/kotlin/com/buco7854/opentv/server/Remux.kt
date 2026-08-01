@@ -271,11 +271,12 @@ class RemuxService(
 
         // Refuse a new stream when the provider's other streams (live or other VOD) already
         // fill its connection allowance, so the viewer sees a clear message instead of bumping
-        // someone else off. This group's own reads (an audio-track switch, or another member of
-        // the same room) share its one connection and don't count. Checked before probing, since
-        // ffprobe itself opens one of the provider's connections.
+        // someone else off. Reads owned by this room's members are the transition's inputs: a
+        // required remux replaces them, while fully capable direct-play VOD retains them and lets
+        // the newcomer's later /stream request receive provider_capacity if no seat is free.
+        // Checked before probing, since ffprobe itself may open one provider connection.
         val providerKey = providerKeyOf(url)
-        if (connections.distinctStreams(providerKey, group) >= cap) {
+        if (connections.distinctStreams(providerKey, supersede + group) >= cap) {
             throw ConnectionLimitException(connectionLimit)
         }
 

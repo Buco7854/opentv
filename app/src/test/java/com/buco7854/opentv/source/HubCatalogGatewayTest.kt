@@ -13,6 +13,7 @@ import com.buco7854.opentv.contract.GuideEntryDto
 import com.buco7854.opentv.contract.ProgrammeDto
 import com.buco7854.opentv.contract.PlaylistCapabilitiesDto
 import com.buco7854.opentv.contract.PlaylistDeleteInfoDto
+import com.buco7854.opentv.contract.PlaylistDetailDto
 import com.buco7854.opentv.contract.PlaylistDto
 import com.buco7854.opentv.contract.PlaylistEditDto
 import com.buco7854.opentv.contract.PlaylistEditField as WirePlaylistEditField
@@ -292,6 +293,36 @@ class HubCatalogGatewayTest {
         assertTrue(traits.supportsRefresh)
         assertTrue(traits.supportsSourceEditing)
         assertTrue(traits.usesXtreamCredentials)
+    }
+
+    @Test
+    fun ordinaryUserTraitsUsePlaylistDetailInsteadOfAdministratorCapabilities() = runTest {
+        val m3uBackend = FakeHubBackend().apply {
+            operationCapabilities = HubPlaylistCapabilities(emptyMap())
+            detailDto = detailDto(
+                name = "Family M3U",
+                mode = "url",
+                isXtreamNative = false,
+            )
+        }
+        val xtreamBackend = FakeHubBackend().apply {
+            operationCapabilities = HubPlaylistCapabilities(emptyMap())
+            detailDto = detailDto(
+                name = "Native panel",
+                mode = "xtream",
+                isXtreamNative = true,
+            )
+        }
+
+        val m3u = HubCatalogGateway(SourceId.Hub(3, 7), m3uBackend).traits()
+        val xtream = HubCatalogGateway(SourceId.Hub(3, 8), xtreamBackend).traits()
+
+        assertEquals("Family M3U", m3u.title)
+        assertFalse(m3u.hasXtreamSeries)
+        assertEquals("Native panel", xtream.title)
+        assertTrue(xtream.hasXtreamSeries)
+        assertEquals(0, m3uBackend.editCalls)
+        assertEquals(0, xtreamBackend.editCalls)
     }
 
     @Test
@@ -623,6 +654,8 @@ private class FakeHubBackend : HubCatalogBackend {
     var refreshStatusCalls = 0
     var groupKind: Pair<String, Int?>? = null
     var updateRequest: PlaylistUpdateRequest? = null
+    var editCalls = 0
+    var detailDto = detailDto("Provider", "xtream", isXtreamNative = true)
     var editDto = PlaylistEditDto(
         id = 7,
         name = "Provider",
@@ -665,7 +698,12 @@ private class FakeHubBackend : HubCatalogBackend {
 
     override suspend fun capabilities() = operationCapabilities.also { maybeFail() }
 
-    override suspend fun edit() = editDto.also { maybeFail() }
+    override suspend fun detail() = detailDto.also { maybeFail() }
+
+    override suspend fun edit() = editDto.also {
+        editCalls++
+        maybeFail()
+    }
 
     override suspend fun update(request: PlaylistUpdateRequest) {
         maybeFail()
@@ -749,6 +787,18 @@ private class FakeHubBackend : HubCatalogBackend {
         channel(contentId, "Detail").also { contentCalls++ }
     override suspend fun guide(contentId: String): List<GuideEntryDto> = emptyList()
 }
+
+private fun detailDto(
+    name: String,
+    mode: String,
+    isXtreamNative: Boolean,
+) = PlaylistDetailDto(
+    playlist = PlaylistDto(7, name, mode, true, 123, 40),
+    isXtreamNative = isXtreamNative,
+    liveCount = 20,
+    movieCount = 10,
+    seriesCount = 10,
+)
 
 private class ReadOnlyHubStore(private val source: HubSource) : HubSourceStore {
     val writeAttempts = mutableListOf<String>()

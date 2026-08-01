@@ -21,6 +21,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withContext
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -240,6 +241,33 @@ class BrowseViewModelTest {
 
             assertEquals(null, viewModel.catalog.value.error)
             assertEquals(groups, viewModel.catalog.value.groups)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun `hub category correction reaches the server gateway and surfaces failure`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        try {
+            val failure = IllegalStateException("administrator required")
+            val gateway = CatalogGatewayFake(SourceId.Hub(3, 9)).apply {
+                categoryCorrectionResult = CatalogResult.Failed(failure)
+            }
+            val viewModel = BrowseViewModel(gateway.source, gateway)
+            advanceUntilIdle()
+
+            viewModel.setGroupKind("Documentaries", ChannelKind.MOVIE)
+            advanceUntilIdle()
+
+            assertEquals(
+                listOf("Documentaries" to ChannelKind.MOVIE),
+                gateway.categoryCorrections,
+            )
+            assertSame(
+                failure,
+                (viewModel.catalog.value.error as CatalogLoadError.Failed).cause,
+            )
         } finally {
             Dispatchers.resetMain()
         }

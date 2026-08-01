@@ -77,6 +77,36 @@ fun PlayerScreen(
         }
     }
 
+    fun watchTogetherActions(closeSheet: () -> Unit) = WatchTogetherActions(
+        onClose = onBack,
+        onWatchAlone = {
+            viewModel.watchAlone()
+            closeSheet()
+        },
+        onJoin = { peerId ->
+            viewModel.askToJoin(peerId)
+            closeSheet()
+        },
+        onAnswerJoin = viewModel::answerJoin,
+        onRequestControl = {
+            viewModel.requestRoomControl()
+            closeSheet()
+        },
+        onAnswerControl = viewModel::answerRoomControl,
+        onSetControl = viewModel::setRoomControl,
+        onKick = viewModel::kickRoomMember,
+        onLeave = {
+            viewModel.leaveRoom()
+            closeSheet()
+        },
+    )
+
+    LaunchedEffect(watchTogether.notice?.id) {
+        val notice = watchTogether.notice ?: return@LaunchedEffect
+        delay(noticeDwellMs(notice.kind, notice.text?.length ?: 0))
+        viewModel.dismissWatchTogetherNotice(notice.id)
+    }
+
     val initial = bootstrap
     if (initial == null) {
         Box(Modifier.fillMaxSize().background(Color.Black))
@@ -107,6 +137,27 @@ fun PlayerScreen(
                     },
                 )
             }
+            watchTogether.notice?.let { notice ->
+                Box(
+                    Modifier.fillMaxSize().padding(top = 84.dp),
+                    contentAlignment = Alignment.TopCenter,
+                ) {
+                    WatchTogetherNoticeOverlay(notice)
+                }
+            }
+        }
+        if (shouldShowWatchTogetherBeforeMedia(watchTogether)) {
+            WatchTogetherSheet(
+                state = watchTogether,
+                actions = watchTogetherActions(closeSheet = {}),
+                // There is no player chrome to return to before media starts. Closing
+                // a required decision therefore cancels playback instead of silently
+                // submitting "watch alone" on the viewer's behalf. The ordinary optional
+                // offer keeps its established dismiss-means-solo behaviour.
+                onDismiss = {
+                    if (watchTogether.requiresJoin) onBack() else viewModel.watchAlone()
+                },
+            )
         }
         return
     }
@@ -184,11 +235,7 @@ fun PlayerScreen(
         val notice = watchTogether.notice ?: return@LaunchedEffect
         if (notice.kind == WatchTogetherNoticeKind.JOIN_REQUEST ||
             notice.kind == WatchTogetherNoticeKind.CONTROL_REQUEST
-        ) {
-            showWatchTogether = true
-        }
-        delay(noticeDwellMs(notice.kind, notice.text?.length ?: 0))
-        viewModel.dismissWatchTogetherNotice(notice.id)
+        ) showWatchTogether = true
     }
     val modalOpen = showGuide || showSubtitleTracks || showAudioTracks ||
         showSpeed || showWatchTogether
@@ -477,31 +524,16 @@ fun PlayerScreen(
     if (showWatchTogether) {
         WatchTogetherSheet(
             state = watchTogether,
-            actions = WatchTogetherActions(
-                onWatchAlone = {
-                    viewModel.watchAlone()
-                    showWatchTogether = false
-                },
-                onJoin = { peerId ->
-                    viewModel.askToJoin(peerId)
-                    showWatchTogether = false
-                },
-                onAnswerJoin = viewModel::answerJoin,
-                onRequestControl = {
-                    viewModel.requestRoomControl()
-                    showWatchTogether = false
-                },
-                onAnswerControl = viewModel::answerRoomControl,
-                onSetControl = viewModel::setRoomControl,
-                onKick = viewModel::kickRoomMember,
-                onLeave = {
-                    viewModel.leaveRoom()
-                    showWatchTogether = false
-                },
-            ),
+            actions = watchTogetherActions { showWatchTogether = false },
             onDismiss = {
-                if (watchTogether.choosing) viewModel.watchAlone()
-                showWatchTogether = false
+                if (watchTogether.duplicateRefused ||
+                    (watchTogether.choosing && watchTogether.requiresJoin)
+                ) {
+                    onBack()
+                } else {
+                    if (watchTogether.choosing) viewModel.watchAlone()
+                    showWatchTogether = false
+                }
             },
         )
     }

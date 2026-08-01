@@ -1,6 +1,9 @@
 package com.buco7854.opentv.server
 
 interface PlaybackLeaseCleanup {
+    /** Invalidate media prepared for an older room generation. Live transitions also have to cut
+     *  lease-owned transports; direct-play VOD deliberately retains its per-member seat. */
+    fun mediaScopeChanging(leaseId: String, dropTransports: Boolean) = Unit
     fun memberLeaving(leaseId: String)
     fun shareGroupUnused(group: String)
     fun leaseTerminated(leaseId: String, unusedShareGroup: String?)
@@ -26,6 +29,12 @@ class RuntimePlaybackLeaseCleanup : PlaybackLeaseCleanup {
     ) {
         check(runtime == null) { "Playback cleanup is already bound" }
         runtime = RuntimeCleanup(mediaGrants, proxy, liveRelay, transcoder, streamGate, remux)
+    }
+
+    override fun mediaScopeChanging(leaseId: String, dropTransports: Boolean) {
+        val current = requireNotNull(runtime) { "Playback cleanup has not been bound" }
+        current.mediaGrants.detachResources(leaseId).forEach(current.remux::stop)
+        if (dropTransports) current.dropTransports(leaseId)
     }
 
     override fun memberLeaving(leaseId: String) {

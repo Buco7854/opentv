@@ -18,8 +18,8 @@ browsers) and scaling down to phones, where the dock doubles as a tab bar:
 
 - A **persistent bottom dock**: a burger opens the floating **playlists
   panel** (switch, add, edit, refresh, account); the center icons are the
-  active playlist's "apps": Live, Movies, Series, Favorites, Search; the
-  right side holds
+  active playlist's Live, Movies, Series and Search views, plus account-wide
+  Favorites collected from every granted playlist; the right side holds
   Downloads and Settings (moved into the panel on narrow screens). `/` forwards into the
   active playlist.
 - A **mini player**: navigating while something plays docks the video into a

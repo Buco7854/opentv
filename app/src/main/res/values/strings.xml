@@ -70,6 +70,8 @@
     <string name="playlist_replaced">Playlist replaced</string>
     <string name="playlist_replace_failed">Replace failed: %1$s</string>
     <string name="playlist_refreshed">Playlist and guide refreshed</string>
+    <string name="playlist_refreshed_guide_failed">Playlist refreshed, but the guide refresh failed</string>
+    <string name="playlist_refreshed_without_guide">Playlist refreshed; no guide is configured</string>
     <string name="playlist_refreshing">Refreshing on the server…</string>
     <string name="playlist_removed">Playlist removed</string>
     <string name="playlist_refresh_failed">Refresh failed: %1$s</string>
@@ -91,6 +93,8 @@
     <string name="playlist_field_epg_url">EPG (XMLTV) URL (optional)</string>
     <string name="playlist_file_edit_hint">Rename this imported playlist, or replace it with another file.</string>
     <string name="playlist_file_add_hint">Pick a .m3u / .m3u8 file from your device.</string>
+    <string name="playlist_file_read_failed">Couldn\'t read that playlist file.</string>
+    <string name="playlist_file_replacement_selected">Replacement file selected</string>
     <string name="playlist_replace_file">Replace file</string>
     <string name="playlist_choose_file">Choose file</string>
     <string name="playlist_xtream_detected_title">Xtream account detected</string>
@@ -135,8 +139,6 @@
     <string name="guide_tomorrow">Tomorrow</string>
     <string name="guide_now">Now</string>
     <string name="guide_replay">Replay</string>
-    <string name="guide_show_description">Show full description</string>
-    <string name="guide_hide_description">Hide full description</string>
     <string name="guide_catchup_unavailable">Catch-up isn\'t available for this programme.</string>
     <string name="guide_open">Guide</string>
     <string name="guide_open_catchup">Guide &amp; catch-up</string>
@@ -213,7 +215,6 @@
         <item quantity="other">%1$d seasons</item>
     </plurals>
     <string name="details_loading_episodes">Loading episodes…</string>
-    <string name="details_episodes_error">Couldn\'t load episodes: %1$s</string>
 
     <!-- Settings -->
     <string name="settings_appearance">Appearance</string>
@@ -275,7 +276,6 @@
     <string name="account_loading">Loading account information…</string>
     <string name="account_updated">Updated %1$s</string>
     <string name="account_cache_hint">Results are cached for a minute; the refresh button forces a fresh request to the provider.</string>
-    <string name="account_active_max">active / maximum connections</string>
     <string name="account_status">Status</string>
     <string name="account_trial">Trial</string>
     <string name="account_username">Username</string>
@@ -304,7 +304,6 @@
     <string name="player_rotate">Rotate screen</string>
     <string name="player_live_badge">LIVE</string>
     <string name="player_now_until">%1$s (until %2$s)</string>
-    <string name="player_next">Next: %1$s</string>
     <string name="player_error_title">Could not play this stream</string>
     <string name="player_catchup_unavailable">Catch-up unavailable</string>
     <string name="player_track_off">Off</string>
@@ -378,6 +377,11 @@
     <string name="hub_status_signed_out">Signed out</string>
     <string name="hub_remove">Remove server</string>
     <string name="hub_remove_confirm">Remove this server? Downloads already saved on this device are kept.</string>
+    <string name="hub_remove_cleanup_title">Server removed with unfinished cleanup</string>
+    <plurals name="hub_remove_cleanup_failed">
+        <item quantity="one">%1$d download still has an association on that server. Clear it from the server\'s own pages.</item>
+        <item quantity="other">%1$d downloads still have associations on that server. Clear them from the server\'s own pages.</item>
+    </plurals>
     <string name="hub_sign_in_again">Sign in again</string>
     <string name="hub_retry">Retry</string>
     <string name="hub_enter_address">Enter an OpenTV server address.</string>
@@ -393,7 +397,6 @@
     <string name="source_signed_out_subtitle">Your session on this server has ended. Sign in again to keep using it.</string>
     <string name="favorites_all_title">Favorites</string>
     <string name="favorites_filter_all">All</string>
-    <string name="favorites_section_empty">No favorites here yet</string>
     <string name="favorites_tv_select_hint">Hold OK on an item, or use Select favorites above, to select more than one.</string>
     <string name="player_playback_ended">Playback ended.</string>
     <string name="player_signed_out">Your session on this server has ended. Sign in again to continue.</string>
@@ -404,6 +407,10 @@
     <string name="watch_together_offer">Other viewers are watching this. Join them or continue on your own.</string>
     <string name="watch_together_join">Join</string>
     <string name="watch_together_watch_alone">Watch alone</string>
+    <string name="watch_together_duplicate_required">This account is already playing this title on another device. Join that session to watch here; it cannot play separately.</string>
+    <string name="watch_together_duplicate_refused">This account is already playing this title on another device, so playback could not start here. Close this player and try again after stopping the other device.</string>
+    <string name="watch_together_dont_join">Don\'t join</string>
+    <string name="watch_together_your_other_device">Your other device</string>
     <string name="watch_together_you">You</string>
     <string name="watch_together_host">Host</string>
     <string name="watch_together_controller">Controller</string>

@@ -12,6 +12,7 @@ import com.buco7854.opentv.contract.PlaybackCreateRequest
 import com.buco7854.opentv.contract.PlaybackLeaseDto
 import com.buco7854.opentv.contract.PlaylistCapabilitiesDto
 import com.buco7854.opentv.contract.PlaylistDeleteInfoDto
+import com.buco7854.opentv.contract.PlaylistDetailDto
 import com.buco7854.opentv.contract.PlaylistDto
 import com.buco7854.opentv.contract.PlaylistEditDto
 import com.buco7854.opentv.contract.PlaylistEditField
@@ -66,6 +67,25 @@ private fun <T> serverBody(serializer: KSerializer<T>, value: T) =
     SERVER_JSON.encodeToString(serializer, value)
 
 class HubApiTest {
+
+    @Test
+    fun playlistDetailUsesTheNonPrivilegedPlaylistEndpoint() = runTest {
+        val detail = PlaylistDetailDto(
+            playlist = PlaylistDto(7, "Family M3U", "url", true, 123, 40),
+            isXtreamNative = false,
+            liveCount = 30,
+            movieCount = 8,
+            seriesCount = 2,
+        )
+        val transport = FakeTransport(ok(serverBody(PlaylistDetailDto.serializer(), detail)))
+
+        val result = HubApi(transport).playlist(HubCredentials(BASE, "t"), 7)
+
+        assertEquals(detail, result)
+        val request = transport.seen.single()
+        assertEquals("GET", request.method)
+        assertEquals("$BASE/api/v1/playlists/7", request.url)
+    }
 
     @Test
     fun everyRequestIdentifiesAsNativeAndCarriesTheBearer() = runTest {
@@ -369,6 +389,18 @@ class HubApiTest {
         val request = transport.seen.single()
         assertEquals("POST", request.method)
         assertEquals("$BASE/api/v1/playback/lease%2F1/media-grant", request.url)
+        assertNull(request.body)
+    }
+
+    @Test
+    fun watchAloneUsesTheLeaseScopedAdmissionEndpoint() = runTest {
+        val transport = FakeTransport(HttpResponseSpec(204, emptyMap(), ""))
+
+        HubApi(transport).watchAlone(HubCredentials(BASE, "t"), "lease/1")
+
+        val request = transport.seen.single()
+        assertEquals("POST", request.method)
+        assertEquals("$BASE/api/v1/playback/lease%2F1/watch-alone", request.url)
         assertNull(request.body)
     }
 

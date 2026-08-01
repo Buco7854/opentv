@@ -24,6 +24,14 @@ import { RemuxController } from './useRemuxSession';
 /** The panel serves an HLS variant of a live .ts under an extra query flag. */
 const engineUrl = (url: string, hlsVariant: boolean) => (hlsVariant ? hlsVariantOf(url) : url);
 
+/** Media libraries expose only the HTTP status, but these two admission statuses have one stable
+ * meaning on lease-scoped media routes and must not degrade into codec/retry-loop failures. */
+const admissionError = (status: number | undefined): string | null => {
+  if (status === 409) return t('error.sameContentAlreadyPlaying');
+  if (status === 429) return t('player.connectionLimit');
+  return null;
+};
+
 export interface PlaybackEngine {
   hlsRef: MutableRefObject<Hls | null>;
   mpegtsRef: MutableRefObject<mpegts.Player | null>;
@@ -240,6 +248,12 @@ export function usePlaybackEngine(opts: {
         const status = Number(response?.code ?? response?.status ?? response?.statusCode);
         if (type === mpegts.ErrorTypes.NETWORK_ERROR) {
           if (hasPicture()) return; // a frozen frame recovers via the watchdog
+          const refused = admissionError(status);
+          if (refused) {
+            stopEngines();
+            setError(refused);
+            return;
+          }
           if (status === 410) {
             void recoverMediaGrant();
             return;
@@ -310,6 +324,12 @@ export function usePlaybackEngine(opts: {
         const status = data.response?.code;
         if (status === 410) {
           void recoverMediaGrant();
+          return;
+        }
+        const refused = admissionError(status);
+        if (refused) {
+          stopEngines();
+          setError(refused);
           return;
         }
         if (isTerminalPlaybackStatus(status)) {

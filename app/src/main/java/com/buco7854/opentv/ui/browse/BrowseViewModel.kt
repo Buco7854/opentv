@@ -186,16 +186,33 @@ class BrowseViewModel private constructor(
     }
 
     fun setGroupKind(groupTitle: String, kind: Int?) {
-        val local = sourceId as? SourceId.LocalPlaylist ?: return
-        val currentGraph = graph ?: return
-        viewModelScope.launch {
-            currentGraph.playlists.setGroupOverride(local.playlistId, groupTitle, kind)
-            mutableMessage.value = if (kind == null) {
-                str(R.string.browse_category_auto_message)
-            } else {
-                str(R.string.browse_category_updated_message)
+        when (val source = sourceId) {
+            is SourceId.LocalPlaylist -> {
+                val currentGraph = graph ?: return
+                viewModelScope.launch {
+                    currentGraph.playlists.setGroupOverride(source.playlistId, groupTitle, kind)
+                    mutableMessage.value = categoryUpdatedMessage(kind)
+                }
             }
+            is SourceId.Hub -> viewModelScope.launch {
+                when (val result = gateway.correctCategoryType(groupTitle, kind)) {
+                    is CatalogResult.Success -> {
+                        mutableMessage.value = categoryUpdatedMessage(kind)
+                        loadGroups(tab.value)
+                    }
+                    CatalogResult.SignedOut -> fail(CatalogLoadError.SignedOut)
+                    CatalogResult.Unreachable -> fail(CatalogLoadError.Unreachable)
+                    is CatalogResult.Failed -> fail(CatalogLoadError.Failed(result.cause))
+                }
+            }
+            is SourceId.HubConnection -> Unit
         }
+    }
+
+    private fun categoryUpdatedMessage(kind: Int?): String = if (kind == null) {
+        str(R.string.browse_category_auto_message)
+    } else {
+        str(R.string.browse_category_updated_message)
     }
 
     fun toggleFavorite(item: CatalogItem) {

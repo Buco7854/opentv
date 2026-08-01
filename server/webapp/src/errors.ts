@@ -36,6 +36,7 @@ const CODE_TEXT: Record<string, MessageKey> = {
   provider_unreachable: 'error.providerUnreachable',
   provider_login_rejected: 'error.providerRejected',
   playback_revoked: 'error.playbackRevoked',
+  same_content_already_playing: 'error.sameContentAlreadyPlaying',
 };
 
 /**

@@ -4,11 +4,20 @@ import android.content.SharedPreferences
 import com.buco7854.opentv.contract.DownloadDto
 import com.buco7854.opentv.core.model.Download
 import com.buco7854.opentv.core.model.DownloadStatus
+import com.buco7854.opentv.core.model.HubSource
+import com.buco7854.opentv.core.net.HttpResponseSpec
+import com.buco7854.opentv.core.net.HttpTransport
 import com.buco7854.opentv.core.storage.DownloadStore
+import com.buco7854.opentv.core.storage.HubSourceStore
+import com.buco7854.opentv.hub.HubAccountRepository
+import com.buco7854.opentv.hub.HubApi
 import com.buco7854.opentv.hub.HubCapacityException
 import com.buco7854.opentv.hub.HubGoneException
+import com.buco7854.opentv.hub.HubRegistry
+import com.buco7854.opentv.hub.HubSessionVault
 import com.buco7854.opentv.hub.HubUnauthorizedException
 import com.buco7854.opentv.hub.HubUnreachableException
+import com.buco7854.opentv.hub.TokenCipher
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
@@ -19,11 +28,13 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.IOException
@@ -153,6 +164,110 @@ class HubDownloadCoordinatorTest {
         assertTrue(preferences.removeFromServerAfterDownload(4))
         assertFalse(preferences.removeFromServerAfterDownload(5))
         assertTrue(preferences.pendingServerDeletes().isEmpty())
+    }
+
+    @Test
+    fun `reachable hub releases pending associations before removal prunes them`() = runTest {
+        val preferences = HubDownloadPreferences(FakeSharedPreferences()).apply {
+            enqueueServerDelete(4, "server-1")
+            enqueueServerDelete(4, "server-2")
+        }
+        val remote = FakeHubDownloadRemote()
+        val coordinator = HubDownloadCoordinator(
+            FakeDownloadStore(),
+            remote,
+            FakeDownloadScheduler(),
+            preferences,
+            this,
+        )
+
+        val unreleased = coordinator.flushPendingServerDeletes(4)
+        preferences.pruneHub(4)
+
+        assertEquals(0, unreleased)
+        assertEquals(listOf(4L to "server-1", 4L to "server-2"), remote.deleted)
+        assertTrue(preferences.pendingServerDeletes().isEmpty())
+    }
+
+    @Test
+    fun `unreachable hub removal prunes the intent and reports what remains on the server`() =
+        runTest {
+            val preferences = HubDownloadPreferences(FakeSharedPreferences()).apply {
+                enqueueServerDelete(4, "server-1")
+            }
+            val remote = FakeHubDownloadRemote().apply {
+                error = HubUnreachableException("offline")
+            }
+            val coordinator = HubDownloadCoordinator(
+                FakeDownloadStore(),
+                remote,
+                FakeDownloadScheduler(),
+                preferences,
+                this,
+            )
+
+            val unreleased = coordinator.flushPendingServerDeletes(4)
+            preferences.pruneHub(4)
+
+            assertEquals(1, unreleased)
+            assertTrue(remote.deleted.isEmpty())
+            assertTrue(preferences.pendingServerDeletes().isEmpty())
+        }
+
+    @Test
+    fun `account removal flushes reachable associations before credentials and preferences are pruned`() =
+        runTest {
+            val preferences = HubDownloadPreferences(FakeSharedPreferences()).apply {
+                enqueueServerDelete(REMOVAL_HUB_ID, "server-1")
+                enqueueServerDelete(REMOVAL_HUB_ID, "server-2")
+            }
+            val remote = FakeHubDownloadRemote()
+            val coordinator = HubDownloadCoordinator(
+                FakeDownloadStore(),
+                remote,
+                FakeDownloadScheduler(),
+                preferences,
+                this,
+            )
+            val fixture = removalRegistry()
+
+            val result = HubAccountRepository(fixture.registry, coordinator, preferences)
+                .remove(REMOVAL_HUB_ID)
+
+            assertEquals(0, result.unreleasedDownloadAssociations)
+            assertEquals(
+                listOf(REMOVAL_HUB_ID to "server-1", REMOVAL_HUB_ID to "server-2"),
+                remote.deleted,
+            )
+            assertTrue(preferences.pendingServerDeletes().isEmpty())
+            assertNull(fixture.store.get(REMOVAL_HUB_ID))
+            assertNull(fixture.vault.token(REMOVAL_HUB_ID))
+        }
+
+    @Test
+    fun `account removal prunes unreachable associations and reports their exact count`() = runTest {
+        val preferences = HubDownloadPreferences(FakeSharedPreferences()).apply {
+            enqueueServerDelete(REMOVAL_HUB_ID, "server-1")
+        }
+        val remote = FakeHubDownloadRemote().apply {
+            error = HubUnreachableException("offline")
+        }
+        val coordinator = HubDownloadCoordinator(
+            FakeDownloadStore(),
+            remote,
+            FakeDownloadScheduler(),
+            preferences,
+            this,
+        )
+        val fixture = removalRegistry()
+
+        val result = HubAccountRepository(fixture.registry, coordinator, preferences)
+            .remove(REMOVAL_HUB_ID)
+
+        assertEquals(1, result.unreleasedDownloadAssociations)
+        assertTrue(preferences.pendingServerDeletes().isEmpty())
+        assertNull(fixture.store.get(REMOVAL_HUB_ID))
+        assertNull(fixture.vault.token(REMOVAL_HUB_ID))
     }
 
     @Test
@@ -520,6 +635,66 @@ class HubDownloadCoordinatorTest {
     )
 }
 
+private const val REMOVAL_HUB_ID = 4L
+
+private data class RemovalFixture(
+    val registry: HubRegistry,
+    val store: RemovalHubStore,
+    val vault: HubSessionVault,
+)
+
+private suspend fun removalRegistry(): RemovalFixture {
+    val store = RemovalHubStore()
+    val vault = HubSessionVault(
+        FakeSharedPreferences(),
+        object : TokenCipher {
+            override fun encrypt(plain: ByteArray) = plain
+            override fun decrypt(blob: ByteArray) = blob
+        },
+    ).apply { store(REMOVAL_HUB_ID, "session-token") }
+    val registry = HubRegistry(
+        store,
+        HubApi(
+            HttpTransport {
+                HttpResponseSpec(204, emptyMap(), "")
+            },
+        ),
+        vault,
+    )
+    return RemovalFixture(registry, store, vault)
+}
+
+private class RemovalHubStore : HubSourceStore {
+    private var source: HubSource? = HubSource(
+        id = REMOVAL_HUB_ID,
+        name = "Home",
+        baseUrl = "https://hub.example",
+        addedMs = 1,
+    )
+
+    override fun observeAll(): Flow<List<HubSource>> = flowOf(source?.let(::listOf).orEmpty())
+    override suspend fun getAll(): List<HubSource> = source?.let(::listOf).orEmpty()
+    override suspend fun get(id: Long): HubSource? = source?.takeIf { it.id == id }
+    override suspend fun upsert(source: HubSource): Long {
+        this.source = source.copy(id = REMOVAL_HUB_ID)
+        return REMOVAL_HUB_ID
+    }
+
+    override suspend fun delete(id: Long) {
+        if (source?.id == id) source = null
+    }
+
+    override suspend fun updateIdentity(
+        id: Long,
+        userId: String?,
+        username: String?,
+        role: String?,
+        seenMs: Long,
+    ) = Unit
+
+    override suspend fun clearIdentity(id: Long) = Unit
+}
+
 private class FakeHubDownloadRemote : HubDownloadRemote {
     var rows: List<DownloadDto> = emptyList()
     var afterEnqueue: List<DownloadDto> = emptyList()
@@ -668,9 +843,9 @@ private class FakeDownloadStore : DownloadStore {
 }
 
 private class FakeSharedPreferences : SharedPreferences {
-    private val values = mutableMapOf<String, Boolean>()
+    private val values = mutableMapOf<String, Any>()
 
-    override fun getBoolean(key: String, defValue: Boolean) = values[key] ?: defValue
+    override fun getBoolean(key: String, defValue: Boolean) = values[key] as? Boolean ?: defValue
     override fun contains(key: String) = values.containsKey(key)
     override fun edit(): SharedPreferences.Editor = object : SharedPreferences.Editor {
         override fun putBoolean(key: String, value: Boolean) = apply { values[key] = value }
@@ -678,7 +853,9 @@ private class FakeSharedPreferences : SharedPreferences {
         override fun clear() = apply { values.clear() }
         override fun commit() = true
         override fun apply() = Unit
-        override fun putString(key: String, value: String?) = throw UnsupportedOperationException()
+        override fun putString(key: String, value: String?) = apply {
+            if (value == null) values.remove(key) else values[key] = value
+        }
         override fun putStringSet(key: String, values: MutableSet<String>?) = throw UnsupportedOperationException()
         override fun putInt(key: String, value: Int) = throw UnsupportedOperationException()
         override fun putLong(key: String, value: Long) = throw UnsupportedOperationException()
@@ -686,7 +863,7 @@ private class FakeSharedPreferences : SharedPreferences {
     }
 
     override fun getAll(): MutableMap<String, *> = values.toMutableMap()
-    override fun getString(key: String, defValue: String?) = throw UnsupportedOperationException()
+    override fun getString(key: String, defValue: String?) = values[key] as? String ?: defValue
     override fun getStringSet(key: String, defValues: MutableSet<String>?) = throw UnsupportedOperationException()
     override fun getInt(key: String, defValue: Int) = throw UnsupportedOperationException()
     override fun getLong(key: String, defValue: Long) = throw UnsupportedOperationException()

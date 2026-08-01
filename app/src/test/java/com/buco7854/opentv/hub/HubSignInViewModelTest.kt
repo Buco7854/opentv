@@ -323,6 +323,9 @@ class HubSignInViewModelTest {
     @Test
     fun `device link denied and expired can restart`() = runTest {
         val deniedGateway = FakeGateway().apply {
+            link = linkStart().copy(
+                verificationUriComplete = "$BASE_URL/link#t=link-token&mode=sign-in",
+            )
             pollResults += { linkStatus("DENIED") }
         }
         val denied = probedViewModel(deniedGateway, FakeSink())
@@ -376,6 +379,39 @@ class HubSignInViewModelTest {
         assertEquals(1, gateway.pollCalls)
         assertTrue(viewModel.state.value is HubSignInState.UrlEntry)
     }
+
+    @Test
+    fun `device link refuses a query secret and cancels it but accepts a fragment secret`() =
+        runTest {
+            val unsafeGateway = FakeGateway().apply {
+                link = linkStart().copy(
+                    verificationUriComplete = "$BASE_URL/link?t=link-token",
+                )
+            }
+            val unsafe = probedViewModel(unsafeGateway, FakeSink())
+
+            unsafe.startDeviceLink(DeviceLinkMode.BROWSER_SIGN_IN)
+            advanceUntilIdle()
+
+            val rejected = unsafe.state.value as HubSignInState.MethodChooser
+            assertEquals(HubSignInFailure.UNEXPECTED_RESPONSE, rejected.error)
+            assertEquals(listOf("poll-token"), unsafeGateway.cancelledPollTokens)
+            assertEquals(0, unsafeGateway.pollCalls)
+
+            val safeGateway = FakeGateway().apply {
+                link = linkStart(intervalMs = 60_000).copy(
+                    verificationUriComplete = "$BASE_URL/link#t=link-token&mode=sign-in",
+                )
+            }
+            val safe = probedViewModel(safeGateway, FakeSink())
+
+            safe.startDeviceLink(DeviceLinkMode.BROWSER_SIGN_IN)
+            runCurrent()
+
+            assertTrue(safe.state.value is HubSignInState.DeviceLink)
+            assertTrue(safeGateway.cancelledPollTokens.isEmpty())
+            safe.cancel()
+        }
 
     @Test
     fun `session token never enters observable state or error copy`() = runTest {
@@ -441,6 +477,7 @@ class HubSignInViewModelTest {
         val recoverySubmissions = mutableListOf<Pair<String, String>>()
         val enrollmentSubmissions = mutableListOf<Pair<String, String>>()
         var pollCalls = 0
+        val cancelledPollTokens = mutableListOf<String>()
         var onPoll: () -> Unit = {}
 
         override suspend fun serverInfo(baseUrl: String) = info
@@ -481,6 +518,10 @@ class HubSignInViewModelTest {
             pollCalls++
             onPoll()
             return pollResults.removeFirst().invoke()
+        }
+
+        override suspend fun linkCancel(baseUrl: String, pollToken: String) {
+            cancelledPollTokens += pollToken
         }
     }
 
@@ -564,7 +605,7 @@ class HubSignInViewModelTest {
         fun linkStart(intervalMs: Long = 1) = DeviceLinkStartDto(
             pollToken = "poll-token",
             linkToken = "link-token",
-            verificationUriComplete = "$BASE_URL/link#token",
+            verificationUriComplete = "$BASE_URL/link#t=link-token",
             expiresAtMs = Long.MAX_VALUE,
             intervalMs = intervalMs,
         )

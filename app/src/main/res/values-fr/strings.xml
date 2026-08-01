@@ -70,6 +70,8 @@
     <string name="playlist_replaced">Playlist remplacée</string>
     <string name="playlist_replace_failed">Échec du remplacement : %1$s</string>
     <string name="playlist_refreshed">Playlist et guide actualisés</string>
+    <string name="playlist_refreshed_guide_failed">Playlist actualisée, mais l\'actualisation du guide a échoué</string>
+    <string name="playlist_refreshed_without_guide">Playlist actualisée ; aucun guide n\'est configuré</string>
     <string name="playlist_refreshing">Actualisation sur le serveur…</string>
     <string name="playlist_removed">Playlist supprimée</string>
     <string name="playlist_refresh_failed">Échec de l\'actualisation : %1$s</string>
@@ -91,6 +93,8 @@
     <string name="playlist_field_epg_url">URL EPG (XMLTV) (optionnel)</string>
     <string name="playlist_file_edit_hint">Renommez cette playlist importée, ou remplacez-la par un autre fichier.</string>
     <string name="playlist_file_add_hint">Choisissez un fichier .m3u / .m3u8 depuis votre appareil.</string>
+    <string name="playlist_file_read_failed">Impossible de lire ce fichier de playlist.</string>
+    <string name="playlist_file_replacement_selected">Fichier de remplacement sélectionné</string>
     <string name="playlist_replace_file">Remplacer le fichier</string>
     <string name="playlist_choose_file">Choisir un fichier</string>
     <string name="playlist_xtream_detected_title">Compte Xtream détecté</string>
@@ -98,7 +102,7 @@
     <string name="playlist_use_xtream">Utiliser Xtream</string>
     <string name="playlist_keep_m3u">Garder M3U</string>
     <string name="playlist_delete_title">Supprimer la playlist ?</string>
-    <string name="playlist_delete_text">« %1$s » et les données de guide en cache seront supprimés.</string>
+    <string name="playlist_delete_text">« %1$s » et les données de guide en cache seront supprimées.</string>
 
     <!-- Browse -->
     <string name="browse_fallback_title">Parcourir</string>
@@ -135,8 +139,6 @@
     <string name="guide_tomorrow">Demain</string>
     <string name="guide_now">En ce moment</string>
     <string name="guide_replay">Replay</string>
-    <string name="guide_show_description">Afficher la description complète</string>
-    <string name="guide_hide_description">Masquer la description complète</string>
     <string name="guide_catchup_unavailable">Le replay n\'est pas disponible pour ce programme.</string>
     <string name="guide_open">Guide</string>
     <string name="guide_open_catchup">Guide et replay</string>
@@ -213,7 +215,6 @@
         <item quantity="other">%1$d saisons</item>
     </plurals>
     <string name="details_loading_episodes">Chargement des épisodes…</string>
-    <string name="details_episodes_error">Impossible de charger les épisodes : %1$s</string>
 
     <!-- Settings -->
     <string name="settings_appearance">Apparence</string>
@@ -275,7 +276,6 @@
     <string name="account_loading">Chargement des informations du compte…</string>
     <string name="account_updated">Mis à jour %1$s</string>
     <string name="account_cache_hint">Les résultats sont mis en cache une minute ; le bouton actualiser force une requête au fournisseur.</string>
-    <string name="account_active_max">connexions actives / maximum</string>
     <string name="account_status">Statut</string>
     <string name="account_trial">Essai</string>
     <string name="account_username">Nom d\'utilisateur</string>
@@ -304,7 +304,6 @@
     <string name="player_rotate">Pivoter l\'écran</string>
     <string name="player_live_badge">DIRECT</string>
     <string name="player_now_until">%1$s (jusqu\'à %2$s)</string>
-    <string name="player_next">Ensuite : %1$s</string>
     <string name="player_error_title">Impossible de lire ce flux</string>
     <string name="player_catchup_unavailable">Replay indisponible</string>
     <string name="player_track_off">Désactivés</string>
@@ -378,6 +377,11 @@
     <string name="hub_status_signed_out">Déconnecté</string>
     <string name="hub_remove">Supprimer le serveur</string>
     <string name="hub_remove_confirm">Supprimer ce serveur ? Les téléchargements déjà enregistrés sur cet appareil sont conservés.</string>
+    <string name="hub_remove_cleanup_title">Serveur supprimé avec un nettoyage inachevé</string>
+    <plurals name="hub_remove_cleanup_failed">
+        <item quantity="one">%1$d téléchargement est encore associé à ce serveur. Supprimez cette association depuis les pages du serveur.</item>
+        <item quantity="other">%1$d téléchargements sont encore associés à ce serveur. Supprimez ces associations depuis les pages du serveur.</item>
+    </plurals>
     <string name="hub_sign_in_again">Se reconnecter</string>
     <string name="hub_retry">Réessayer</string>
     <string name="hub_enter_address">Saisissez l\'adresse d\'un serveur OpenTV.</string>
@@ -393,7 +397,6 @@
     <string name="source_signed_out_subtitle">Votre session sur ce serveur a pris fin. Reconnectez-vous pour continuer.</string>
     <string name="favorites_all_title">Favoris</string>
     <string name="favorites_filter_all">Tous</string>
-    <string name="favorites_section_empty">Aucun favori pour le moment</string>
     <string name="favorites_tv_select_hint">Maintenez OK sur un élément, ou utilisez Sélectionner des favoris ci-dessus, pour en sélectionner plusieurs.</string>
     <string name="player_playback_ended">Lecture terminée.</string>
     <string name="player_signed_out">Votre session sur ce serveur a pris fin. Reconnectez-vous pour continuer.</string>
@@ -404,6 +407,10 @@
     <string name="watch_together_offer">D\'autres personnes regardent ce contenu. Rejoignez-les ou continuez de votre côté.</string>
     <string name="watch_together_join">Rejoindre</string>
     <string name="watch_together_watch_alone">Regarder seul</string>
+    <string name="watch_together_duplicate_required">Ce compte lit déjà ce titre sur un autre appareil. Rejoignez cette session pour regarder ici ; la lecture séparée est impossible.</string>
+    <string name="watch_together_duplicate_refused">Ce compte lit déjà ce titre sur un autre appareil ; la lecture n\'a donc pas pu démarrer ici. Fermez ce lecteur et réessayez après avoir arrêté l\'autre appareil.</string>
+    <string name="watch_together_dont_join">Ne pas rejoindre</string>
+    <string name="watch_together_your_other_device">Votre autre appareil</string>
     <string name="watch_together_you">Vous</string>
     <string name="watch_together_host">Hôte</string>
     <string name="watch_together_controller">Contrôle</string>

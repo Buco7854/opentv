@@ -23,7 +23,7 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
         media.proxy.handle(call, authorized.capability, authorized.grant, authorized.guard)
     }
     get("/shared-hls") {
-        val authorized = authorizedStream(media, call)
+        val authorized = authorizedStream(media, call, PlaybackMediaTransport.SHARED_HLS)
         val leaseId = authorized.capability.leaseId
         val group = media.sessions.shareGroup(leaseId)
         if (group == leaseId || !authorized.capability.hlsResource) {
@@ -57,7 +57,7 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
     }
 
     get("/relay") {
-        val (capability, _, guard) = authorizedStream(media, call)
+        val (capability, _, guard) = authorizedStream(media, call, PlaybackMediaTransport.RELAY)
         val sessionId = capability.leaseId
         val url = capability.url
         val group = media.sessions.shareGroup(sessionId)
@@ -239,11 +239,17 @@ private data class AuthorizedStream(
 private fun authorizedStream(
     media: MediaRouteDependencies,
     call: ApplicationCall,
+    transport: PlaybackMediaTransport = PlaybackMediaTransport.SOLO,
 ): AuthorizedStream {
     val capability = requiredStreamCapability(media, call)
     val grant = call.request.queryParameters["g"]
     val guard: () -> Unit = {
-        media.mediaGrants.validateCapability(capability.leaseId, grant, capability)
+        media.mediaGrants.validateCapability(
+            capability.leaseId,
+            grant,
+            capability,
+            transport,
+        )
         media.sessions.touch(capability.leaseId)
     }
     guard()
@@ -274,7 +280,14 @@ private suspend fun remuxTarget(
     val downloadId = call.request.queryParameters["d"]
         ?: return requiredStreamCapability(media, call).let { capability ->
             val guard: () -> Unit = {
-                media.mediaGrants.validateCapability(capability.leaseId, grant, capability)
+                // A room remux is keyed by the room share group and therefore remains one
+                // provider read; only the lease-owned proxy/transcode transports are independent.
+                media.mediaGrants.validateCapability(
+                    capability.leaseId,
+                    grant,
+                    capability,
+                    PlaybackMediaTransport.REMUX,
+                )
                 media.sessions.touch(capability.leaseId)
             }
             guard()

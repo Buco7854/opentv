@@ -110,6 +110,15 @@ const PROVIDER_ID_MIRRORS: ReadonlyArray<readonly [string, string, string]> = [
   ['MetadataDto', 'Metadata', 'sourceId'],
 ];
 
+const VOCABULARY_MIRRORS: ReadonlyArray<readonly [string, string]> = [
+  ['PlaylistEditField', 'PlaylistEditField'],
+  ['PlaylistEpgRefreshStatus', 'PlaylistEpgRefreshStatus'],
+  ['PlaylistRefreshJobStatus', 'PlaylistRefreshJobStatus'],
+  ['PlaylistDeleteEffect', 'PlaylistDeleteEffect'],
+  ['PlaylistOperation', 'PlaylistOperation'],
+  ['PlaylistOperationExecution', 'PlaylistOperationExecution'],
+];
+
 /**
  * These DTOs travel from the browser to Kotlin. Their defaulted/nullable Kotlin
  * fields may intentionally be omitted by TypeScript callers. Every other mirror
@@ -268,6 +277,34 @@ function typescriptFieldTypes(): Map<string, Map<string, string>> {
   return result;
 }
 
+function kotlinVocabulary(name: string): string[] {
+  for (const file of fs.readdirSync(KOTLIN_CONTRACT).filter((entry) => entry.endsWith('.kt'))) {
+    const source = fs.readFileSync(path.join(KOTLIN_CONTRACT, file), 'utf8');
+    const declaration = new RegExp(`\\bobject\\s+${name}\\s*\\{`).exec(source);
+    if (!declaration) continue;
+    const open = source.indexOf('{', declaration.index);
+    const close = matchingBrace(source, open);
+    return [...source.slice(open + 1, close).matchAll(/\bconst\s+val\s+\w+\s*=\s*"([^"]+)"/g)]
+      .map((entry) => entry[1]!)
+      .sort();
+  }
+  throw new Error(`Missing Kotlin vocabulary ${name}`);
+}
+
+function typescriptVocabulary(name: string): string[] {
+  for (const fileName of TS_CONTRACT) {
+    const source = fs.readFileSync(fileName, 'utf8');
+    const declaration = new RegExp(`\\bexport\\s+const\\s+${name}\\s*=\\s*\\{`).exec(source);
+    if (!declaration) continue;
+    const open = source.indexOf('{', declaration.index);
+    const close = matchingBrace(source, open);
+    return [...source.slice(open + 1, close).matchAll(/:\s*['"]([^'"]+)['"]/g)]
+      .map((entry) => entry[1]!)
+      .sort();
+  }
+  throw new Error(`Missing TypeScript vocabulary ${name}`);
+}
+
 type WireTypeShape = {
   kind: 'boolean' | 'list' | 'number' | 'object' | 'string';
   nullable: boolean;
@@ -281,6 +318,8 @@ const TS_STRING_TYPES = new Set([
   'ClientKind',
   'DeviceLinkState',
   'DownloadStatus',
+  'PlaylistEpgRefreshStatus',
+  'PlaylistRefreshJobStatus',
   'PlaylistOperation',
   'PlaylistOperationExecution',
   'PlaylistMode',
@@ -338,6 +377,15 @@ describe('hand-written server contract mirror', () => {
         typescript.get(typescriptName),
         `${typescriptName} must mirror ${kotlinName}`,
       ).toEqual(kotlin.get(kotlinName));
+    }
+  });
+
+  it('keeps closed wire vocabularies value-for-value with Kotlin', () => {
+    for (const [kotlinName, typescriptName] of VOCABULARY_MIRRORS) {
+      expect(
+        typescriptVocabulary(typescriptName),
+        `${typescriptName} must mirror every value in ${kotlinName}`,
+      ).toEqual(kotlinVocabulary(kotlinName));
     }
   });
 

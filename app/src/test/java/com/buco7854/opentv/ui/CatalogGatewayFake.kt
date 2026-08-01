@@ -49,6 +49,16 @@ internal class CatalogGatewayFake(
     var favoriteBlock: suspend (Int, Int) -> CatalogResult<Page<CatalogItem>> =
         { _, _ -> CatalogResult.Success(Page(emptyList(), 0)) }
     val channelRequests = mutableListOf<Pair<Int, Int>>()
+    val categoryCorrections = mutableListOf<Pair<String, Int?>>()
+    var categoryCorrectionResult: CatalogResult<Unit> = CatalogResult.Success(Unit)
+
+    override suspend fun correctCategoryType(
+        groupTitle: String,
+        kind: Int?,
+    ): CatalogResult<Unit> {
+        categoryCorrections += groupTitle to kind
+        return categoryCorrectionResult
+    }
 
     override suspend fun groups(kind: Int) = groupsBlock(kind)
 

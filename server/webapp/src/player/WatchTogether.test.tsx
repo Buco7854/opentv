@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, SessionCommand, WatchIntent } from '../api';
+import { api, ApiError, SessionCommand, WatchIntent } from '../api';
 import { useWatchTogether } from './WatchTogether';
 
 const command = (overrides: Partial<SessionCommand>): SessionCommand => ({
@@ -38,7 +38,6 @@ describe('watch-together capacity preflight', () => {
       video,
       active: true,
       live: true,
-      remuxEligible: false,
       sharesRoomRead: true,
       contentId: 'content-1',
       send,
@@ -51,9 +50,10 @@ describe('watch-together capacity preflight', () => {
     expect(view.result.current.checking).toBe(false);
 
     await act(async () => resolveIntent({
-      sameContent: [{ id: 'peer-1', name: 'Peer' }],
+      sameContent: [{ id: 'peer-1', name: 'Peer', sameAccount: true }],
       full: true,
       limit: 1,
+      requiresJoin: true,
     }));
 
     expect(view.result.current.blocked).toBe(false);
@@ -63,7 +63,7 @@ describe('watch-together capacity preflight', () => {
 
   it('does not let a stale room-go release a newer barrier', async () => {
     vi.spyOn(api, 'playbackIntent').mockResolvedValue({
-      sameContent: [], full: false, limit: 1,
+      sameContent: [], full: false, limit: 1, requiresJoin: false,
     });
     const element = document.createElement('video');
     vi.spyOn(element, 'pause').mockImplementation(() => {});
@@ -73,7 +73,6 @@ describe('watch-together capacity preflight', () => {
       video: { current: element },
       active: true,
       live: false,
-      remuxEligible: true,
       sharesRoomRead: true,
       contentId: 'content-1',
       send: { current: null },
@@ -95,14 +94,16 @@ describe('watch-together capacity preflight', () => {
 
   it('does not clear provider-full when the lease has no real shared room transport', async () => {
     vi.spyOn(api, 'playbackIntent').mockResolvedValue({
-      sameContent: [{ id: 'peer-1', name: 'Peer' }], full: true, limit: 1,
+      sameContent: [{ id: 'peer-1', name: 'Peer', sameAccount: false }],
+      full: true,
+      limit: 1,
+      requiresJoin: false,
     });
     const view = renderHook(() => useWatchTogether({
       selfId: 'lease-1',
       video: { current: document.createElement('video') },
       active: true,
       live: true,
-      remuxEligible: false,
       sharesRoomRead: false,
       contentId: 'content-1',
       send: { current: null },
@@ -125,7 +126,7 @@ describe('watch-together capacity preflight', () => {
   it('reports ready only for the current barrier generation', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.spyOn(api, 'playbackIntent').mockResolvedValue({
-      sameContent: [], full: false, limit: 1,
+      sameContent: [], full: false, limit: 1, requiresJoin: false,
     });
     const ready = vi.spyOn(api, 'sessionReady').mockResolvedValue(undefined);
     const element = document.createElement('video');
@@ -135,7 +136,6 @@ describe('watch-together capacity preflight', () => {
       video: { current: element },
       active: true,
       live: false,
-      remuxEligible: true,
       sharesRoomRead: true,
       contentId: 'content-1',
       send: { current: null },
@@ -150,5 +150,43 @@ describe('watch-together capacity preflight', () => {
 
     expect(ready).toHaveBeenCalledTimes(1);
     expect(ready).toHaveBeenCalledWith('lease-1', 9);
+  });
+
+  it('turns declining a required own-device join into the typed refusal', async () => {
+    vi.spyOn(api, 'playbackIntent').mockResolvedValue({
+      sameContent: [
+        { id: 'friend', name: 'Friend', sameAccount: false },
+        { id: 'own-tv', name: 'My television', sameAccount: true },
+      ],
+      full: false,
+      limit: 2,
+      requiresJoin: true,
+    });
+    const refuse = vi.spyOn(api, 'watchAlone').mockRejectedValue(
+      new ApiError(
+        'This account is already playing this content on another device',
+        409,
+        'same_content_already_playing',
+      ),
+    );
+    const view = renderHook(() => useWatchTogether({
+      selfId: 'lease-2',
+      video: { current: document.createElement('video') },
+      active: true,
+      live: false,
+      sharesRoomRead: true,
+      contentId: 'content-1',
+      send: { current: null },
+    }));
+    await act(async () => {});
+
+    expect(view.result.current.choosing).toBe(true);
+    expect(view.result.current.requiresJoin).toBe(true);
+    expect(view.result.current.peers.map((peer) => peer.id)).toEqual(['own-tv']);
+    await act(async () => view.result.current.watchAlone());
+
+    expect(refuse).toHaveBeenCalledWith('lease-2');
+    expect(view.result.current.choosing).toBe(false);
+    expect(view.result.current.refusal).toContain('another device');
   });
 });

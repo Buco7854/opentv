@@ -50,6 +50,14 @@ class HubDownloadPreferences(
     }
 
     @Synchronized
+    fun pruneHub(hubSourceId: Long) {
+        val keys = preferences.all.keys.filter { hubId(it) == hubSourceId }
+        if (keys.isNotEmpty()) {
+            preferences.edit().apply { keys.forEach(::remove) }.apply()
+        }
+    }
+
+    @Synchronized
     internal fun enqueueServerDelete(hubSourceId: Long, serverDownloadId: String) {
         preferences.edit()
             .putBoolean(pendingDeleteKey(hubSourceId, serverDownloadId), true)
@@ -59,6 +67,10 @@ class HubDownloadPreferences(
     @Synchronized
     internal fun pendingServerDeletes(): List<PendingHubDownloadDelete> =
         preferences.all.keys.mapNotNull(::pendingDelete)
+
+    @Synchronized
+    internal fun pendingServerDeleteCount(hubSourceId: Long): Int =
+        preferences.all.keys.count { pendingDelete(it)?.hubSourceId == hubSourceId }
 
     @Synchronized
     internal fun completeServerDelete(delete: PendingHubDownloadDelete) {
@@ -379,7 +391,21 @@ class HubDownloadCoordinator internal constructor(
     }
 
     internal suspend fun retryPendingServerDeletes(): Boolean = serverDeleteLock.withLock {
-        preferences.pendingServerDeletes().forEach { pending ->
+        retryServerDeletes(preferences.pendingServerDeletes())
+        preferences.pendingServerDeletes().isEmpty()
+    }
+
+    /** Uses the still-live hub credentials immediately before that hub is removed. */
+    internal suspend fun flushPendingServerDeletes(hubSourceId: Long): Int =
+        serverDeleteLock.withLock {
+            retryServerDeletes(
+                preferences.pendingServerDeletes().filter { it.hubSourceId == hubSourceId },
+            )
+            preferences.pendingServerDeleteCount(hubSourceId)
+        }
+
+    private suspend fun retryServerDeletes(deletes: List<PendingHubDownloadDelete>) {
+        deletes.forEach { pending ->
             try {
                 remote.delete(pending.hubSourceId, pending.serverDownloadId)
                 preferences.completeServerDelete(pending)
@@ -392,7 +418,6 @@ class HubDownloadCoordinator internal constructor(
                 ErrorLog.log("Remove hub download from server", error)
             }
         }
-        preferences.pendingServerDeletes().isEmpty()
     }
 
     private suspend fun sync(

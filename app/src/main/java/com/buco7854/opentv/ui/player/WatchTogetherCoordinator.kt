@@ -5,6 +5,7 @@ import com.buco7854.opentv.contract.SessionCommandDto
 import com.buco7854.opentv.contract.SyncStateDto
 import com.buco7854.opentv.contract.WatchIntentPeer
 import com.buco7854.opentv.contract.WatchIntentResponse
+import com.buco7854.opentv.hub.HubDuplicatePlaybackException
 import com.buco7854.opentv.hub.playback.isProtocolCommand
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
@@ -56,6 +57,10 @@ internal data class WatchTogetherState(
     val controlRequests: List<PendingControlRequest> = emptyList(),
     val checking: Boolean = false,
     val choosing: Boolean = false,
+    /** This account already plays this title elsewhere: joining is the only way to watch here. */
+    val requiresJoin: Boolean = false,
+    /** The required join was declined, so nothing will play on this device. */
+    val duplicateRefused: Boolean = false,
     val blocked: Boolean = false,
     val loading: Boolean = false,
     val transitioning: Boolean = false,
@@ -103,6 +108,9 @@ internal interface WatchTogetherHub {
     suspend fun kick(targetId: String)
     suspend fun setRoomAudio(audioTrackIndex: Int)
     suspend fun ready(generation: Long)
+
+    /** Tells the server this device declined a required join. */
+    suspend fun watchAlone()
     suspend fun leave()
     suspend fun sendSync(state: SyncStateDto)
 }
@@ -202,13 +210,22 @@ internal class WatchTogetherCoordinator(
                 mutate { copy(checking = false) }
                 startSolo = true
             } else {
-                val choosing = intent.sameContent.isNotEmpty()
+                // A required join can only be satisfied by this account's own devices; another
+                // user's session is not the thing blocking us and offering it would mislead.
+                val offered = if (intent.requiresJoin) {
+                    intent.sameContent.filter { it.sameAccount }
+                } else {
+                    intent.sameContent
+                }
+                val choosing = offered.isNotEmpty()
                 mutate {
                     copy(
                         selfId = hub.selfId,
-                        peers = intent.sameContent,
+                        peers = offered,
                         checking = false,
                         choosing = choosing,
+                        requiresJoin = intent.requiresJoin,
+                        duplicateRefused = false,
                         blocked = intent.full,
                     )
                 }
@@ -231,9 +248,33 @@ internal class WatchTogetherCoordinator(
     }
 
     fun watchAlone() {
-        val blocked = mutableState.value.blocked
+        val current = mutableState.value
         mutate { copy(choosing = false) }
-        if (blocked) {
+        if (current.requiresJoin) {
+            scope.launch {
+                mutate { copy(duplicateRefused = false, transitioning = true) }
+                try {
+                    // The duplicate can disappear after intent was checked. A successful
+                    // authoritative check therefore admits solo playback; only the typed
+                    // duplicate response is a refusal.
+                    hub.watchAlone()
+                    mutate { copy(requiresJoin = false) }
+                    onStartMedia(false)
+                    player?.play()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: HubDuplicatePlaybackException) {
+                    duplicatePlaybackRefused()
+                } catch (_: Throwable) {
+                    mutate { copy(choosing = true) }
+                    showNotice(WatchTogetherNoticeKind.ACTION_FAILED)
+                } finally {
+                    mutate { copy(transitioning = false) }
+                }
+            }
+            return
+        }
+        if (current.blocked) {
             scope.launch { onProviderCapacity() }
         } else {
             scope.launch {
@@ -243,9 +284,41 @@ internal class WatchTogetherCoordinator(
         }
     }
 
-    suspend fun askToJoin(peerId: String) = action {
-        hub.requestJoin(peerId)
+    /** The server deleted this lease; only leaving and starting a new lease can continue. */
+    fun duplicatePlaybackRefused() {
+        mutate {
+            copy(
+                peers = emptyList(),
+                choosing = false,
+                requiresJoin = true,
+                duplicateRefused = true,
+                transitioning = false,
+            )
+        }
+    }
+
+    suspend fun askToJoin(peerId: String) {
+        // Before the call, not after: a join between two of this account's own devices is
+        // admitted without approval, so room-state can arrive while requestJoin is still
+        // in flight and would otherwise be overwritten by a stale transitioning=true.
         mutate { copy(transitioning = true, choosing = false) }
+        try {
+            hub.requestJoin(peerId)
+        } catch (cancelled: CancellationException) {
+            restoreJoinChoiceAfterFailure()
+            throw cancelled
+        } catch (_: Throwable) {
+            if (restoreJoinChoiceAfterFailure()) {
+                showNotice(WatchTogetherNoticeKind.ACTION_FAILED)
+            }
+        }
+    }
+
+    /** False when room-state already proved that the request reached the server. */
+    private fun restoreJoinChoiceAfterFailure(): Boolean {
+        if (mutableState.value.inRoom) return false
+        mutate { copy(transitioning = false, choosing = peers.isNotEmpty()) }
+        return true
     }
 
     suspend fun answerJoin(requestId: String, accept: Boolean) = action {
@@ -398,6 +471,10 @@ internal class WatchTogetherCoordinator(
                 members = roster,
                 peers = emptyList(),
                 choosing = false,
+                // Being in the room is the answer to the prompt; neither it nor the
+                // refusal should outlive the thing they were asking about.
+                requiresJoin = if (roster.isNotEmpty()) false else requiresJoin,
+                duplicateRefused = if (roster.isNotEmpty()) false else duplicateRefused,
                 blocked = if (roster.isNotEmpty() && sharesRoomRead()) false else blocked,
                 transitioning = false,
                 joinRequests = joinRequests.filterNot { it.peerId in ids },

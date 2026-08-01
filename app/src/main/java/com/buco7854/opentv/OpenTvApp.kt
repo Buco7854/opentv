@@ -56,7 +56,6 @@ class AppGraph(app: Application) : AutoCloseable {
     private val hubTransport by lazy { OkHttpTransport() }
     val hubApi: HubApi by lazy { HubApi(hubTransport) }
     val hubs: HubRegistry by lazy { HubRegistry(storage.hubSources, hubApi, hubVault) }
-    val hubAccounts: HubAccountRepository by lazy { HubAccountRepository(hubs) }
     private val coreLog = CoreLog { context, error -> ErrorLog.log(context, error) }
     val xtreamApi = XtreamApi(Http.fetcher)
     val account = AccountRepository(xtreamApi, coreLog)
@@ -75,6 +74,9 @@ class AppGraph(app: Application) : AutoCloseable {
         preferences = hubDownloadPreferences,
         scope = applicationScope,
     )
+    val hubAccounts: HubAccountRepository by lazy {
+        HubAccountRepository(hubs, hubDownloads, hubDownloadPreferences)
+    }
     val downloads = DownloadRepository(
         context = app,
         store = storage.downloads,

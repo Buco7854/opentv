@@ -17,6 +17,14 @@ class HubErrorsTest {
         assertIs<HubForbiddenException>(hubFailure(response(403)))
         assertIs<HubNotFoundException>(hubFailure(response(404)))
         assertIs<HubGoneException>(hubFailure(response(410, """{"code":"playback_revoked","message":"gone"}""")))
+        assertIs<HubDuplicatePlaybackException>(
+            hubFailure(
+                response(
+                    409,
+                    """{"code":"same_content_already_playing","message":"another device"}""",
+                ),
+            ),
+        )
         assertIs<HubServerException>(hubFailure(response(503)))
         assertIs<HubApiException>(hubFailure(response(400)))
     }

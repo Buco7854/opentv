@@ -1,6 +1,7 @@
 package com.buco7854.opentv.server
 
 import com.buco7854.opentv.contract.*
+import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.storage.Storage
 import com.buco7854.opentv.core.repo.XtreamRepository
 import kotlinx.coroutines.channels.ReceiveChannel
@@ -70,6 +71,7 @@ class SessionApplicationService(
         val lease = sessions.create(
             actor, identity.playlistId, identity.contentId, sourceUrl, client.ip, client.userAgent,
             MediaCapabilities.from(request.capabilities),
+            liveSource = request.mode == "play" && channel?.kind == ChannelKind.LIVE,
         )
         val grant = mediaGrants.issue(actor, lease.id)
         val remote = sourceUrl.startsWith("http://") || sourceUrl.startsWith("https://")
@@ -164,13 +166,25 @@ class SessionApplicationService(
     suspend fun watchIntent(actor: Actor, id: String): WatchIntentResponse {
         val self = sessions.owned(actor, id)
         val peers = sessions.sameContentPeers(id, self.contentId)
-            .map { WatchIntentPeer(it.id, it.displayName) }
+            .map { WatchIntentPeer(it.id, it.displayName, sameAccount = it.userId == self.userId) }
         val url = self.sourceUrl
         val limit = connectionLimit(url)
         val group = sessions.shareGroup(id)
         val full = url.startsWith("http") &&
             streamGate.streams(providerKeyOf(url), group) >= limit.coerceAtLeast(1)
-        return WatchIntentResponse(peers, full, limit)
+        return WatchIntentResponse(
+            sameContent = peers,
+            full = full,
+            limit = limit,
+            requiresJoin = sessions.sameAccountConflict(id) != null,
+        )
+    }
+
+    fun watchAlone(actor: Actor, id: String) {
+        sessions.owned(actor, id)
+        if (!sessions.watchAlone(id)) {
+            throw SameContentAlreadyPlayingException()
+        }
     }
 
     fun requestJoin(actor: Actor, id: String, request: JoinRequestBody) {

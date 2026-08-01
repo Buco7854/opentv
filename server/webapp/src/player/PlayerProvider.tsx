@@ -285,8 +285,9 @@ function LeasedPlayerSurface({
   // Whether this stream draws on the provider at all (downloads are local).
   const providerBacked = !direct;
   const liveKind = sourceKind(lease.streamUrl);
-  // A room may clear a provider-full result only when the server advertised the transport that
-  // really shares this source. HLS uses untouched cached resources; TS uses the tee relay.
+  // A room may retry a provider-full result when it has a shared transport or may negotiate a
+  // shared remux. Fully capable direct-play VOD is the deliberate exception: after negotiation
+  // says no remux is needed, each member retains a seat and the newcomer may receive 429.
   const sharesRoomRead = remuxEligible || (
     liveKind === 'hls' ? lease.sharedHlsUrl != null : lease.relayUrl != null
   );
@@ -301,7 +302,6 @@ function LeasedPlayerSurface({
     video: videoRef,
     active: !status.error,
     live,
-    remuxEligible,
     sharesRoomRead,
     contentId: request.contentId,
     send: wsSend,
@@ -357,7 +357,7 @@ function LeasedPlayerSurface({
   // provider only blocks provider-backed streams.
   const holdForChoice = wt.checking || wt.choosing;
   const holdForConnection = holdForChoice || (providerBacked && wt.blocked);
-  const holdEngine = wt.transitioning || holdForConnection || (remuxEligible && !remux.session &&
+  const holdEngine = wt.refusal != null || wt.transitioning || holdForConnection || (remuxEligible && !remux.session &&
     (remux.available == null ||
       (remux.available && (remux.state === 'idle' || remux.state === 'loading'))));
   useEffect(() => {
@@ -374,6 +374,14 @@ function LeasedPlayerSurface({
     try {
       const response = await fetch(url, { headers: { Range: 'bytes=0-0' } });
       if (!response.ok) {
+        if (response.status === 409) {
+          setError(t('error.sameContentAlreadyPlaying'));
+          return;
+        }
+        if (response.status === 429) {
+          setError(t('player.connectionLimit'));
+          return;
+        }
         if (isTerminalPlaybackStatus(response.status)) {
           terminatePlayback(response.status);
           return;
@@ -556,6 +564,7 @@ function LeasedPlayerSurface({
   // while paused, so a loading player never shows a resting play icon. A deliberate pause clears
   // buffering (the media has data), so it correctly shows play then.
   const busy = holdEngine || remux.state === 'loading' || status.buffering || wt.loading;
+  const visibleError = status.error ?? wt.refusal;
   const tracksEmptyText =
     remux.state === 'loading' || holdEngine ? t('player.remuxPreparing')
       : remux.session || remux.state === 'none' ? t('player.noExtraTracks')
@@ -587,7 +596,7 @@ function LeasedPlayerSurface({
              className={scale === 'zoom' ? 'zoom' : scale === 'stretch' ? 'stretch' : undefined} />
 
       <PlayerOverlays
-        error={status.error}
+        error={visibleError}
         busy={busy}
         uiVisible={uiVisible}
         cueText={status.cueText}
@@ -597,7 +606,7 @@ function LeasedPlayerSurface({
         onOpenWatchTogether={() => setWtMenu(true)}
       />
 
-      {!status.error && !wt.choosing && (
+      {!visibleError && !wt.choosing && (
         <PlayerControls
           title={title}
           live={live}

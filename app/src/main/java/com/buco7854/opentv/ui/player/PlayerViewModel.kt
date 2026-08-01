@@ -364,6 +364,12 @@ internal class PlayerViewModel(
                             pendingHubPositionMs = null
                             _problem.value = PlayerProblem.SIGNED_OUT
                         }
+                        HubPlaybackState.DuplicatePlayback -> {
+                            pendingHubPositionMs = null
+                            _playbackSource.value = null
+                            _problem.value = null
+                            watchTogether?.duplicatePlaybackRefused()
+                        }
                         is HubPlaybackState.AtCapacity -> {
                             pendingHubPositionMs = null
                             _problem.value = PlayerProblem.AT_CAPACITY

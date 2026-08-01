@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.buco7854.opentv.R
 import com.buco7854.opentv.contract.RoomMemberDto
+import com.buco7854.opentv.contract.WatchIntentPeer
 import com.buco7854.opentv.ui.components.OtvButton
 import com.buco7854.opentv.ui.components.OtvTextButton
 import com.buco7854.opentv.ui.components.OtvTonalButton
@@ -50,6 +51,7 @@ import com.buco7854.opentv.ui.components.RequestInitialFocusOnTv
 import kotlinx.coroutines.delay
 
 internal data class WatchTogetherActions(
+    val onClose: () -> Unit,
     val onWatchAlone: () -> Unit,
     val onJoin: (String) -> Unit,
     val onAnswerJoin: (String, Boolean) -> Unit,
@@ -72,6 +74,7 @@ internal fun WatchTogetherSheet(
         state.isHost && it.id != state.selfId && !it.host
     }
     val firstTarget = when {
+        state.duplicateRefused -> "close"
         !state.inRoom && state.peers.isNotEmpty() -> "peer:${state.peers.first().id}"
         manageableMember != null -> "member:${manageableMember.id}"
         state.joinRequests.isNotEmpty() -> "join:${state.joinRequests.first().requestId}"
@@ -102,15 +105,33 @@ internal fun WatchTogetherSheet(
                 modifier = Modifier.padding(bottom = 4.dp),
             )
 
-            if (!state.inRoom && state.peers.isNotEmpty()) {
+            if (state.duplicateRefused) {
                 Text(
-                    stringResource(R.string.watch_together_offer),
+                    stringResource(R.string.watch_together_duplicate_refused),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            if (!state.duplicateRefused && !state.inRoom && state.peers.isNotEmpty()) {
+                Text(
+                    // A required join is not an invitation: nothing plays here unless it is
+                    // accepted, so the wording has to say that rather than merely offer.
+                    stringResource(
+                        if (state.requiresJoin) {
+                            R.string.watch_together_duplicate_required
+                        } else {
+                            R.string.watch_together_offer
+                        },
+                    ),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 state.peers.forEach { peer ->
                     WatchPeerRow(
-                        name = peer.name,
+                        name = peerDisplayName(
+                            peer,
+                            stringResource(R.string.watch_together_your_other_device),
+                        ),
                         actionLabel = stringResource(R.string.watch_together_join),
                         onAction = { actions.onJoin(peer.id) },
                         modifier = if (firstTarget == "peer:${peer.id}") {
@@ -121,9 +142,10 @@ internal fun WatchTogetherSheet(
                     )
                 }
             }
-            if (state.choosing) {
+            if (state.choosing && !state.duplicateRefused) {
                 OtvTonalButton(
                     onClick = actions.onWatchAlone,
+                    enabled = !state.transitioning,
                     modifier = Modifier
                         .fillMaxWidth()
                         .then(
@@ -134,7 +156,25 @@ internal fun WatchTogetherSheet(
                             },
                         ),
                 ) {
-                    Text(stringResource(R.string.watch_together_watch_alone))
+                    Text(
+                        stringResource(
+                            if (state.requiresJoin) {
+                                R.string.watch_together_dont_join
+                            } else {
+                                R.string.watch_together_watch_alone
+                            },
+                        ),
+                    )
+                }
+            }
+            if (state.duplicateRefused) {
+                OtvTonalButton(
+                    onClick = actions.onClose,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(initialFocusRequester),
+                ) {
+                    Text(stringResource(R.string.common_close))
                 }
             }
 
@@ -227,6 +267,9 @@ internal fun WatchTogetherSheet(
         }
     }
 }
+
+internal fun peerDisplayName(peer: WatchIntentPeer, yourOtherDevice: String): String =
+    if (peer.sameAccount) yourOtherDevice else peer.name
 
 @Composable
 private fun WatchPeerRow(

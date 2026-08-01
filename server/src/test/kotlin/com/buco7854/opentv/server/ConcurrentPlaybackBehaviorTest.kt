@@ -119,7 +119,7 @@ class ConcurrentPlaybackBehaviorTest {
     }
 
     @Test
-    fun `same title stays on separate reads until the viewers enter a room`() {
+    fun `same-title leases acquire one share group when own-device join is admitted`() {
         val sessions = PlaybackSessionRegistry(reapInBackground = false)
         try {
             val phone = sessions.create(
@@ -158,7 +158,7 @@ class ConcurrentPlaybackBehaviorTest {
                 peerName = "Viewer's TV",
                 contentKey = "same-live-content",
             )
-            assertTrue(sessions.answerJoin(phone.id, requireNotNull(request), accept = true))
+            requireNotNull(request)
 
             assertEquals(sessions.shareGroup(phone.id), sessions.shareGroup(television.id))
             assertEquals(
@@ -190,6 +190,69 @@ class ConcurrentPlaybackBehaviorTest {
         } finally {
             connections.closeAll()
         }
+    }
+
+    @Test
+    fun `fully capable direct VOD room still needs one provider seat per member`() {
+        val sessions = PlaybackSessionRegistry(reapInBackground = false)
+        val connections = ProviderConnections()
+        try {
+            val phoneActor = actor("phone-auth")
+            val televisionActor = actor("tv-auth")
+            val phone = sessions.create(
+                phoneActor, 1, "movie", "https://provider.example/movie.mkv", "", "",
+            )
+            val television = sessions.create(
+                televisionActor, 1, "movie", "https://provider.example/movie.mkv", "", "",
+            )
+            // Direct VOD remains lease-owned even in a room. Forcing it through the shared HLS
+            // remux would reverse the in-band direct-play policy and spend server CPU unnecessarily.
+            assertTrue(connections.tryOpenStream(phone.id, "provider", phone.id, 1) {})
+            assertNotEquals(phone.id, sessions.shareGroup(television.id))
+            requireNotNull(sessions.requestJoin(phone.id, television.id, "Television", "movie"))
+            assertEquals(sessions.shareGroup(phone.id), sessions.shareGroup(television.id))
+            val grants = PlaybackMediaGrants(sessions)
+            assertEquals(television.id, grants.run {
+                // A room has satisfied duplicate-play policy; provider capacity is the remaining
+                // and intentionally separate admission decision for fully capable direct VOD.
+                val issued = issue(televisionActor, television.id)
+                validate(television.id, issued.token).id
+            })
+            // Room renegotiation may inspect whether conversion is needed without counting the
+            // existing member's solo read against itself. If direct play wins, the newcomer's
+            // later /stream admission is still the operation that receives provider_capacity.
+            assertEquals(
+                0,
+                connections.distinctStreams(
+                    "provider",
+                    sessions.roomMembers(phone.id) + sessions.shareGroup(phone.id),
+                ),
+            )
+            assertFalse(
+                connections.tryOpenStream(television.id, "provider", television.id, 1) {},
+            )
+            assertEquals(1, connections.distinctStreams("provider", null))
+        } finally {
+            sessions.close()
+            connections.closeAll()
+        }
+    }
+
+    @Test
+    fun `same-content independent-play refusal is a typed conflict`() = testApplication {
+        application {
+            install(ContentNegotiation) { json() }
+            installOpenTvErrorResponses()
+            routing {
+                get("/") { throw SameContentAlreadyPlayingException() }
+            }
+        }
+
+        val response = client.get("/")
+
+        assertEquals(HttpStatusCode.Conflict, response.status)
+        assertTrue("same_content_already_playing" in response.bodyAsText())
+        assertTrue("another device" in response.bodyAsText())
     }
 
     @Test

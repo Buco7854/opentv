@@ -64,6 +64,15 @@ class PlayerPolicyTest {
     }
 
     @Test
+    fun `watch choice remains visible before media exists`() {
+        assertTrue(shouldShowWatchTogetherBeforeMedia(WatchTogetherState(choosing = true)))
+        assertTrue(
+            shouldShowWatchTogetherBeforeMedia(WatchTogetherState(duplicateRefused = true)),
+        )
+        assertFalse(shouldShowWatchTogetherBeforeMedia(WatchTogetherState(checking = true)))
+    }
+
+    @Test
     fun `back peels notice then controls before exiting playback`() {
         assertEquals(
             PlayerBackAction.DISMISS_NOTICE,

@@ -8,6 +8,11 @@ class ResourceNotFound(
     message: String = "No such $resource",
 ) : ApplicationError(message)
 
+class SameContentAlreadyPlayingException : ApplicationError(
+    "This account is already playing this content on another device. " +
+        "Join that watch-together session or stop playback there.",
+)
+
 class LastFactorException : ApplicationError("The last usable sign-in or MFA factor cannot be removed")
 
 class LastAdminException(action: String) :

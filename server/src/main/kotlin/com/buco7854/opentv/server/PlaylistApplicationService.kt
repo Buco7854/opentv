@@ -134,6 +134,12 @@ class PlaylistApplicationService(
             warning = "\"${playlist.name}\" and its cached guide data will be removed, " +
                 "along with every user's favorites, watch progress and downloads for it. " +
                 "This cannot be undone.",
+            effects = listOf(
+                PlaylistDeleteEffect.CACHED_GUIDE_DATA,
+                PlaylistDeleteEffect.USER_FAVORITES,
+                PlaylistDeleteEffect.USER_WATCH_PROGRESS,
+                PlaylistDeleteEffect.USER_DOWNLOADS,
+            ),
         )
     }
 

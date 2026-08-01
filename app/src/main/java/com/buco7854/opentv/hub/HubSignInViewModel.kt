@@ -11,6 +11,7 @@ import com.buco7854.opentv.contract.DeviceLinkStatusDto
 import com.buco7854.opentv.contract.ServerInfoDto
 import com.buco7854.opentv.contract.TotpEnrollmentDto
 import com.buco7854.opentv.core.model.HubSource
+import com.buco7854.opentv.core.net.Urls
 import com.buco7854.opentv.diag.ErrorLog
 import java.net.URI
 import java.util.Locale
@@ -39,6 +40,7 @@ interface HubAuthGateway {
         browserSignIn: Boolean,
     ): DeviceLinkStartDto
     suspend fun linkPoll(baseUrl: String, pollToken: String): DeviceLinkStatusDto
+    suspend fun linkCancel(baseUrl: String, pollToken: String)
 }
 
 class ApiHubAuthGateway(
@@ -72,6 +74,9 @@ class ApiHubAuthGateway(
 
     override suspend fun linkPoll(baseUrl: String, pollToken: String) =
         api.linkPoll(baseUrl, pollToken)
+
+    override suspend fun linkCancel(baseUrl: String, pollToken: String) =
+        api.linkCancel(baseUrl, pollToken)
 }
 
 interface HubSignInSink {
@@ -363,6 +368,20 @@ class HubSignInViewModel(
                     deviceName,
                     browserSignIn = mode == DeviceLinkMode.BROWSER_SIGN_IN,
                 )
+                if (!isSafeDeviceLinkUrl(link.verificationUriComplete, mode)) {
+                    try {
+                        gateway.linkCancel(baseUrl, link.pollToken)
+                    } catch (error: Throwable) {
+                        error.rethrowCancellation()
+                        ErrorLog.log(LOG_TAG, error, "Could not cancel unsafe device-link request")
+                    }
+                    mutableState.value = HubSignInState.MethodChooser(
+                        baseUrl,
+                        offered,
+                        unexpectedResponse("The hub returned an unsafe device-link URL"),
+                    )
+                    return@launch
+                }
                 mutableState.value = link.toState(DeviceLinkPhase.PENDING, mode)
                 pollLink(link, mode)
             } catch (error: Throwable) {
@@ -668,6 +687,31 @@ class HubSignInViewModel(
     private fun unexpectedResponse(detail: String): HubSignInFailure {
         ErrorLog.log(LOG_TAG, message = detail)
         return HubSignInFailure.UNEXPECTED_RESPONSE
+    }
+
+    /**
+     * The link token may reach a browser or QR scanner only in the fragment: a query token
+     * would enter browser history and Referer headers. Validate the server's answer before
+     * exposing it to either production handoff.
+     */
+    private fun isSafeDeviceLinkUrl(url: String, mode: DeviceLinkMode): Boolean {
+        if (!HubEndpoints.isSameOrigin(baseUrl, url) ||
+            Urls.parse(url)?.queryParameter("t") != null
+        ) {
+            return false
+        }
+        val fragment = url.substringAfter('#', missingDelimiterValue = "")
+        if (fragment.isBlank()) return false
+        val fields = fragment.split('&').associate { field ->
+            val separator = field.indexOf('=')
+            if (separator < 0) {
+                field to ""
+            } else {
+                field.substring(0, separator) to field.substring(separator + 1)
+            }
+        }
+        return fields["t"].orEmpty().isNotBlank() &&
+            (mode != DeviceLinkMode.BROWSER_SIGN_IN || fields["mode"] == "sign-in")
     }
 
     private fun defaultHubName(url: String): String =

@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Whether a hub can be talked to right now, for badges and empty states. */
 enum class HubHealth { UNKNOWN, REACHABLE, UNREACHABLE, SIGNED_OUT }
@@ -219,14 +220,54 @@ class HubRegistry(
         } catch (_: Throwable) { }
     }
 
-    suspend fun remove(hubId: Long) {
-        signOut(hubId)
-        mutationMutex.withLock {
-            store.delete(hubId)
-            clients.remove(hubId)
+    suspend fun remove(
+        hubId: Long,
+        beforeLogout: suspend () -> Unit = {},
+        beforeForget: () -> Unit = {},
+    ) {
+        val client = clientFor(hubId)
+        if (client == null) {
+            beforeForget()
+            return
+        }
+        val credentials = client.credentials()
+        try {
+            // Releases go first because logout invalidates the bearer they need. One budget
+            // covers every remote best-effort action so an unreachable server cannot hold
+            // removal behind OkHttp's much longer general-purpose timeouts.
+            withTimeoutOrNull(REMOVE_REMOTE_BUDGET_MS) {
+                try {
+                    beforeLogout()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Throwable) { }
+                try {
+                    api.logout(credentials)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Throwable) { }
+            }
+        } finally {
+            try {
+                beforeForget()
+            } finally {
+                // Explicit removal always wins over cancellation of its best-effort network
+                // phase: no callback may leave a removed server's bearer in the vault.
+                withContext(NonCancellable) {
+                    mutationMutex.withLock {
+                        client.forgetToken()
+                        store.delete(hubId)
+                        clients.remove(hubId)
+                    }
+                }
+            }
         }
     }
 
     /** The unauthenticated API, for probing a URL before any hub row exists. */
     val discovery: HubApi get() = api
+
+    private companion object {
+        const val REMOVE_REMOTE_BUDGET_MS = 2_000L
+    }
 }

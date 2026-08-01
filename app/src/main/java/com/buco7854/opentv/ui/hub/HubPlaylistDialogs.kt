@@ -1,5 +1,7 @@
 package com.buco7854.opentv.ui.hub
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -12,8 +14,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.buco7854.opentv.R
@@ -24,6 +28,10 @@ import androidx.compose.ui.autofill.AutofillType
 import com.buco7854.opentv.ui.components.OtvTextButton
 import com.buco7854.opentv.ui.components.PlaylistField
 import com.buco7854.opentv.ui.components.ServerPlaylistNotice
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Edits a server-hosted playlist.
@@ -48,6 +56,33 @@ fun HubPlaylistEditDialog(
     var password by remember(form.id) { mutableStateOf("") }
     var url by remember(form.id) { mutableStateOf("") }
     var epgUrl by remember(form.id) { mutableStateOf("") }
+    var content by remember(form.id) { mutableStateOf<String?>(null) }
+    var readingFile by remember(form.id) { mutableStateOf(false) }
+    var fileReadFailed by remember(form.id) { mutableStateOf(false) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            readingFile = true
+            fileReadFailed = false
+            content = try {
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openInputStream(uri)
+                        ?.bufferedReader()
+                        ?.use { it.readText() }
+                        ?: throw IllegalStateException("The selected playlist file could not be opened")
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                fileReadFailed = true
+                null
+            } finally {
+                readingFile = false
+            }
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -94,22 +129,44 @@ fun HubPlaylistEditDialog(
                 if (PlaylistEditField.EPG_URL in form.fields) {
                     PlaylistField(R.string.playlist_field_epg_url, epgUrl, { epgUrl = it })
                 }
+                if (PlaylistEditField.CONTENT in form.fields) {
+                    OtvTextButton(
+                        onClick = { filePicker.launch(arrayOf("*/*")) },
+                        enabled = !busy && !readingFile,
+                    ) {
+                        Text(stringResource(R.string.playlist_replace_file))
+                    }
+                    when {
+                        fileReadFailed -> Text(
+                            stringResource(R.string.playlist_file_read_failed),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        content != null -> Text(
+                            stringResource(R.string.playlist_file_replacement_selected),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
         },
         confirmButton = {
             OtvTextButton(
-                enabled = !busy && name.isNotBlank(),
+                enabled = !busy && !readingFile && name.isNotBlank(),
                 onClick = {
                     // Blank stays blank: an untouched field must reach the server as absent,
                     // not as an empty string that would erase a stored credential.
                     onSave(
-                        PlaylistEditUpdate(
-                            name = name.takeIf { it.isNotBlank() && it != form.name },
-                            server = server.takeIf { it.isNotBlank() },
-                            username = username.takeIf { it.isNotBlank() },
-                            password = password.takeIf { it.isNotBlank() },
-                            url = url.takeIf { it.isNotBlank() },
-                            epgUrl = epgUrl.takeIf { it.isNotBlank() },
+                        playlistEditUpdate(
+                            form,
+                            name,
+                            server,
+                            username,
+                            password,
+                            url,
+                            epgUrl,
+                            content,
                         ),
                     )
                 },
@@ -120,3 +177,22 @@ fun HubPlaylistEditDialog(
         },
     )
 }
+
+internal fun playlistEditUpdate(
+    form: PlaylistEditForm,
+    name: String,
+    server: String,
+    username: String,
+    password: String,
+    url: String,
+    epgUrl: String,
+    content: String?,
+) = PlaylistEditUpdate(
+    name = name.takeIf { it.isNotBlank() && it != form.name },
+    server = server.takeIf { it.isNotBlank() },
+    username = username.takeIf { it.isNotBlank() },
+    password = password.takeIf { it.isNotBlank() },
+    url = url.takeIf { it.isNotBlank() },
+    epgUrl = epgUrl.takeIf { it.isNotBlank() },
+    content = content,
+)

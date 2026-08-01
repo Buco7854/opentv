@@ -341,6 +341,10 @@ absent from the initial bundle.
   back to a QR code on televisions or devices without a browser. Keep the HTTP and HTTPS
   `ACTION_VIEW` declarations in the manifest's `<queries>` block: Android 11+ package
   visibility otherwise makes the browser probe lie.
+- The browser-sign-in return is the fixed `opentv://sign-in` signal and carries no query,
+  fragment, token, account identity or other secret: any app can claim a custom scheme.
+  It may wake the Android wait early, but the in-memory poll token and server poll remain
+  authoritative; losing or intercepting the return may change latency only.
 - `DownloadStateIcon` is the single contextual `POST_NOTIFICATIONS` request seam for every
   download source, including hub downloads. It asks only on Android 13+ and always invokes the
   enqueue callback immediately, so denial hides progress notification UI but never blocks work.

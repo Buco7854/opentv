@@ -3,6 +3,11 @@ package com.buco7854.opentv.server
 import com.buco7854.opentv.serverdata.createOpenTvServerDatabase
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsBytes
+import io.ktor.client.statement.bodyAsText
+import io.ktor.http.HttpStatusCode
+import io.ktor.serialization.kotlinx.json.json
+import io.ktor.server.application.install
+import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.Dispatchers
@@ -16,6 +21,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -79,8 +85,12 @@ class RawLiveRoomTransitionTest {
             val target = "http://127.0.0.1:${listener.localPort}/live/channel.ts"
             val phoneActor = actor("phone-auth")
             val televisionActor = actor("tv-auth")
-            val phone = sessions.create(phoneActor, 1, "channel", target, "", "")
-            val television = sessions.create(televisionActor, 1, "channel", target, "", "")
+            val phone = sessions.create(
+                phoneActor, 1, "channel", target, "", "", liveSource = true,
+            )
+            val television = sessions.create(
+                televisionActor, 1, "channel", target, "", "", liveSource = true,
+            )
             val phoneGrant = grants.issue(phoneActor, phone.id)
             val televisionGrant = grants.issue(televisionActor, television.id)
             val media = MediaRouteDependencies(
@@ -95,7 +105,11 @@ class RawLiveRoomTransitionTest {
                 mediaGrants = grants,
                 connectionLimit = { 1 },
             )
-            application { routing { mediaRoutes(media) } }
+            application {
+                install(ContentNegotiation) { json() }
+                installOpenTvErrorResponses()
+                routing { mediaRoutes(media) }
+            }
 
             try {
                 coroutineScope {
@@ -125,10 +139,15 @@ class RawLiveRoomTransitionTest {
                         }
                     }
 
-                    val requestId = assertNotNull(
+                    assertNotNull(
                         sessions.requestJoin(phone.id, television.id, "Viewer's TV", "channel"),
                     )
-                    assertTrue(sessions.answerJoin(phone.id, requestId, accept = true))
+                    val refusedSolo = client.get(
+                        "/stream?u=${urlEncode(cipher.encryptStream(target, television.id))}" +
+                            "&sid=${urlEncode(television.id)}&g=${urlEncode(televisionGrant.token)}",
+                    )
+                    assertEquals(HttpStatusCode.Conflict, refusedSolo.status)
+                    assertTrue("same_content_already_playing" in refusedSolo.bodyAsText())
                     val shared = async(Dispatchers.Default) {
                         runCatching {
                             client.get(

@@ -2,11 +2,15 @@ package com.buco7854.opentv.hub
 
 import com.buco7854.opentv.contract.CurrentUserDto
 import com.buco7854.opentv.core.model.HubSource
+import com.buco7854.opentv.download.HubDownloadCoordinator
+import com.buco7854.opentv.download.HubDownloadPreferences
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 
 class HubAccountRepository(
     private val registry: HubRegistry,
+    private val hubDownloads: HubDownloadCoordinator,
+    private val downloadPreferences: HubDownloadPreferences,
 ) {
     val sources: Flow<List<HubSource>>
         get() = registry.observeAll()
@@ -21,8 +25,19 @@ class HubAccountRepository(
         registry.signOut(hubId)
     }
 
-    suspend fun remove(hubId: Long) {
-        registry.remove(hubId)
+    suspend fun remove(hubId: Long): HubRemovalResult {
+        var unreleased = downloadPreferences.pendingServerDeleteCount(hubId)
+        registry.remove(
+            hubId = hubId,
+            beforeLogout = { hubDownloads.flushPendingServerDeletes(hubId) },
+            beforeForget = {
+                // Capture this while the row and token still exist; the final prune is
+                // intentionally destructive and must not erase what the UI needs to report.
+                unreleased = downloadPreferences.pendingServerDeleteCount(hubId)
+            },
+        )
+        downloadPreferences.pruneHub(hubId)
+        return HubRemovalResult(unreleased)
     }
 
     fun webSecurity(source: HubSource): String =
@@ -41,3 +56,5 @@ class HubAccountRepository(
         const val ADMIN_ROLE = "ADMIN"
     }
 }
+
+data class HubRemovalResult(val unreleasedDownloadAssociations: Int)

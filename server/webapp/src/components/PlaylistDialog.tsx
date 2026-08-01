@@ -1,7 +1,9 @@
 // Add/edit playlist dialog with Xtream detection for get.php M3U links.
 
 import { useState } from 'react';
-import { api, Playlist, PlaylistUpsertRequest } from '../api';
+import {
+  api, Playlist, PlaylistEdit, PlaylistEditField, PlaylistUpdateRequest, PlaylistUpsertRequest,
+} from '../api';
 import { reportError, reportSuccess } from '../errors';
 import { t } from '../i18n';
 import { Dialog, Segmented, toast, TextField } from './Primitives';
@@ -9,7 +11,7 @@ import { Dialog, Segmented, toast, TextField } from './Primitives';
 type Mode = 'xtream' | 'url' | 'file';
 
 export function PlaylistDialog({ editing, onDismiss, onDone }: {
-  editing: Playlist | null;
+  editing: PlaylistEdit | null;
   onDismiss: () => void;
   onDone: (saved: Playlist) => void;
 }) {
@@ -25,13 +27,15 @@ export function PlaylistDialog({ editing, onDismiss, onDone }: {
 
   const [busy, setBusy] = useState(false);
   const [suggestion, setSuggestion] = useState<{ base: string; user: string; pass: string } | null>(null);
+  const editShowsAny = (...fields: PlaylistEditField[]) =>
+    editing?.fields.some((field) => fields.includes(field)) === true;
 
-  async function submit(req: PlaylistUpsertRequest) {
+  async function submit(req: PlaylistUpsertRequest | PlaylistUpdateRequest) {
     setBusy(true);
     try {
       const saved = isEdit
-        ? await api.updatePlaylist(editing.id, (({ mode: _mode, ...update }) => update)(req))
-        : await api.addPlaylist(req);
+        ? await api.updatePlaylist(editing.id, req as PlaylistUpdateRequest)
+        : await api.addPlaylist(req as PlaylistUpsertRequest);
       reportSuccess(isEdit ? t('playlists.updated') : t('playlists.added'));
       onDone(saved);
     } catch (e) {
@@ -41,8 +45,23 @@ export function PlaylistDialog({ editing, onDismiss, onDone }: {
   }
 
   async function onConfirm() {
+    if (editing) {
+      const fields = new Set(editing.fields);
+      const update: PlaylistUpdateRequest = {};
+      if (fields.has(PlaylistEditField.NAME)) update.name = name;
+      if (fields.has(PlaylistEditField.SERVER) && server.trim()) update.server = server.trim();
+      if (fields.has(PlaylistEditField.USERNAME) && username.trim()) {
+        update.username = username.trim();
+      }
+      if (fields.has(PlaylistEditField.PASSWORD) && password) update.password = password;
+      if (fields.has(PlaylistEditField.URL) && url.trim()) update.url = url.trim();
+      if (fields.has(PlaylistEditField.EPG_URL) && epg.trim()) update.epgUrl = epg.trim();
+      if (fields.has(PlaylistEditField.CONTENT) && file) update.content = await file.text();
+      await submit(update);
+      return;
+    }
     if (mode === 'xtream') {
-      if (!isEdit && (!server.trim() || !username.trim() || !password)) return;
+      if (!server.trim() || !username.trim() || !password) return;
       await submit({
         mode,
         name,
@@ -52,9 +71,9 @@ export function PlaylistDialog({ editing, onDismiss, onDone }: {
       });
     } else if (mode === 'url') {
       const trimmed = url.trim();
-      if (!isEdit && !trimmed) return;
+      if (!trimmed) return;
       // A get.php URL carries an Xtream login: offer the richer mode.
-      const detected = !isEdit && /get\.php\?/.test(trimmed) && /username=/.test(trimmed)
+      const detected = /get\.php\?/.test(trimmed) && /username=/.test(trimmed)
         ? (() => {
             try {
               const u = new URL(trimmed);
@@ -69,8 +88,7 @@ export function PlaylistDialog({ editing, onDismiss, onDone }: {
       if (detected) setSuggestion(detected);
       else await submit({ mode, name, url: trimmed, epgUrl: epg.trim() });
     } else {
-      if (isEdit && !file) await submit({ mode, name });
-      else if (file) await submit({ mode, name, content: await file.text() });
+      if (file) await submit({ mode, name, content: await file.text() });
       else toast(t('playlists.pickFileFirst'));
     }
   }
@@ -97,27 +115,46 @@ export function PlaylistDialog({ editing, onDismiss, onDone }: {
               onSelect={setMode}
             />
           )}
-          <TextField label={t('playlists.name')} value={name} onChange={setName} />
-          {isEdit && mode !== 'file' && (
+          {(!editing || editing.fields.includes(PlaylistEditField.NAME)) && (
+            <TextField label={t('playlists.name')} value={name} onChange={setName} />
+          )}
+          {editing && editing.storedFields.some((field) => field !== PlaylistEditField.CONTENT) && (
             <p className="hint">{t('playlists.credentialsEditHint')}</p>
           )}
-          {mode === 'xtream' && (
+          {(!editing ? mode === 'xtream' : editShowsAny(
+            PlaylistEditField.SERVER,
+            PlaylistEditField.USERNAME,
+            PlaylistEditField.PASSWORD,
+          )) && (
             <>
-              <TextField label={t('playlists.server')} value={server} onChange={setServer} />
-              <TextField label={t('playlists.username')} value={username} onChange={setUsername} autoComplete="username" />
-              <TextField label={t('playlists.password')} type="password" value={password} onChange={setPassword} autoComplete="current-password" />
+              {(!editing || editing.fields.includes(PlaylistEditField.SERVER)) && (
+                <TextField label={t('playlists.server')} value={server} onChange={setServer} />
+              )}
+              {(!editing || editing.fields.includes(PlaylistEditField.USERNAME)) && (
+                <TextField label={t('playlists.username')} value={username} onChange={setUsername} autoComplete="username" />
+              )}
+              {(!editing || editing.fields.includes(PlaylistEditField.PASSWORD)) && (
+                <TextField label={t('playlists.password')} type="password" value={password} onChange={setPassword} autoComplete="current-password" />
+              )}
               {!isEdit && (
                 <p className="hint">{t('playlists.xtreamHint')}</p>
               )}
             </>
           )}
-          {mode === 'url' && (
+          {(!editing ? mode === 'url' : editShowsAny(
+            PlaylistEditField.URL,
+            PlaylistEditField.EPG_URL,
+          )) && (
             <>
-              <TextField label={t('playlists.url')} value={url} onChange={setUrl} />
-              <TextField label={t('playlists.epgUrl')} value={epg} onChange={setEpg} />
+              {(!editing || editing.fields.includes(PlaylistEditField.URL)) && (
+                <TextField label={t('playlists.url')} value={url} onChange={setUrl} />
+              )}
+              {(!editing || editing.fields.includes(PlaylistEditField.EPG_URL)) && (
+                <TextField label={t('playlists.epgUrl')} value={epg} onChange={setEpg} />
+              )}
             </>
           )}
-          {mode === 'file' && (
+          {(!editing ? mode === 'file' : editing.fields.includes(PlaylistEditField.CONTENT)) && (
             <>
               <p className="hint">
                 {isEdit ? t('playlists.fileHintEdit') : t('playlists.fileHintAdd')}

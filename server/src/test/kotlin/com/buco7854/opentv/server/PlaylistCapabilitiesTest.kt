@@ -1,6 +1,7 @@
 package com.buco7854.opentv.server
 
 import com.buco7854.opentv.contract.GroupKindRequest
+import com.buco7854.opentv.contract.PlaylistDeleteEffect
 import com.buco7854.opentv.contract.PlaylistEditField
 import com.buco7854.opentv.contract.PlaylistOperation
 import com.buco7854.opentv.contract.PlaylistOperationExecution
@@ -326,6 +327,15 @@ class PlaylistCapabilitiesTest {
             fixture.service.refresh(fixture.admin, m3u, force = true)
             val deletion = fixture.service.deleteInfo(fixture.admin, deleting)
             assertTrue("every user's favorites, watch progress and downloads" in deletion.warning)
+            assertEquals(
+                listOf(
+                    PlaylistDeleteEffect.CACHED_GUIDE_DATA,
+                    PlaylistDeleteEffect.USER_FAVORITES,
+                    PlaylistDeleteEffect.USER_WATCH_PROGRESS,
+                    PlaylistDeleteEffect.USER_DOWNLOADS,
+                ),
+                deletion.effects,
+            )
             val account = fixture.service.account(fixture.admin, xtream, force = true)
             assertEquals("Active", account.status)
             fixture.service.delete(fixture.admin, deleting)

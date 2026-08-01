@@ -6,7 +6,7 @@ import { ReactNode, useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import {
   api, canShowGuide, Channel, ChannelKind, ChannelListItem, GroupCount, hasCatchup,
-  PlaylistOperation, Programme,
+  PlaylistOperation, PlaylistOperationExecution, Programme,
 } from '../api';
 import { mediaTags } from '../components/Badges';
 import { asyncFallback, EmptyState } from '../components/Common';
@@ -39,11 +39,18 @@ export function BrowseScreen() {
     () => api.playlistCapabilities(playlistId),
     [playlistId],
   );
-  const hasOperation = (operation: PlaylistOperation) =>
-    capabilities?.operations.some((capability) => capability.operation === operation) ?? false;
-  const canRefresh = hasOperation(PlaylistOperation.REFRESH);
-  const canViewProviderAccount = hasOperation(PlaylistOperation.VIEW_PROVIDER_ACCOUNT);
-  const canCorrectCategoryType = hasOperation(PlaylistOperation.CORRECT_CATEGORY_TYPE);
+  const operation = (name: PlaylistOperation) =>
+    capabilities?.operations.find((capability) => capability.operation === name);
+  const refresh = operation(PlaylistOperation.REFRESH);
+  const account = operation(PlaylistOperation.VIEW_PROVIDER_ACCOUNT);
+  const categoryCorrection = operation(PlaylistOperation.CORRECT_CATEGORY_TYPE);
+  const canRefreshInApp = refresh?.execution === PlaylistOperationExecution.IN_APP;
+  const canCorrectCategoryInApp =
+    categoryCorrection?.execution === PlaylistOperationExecution.IN_APP;
+  const categoryCorrectionBrowserPath =
+    categoryCorrection?.execution === PlaylistOperationExecution.BROWSER
+      ? categoryCorrection.browserPath
+      : null;
   const { favoriteContentIds, toggleFavorite } = useFavorites(playlistId);
   const downloads = useDownloads();
   const [filter, setFilter] = useState('');
@@ -65,10 +72,10 @@ export function BrowseScreen() {
 
   // Background refresh (throttled server-side).
   useEffect(() => {
-    if (!canRefresh) return;
+    if (!canRefreshInApp) return;
     api.refreshPlaylist(playlistId, false).then(reloadGuideIds, (cause: unknown) =>
       reportErrorAs((message) => t('browse.refreshFailed', { message }), cause));
-  }, [canRefresh, playlistId, reloadGuideIds]);
+  }, [canRefreshInApp, playlistId, reloadGuideIds]);
 
   const groupsRequest = useAsync(
     async () => ({ tab, items: await api.groups(playlistId, tab) }),
@@ -157,8 +164,12 @@ export function BrowseScreen() {
       <ScreenHeader
         title={title}
         onBack={atRoot ? undefined : () => setTabGroup(tab, null)}
-        subtitle={detail?.playlist.hasXtreamPanel && canViewProviderAccount
-          ? <ConnectionLine playlistId={playlistId} />
+        subtitle={detail?.playlist.hasXtreamPanel && account
+          ? account.execution === PlaylistOperationExecution.BROWSER && account.browserPath
+            ? <BrowserOperationLine path={account.browserPath} />
+            : account.execution === PlaylistOperationExecution.IN_APP
+              ? <ConnectionLine playlistId={playlistId} />
+              : null
           : `${sectionNames[tab as 0 | 1 | 2] ?? ''} · ${counts[tab as 0 | 1 | 2] ?? 0}`}
         actions={
           group != null && tab !== ChannelKind.LIVE ? (
@@ -180,7 +191,10 @@ export function BrowseScreen() {
           <>
             <GroupList
               groups={pagedGroups.pageItems}
-              onCorrect={isXtreamNative || !canCorrectCategoryType ? null : setCorrectingGroup}
+              onCorrect={isXtreamNative ? null
+                : canCorrectCategoryInApp ? setCorrectingGroup
+                  : categoryCorrectionBrowserPath ? () => navigate(categoryCorrectionBrowserPath)
+                    : null}
               onSelect={(g) => setTabGroup(tab, g)}
             />
             <Pager {...pagedGroups} onPage={pagedGroups.setPage} />
@@ -277,7 +291,7 @@ export function BrowseScreen() {
           onPlayCatchup={(cid, s, e) => playCatchup(cid, s, e)}
         />
       )}
-      {canCorrectCategoryType && correctingGroup && (
+      {canCorrectCategoryInApp && correctingGroup && (
         <GroupKindDialog
           groupTitle={correctingGroup}
           onDismiss={() => setCorrectingGroup(null)}
@@ -294,6 +308,16 @@ export function BrowseScreen() {
         />
       )}
     </>
+  );
+}
+
+function BrowserOperationLine({ path }: { path: string }) {
+  const navigate = useNavigate();
+  return (
+    <button type="button" className="subtitle conn" onClick={() => navigate(path)}>
+      <Icon name="person" className="sm" />
+      {t('playlists.account')}
+    </button>
   );
 }
 

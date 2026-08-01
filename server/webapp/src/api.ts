@@ -23,6 +23,34 @@ export type DownloadStatus = typeof DownloadStatus[keyof typeof DownloadStatus];
 
 export type PlaylistMode = 'xtream' | 'url' | 'file';
 
+export const PlaylistEditField = {
+  NAME: 'NAME',
+  SERVER: 'SERVER',
+  USERNAME: 'USERNAME',
+  PASSWORD: 'PASSWORD',
+  URL: 'URL',
+  EPG_URL: 'EPG_URL',
+  CONTENT: 'CONTENT',
+} as const;
+export type PlaylistEditField = typeof PlaylistEditField[keyof typeof PlaylistEditField];
+
+export const PlaylistEpgRefreshStatus = {
+  SUCCEEDED: 'SUCCEEDED',
+  FAILED: 'FAILED',
+  NOT_CONFIGURED: 'NOT_CONFIGURED',
+} as const;
+export type PlaylistEpgRefreshStatus =
+  typeof PlaylistEpgRefreshStatus[keyof typeof PlaylistEpgRefreshStatus];
+
+export const PlaylistRefreshJobStatus = {
+  QUEUED: 'QUEUED',
+  RUNNING: 'RUNNING',
+  SUCCEEDED: 'SUCCEEDED',
+  FAILED: 'FAILED',
+} as const;
+export type PlaylistRefreshJobStatus =
+  typeof PlaylistRefreshJobStatus[keyof typeof PlaylistRefreshJobStatus];
+
 /** Credential-free playlist listing. Stored provider details never return to the browser. */
 export interface Playlist {
   id: number;
@@ -37,26 +65,36 @@ export interface PlaylistEdit {
   id: number;
   name: string;
   mode: PlaylistMode;
-  fields: string[];
-  storedFields: string[];
+  fields: PlaylistEditField[];
+  storedFields: PlaylistEditField[];
 }
 
 export interface PlaylistRefreshResult {
   playlist: Playlist;
   catalogChanged: boolean;
-  epgStatus: string;
+  epgStatus: PlaylistEpgRefreshStatus;
 }
 
 export interface PlaylistRefreshJob {
   id: string;
-  status: string;
+  status: PlaylistRefreshJobStatus;
   result: PlaylistRefreshResult | null;
 }
+
+export const PlaylistDeleteEffect = {
+  CACHED_GUIDE_DATA: 'CACHED_GUIDE_DATA',
+  USER_FAVORITES: 'USER_FAVORITES',
+  USER_WATCH_PROGRESS: 'USER_WATCH_PROGRESS',
+  USER_DOWNLOADS: 'USER_DOWNLOADS',
+} as const;
+export type PlaylistDeleteEffect =
+  typeof PlaylistDeleteEffect[keyof typeof PlaylistDeleteEffect];
 
 export interface PlaylistDeleteInfo {
   id: number;
   name: string;
   warning: string;
+  effects: PlaylistDeleteEffect[];
 }
 
 export const PlaylistOperation = {
@@ -69,7 +107,12 @@ export const PlaylistOperation = {
 } as const;
 export type PlaylistOperation = typeof PlaylistOperation[keyof typeof PlaylistOperation];
 
-export type PlaylistOperationExecution = 'IN_APP' | 'BROWSER';
+export const PlaylistOperationExecution = {
+  IN_APP: 'IN_APP',
+  BROWSER: 'BROWSER',
+} as const;
+export type PlaylistOperationExecution =
+  typeof PlaylistOperationExecution[keyof typeof PlaylistOperationExecution];
 
 export interface PlaylistOperationCapability {
   operation: PlaylistOperation;
@@ -413,9 +456,14 @@ export interface HeartbeatResponse { commands: SessionCommand[] }
 export interface Message { message: string }
 
 /** A viewer already on this content, offered as someone to watch together with. */
-export interface WatchIntentPeer { id: string; name: string }
+export interface WatchIntentPeer { id: string; name: string; sameAccount: boolean }
 /** Who else is on this content, and whether the provider's connections are all in use. */
-export interface WatchIntent { sameContent: WatchIntentPeer[]; full: boolean; limit: number }
+export interface WatchIntent {
+  sameContent: WatchIntentPeer[];
+  full: boolean;
+  limit: number;
+  requiresJoin: boolean;
+}
 
 export interface RemuxDiag {
   videoCodec: string;
@@ -630,6 +678,9 @@ export const api = {
   /** Who else is watching this content, and whether the provider is at its limit. */
   playbackIntent: (id: string) =>
     j<WatchIntent>(`/playback/${encodeURIComponent(id)}/intent`, { method: 'POST' }),
+  /** Confirm that this lease may play independently; same-account duplicates are refused. */
+  watchAlone: (id: string) =>
+    j<null>(`/playback/${encodeURIComponent(id)}/watch-alone`, { method: 'POST' }),
   /** Ask [hostId]'s viewer to admit us into a watch-together room. */
   joinRequest: (id: string, peerId: string) =>
     j<null>(`/playback/${encodeURIComponent(id)}/join-request`, post({ peerId })),

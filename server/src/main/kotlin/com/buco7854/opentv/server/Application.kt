@@ -283,6 +283,15 @@ internal fun Application.installOpenTvErrorResponses() {
                 ApiErrorDto("not_found", cause.message ?: "Resource not found"),
             )
         }
+        exception<SameContentAlreadyPlayingException> { call, cause ->
+            call.respond(
+                HttpStatusCode.Conflict,
+                ApiErrorDto(
+                    "same_content_already_playing",
+                    cause.message ?: "This content is already playing on another device",
+                ),
+            )
+        }
         exception<UnauthenticatedApiException> { call, _ ->
             call.respond(
                 HttpStatusCode.Unauthorized,

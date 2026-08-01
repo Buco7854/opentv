@@ -50,6 +50,16 @@ class RoutesIdentityTest {
     }
 
     @Test
+    fun accountRouteRoundTripsLocalAndHubSources() {
+        listOf(SourceId.LocalPlaylist(11), SourceId.Hub(3, 7)).forEach { source ->
+            val segments = Uri.parse("https://navigation.test/${Routes.account(source)}")
+                .pathSegments
+
+            assertEquals(source, SourceId.decode(segments[1]))
+        }
+    }
+
+    @Test
     fun invalidAndEmptyHubArgumentsAreRejected() {
         assertNull(ContentRef.decode("h:"))
         assertNull(ContentRef.decode("h:%2f"))

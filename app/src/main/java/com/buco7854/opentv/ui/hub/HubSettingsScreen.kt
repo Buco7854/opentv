@@ -43,6 +43,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.unit.dp
 import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.R
@@ -53,6 +54,8 @@ import com.buco7854.opentv.ui.components.Pill
 import com.buco7854.opentv.ui.components.RequestInitialFocusOnTv
 import com.buco7854.opentv.ui.components.focusHighlight
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Settings for one connected server.
@@ -90,6 +93,8 @@ fun HubSettingsScreen(
     var qrUrl by remember { mutableStateOf<String?>(null) }
     var rejected by remember { mutableStateOf(false) }
     var confirmRemove by remember { mutableStateOf(false) }
+    var removing by remember { mutableStateOf(false) }
+    var unreleasedAssociations by remember { mutableStateOf<Int?>(null) }
     var removeAfterDownload by remember(hubId) {
         mutableStateOf(graph.hubDownloadPreferences.removeFromServerAfterDownload(hubId))
     }
@@ -239,6 +244,7 @@ fun HubSettingsScreen(
             }
             OtvTextButton(
                 onClick = { confirmRemove = true },
+                enabled = !removing,
                 danger = true,
                 modifier = Modifier.fillMaxWidth(),
             ) { Text(stringResource(R.string.hub_remove)) }
@@ -263,10 +269,21 @@ fun HubSettingsScreen(
                 OtvTextButton(
                     onClick = {
                         confirmRemove = false
+                        removing = true
                         // Removal ends with the same HTTP logout, so it runs where a
                         // navigation cannot cancel it half-done.
-                        graph.applicationScope.launch { accounts.remove(hubId) }
-                        onRemoved()
+                        graph.applicationScope.launch {
+                            val result = accounts.remove(hubId)
+                            withContext(Dispatchers.Main.immediate) {
+                                removing = false
+                                if (result.unreleasedDownloadAssociations == 0) {
+                                    onRemoved()
+                                } else {
+                                    unreleasedAssociations =
+                                        result.unreleasedDownloadAssociations
+                                }
+                            }
+                        }
                     },
                     danger = true,
                 ) { Text(stringResource(R.string.hub_remove)) }
@@ -277,6 +294,35 @@ fun HubSettingsScreen(
                     modifier = Modifier.focusRequester(removeCancelFocusRequester),
                 ) {
                     Text(stringResource(android.R.string.cancel))
+                }
+            },
+        )
+    }
+
+    unreleasedAssociations?.let { count ->
+        AlertDialog(
+            onDismissRequest = {
+                unreleasedAssociations = null
+                onRemoved()
+            },
+            title = { Text(stringResource(R.string.hub_remove_cleanup_title)) },
+            text = {
+                Text(
+                    pluralStringResource(
+                        R.plurals.hub_remove_cleanup_failed,
+                        count,
+                        count,
+                    ),
+                )
+            },
+            confirmButton = {
+                OtvTextButton(
+                    onClick = {
+                        unreleasedAssociations = null
+                        onRemoved()
+                    },
+                ) {
+                    Text(stringResource(R.string.common_close))
                 }
             },
         )

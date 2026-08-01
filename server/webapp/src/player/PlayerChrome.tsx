@@ -86,10 +86,12 @@ export function PlayerOverlays({
             <IconBtn name="close" label={t('player.stop')} onClick={onClose} />
           </span>
           <h3>{t('watch.title')}</h3>
-          <p>{t('watch.choosePrompt')}</p>
+          <p>{t(wt.requiresJoin ? 'watch.chooseRequiredPrompt' : 'watch.choosePrompt')}</p>
           <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
             <button className="btn tonal w-auto" onClick={onOpenWatchTogether}>{t('watch.title')}</button>
-            <button className="btn text w-auto" onClick={wt.watchAlone}>{t('watch.watchAlone')}</button>
+            <button className="btn text w-auto" onClick={() => void wt.watchAlone()}>
+              {t(wt.requiresJoin ? 'watch.dontJoin' : 'watch.watchAlone')}
+            </button>
           </div>
         </div>
       )}
@@ -98,7 +100,11 @@ export function PlayerOverlays({
         <div className="player-error">
           <h3>{t('player.errorTitle')}</h3>
           {/* The codec/Android hint only fits a decode failure, not a full-provider refusal. */}
-          <p>{error}{error === t('player.connectionLimit') ? '' : ` ${t('player.errorHint')}`}</p>
+          <p>
+            {error}
+            {error === t('player.connectionLimit') || error === t('error.sameContentAlreadyPlaying')
+              ? '' : ` ${t('player.errorHint')}`}
+          </p>
           <button className="btn tonal w-auto" onClick={onClose}>{t('common.close')}</button>
         </div>
       )}

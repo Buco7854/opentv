@@ -252,12 +252,6 @@ fun PlaylistDialog(
 }
 
 /**
- * One input in a playlist form, shared by the local and server-hosted variants.
- *
- * They ask for the same things -- a name, a provider address, a login -- and differ only in
- * where the values are kept, so the inputs themselves have no business being written twice.
- */
-/**
  * States that an action lands on the server, not on this device.
  *
  * Local and server-hosted playlists reach the same menu with the same words, so nothing in
@@ -275,6 +269,12 @@ fun ServerPlaylistNotice(modifier: Modifier = Modifier) {
     )
 }
 
+/**
+ * One input in a playlist form, shared by the local and server-hosted variants.
+ *
+ * They ask for the same things -- a name, a provider address, a login -- and differ only in
+ * where the values are kept, so the inputs themselves have no business being written twice.
+ */
 @Composable
 fun PlaylistField(
     label: Int,

@@ -13,13 +13,20 @@ data class ApiErrorDto(
 )
 
 @Serializable
-data class WatchIntentPeer(val id: String, val name: String)
+data class WatchIntentPeer(
+    val id: String,
+    val name: String,
+    /** True when this lease belongs to another authenticated session of the acting account. */
+    val sameAccount: Boolean = false,
+)
 
 @Serializable
 data class WatchIntentResponse(
     val sameContent: List<WatchIntentPeer>,
     val full: Boolean,
     val limit: Int,
+    /** Independent playback is forbidden until this lease joins an older same-account lease. */
+    val requiresJoin: Boolean = false,
 )
 
 @Serializable
@@ -193,8 +200,18 @@ object PlaylistRefreshJobStatus {
 data class PlaylistDeleteInfoDto(
     val id: Long,
     val name: String,
+    /** Legacy complete copy for clients that do not localize the structured effects yet. */
     val warning: String,
+    /** Machine-readable facts; presentation belongs to each client and its locale. */
+    val effects: List<String> = emptyList(),
 )
+
+object PlaylistDeleteEffect {
+    const val CACHED_GUIDE_DATA = "CACHED_GUIDE_DATA"
+    const val USER_FAVORITES = "USER_FAVORITES"
+    const val USER_WATCH_PROGRESS = "USER_WATCH_PROGRESS"
+    const val USER_DOWNLOADS = "USER_DOWNLOADS"
+}
 
 @Serializable
 data class PlaylistDetailDto(

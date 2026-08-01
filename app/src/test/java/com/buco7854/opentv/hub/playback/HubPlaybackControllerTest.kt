@@ -157,6 +157,19 @@ class HubPlaybackControllerTest {
     }
 
     @Test
+    fun watchAloneChecksTheLeaseScopedServerPolicyBeforeMediaStarts() = runTest {
+        val api = FakePlaybackApi()
+        val controller = controller(api)
+        controller.start("content-1", CAPABILITIES)
+
+        controller.watchAlone()
+
+        assertEquals(1, api.watchAloneCalls)
+        assertTrue(api.remuxAudioRequests.isEmpty())
+        assertSame(HubPlaybackState.LeaseCreated, controller.state.value)
+    }
+
+    @Test
     fun remuxStartAndAudioTrackRerequestReplaceTheTarget() = runTest {
         val api = FakePlaybackApi().apply {
             remuxResults[0] = remux("remux-0", 0)
@@ -282,6 +295,19 @@ class HubPlaybackControllerTest {
         controller.onMediaRequestFailed(410)
 
         assertSame(HubPlaybackState.Revoked, controller.state.value)
+        assertEquals(listOf("lease-1"), api.endedLeaseIds)
+    }
+
+    @Test
+    fun mediaConflictBecomesTheTypedDuplicateStateAndEndsTheRejectedLease() = runTest {
+        val api = FakePlaybackApi()
+        val controller = controller(api)
+        controller.start("content-1", CAPABILITIES)
+        controller.startMedia()
+
+        controller.onMediaRequestFailed(409)
+
+        assertSame(HubPlaybackState.DuplicatePlayback, controller.state.value)
         assertEquals(listOf("lease-1"), api.endedLeaseIds)
     }
 
@@ -567,6 +593,7 @@ class HubPlaybackControllerTest {
         var syncGate: CompletableDeferred<Unit>? = null
         val syncs = mutableListOf<SyncStateDto>()
         val readyGenerations = mutableListOf<Long>()
+        var watchAloneCalls = 0
 
         override suspend fun createLease(request: PlaybackCreateRequest): PlaybackLeaseDto {
             createRequests += request
@@ -594,6 +621,10 @@ class HubPlaybackControllerTest {
 
         override suspend fun ready(leaseId: String, generation: Long) {
             readyGenerations += generation
+        }
+
+        override suspend fun watchAlone(leaseId: String) {
+            watchAloneCalls++
         }
 
         override suspend fun refreshMediaGrant(leaseId: String): HubMediaGrant {

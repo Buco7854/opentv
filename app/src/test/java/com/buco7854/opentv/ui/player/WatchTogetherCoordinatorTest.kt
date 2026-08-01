@@ -5,6 +5,7 @@ import com.buco7854.opentv.contract.SessionCommandDto
 import com.buco7854.opentv.contract.SyncStateDto
 import com.buco7854.opentv.contract.WatchIntentPeer
 import com.buco7854.opentv.contract.WatchIntentResponse
+import com.buco7854.opentv.hub.HubDuplicatePlaybackException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
@@ -195,6 +196,147 @@ class WatchTogetherCoordinatorTest {
         coordinator.handleCommand(command(type = "control-response", accepted = false))
         assertEquals(listOf("peer-1" to true), hub.controlAnswers)
         assertEquals(WatchTogetherNoticeKind.CONTROL_DENIED, coordinator.state.value.notice?.kind)
+    }
+
+    @Test
+    fun decliningARequiredJoinRefusesRatherThanPlayingAlone() = runTest {
+        val hub = FakeWatchTogetherHub().apply {
+            watchAloneFailure = HubDuplicatePlaybackException(
+                "same_content_already_playing",
+                "Already playing",
+            )
+            intentResponse = WatchIntentResponse(
+                sameContent = listOf(
+                    WatchIntentPeer("own-tv", "Living room", sameAccount = true),
+                    WatchIntentPeer("someone-else", "Ari", sameAccount = false),
+                ),
+                full = false,
+                limit = 2,
+                requiresJoin = true,
+            )
+        }
+        val player = FakeWatchTogetherPlayer()
+        val starts = mutableListOf<Boolean>()
+        val coordinator = WatchTogetherCoordinator(
+            hub = hub,
+            scope = backgroundScope,
+            reloadAudio = { _, _ -> },
+            onStartMedia = { starts += it },
+            clock = { testScheduler.currentTime },
+        )
+        coordinator.attachPlayer(player)
+
+        coordinator.checkIntent()
+
+        // Only this account's own device can satisfy the requirement; another user's
+        // session is not what is blocking us and offering it would mislead.
+        assertEquals(listOf("own-tv"), coordinator.state.value.peers.map { it.id })
+        assertTrue(coordinator.state.value.requiresJoin)
+        assertTrue("media must stay closed while the choice is pending", starts.isEmpty())
+
+        coordinator.watchAlone()
+        runCurrent()
+
+        assertEquals("the server is told, not guessed at", 1, hub.watchAloneCalls)
+        assertTrue("the refusal must be visible", coordinator.state.value.duplicateRefused)
+        assertFalse("a deleted lease cannot offer another action", coordinator.state.value.choosing)
+        assertTrue("stale peers cannot remain actionable", coordinator.state.value.peers.isEmpty())
+        assertTrue("declining must never start a second stream", starts.isEmpty())
+    }
+
+    @Test
+    fun requiredJoinStartsSoloWhenTheDuplicateEndedBeforeTheServerCheck() = runTest {
+        val hub = FakeWatchTogetherHub().apply {
+            intentResponse = WatchIntentResponse(
+                sameContent = listOf(WatchIntentPeer("own-tv", "Living room", sameAccount = true)),
+                full = false,
+                limit = 2,
+                requiresJoin = true,
+            )
+        }
+        val starts = mutableListOf<Boolean>()
+        val coordinator = WatchTogetherCoordinator(
+            hub = hub,
+            scope = backgroundScope,
+            reloadAudio = { _, _ -> },
+            onStartMedia = { starts += it },
+            clock = { testScheduler.currentTime },
+        )
+
+        coordinator.checkIntent()
+        coordinator.watchAlone()
+        runCurrent()
+
+        assertEquals(1, hub.watchAloneCalls)
+        assertEquals(listOf(false), starts)
+        assertFalse(coordinator.state.value.requiresJoin)
+        assertFalse(coordinator.state.value.duplicateRefused)
+    }
+
+    @Test
+    fun failedJoinRequestRestoresTheChoiceAndClearsTransitioning() = runTest {
+        val hub = FakeWatchTogetherHub().apply {
+            intentResponse = WatchIntentResponse(
+                listOf(WatchIntentPeer("peer-1", "Ari")),
+                full = false,
+                limit = 2,
+            )
+            requestJoinFailure = IllegalStateException("offline")
+        }
+        val coordinator = coordinator(hub, FakeWatchTogetherPlayer())
+        coordinator.checkIntent()
+
+        coordinator.askToJoin("peer-1")
+
+        assertFalse(coordinator.state.value.transitioning)
+        assertTrue(coordinator.state.value.choosing)
+        assertEquals(WatchTogetherNoticeKind.ACTION_FAILED, coordinator.state.value.notice?.kind)
+    }
+
+    @Test
+    fun failedRequiredAdmissionIsNotMisreportedAsADuplicateRefusal() = runTest {
+        val hub = FakeWatchTogetherHub().apply {
+            intentResponse = WatchIntentResponse(
+                listOf(WatchIntentPeer("own-tv", "Living room", sameAccount = true)),
+                full = false,
+                limit = 2,
+                requiresJoin = true,
+            )
+            watchAloneFailure = IllegalStateException("offline")
+        }
+        val coordinator = coordinator(hub, FakeWatchTogetherPlayer())
+        coordinator.checkIntent()
+
+        coordinator.watchAlone()
+        runCurrent()
+
+        assertTrue(coordinator.state.value.choosing)
+        assertFalse(coordinator.state.value.duplicateRefused)
+        assertFalse(coordinator.state.value.transitioning)
+        assertEquals(WatchTogetherNoticeKind.ACTION_FAILED, coordinator.state.value.notice?.kind)
+    }
+
+    @Test
+    fun optionalIntentOffersOwnAndOtherAccountPeers() = runTest {
+        val hub = FakeWatchTogetherHub().apply {
+            intentResponse = WatchIntentResponse(
+                listOf(
+                    WatchIntentPeer("own-tv", "Living room", sameAccount = true),
+                    WatchIntentPeer("someone-else", "Ari", sameAccount = false),
+                ),
+                full = false,
+                limit = 2,
+                requiresJoin = false,
+            )
+        }
+        val coordinator = coordinator(hub, FakeWatchTogetherPlayer())
+
+        coordinator.checkIntent()
+
+        assertEquals(
+            listOf("own-tv", "someone-else"),
+            coordinator.state.value.peers.map { it.id },
+        )
     }
 
     @Test
@@ -840,6 +982,7 @@ private class FakeWatchTogetherHub : WatchTogetherHub {
     var intentResponse: WatchIntentResponse? = WatchIntentResponse(emptyList(), false, 2)
     var intentGate: CompletableDeferred<Unit>? = null
     val joinRequests = mutableListOf<String>()
+    var requestJoinFailure: Throwable? = null
     val joinAnswers = mutableListOf<Pair<String, Boolean>>()
     var controlRequests = 0
     val controlAnswers = mutableListOf<Pair<String, Boolean>>()
@@ -858,6 +1001,7 @@ private class FakeWatchTogetherHub : WatchTogetherHub {
     }
     override suspend fun requestJoin(peerId: String) {
         joinRequests += peerId
+        requestJoinFailure?.let { throw it }
     }
     override suspend fun answerJoin(requestId: String, accept: Boolean) {
         joinAnswers += requestId to accept
@@ -877,6 +1021,14 @@ private class FakeWatchTogetherHub : WatchTogetherHub {
     override suspend fun setRoomAudio(audioTrackIndex: Int) {
         roomAudio += audioTrackIndex
     }
+    var watchAloneCalls = 0
+    var watchAloneFailure: Throwable? = null
+
+    override suspend fun watchAlone() {
+        watchAloneCalls++
+        watchAloneFailure?.let { throw it }
+    }
+
     override suspend fun ready(generation: Long) {
         readyCalls++
         readyGenerations += generation

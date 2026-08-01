@@ -182,6 +182,65 @@ class DownloadRepositoryTest {
     }
 
     @Test
+    fun `hub delete records server release before physical deletion can fail`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        Robolectric.setupContentProvider(
+            DeleteOutcomeProvider::class.java,
+            "downloads-hub-delete-refused",
+        )
+        val store = RepositoryDownloadStore()
+        val scheduler = RepositoryScheduler()
+        val remote = RecordingHubRemote().apply {
+            error = HubUnreachableException("offline")
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val preferences = HubDownloadPreferences(
+            context.getSharedPreferences(
+                "repository-hub-delete-refused-${System.nanoTime()}",
+                Context.MODE_PRIVATE,
+            ),
+        )
+        val coordinator = HubDownloadCoordinator(
+            store,
+            remote,
+            scheduler,
+            preferences,
+            scope,
+        )
+        val repository = DownloadRepository(
+            context,
+            store,
+            PlayerPrefs(context),
+            scheduler,
+            coordinator,
+        )
+        val id = store.insert(
+            Download(
+                title = "Hub movie",
+                url = "https://hub.invalid/api/v1/downloads/server-1/file?token=short",
+                filePath = "content://downloads-hub-delete-refused/document/refused",
+                status = DownloadStatus.DONE,
+                hubSourceId = 4,
+                contentId = "content-1",
+                serverDownloadId = "server-1",
+            ),
+        )
+
+        try {
+            val result = repository.delete(requireNotNull(store.get(id)))
+
+            assertEquals(context.getString(R.string.downloads_delete_failed), result)
+            assertNotNull(store.get(id))
+            assertEquals(
+                listOf(PendingHubDownloadDelete(4, "server-1")),
+                preferences.pendingServerDeletes(),
+            )
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
     fun `delete removes row when provider confirms document is already gone`() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         Robolectric.setupContentProvider(

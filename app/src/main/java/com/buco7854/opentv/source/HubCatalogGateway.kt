@@ -10,6 +10,7 @@ import com.buco7854.opentv.contract.GroupCountDto
 import com.buco7854.opentv.contract.GuideEntryDto
 import com.buco7854.opentv.contract.ProgrammeDto
 import com.buco7854.opentv.contract.PlaylistDeleteInfoDto
+import com.buco7854.opentv.contract.PlaylistDetailDto
 import com.buco7854.opentv.contract.PlaylistEditDto
 import com.buco7854.opentv.contract.PlaylistEditField as WirePlaylistEditField
 import com.buco7854.opentv.contract.PlaylistEpgRefreshStatus
@@ -43,6 +44,7 @@ class HubCatalogGateway internal constructor(
         this(source, RegistryHubCatalogBackend(source, registry))
 
     override suspend fun traits(): SourceTraits {
+        val detail = backend.detail()
         val capabilities = backend.capabilities().toCatalogCapabilities()
         val edit = if (PlaylistOperation.EDIT in capabilities.operations) {
             backend.edit()
@@ -50,11 +52,10 @@ class HubCatalogGateway internal constructor(
             null
         }
         return SourceTraits(
-            // Only an administrator fetches the edit form, and only an administrator can
-            // reach the surfaces that show a title, so this is present exactly when needed.
-            title = edit?.name,
-            hasXtreamSeries =
-                PlaylistOperation.CORRECT_CATEGORY_TYPE !in capabilities.operations,
+            // Detail is entitled to every playlist viewer. Neither identity nor source type
+            // may depend on administrator-only edit/category-correction capabilities.
+            title = detail.playlist.name,
+            hasXtreamSeries = detail.isXtreamNative,
             hasGuide = true,
             hasAccountPanel =
                 PlaylistOperation.VIEW_PROVIDER_ACCOUNT in capabilities.operations,
@@ -431,6 +432,7 @@ private fun ContentRef.hubContentId(): String =
 
 internal interface HubCatalogBackend {
     val baseUrl: String
+    suspend fun detail(): PlaylistDetailDto
     suspend fun capabilities(): HubPlaylistCapabilities
     suspend fun edit(): PlaylistEditDto
     suspend fun update(request: PlaylistUpdateRequest)
@@ -480,6 +482,8 @@ private class RegistryHubCatalogBackend(
 
     override suspend fun capabilities() =
         call { playlistCapabilities(it, source.playlistId) }
+    override suspend fun detail() =
+        call { playlist(it, source.playlistId) }
     override suspend fun edit() =
         call { playlistEdit(it, source.playlistId) }
     override suspend fun update(request: PlaylistUpdateRequest) {

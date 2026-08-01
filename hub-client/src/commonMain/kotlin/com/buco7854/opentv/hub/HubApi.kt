@@ -25,6 +25,7 @@ import com.buco7854.opentv.contract.PlaybackCreateRequest
 import com.buco7854.opentv.contract.PlaybackLeaseDto
 import com.buco7854.opentv.contract.PlaylistCapabilitiesDto
 import com.buco7854.opentv.contract.PlaylistDeleteInfoDto
+import com.buco7854.opentv.contract.PlaylistDetailDto
 import com.buco7854.opentv.contract.PlaylistDto
 import com.buco7854.opentv.contract.PlaylistEditDto
 import com.buco7854.opentv.contract.GroupKindRequest
@@ -132,6 +133,13 @@ class HubApi(
 
     suspend fun playlists(c: HubCredentials): List<PlaylistDto> =
         getList(c, HubEndpoints.playlists(c.baseUrl), PlaylistDto.serializer())
+
+    suspend fun playlist(c: HubCredentials, playlistId: Long): PlaylistDetailDto =
+        get(
+            c,
+            HubEndpoints.playlist(c.baseUrl, playlistId),
+            PlaylistDetailDto.serializer(),
+        )
 
     suspend fun playlistCapabilities(
         c: HubCredentials,
@@ -334,6 +342,10 @@ class HubApi(
 
     suspend fun intent(c: HubCredentials, leaseId: String): WatchIntentResponse =
         postEmpty(c, HubEndpoints.playbackAction(c.baseUrl, leaseId, "intent"), WatchIntentResponse.serializer())
+
+    suspend fun watchAlone(c: HubCredentials, leaseId: String) {
+        send(c, "POST", HubEndpoints.playbackAction(c.baseUrl, leaseId, "watch-alone"), null)
+    }
 
     suspend fun sync(c: HubCredentials, leaseId: String, state: SyncStateDto) {
         send(c, "POST", HubEndpoints.playbackAction(c.baseUrl, leaseId, "sync"), body(SyncStateDto.serializer(), state))

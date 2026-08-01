@@ -55,6 +55,10 @@ internal fun Route.sessionRoutes(
             post("/intent") {
                 call.respond(service.watchIntent(call.actor, call.requiredParameter("id")))
             }
+            post("/watch-alone") {
+                service.watchAlone(call.actor, call.requiredParameter("id"))
+                call.respond(HttpStatusCode.NoContent)
+            }
             post("/join-request") {
                 service.requestJoin(call.actor, call.requiredParameter("id"), call.receive())
                 call.respond(HttpStatusCode.NoContent)

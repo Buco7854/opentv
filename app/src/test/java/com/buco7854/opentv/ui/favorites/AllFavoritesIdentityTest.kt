@@ -27,6 +27,16 @@ class AllFavoritesIdentityTest {
     }
 
     @Test
+    fun identicalFavoriteInTwoSourcesKeepsTwoRowAndSelectionKeys() {
+        val favorite = item(ContentRef.LocalUrl("https://provider.example/movie", 7))
+
+        assertNotEquals(
+            favoriteItemKey(SourceId.LocalPlaylist(1), favorite),
+            favoriteItemKey(SourceId.LocalPlaylist(2), favorite),
+        )
+    }
+
+    @Test
     fun missingFilteredSourceFallsBackToAllSources() {
         val missing = SourceId.LocalPlaylist(1)
         val remaining = SourceId.LocalPlaylist(2)

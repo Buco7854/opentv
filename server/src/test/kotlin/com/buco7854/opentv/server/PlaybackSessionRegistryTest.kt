@@ -1,6 +1,7 @@
 package com.buco7854.opentv.server
 
 import com.buco7854.opentv.contract.SessionCommandDto
+import com.buco7854.opentv.contract.SyncStateDto
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -20,6 +21,16 @@ class PlaybackSessionRegistryTest {
     }
 
     private fun actor(id: String) = Actor(id, "auth-$id", id, id, setOf("USER"), "PASSWORD", "BROWSER")
+
+    private fun device(userId: String, authSessionId: String, displayName: String) = Actor(
+        userId,
+        authSessionId,
+        userId,
+        displayName,
+        setOf("USER"),
+        "PASSWORD",
+        "NATIVE",
+    )
 
     private fun create(
         sessions: PlaybackSessionRegistry,
@@ -48,6 +59,367 @@ class PlaybackSessionRegistryTest {
         val room = assertNotNull(sessions.roomOf(guest))
         assertEquals(1, room.second)
         assertTrue(sessions.setRoomAudio(guest, 2))
+    }
+
+    @Test
+    fun sameAccountDuplicateIsBlockedUntilItsJoinIsAdmittedWithoutHostApproval() {
+        val sessions = PlaybackSessionRegistry(reapInBackground = false)
+        val phoneActor = device("viewer", "phone-auth", "Phone")
+        val televisionActor = device("viewer", "tv-auth", "Television")
+        val phone = sessions.create(
+            phoneActor, 1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        val television = sessions.create(
+            televisionActor, 1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        val grants = PlaybackMediaGrants(sessions)
+        val televisionGrant = grants.issue(televisionActor, television.id)
+
+        assertEquals(listOf(phone.id), sessions.sameContentPeers(television.id, "movie").map { it.id })
+        assertEquals(phone.id, sessions.sameAccountConflict(television.id)?.id)
+        assertEquals(null, sessions.sameAccountConflict(phone.id))
+        assertFailsWith<SameContentAlreadyPlayingException> {
+            grants.validate(television.id, televisionGrant.token)
+        }
+
+        assertNotNull(
+            sessions.requestJoin(phone.id, television.id, "Television", "movie"),
+        )
+
+        assertEquals(sessions.shareGroup(phone.id), sessions.shareGroup(television.id))
+        assertEquals(null, sessions.sameAccountConflict(television.id))
+        assertFalse(sessions.drainCommands(phone.id).any { it.type == "join-request" })
+        assertTrue(sessions.drainCommands(television.id).any {
+            it.type == "join-response" && it.accepted == true
+        })
+        assertTrue(sessions.setRoomAudio(phone.id, 1))
+        assertTrue(sessions.setRoomAudio(television.id, 2))
+        sessions.drainCommands(phone.id)
+        assertTrue(sessions.requestControl(television.id, "Television"))
+        sessions.syncRoom(
+            television.id,
+            SyncStateDto(positionMs = 42_000, paused = true, rate = 1.0, seek = true),
+        )
+        assertTrue(sessions.drainCommands(phone.id).any {
+            it.type == "sync" && it.sync?.let { sync ->
+                sync.positionMs == 42_000L && sync.seek
+            } == true
+        })
+        sessions.close()
+    }
+
+    @Test
+    fun declinedRequiredJoinTombstonesItsLeaseAndMediaGrantImmediately() {
+        val sessions = PlaybackSessionRegistry(reapInBackground = false)
+        val phoneActor = device("viewer", "phone-auth", "Phone")
+        val televisionActor = device("viewer", "tv-auth", "Television")
+        sessions.create(
+            phoneActor, 1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        val television = sessions.create(
+            televisionActor, 1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        val grants = PlaybackMediaGrants(sessions)
+        val grant = grants.issue(televisionActor, television.id)
+
+        assertFalse(sessions.watchAlone(television.id))
+
+        assertFailsWith<PlaybackRevokedException> { sessions.lease(television.id) }
+        assertFailsWith<PlaybackRevokedException> {
+            grants.validate(television.id, grant.token)
+        }
+        sessions.close()
+    }
+
+    @Test
+    fun differentAccountCannotBypassHostApprovalByTargetingAGuest() {
+        val sessions = PlaybackSessionRegistry(reapInBackground = false)
+        val host = create(sessions, "host")
+        val guest = create(sessions, "guest")
+        val outsider = create(sessions, "outsider")
+        assertTrue(join(sessions, host, guest))
+        sessions.drainCommands(host)
+        sessions.drainCommands(guest)
+
+        assertEquals(null, sessions.requestJoin(guest, outsider, "Outsider", "same"))
+
+        assertEquals(setOf(host, guest), sessions.roomMembers(host))
+        assertEquals(null, sessions.roomOf(outsider))
+        assertFalse(sessions.drainCommands(guest).any { it.type == "join-request" })
+        sessions.close()
+    }
+
+    @Test
+    fun ownDeviceFollowingAViewerIntoAnotherAccountsRoomDoesNotGainControl() {
+        val sessions = PlaybackSessionRegistry(reapInBackground = false)
+        val host = create(sessions, "host")
+        val viewerActor = device("viewer", "phone-auth", "Phone")
+        val secondDeviceActor = device("viewer", "tv-auth", "Television")
+        val viewer = sessions.create(
+            viewerActor, 1, "same", "https://example.test/movie.mkv", "", "",
+        )
+        val secondDevice = sessions.create(
+            secondDeviceActor, 1, "same", "https://example.test/movie.mkv", "", "",
+        )
+        val firstRequest = assertNotNull(
+            sessions.requestJoin(host, viewer.id, "Phone", "same"),
+        )
+        assertTrue(sessions.answerJoin(host, firstRequest, true))
+        sessions.drainCommands(host)
+        sessions.drainCommands(viewer.id)
+
+        assertNotNull(
+            sessions.requestJoin(viewer.id, secondDevice.id, "Television", "same"),
+        )
+
+        assertEquals(sessions.roomOf(host), sessions.roomOf(secondDevice.id))
+        assertFalse(sessions.drainCommands(host).any { it.type == "join-request" })
+        assertFalse(sessions.setRoomAudio(viewer.id, 1))
+        assertFalse(sessions.setRoomAudio(secondDevice.id, 1))
+        assertTrue(sessions.setRoomAudio(host, 1))
+        sessions.close()
+    }
+
+    @Test
+    fun differentAccountJoinStillWaitsForHostApprovalAndDoesNotGrantControl() {
+        val sessions = PlaybackSessionRegistry(reapInBackground = false)
+        val host = create(sessions, "host")
+        val guest = create(sessions, "guest")
+
+        val requestId = assertNotNull(sessions.requestJoin(host, guest, "Guest", "same"))
+
+        assertEquals(null, sessions.roomOf(host))
+        assertEquals(null, sessions.roomOf(guest))
+        assertTrue(sessions.drainCommands(host).any {
+            it.type == "join-request" && it.requestId == requestId
+        })
+        assertTrue(sessions.answerJoin(host, requestId, true))
+        assertFalse(sessions.setRoomAudio(guest, 1))
+        assertTrue(sessions.setRoomAudio(host, 1))
+        sessions.close()
+    }
+
+    @Test
+    fun sameAccountDifferentTitlesRemainIndependentAndMediaAdmitted() {
+        val sessions = PlaybackSessionRegistry(reapInBackground = false)
+        val phoneActor = device("viewer", "phone-auth", "Phone")
+        val televisionActor = device("viewer", "tv-auth", "Television")
+        val movie = sessions.create(
+            phoneActor, 1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        val news = sessions.create(
+            televisionActor, 1, "news", "https://example.test/news.ts", "", "",
+        )
+        val grants = PlaybackMediaGrants(sessions)
+
+        val movieGrant = grants.issue(phoneActor, movie.id)
+        val newsGrant = grants.issue(televisionActor, news.id)
+
+        assertEquals(movie.id, grants.validate(movie.id, movieGrant.token).id)
+        assertEquals(news.id, grants.validate(news.id, newsGrant.token).id)
+        assertEquals(null, sessions.sameAccountConflict(movie.id))
+        assertEquals(null, sessions.sameAccountConflict(news.id))
+        assertTrue(sessions.sameContentPeers(movie.id, movie.contentId).isEmpty())
+        sessions.close()
+    }
+
+    @Test
+    fun duplicateKeyIsContentIdNotSourceUrlOrPlaybackVariant() {
+        val sessions = PlaybackSessionRegistry(reapInBackground = false)
+        val phoneActor = device("viewer", "phone-auth", "Phone")
+        val televisionActor = device("viewer", "tv-auth", "Television")
+        val live = sessions.create(
+            phoneActor,
+            1,
+            "channel-content",
+            "https://example.test/live/channel.ts",
+            "",
+            "",
+        )
+        val catchup = sessions.create(
+            televisionActor,
+            1,
+            "channel-content",
+            "https://example.test/timeshift/2026-08-01/channel.ts",
+            "",
+            "",
+        )
+        assertEquals(live.id, sessions.sameAccountConflict(catchup.id)?.id)
+
+        val otherPlaylistIdentity = sessions.create(
+            televisionActor,
+            2,
+            "other-content-id",
+            live.sourceUrl,
+            "",
+            "",
+        )
+        assertEquals(null, sessions.sameAccountConflict(otherPlaylistIdentity.id))
+        sessions.close()
+    }
+
+    @Test
+    fun racingDuplicateLeaseCreationLeavesExactlyOneIndependentWinner() {
+        val sessions = PlaybackSessionRegistry(reapInBackground = false)
+        val executor = Executors.newFixedThreadPool(2)
+        val start = CountDownLatch(1)
+        try {
+            val actors = listOf(
+                device("viewer", "phone-auth", "Phone"),
+                device("viewer", "tv-auth", "Television"),
+            )
+            val leases = actors.map { owner ->
+                executor.submit<PlaybackSessionRegistry.Live> {
+                    start.await(1, TimeUnit.SECONDS)
+                    sessions.create(
+                        owner, 1, "movie", "https://example.test/movie.mkv", "", "",
+                    )
+                }
+            }.also { start.countDown() }.map { it.get(1, TimeUnit.SECONDS) }
+            val grants = PlaybackMediaGrants(sessions)
+
+            val admitted = leases.zip(actors).count { (lease, owner) ->
+                val grant = grants.issue(owner, lease.id)
+                runCatching { grants.validate(lease.id, grant.token) }.isSuccess
+            }
+
+            assertEquals(1, admitted)
+            assertEquals(1, leases.count { sessions.sameAccountConflict(it.id) != null })
+        } finally {
+            executor.shutdownNow()
+            sessions.close()
+        }
+    }
+
+    @Test
+    fun reapingOlderRoomMemberLeavesTheOtherOwnDeviceAdmitted() {
+        val clock = MutableClock()
+        val sessions = PlaybackSessionRegistry(clock, staleMs = 100, reapInBackground = false)
+        val phoneActor = device("viewer", "phone-auth", "Phone")
+        val televisionActor = device("viewer", "tv-auth", "Television")
+        val phone = sessions.create(
+            phoneActor, 1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        val television = sessions.create(
+            televisionActor, 1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        val grants = PlaybackMediaGrants(sessions)
+        val grant = grants.issue(televisionActor, television.id)
+        assertNotNull(sessions.requestJoin(phone.id, television.id, "Television", "movie"))
+        clock.value = 90
+        sessions.touch(television.id)
+        clock.value = 101
+
+        assertEquals(listOf(television.id), sessions.active().map { it.id })
+        assertEquals(null, sessions.sameAccountConflict(television.id))
+        assertEquals(television.id, grants.validate(television.id, grant.token).id)
+        sessions.close()
+    }
+
+    @Test
+    fun joinedLiveRoomRejectsEachMembersIndependentMediaTransport() {
+        val sessions = PlaybackSessionRegistry(reapInBackground = false)
+        val phoneActor = device("viewer", "phone-auth", "Phone")
+        val televisionActor = device("viewer", "tv-auth", "Television")
+        val target = "https://example.test/live/channel.ts"
+        val phone = sessions.create(
+            phoneActor, 1, "channel", target, "", "", liveSource = true,
+        )
+        val television = sessions.create(
+            televisionActor, 1, "channel", target, "", "", liveSource = true,
+        )
+        val grants = PlaybackMediaGrants(sessions)
+        val phoneGrant = grants.issue(phoneActor, phone.id)
+        val televisionGrant = grants.issue(televisionActor, television.id)
+        assertNotNull(sessions.requestJoin(phone.id, television.id, "Television", "channel"))
+
+        listOf(phone to phoneGrant, television to televisionGrant).forEach { (lease, grant) ->
+            val capability = StreamCapability(target, lease.id)
+            assertFailsWith<SameContentAlreadyPlayingException> {
+                grants.validateCapability(
+                    lease.id,
+                    grant.token,
+                    capability,
+                    PlaybackMediaTransport.SOLO,
+                )
+            }
+            grants.validateCapability(
+                lease.id,
+                grant.token,
+                capability,
+                PlaybackMediaTransport.RELAY,
+            )
+        }
+        sessions.close()
+    }
+
+    @Test
+    fun liveRoomAcceptsOnlyTheSingleSourceAppropriateSharedTransport() {
+        val sessions = PlaybackSessionRegistry(reapInBackground = false)
+        val phoneActor = device("viewer", "phone-auth", "Phone")
+        val televisionActor = device("viewer", "tv-auth", "Television")
+        val phone = sessions.create(
+            phoneActor, 1, "channel", "https://example.test/live/channel.ts", "", "",
+            liveSource = true,
+        )
+        val television = sessions.create(
+            televisionActor, 1, "channel", "https://example.test/live/channel.ts", "", "",
+            liveSource = true,
+        )
+        val grants = PlaybackMediaGrants(sessions)
+        val grant = grants.issue(televisionActor, television.id)
+        assertNotNull(sessions.requestJoin(phone.id, television.id, "Television", "channel"))
+
+        val raw = StreamCapability(television.sourceUrl, television.id, hlsResource = false)
+        grants.validateCapability(
+            television.id,
+            grant.token,
+            raw,
+            PlaybackMediaTransport.RELAY,
+        )
+        listOf(PlaybackMediaTransport.SHARED_HLS, PlaybackMediaTransport.REMUX).forEach { transport ->
+            assertFailsWith<SameContentAlreadyPlayingException> {
+                grants.validateCapability(television.id, grant.token, raw, transport)
+            }
+        }
+
+        val hls = raw.copy(hlsResource = true)
+        grants.validateCapability(
+            television.id,
+            grant.token,
+            hls,
+            PlaybackMediaTransport.SHARED_HLS,
+        )
+        listOf(PlaybackMediaTransport.RELAY, PlaybackMediaTransport.REMUX).forEach { transport ->
+            assertFailsWith<SameContentAlreadyPlayingException> {
+                grants.validateCapability(television.id, grant.token, hls, transport)
+            }
+        }
+        sessions.close()
+    }
+
+    @Test
+    fun joiningRoomInvalidatesPreviouslyBoundSoloRemux() {
+        val sessions = PlaybackSessionRegistry(reapInBackground = false)
+        val phoneActor = device("viewer", "phone-auth", "Phone")
+        val televisionActor = device("viewer", "tv-auth", "Television")
+        val phone = sessions.create(
+            phoneActor, 1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        val grants = PlaybackMediaGrants(sessions)
+        val phoneGrant = grants.issue(phoneActor, phone.id)
+        grants.bindResource(phone.id, "solo-remux")
+        grants.validateResource(phone.id, phoneGrant.token, "solo-remux")
+        val television = sessions.create(
+            televisionActor, 1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+
+        assertNotNull(sessions.requestJoin(phone.id, television.id, "Television", "movie"))
+
+        assertFailsWith<PlaybackRevokedException> {
+            grants.validateResource(phone.id, phoneGrant.token, "solo-remux")
+        }
+        sessions.close()
     }
 
     @Test
@@ -230,6 +602,41 @@ class PlaybackSessionRegistryTest {
         delay(100)
         assertFailsWith<PlaybackRevokedException> { sessions.owned(guestActor, guest.id) }
         assertEquals(host.id, sessions.owned(hostActor, host.id).id)
+        sessions.close()
+    }
+
+    @Test
+    fun kickedOwnDeviceCannotAutoRejoinOrOpenMediaDuringNoticeGrace() = runBlocking {
+        val sessions = PlaybackSessionRegistry(
+            kickNoticeGraceMs = 250,
+            reapInBackground = false,
+        )
+        val phoneActor = device("viewer", "phone-auth", "Phone")
+        val televisionActor = device("viewer", "tv-auth", "Television")
+        val phone = sessions.create(
+            phoneActor, 1, "channel", "https://example.test/live/channel.ts", "", "",
+            liveSource = true,
+        )
+        val television = sessions.create(
+            televisionActor, 1, "channel", "https://example.test/live/channel.ts", "", "",
+            liveSource = true,
+        )
+        val grants = PlaybackMediaGrants(sessions)
+        val grant = grants.issue(televisionActor, television.id)
+        assertNotNull(sessions.requestJoin(phone.id, television.id, "Television", "channel"))
+        sessions.drainCommands(phone.id)
+        sessions.drainCommands(television.id)
+
+        assertTrue(sessions.kick(phone.id, television.id))
+
+        assertEquals(
+            null,
+            sessions.requestJoin(phone.id, television.id, "Television", "channel"),
+        )
+        assertFailsWith<PlaybackRevokedException> {
+            grants.validate(television.id, grant.token)
+        }
+        assertEquals("room-ended", sessions.drainCommands(television.id).single().type)
         sessions.close()
     }
 

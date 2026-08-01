@@ -214,6 +214,27 @@ describe('hls playback engine', () => {
     expect(onTerminate).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [409, 'another device'],
+    [429, 'connection limit'],
+  ])('surfaces typed playback admission status %i without a retry loop', (status, copy) => {
+    const hlsLease = {
+      ...lease,
+      streamUrl: '/api/v1/stream?u=h.token&sid=lease-1&g=grant-1',
+    };
+    const { hls, actions } = mountEngine(null, hlsLease);
+
+    hls.emitError({
+      fatal: true,
+      type: FakeHls.ErrorTypes.NETWORK_ERROR,
+      response: { code: status },
+    });
+
+    expect(hls.destroy).toHaveBeenCalledOnce();
+    expect(actions.setError).toHaveBeenLastCalledWith(expect.stringContaining(copy));
+    expect(hls.startLoad).not.toHaveBeenCalled();
+  });
+
   it('destroys hls.js after its fatal network recovery budget is exhausted', () => {
     const { hls, actions } = mountEngine();
     const failure = {

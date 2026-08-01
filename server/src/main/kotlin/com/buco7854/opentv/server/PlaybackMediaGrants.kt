@@ -7,6 +7,13 @@ import java.util.concurrent.ConcurrentHashMap
 
 data class IssuedMediaGrant(val token: String, val expiresAtMs: Long)
 
+internal enum class PlaybackMediaTransport {
+    SOLO,
+    SHARED_HLS,
+    RELAY,
+    REMUX,
+}
+
 /**
  * A media grant narrows an authenticated browser session to one live playback
  * lease. Tokens are short lived, stored only as hashes, and become useless as
@@ -24,7 +31,10 @@ class PlaybackMediaGrants(
     )
 
     private val grants = ConcurrentHashMap<String, Grant>()
-    private val resources = ConcurrentHashMap<String, MutableSet<String>>()
+    private val resources = ConcurrentHashMap<
+        String,
+        MutableMap<String, PlaybackSessionRegistry.MediaScope>,
+    >()
     private val resourceLock = Any()
 
     fun issue(actor: Actor, leaseId: String): IssuedMediaGrant {
@@ -39,6 +49,7 @@ class PlaybackMediaGrants(
     fun validate(leaseId: String?, rawGrant: String?): PlaybackSessionRegistry.Live {
         if (leaseId.isNullOrBlank() || rawGrant.isNullOrBlank()) throw PlaybackRevokedException()
         val lease = sessions.lease(leaseId)
+        if (!sessions.mediaAllowed(leaseId)) throw PlaybackRevokedException()
         val grant = grants[key(rawGrant)] ?: throw PlaybackRevokedException()
         if (grant.leaseId != leaseId ||
             grant.authSessionId != lease.authSessionId ||
@@ -47,16 +58,28 @@ class PlaybackMediaGrants(
             grants.remove(key(rawGrant))
             throw PlaybackRevokedException()
         }
+        if (sessions.sameAccountConflict(lease.id) != null) {
+            throw SameContentAlreadyPlayingException()
+        }
         return lease
     }
 
-    fun validateCapability(
+    internal fun validateCapability(
         leaseId: String?,
         rawGrant: String?,
         capability: StreamCapability,
+        transport: PlaybackMediaTransport = PlaybackMediaTransport.SOLO,
     ) {
-        validate(leaseId, rawGrant)
+        val lease = validate(leaseId, rawGrant)
         if (capability.leaseId != leaseId) throw PlaybackRevokedException()
+        if (sessions.requiresSharedLiveTransport(lease.id)) {
+            val required = if (capability.hlsResource) {
+                PlaybackMediaTransport.SHARED_HLS
+            } else {
+                PlaybackMediaTransport.RELAY
+            }
+            if (transport != required) throw SameContentAlreadyPlayingException()
+        }
     }
 
     fun validateSource(leaseId: String?, rawGrant: String?, source: String) {
@@ -66,15 +89,18 @@ class PlaybackMediaGrants(
     }
 
     fun bindResource(leaseId: String, resourceId: String) {
-        sessions.lease(leaseId)
-        synchronized(resourceLock) {
-            resources.computeIfAbsent(resourceId) { ConcurrentHashMap.newKeySet() }.add(leaseId)
+        sessions.withLiveLease(leaseId) {
+            val scope = sessions.mediaScope(leaseId)
+            synchronized(resourceLock) {
+                resources.computeIfAbsent(resourceId) { ConcurrentHashMap() }[leaseId] = scope
+            }
         }
     }
 
     fun validateResource(leaseId: String?, rawGrant: String?, resourceId: String) {
-        validate(leaseId, rawGrant)
-        if (resources[resourceId]?.contains(leaseId) != true) throw PlaybackRevokedException()
+        val lease = validate(leaseId, rawGrant)
+        val currentScope = sessions.mediaScope(lease.id)
+        if (resources[resourceId]?.get(lease.id) != currentScope) throw PlaybackRevokedException()
     }
 
     /**

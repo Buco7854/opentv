@@ -64,6 +64,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -90,6 +91,7 @@ import com.buco7854.opentv.source.CatalogResult
 import com.buco7854.opentv.source.PlaylistCapabilities
 import com.buco7854.opentv.source.PlaylistDeleteInfo
 import com.buco7854.opentv.source.PlaylistEditForm
+import com.buco7854.opentv.source.PlaylistEpgRefreshOutcome
 import com.buco7854.opentv.source.PlaylistOperation
 import com.buco7854.opentv.source.PlaylistOperationAvailability
 import com.buco7854.opentv.source.SourceId
@@ -578,9 +580,9 @@ private fun PanelHubRow(hub: HubSource, signedOut: Boolean, onClick: () -> Unit)
  *
  * It offers the same operations a local playlist does, but the server decides which:
  * clearing your own watch progress is yours to do, while refreshing, editing or deleting
- * change a catalog everyone on that server shares, so they belong to an administrator and
- * open the server's own pages. The capability list is fetched per playlist and is never
- * inferred from a locally cached role — the server enforces it regardless of what we draw.
+ * change a catalog everyone on that server shares, so they belong to an administrator.
+ * Each advertised operation says whether Android handles it in-app or opens the server's
+ * page. The list is fetched per playlist and never inferred from a locally cached role.
  */
 @Composable
 private fun PanelHubPlaylistRow(
@@ -592,6 +594,7 @@ private fun PanelHubPlaylistRow(
     onNotify: (String) -> Unit,
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val handoff = remember(context) { HubBrowserHandoff(context) }
     var menuOpen by remember { mutableStateOf(false) }
     var confirmClear by remember { mutableStateOf(false) }
@@ -605,7 +608,6 @@ private fun PanelHubPlaylistRow(
     val rejectedMessage = stringResource(R.string.hub_handoff_rejected)
     val failedMessage = stringResource(R.string.source_load_failed)
     val refreshStartedMessage = stringResource(R.string.playlist_refreshing)
-    val refreshedMessage = stringResource(R.string.playlist_refreshed)
     val savedMessage = stringResource(R.string.playlist_updated)
     val deletedMessage = stringResource(R.string.playlist_removed)
     val clearedMessage = stringResource(R.string.playlist_progress_cleared)
@@ -773,7 +775,7 @@ private fun PanelHubPlaylistRow(
                     val result = gateway.refreshPlaylist(force = true) {}
                     onNotify(
                         if (result is CatalogResult.Success) {
-                            refreshedMessage
+                            resources.getString(playlistRefreshMessage(result.value.epg))
                         } else {
                             failedMessage
                         },
@@ -904,6 +906,12 @@ private fun HubPlaylistMenuItem(
 
 /** Which management dialog a hub playlist row currently has open. */
 private enum class HubRowAction { ACCOUNT, REFRESH, EDIT, DELETE }
+
+internal fun playlistRefreshMessage(outcome: PlaylistEpgRefreshOutcome): Int = when (outcome) {
+    PlaylistEpgRefreshOutcome.SUCCEEDED -> R.string.playlist_refreshed
+    PlaylistEpgRefreshOutcome.FAILED -> R.string.playlist_refreshed_guide_failed
+    PlaylistEpgRefreshOutcome.NOT_CONFIGURED -> R.string.playlist_refreshed_without_guide
+}
 
 @Composable
 private fun PanelActionRow(

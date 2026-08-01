@@ -35,8 +35,10 @@ carried to a new phone; after switching devices you sign in again.
 
 Connecting is optional. The app works fully without it. When you do connect one:
 
-- **You have an account on that server**, with a username and password and
-  optionally two-factor authentication or single sign-on.
+- **You have an account on that server**, with a username and one or more
+  configured sign-in methods. Depending on that server and account, this can be
+  a password (optionally with two-factor authentication), single sign-on, a
+  passkey, or a combination; an OIDC- or passkey-only account has no password.
 - **Some of your data lives there, not on your device.** Your favourites and
   watch progress for that server's playlists are stored server-side so they
   follow you between devices. Your local playlists keep their favourites and

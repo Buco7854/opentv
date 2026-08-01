@@ -28,6 +28,7 @@ class HubUnauthorizedException(override val code: String?, message: String) : Hu
 class HubForbiddenException(override val code: String?, message: String) : HubException(message)
 class HubNotFoundException(override val code: String?, message: String) : HubException(message)
 class HubGoneException(override val code: String?, message: String) : HubException(message)
+class HubDuplicatePlaybackException(override val code: String?, message: String) : HubException(message)
 class HubCapacityException(override val code: String?, message: String, val retryAfterMs: Long?) :
     HubException(message)
 
@@ -41,8 +42,8 @@ class HubApiException(val status: Int, override val code: String?, message: Stri
 /** A successful response did not satisfy the hub protocol's security contract. */
 class HubProtocolException(message: String) : HubException(message)
 
-/** Maps a non-2xx hub response to its typed exception. 409 is NOT an error here:
- *  auth flows return it with an AuthFlow body and callers decode that themselves. */
+/** Maps a non-2xx hub response to its typed exception. Auth-flow callers decode their expected
+ *  conflict bodies before reaching this mapper; ordinary 409 responses remain typed failures. */
 fun hubFailure(response: HttpResponseSpec): HubException {
     val (code, message) = parseApiError(response.bodyText)
     val text = message ?: code ?: "HTTP ${response.status}"
@@ -50,12 +51,19 @@ fun hubFailure(response: HttpResponseSpec): HubException {
         401 -> HubUnauthorizedException(code, text)
         403 -> HubForbiddenException(code, text)
         404 -> HubNotFoundException(code, text)
+        409 -> if (code == SAME_CONTENT_ALREADY_PLAYING) {
+            HubDuplicatePlaybackException(code, text)
+        } else {
+            HubApiException(response.status, code, text)
+        }
         410 -> HubGoneException(code, text)
         429 -> HubCapacityException(code, text, response.header("Retry-After")?.toLongOrNull()?.times(1000))
         in 500..599 -> HubServerException(response.status, code, text)
         else -> HubApiException(response.status, code, text)
     }
 }
+
+private const val SAME_CONTENT_ALREADY_PLAYING = "same_content_already_playing"
 
 /** Lenient `ApiErrorDto` read: any non-JSON or unexpected body degrades to nulls. */
 internal fun parseApiError(body: String): Pair<String?, String?> = runCatching {

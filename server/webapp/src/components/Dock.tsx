@@ -1,10 +1,12 @@
-// Bottom dock: burger opens the playlists panel; center icons are the active
-// playlist's apps. Burger shows a green dot while downloads run.
+// Bottom dock: burger opens the playlists panel; center icons combine active-playlist
+// views with account-wide Favorites. Burger shows a green dot while downloads run.
 
 import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import {
-  api, DownloadStatus, Playlist, PlaylistCapabilities, PlaylistOperation,
+  api, DownloadStatus, Playlist, PlaylistCapabilities, PlaylistDeleteEffect,
+  PlaylistDeleteInfo, PlaylistEdit, PlaylistEpgRefreshStatus, PlaylistOperation,
+  PlaylistOperationCapability, PlaylistOperationExecution, PlaylistRefreshResult,
 } from '../api';
 import { reportError, reportErrorAs, reportSuccess } from '../errors';
 import { useDownloads } from '../hooks';
@@ -16,6 +18,31 @@ import { prefetchScreen, ScreenName } from '../prefetch';
 import { ConfirmDialog, IconBtn, Menu, MenuOption, toast } from './Primitives';
 import { PlaylistDialog } from './PlaylistDialog';
 import { useAuth } from '../auth/AuthProvider';
+
+const LOCALIZED_DELETE_EFFECTS = Object.values(PlaylistDeleteEffect);
+
+/** Server facts choose the warning; the browser owns its localized wording. */
+export function playlistDeleteWarning(info: PlaylistDeleteInfo): string {
+  const effects = new Set(info.effects);
+  const knownCompleteWarning = effects.size === LOCALIZED_DELETE_EFFECTS.length
+    && LOCALIZED_DELETE_EFFECTS.every((effect) => effects.has(effect));
+  return knownCompleteWarning
+    ? t('playlists.removeMessage', { name: info.name })
+    : info.warning;
+}
+
+export function playlistRefreshNotice(result: PlaylistRefreshResult): {
+  message: string;
+  tone: 'success' | 'error';
+} {
+  if (result.epgStatus === PlaylistEpgRefreshStatus.FAILED) {
+    return { message: t('playlists.refreshedGuideFailed'), tone: 'error' };
+  }
+  if (result.epgStatus === PlaylistEpgRefreshStatus.NOT_CONFIGURED) {
+    return { message: t('playlists.refreshedNoGuide'), tone: 'success' };
+  }
+  return { message: t('playlists.refreshed'), tone: 'success' };
+}
 
 function DockButton({ icon, label, active, disabled, dot, prefetch, onClick }: {
   icon: IconName;
@@ -119,8 +146,8 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
   const {
     playlists, loading, error, reload, rememberPlaylist, forgetPlaylist,
   } = useLibrary();
-  const [dialog, setDialog] = useState<'add' | Playlist | null>(null);
-  const [pendingDelete, setPendingDelete] = useState<Playlist | null>(null);
+  const [dialog, setDialog] = useState<'add' | PlaylistEdit | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<PlaylistDeleteInfo | null>(null);
   const [pendingClearProgress, setPendingClearProgress] = useState<Playlist | null>(null);
   // Playlist whose actions menu is open, plus its anchor button.
   const [actionsFor, setActionsFor] = useState<{
@@ -243,36 +270,63 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
 
       {actionsFor && (() => {
         const p = actionsFor.playlist;
-        const available = new Set(
-          actionsFor.capabilities.operations.map((capability) => capability.operation),
-        );
-        const options: MenuOption[] = [];
-        if (available.has(PlaylistOperation.VIEW_PROVIDER_ACCOUNT)) {
-          options.push({ icon: 'person', label: t('playlists.account'),
-                         onSelect: () => { onClose(); navigate(`/account/${p.id}`); } });
-        }
-        if (available.has(PlaylistOperation.REFRESH)) {
-          options.push({ icon: 'refresh', label: t('playlists.refresh'), onSelect: async () => {
-            toast(t('playlists.refreshing'));
-            try {
-              await api.refreshPlaylist(p.id, true);
-              reportSuccess(t('playlists.refreshed'));
-              void reload();
-            } catch (e) {
-              reportErrorAs((message) => t('playlists.refreshFailed', { message }), e);
+        const available = (operation: PlaylistOperation) =>
+          actionsFor.capabilities.operations.find((capability) => capability.operation === operation);
+        const run = (capability: PlaylistOperationCapability, inApp: () => void) => {
+          if (capability.execution === PlaylistOperationExecution.BROWSER) {
+            if (!capability.browserPath) {
+              reportError(new Error(t('common.unexpectedResponse')));
+              return;
             }
+            onClose();
+            navigate(capability.browserPath);
+            return;
+          }
+          inApp();
+        };
+        const options: MenuOption[] = [];
+        const account = available(PlaylistOperation.VIEW_PROVIDER_ACCOUNT);
+        if (account) {
+          options.push({ icon: 'person', label: t('playlists.account'),
+                         onSelect: () => run(account, () => {
+                           onClose();
+                           navigate(`/account/${p.id}`);
+                         }) });
+        }
+        const refresh = available(PlaylistOperation.REFRESH);
+        if (refresh) {
+          options.push({ icon: 'refresh', label: t('playlists.refresh'), onSelect: async () => {
+            run(refresh, () => {
+              toast(t('playlists.refreshing'));
+              void api.refreshPlaylist(p.id, true).then((result) => {
+                const notice = playlistRefreshNotice(result);
+                toast(notice.message, { tone: notice.tone });
+                void reload();
+              }).catch((e: unknown) => {
+                reportErrorAs((message) => t('playlists.refreshFailed', { message }), e);
+              });
+            });
           } });
         }
-        if (available.has(PlaylistOperation.EDIT)) {
-          options.push({ icon: 'edit', label: t('playlists.edit.action'), onSelect: () => setDialog(p) });
+        const edit = available(PlaylistOperation.EDIT);
+        if (edit) {
+          options.push({ icon: 'edit', label: t('playlists.edit.action'), onSelect: () => {
+            run(edit, () => {
+              void api.playlistEdit(p.id).then(setDialog).catch(reportError);
+            });
+          } });
         }
-        if (available.has(PlaylistOperation.CLEAR_WATCH_PROGRESS)) {
+        const clearProgress = available(PlaylistOperation.CLEAR_WATCH_PROGRESS);
+        if (clearProgress) {
           options.push({ icon: 'replay', label: t('playlists.clearProgress.action'),
-                         onSelect: () => setPendingClearProgress(p) });
+                         onSelect: () => run(clearProgress, () => setPendingClearProgress(p)) });
         }
-        if (available.has(PlaylistOperation.DELETE)) {
+        const remove = available(PlaylistOperation.DELETE);
+        if (remove) {
           options.push({ icon: 'del', label: t('playlists.delete.action'), danger: true,
-                         onSelect: () => setPendingDelete(p) });
+                         onSelect: () => run(remove, () => {
+                           void api.playlistDeleteInfo(p.id).then(setPendingDelete).catch(reportError);
+                         }) });
         }
         return <Menu anchor={actionsFor.anchor} options={options} onDismiss={() => setActionsFor(null)} />;
       })()}
@@ -292,7 +346,7 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
       {pendingDelete && (
         <ConfirmDialog
           title={t('playlists.removeTitle')}
-          message={t('playlists.removeMessage', { name: pendingDelete.name })}
+          message={playlistDeleteWarning(pendingDelete)}
           confirmLabel={t('common.remove')}
           onConfirm={async () => {
             try {

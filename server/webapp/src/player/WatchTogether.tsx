@@ -10,7 +10,9 @@ import {
   api, RoomMember, SessionCommand, SessionCommandInput, SyncState, WatchIntentPeer,
 } from '../api';
 import { Select, Sheet, toast } from '../components/Primitives';
-import { GENERIC, reportError, reportSuccess } from '../errors';
+import {
+  errorMessage, GENERIC, reportError, reportSuccess,
+} from '../errors';
 import { t } from '../i18n';
 import { sessionCommandGeneration } from './sessionProtocol';
 
@@ -50,12 +52,16 @@ export interface WatchTogether {
   blocked: boolean;
   /** Someone's already on this content: hold playback until the viewer picks alone or together. */
   choosing: boolean;
+  /** This account already has an older lease for the content, so independent play is forbidden. */
+  requiresJoin: boolean;
+  /** Typed refusal shown inline after the viewer declines a required own-device join. */
+  refusal: string | null;
   /** The room is reloading a changed track: lock controls and show loading until all are back. */
   loading: boolean;
   /** A membership transition is in flight; do not open a solo provider connection yet. */
   transitioning: boolean;
-  /** Viewer chose to watch alone: release the hold and play (may then hit the provider limit). */
-  watchAlone: () => void;
+  /** Ask the server to admit independent play; required own-device duplicates are refused. */
+  watchAlone: () => Promise<void>;
   ask: (peerId: string) => void;
   answerJoin: (requestId: string, accept: boolean) => Promise<void>;
   requestControl: () => Promise<void>;
@@ -74,8 +80,6 @@ export function useWatchTogether(opts: {
   /** The player is up on real content (not an error), so an intent check is worthwhile. */
   active: boolean;
   live: boolean;
-  /** This content is served through the remux, so a same-content viewer shares its connection. */
-  remuxEligible: boolean;
   /** The active source has a real room transport, so a room may clear provider-full. */
   sharesRoomRead: boolean;
   contentId: string;
@@ -85,7 +89,7 @@ export function useWatchTogether(opts: {
   onRoomAudio?: (index: number) => void;
 }): WatchTogether {
   const {
-    selfId, video, active, live, remuxEligible, sharesRoomRead, contentId, send,
+    selfId, video, active, live, sharesRoomRead, contentId, send,
   } = opts;
   const roomAudioRef = useRef(opts.onRoomAudio); roomAudioRef.current = opts.onRoomAudio;
 
@@ -97,6 +101,8 @@ export function useWatchTogether(opts: {
   const [checking, setChecking] = useState(true);
   const [recheckNonce, setRecheckNonce] = useState(0);
   const [blocked, setBlocked] = useState(false);
+  const [requiresJoin, setRequiresJoin] = useState(false);
+  const [refusal, setRefusal] = useState<string | null>(null);
   // 'pending' while someone is already on this content and the viewer hasn't said whether to watch
   // alone or together - playback is held until they choose, so a seat is never taken by surprise.
   const [choice, setChoice] = useState<'pending' | 'decided'>('decided');
@@ -113,7 +119,6 @@ export function useWatchTogether(opts: {
   const canControl = !!self?.controller;
 
   const liveRef = useRef(live); liveRef.current = live;
-  const remuxRef = useRef(remuxEligible); remuxRef.current = remuxEligible;
   // The content the room was formed on, so navigating elsewhere drops us out of it.
   const roomContent = useRef<string | null>(null);
   // The content whose provider we've already checked, so we only ask once - reset on leaving a
@@ -148,6 +153,8 @@ export function useWatchTogether(opts: {
     setChecking(true);
     setRecheckNonce((n) => n + 1);
     setInRoom(false);
+    setRequiresJoin(false);
+    setRefusal(null);
     setMembers([]);
     setJoinRequests([]);
     setControlRequests([]);
@@ -290,6 +297,8 @@ export function useWatchTogether(opts: {
       // Clear provider-full only when this lease advertised a transport that genuinely shares the
       // read. This keeps a newer client honest when connected to an older server without shared HLS.
       setChoice('decided');
+      setRequiresJoin(false);
+      setRefusal(null);
       if (sharesRoomRead) setBlocked(false);
       // Anyone now in the room no longer has a pending request to answer.
       setJoinRequests((list) => list.filter((r) => !ids.has(r.peerId)));
@@ -324,6 +333,8 @@ export function useWatchTogether(opts: {
   useEffect(() => {
     setPeers([]);
     setBlocked(false);
+    setRequiresJoin(false);
+    setRefusal(null);
     setChecking(true);
     setChoice('decided');
     loadingRef.current = false;
@@ -335,7 +346,26 @@ export function useWatchTogether(opts: {
     }
   }, [contentId, leave]);
 
-  const watchAlone = useCallback(() => setChoice('decided'), []);
+  const watchAlone = useCallback(async () => {
+    if (!requiresJoin) {
+      setChoice('decided');
+      return;
+    }
+    setTransitioning(true);
+    try {
+      // This is an enforcement endpoint, not client-side copy: an older or scripted client that
+      // skips the prompt is refused by the same policy at the media-grant boundary.
+      await api.watchAlone(selfId);
+      setRequiresJoin(false);
+      setChoice('decided');
+    } catch (cause) {
+      setChoice('decided');
+      setBlocked(true);
+      setRefusal(errorMessage(cause));
+    } finally {
+      setTransitioning(false);
+    }
+  }, [requiresJoin, selfId]);
 
   // Ask the server who else is here and whether the provider is full - once per content.
   useEffect(() => {
@@ -353,15 +383,22 @@ export function useWatchTogether(opts: {
     api.playbackIntent(selfId).then((intent) => {
       if (cancelled || timedOut) return;
       clearTimeout(failOpen);
-      setPeers(intent.sameContent);
-      // A solo viewer needs its own connection even on the same content: sharing only happens
-      // inside a room. So a full provider blocks playing alone - join someone to watch together
-      // (which shares their read) or get the limit message.
+      // A mandatory join must resolve the account's duplicate specifically. Joining an unrelated
+      // viewer would still leave the older own-device lease outside the room and therefore could
+      // not satisfy independent-play admission.
+      const offeredPeers = intent.requiresJoin
+        ? intent.sameContent.filter((peer) => peer.sameAccount)
+        : intent.sameContent;
+      setPeers(offeredPeers);
+      setRequiresJoin(intent.requiresJoin);
+      // A solo viewer needs its own connection even on the same content. A room shares live and
+      // converted VOD reads; fully capable direct-play VOD deliberately keeps one seat per member,
+      // so its media request may still return provider_capacity after the join.
       setBlocked(intent.full);
       setChecking(false);
       // Someone's already here: don't just start streaming (and maybe take the last seat) - hold
       // and ask whether to watch alone or together.
-      if (intent.sameContent.length > 0) setChoice('pending');
+      if (offeredPeers.length > 0) setChoice('pending');
     }).catch(() => {
       if (!cancelled && !timedOut) {
         clearTimeout(failOpen);
@@ -430,7 +467,7 @@ export function useWatchTogether(opts: {
     available: inRoom || peers.length > 0 || joinRequests.length > 0,
     hasPending: joinRequests.length > 0 || controlRequests.length > 0,
     inRoom, members, isHost, canControl, peers, joinRequests, controlRequests, checking, blocked,
-    choosing: choice === 'pending', loading, transitioning, watchAlone,
+    choosing: choice === 'pending', requiresJoin, refusal, loading, transitioning, watchAlone,
     ask, answerJoin, requestControl, answerControl, setControl, kick, leave, onCommand,
   };
 }
@@ -489,7 +526,9 @@ export function WatchTogetherSheet({ wt, onDismiss, container }: {
   if (!wt.inRoom) {
     wt.peers.forEach((p) => rows.push(
       <div className="watch-row" key={`p-${p.id}`}>
-        <span className="min-w-0 flex-1 truncate">{p.name}</span>
+        <span className="min-w-0 flex-1 truncate">
+          {p.sameAccount ? t('watch.yourOtherDevice') : p.name}
+        </span>
         <button className="btn text watch-act" onClick={() => { wt.ask(p.id); onDismiss(); }}>{t('watch.joinPeer')}</button>
       </div>,
     ));

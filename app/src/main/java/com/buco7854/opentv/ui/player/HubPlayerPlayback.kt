@@ -60,6 +60,7 @@ internal interface HubPlayerPlayback : WatchTogetherHub {
     override suspend fun kick(targetId: String) = Unit
     override suspend fun setRoomAudio(audioTrackIndex: Int) = Unit
     override suspend fun ready(generation: Long) = Unit
+    override suspend fun watchAlone() = Unit
     override suspend fun leave() = Unit
     override suspend fun sendSync(state: SyncStateDto) = Unit
 }
@@ -175,6 +176,10 @@ internal class DefaultHubPlayerPlayback(
 
     override suspend fun ready(generation: Long) {
         controller?.ready(generation)
+    }
+
+    override suspend fun watchAlone() {
+        controller?.watchAlone()
     }
 
     override suspend fun leave() {

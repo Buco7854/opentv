@@ -17,7 +17,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.ViewList
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.Close
@@ -118,14 +117,11 @@ internal fun shouldExitFavoriteSelection(selectedBefore: Int, retained: Int): Bo
  * Every favorite the user has, from every source, on one page.
  *
  * Favorites stay owned by the source they came from — local ones live in the
- * local database, a server's live on that server — so this only ever presents
- * them side by side. Two consequences shape the layout:
- *
- * - Each source is a section with its **own** load state. One unreachable
- *   server must not blank the page, so its section shows the failure while the
- *   rest still render.
- * - The same channel present in two sources is shown twice on purpose. They are
- *   different playable entries, and the section headers already explain why.
+ * local database and a server's live on that server — while the page merges
+ * them into Live, Movies and Series sections. Source chips filter that merged
+ * list, and a source failure appears inline without blanking healthy results.
+ * The same channel in two sources is deliberately shown twice because those
+ * are different playable entries with different owners.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -321,7 +317,12 @@ fun AllFavoritesScreen(
                     } else {
                         IconButton(
                             onClick = { selectMode = true },
-                            modifier = Modifier.focusHighlight(),
+                            // The same requester belongs to Close while selecting. Outside
+                            // selection it must still be attached before the TV-only initial
+                            // request runs, or FocusRequester throws as this screen opens.
+                            modifier = Modifier
+                                .focusRequester(backFocusRequester)
+                                .focusHighlight(),
                         ) {
                             Icon(
                                 Icons.Outlined.Checklist,

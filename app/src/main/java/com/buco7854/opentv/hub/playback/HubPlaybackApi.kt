@@ -49,6 +49,8 @@ interface HubPlaybackApi {
     suspend fun sync(leaseId: String, state: SyncStateDto)
     suspend fun watchIntent(leaseId: String): WatchIntentResponse =
         throw UnsupportedOperationException("Watch together is not configured")
+    suspend fun watchAlone(leaseId: String): Unit =
+        throw UnsupportedOperationException("Watch together is not configured")
     suspend fun requestJoin(leaseId: String, peerId: String): Unit =
         throw UnsupportedOperationException("Watch together is not configured")
     suspend fun answerJoin(leaseId: String, requestId: String, accept: Boolean): Unit =
@@ -107,6 +109,10 @@ class HubClientPlaybackApi(
 
     override suspend fun watchIntent(leaseId: String): WatchIntentResponse =
         client.call { intent(it, leaseId) }
+
+    override suspend fun watchAlone(leaseId: String) {
+        client.call { watchAlone(it, leaseId) }
+    }
 
     override suspend fun requestJoin(leaseId: String, peerId: String) {
         client.call {

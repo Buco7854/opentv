@@ -9,6 +9,7 @@ import com.buco7854.opentv.contract.SessionHeartbeatDto
 import com.buco7854.opentv.contract.SyncStateDto
 import com.buco7854.opentv.contract.WatchIntentResponse
 import com.buco7854.opentv.hub.HubCapacityException
+import com.buco7854.opentv.hub.HubDuplicatePlaybackException
 import com.buco7854.opentv.hub.HubForbiddenException
 import com.buco7854.opentv.hub.HubGoneException
 import com.buco7854.opentv.hub.HubNotFoundException
@@ -51,6 +52,7 @@ sealed interface HubPlaybackState {
 
     data object Revoked : HubPlaybackState
     data object SignedOut : HubPlaybackState
+    data object DuplicatePlayback : HubPlaybackState
 
     data class AtCapacity(
         val retryAfterMs: Long?,
@@ -223,6 +225,7 @@ class HubPlaybackController(
             // outcome, so refreshing grants would only create an unbounded loop.
             403 -> becomeTerminal(HubPlaybackState.Revoked)
             410 -> becomeTerminal(HubPlaybackState.Revoked)
+            409 -> becomeTerminal(HubPlaybackState.DuplicatePlayback)
             429 -> atCapacity(null)
             // A missing manifest or segment is recoverable and never means the lease died.
             404 -> Unit
@@ -271,6 +274,14 @@ class HubPlaybackController(
 
     suspend fun watchIntent(): WatchIntentResponse? =
         withLease { api.watchIntent(it) }
+
+    /**
+     * Confirms independent-play admission before opening media. A same-account duplicate raises
+     * HubDuplicatePlaybackException so the UI can render the server's typed refusal verbatim.
+     */
+    suspend fun watchAlone() {
+        withLease { api.watchAlone(it) }
+    }
 
     suspend fun requestJoin(peerId: String) {
         withLease { api.requestJoin(it, peerId) }
@@ -479,6 +490,8 @@ class HubPlaybackController(
             is HubGoneException -> becomeTerminal(HubPlaybackState.Revoked)
             is HubForbiddenException -> becomeTerminal(HubPlaybackState.Revoked)
             is HubUnauthorizedException -> becomeTerminal(HubPlaybackState.SignedOut)
+            is HubDuplicatePlaybackException ->
+                becomeTerminal(HubPlaybackState.DuplicatePlayback)
             is HubCapacityException -> atCapacity(error.retryAfterMs)
             is HubNotFoundException -> Unit
         }
@@ -490,15 +503,15 @@ class HubPlaybackController(
             is HubGoneException -> becomeTerminal(HubPlaybackState.Revoked)
             is HubForbiddenException -> becomeTerminal(HubPlaybackState.Revoked)
             is HubUnauthorizedException -> becomeTerminal(HubPlaybackState.SignedOut)
+            is HubDuplicatePlaybackException ->
+                becomeTerminal(HubPlaybackState.DuplicatePlayback)
             is HubCapacityException -> atCapacity(error.retryAfterMs)
             else -> fail(error)
         }
     }
 
     private suspend fun becomeTerminal(terminal: HubPlaybackState) {
-        if (stateMutable.value is HubPlaybackState.Revoked ||
-            stateMutable.value is HubPlaybackState.SignedOut
-        ) return
+        if (stateMutable.value.isTerminal()) return
         stateMutable.value = terminal
         cancelRuntime()
         releaseLease()
@@ -544,6 +557,7 @@ class HubPlaybackController(
         stopped.get() ||
             stateMutable.value is HubPlaybackState.Revoked ||
             stateMutable.value is HubPlaybackState.SignedOut ||
+            stateMutable.value is HubPlaybackState.DuplicatePlayback ||
             stateMutable.value is HubPlaybackState.AtCapacity ||
             stateMutable.value is HubPlaybackState.Failed
 
@@ -594,3 +608,10 @@ class HubPlaybackController(
         const val NO_EXTRA_TRACKS = "no_extra_tracks"
     }
 }
+
+private fun HubPlaybackState.isTerminal(): Boolean =
+    this is HubPlaybackState.Revoked ||
+        this is HubPlaybackState.SignedOut ||
+        this is HubPlaybackState.DuplicatePlayback ||
+        this is HubPlaybackState.AtCapacity ||
+        this is HubPlaybackState.Failed

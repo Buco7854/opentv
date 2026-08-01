@@ -234,6 +234,22 @@ class PlayerViewModelTest {
     }
 
     @Test
+    fun `media 409 maps to the terminal same-content message`() = runTest(dispatcher) {
+        val playback = FakeHubPlayback()
+        val viewModel = hubViewModel(playback)
+        advanceUntilIdle()
+
+        assertFalse(viewModel.onMediaRequestFailed(409))
+        advanceUntilIdle()
+
+        assertTrue(viewModel.watchTogetherState.value.duplicateRefused)
+        assertFalse(viewModel.watchTogetherState.value.choosing)
+        assertTrue(viewModel.watchTogetherState.value.peers.isEmpty())
+        assertNull(viewModel.playbackSource.value)
+        assertNull(viewModel.problem.value)
+    }
+
+    @Test
     fun `capability discovery failure leaves Preparing with a visible error`() =
         runTest(dispatcher) {
             val viewModel = PlayerViewModel(
@@ -649,6 +665,7 @@ class PlayerViewModelTest {
 
         override suspend fun onMediaRequestFailed(statusCode: Int) {
             mediaFailures += statusCode
+            if (statusCode == 409) mutableState.value = HubPlaybackState.DuplicatePlayback
         }
 
         override fun updateSnapshot(snapshot: HubPlaybackSnapshot) = Unit

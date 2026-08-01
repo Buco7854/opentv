@@ -46,7 +46,13 @@ class ProviderConnections(
     /** Distinct streams reading from [key], ignoring content [exceptShareKey] (which a caller
      *  would share rather than add to). Used to decide whether a new read fits. */
     fun distinctStreams(key: String, exceptShareKey: String?): Int =
-        holders.values.filter { it.key == key && it.kind == Kind.STREAM && it.shareKey != exceptShareKey }
+        distinctStreams(key, setOfNotNull(exceptShareKey))
+
+    /** Count distinct streams except the reads a room transition is about to replace or retain. */
+    fun distinctStreams(key: String, exceptShareKeys: Set<String>): Int =
+        holders.values.filter {
+            it.key == key && it.kind == Kind.STREAM && it.shareKey !in exceptShareKeys
+        }
             .map { it.shareKey }.distinct().size
 
     /** Evict least-recently-used downloads (under the lock) until content [shareKey] fits under

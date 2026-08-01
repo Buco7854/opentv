@@ -47,6 +47,10 @@ internal fun shouldPersistProgress(durationMs: Long, live: Boolean): Boolean =
 internal fun shouldClosePlayerOnDispose(isChangingConfigurations: Boolean): Boolean =
     !isChangingConfigurations
 
+/** Media is deliberately absent while the initial alone/together decision is unresolved. */
+internal fun shouldShowWatchTogetherBeforeMedia(state: WatchTogetherState): Boolean =
+    state.choosing || state.duplicateRefused
+
 internal enum class PlayerBackAction {
     DISMISS_NOTICE,
     HIDE_CONTROLS,
