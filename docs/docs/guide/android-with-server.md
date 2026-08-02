@@ -90,13 +90,26 @@ If someone else is watching the same thing, the player offers to watch together.
 The host approves who joins and can hand out control, so anyone with control can
 play, pause and seek for everyone.
 
-Watching together also works between your own devices, and for the same title it
-is the only thing that works. One account cannot play the same title twice
-independently: start something already playing on another of your devices and
-the app offers to join that session instead. Joining your own device needs no
-approval, since you are both ends of it. Declining ends the attempt on the new
-device rather than starting a second stream, and you can start it again once the
-other device stops.
+Watching together also works between your own devices, and for the same thing it
+is the only thing that works. One account cannot play the same thing twice
+independently: start what another of your devices is already playing and the app
+offers to join that session instead. Joining your own device needs no approval,
+since you are both ends of it. Declining ends the attempt on the new device
+rather than starting a second stream, and you can start it again once the other
+device stops.
+
+"The same thing" means the same source, not merely the same title. Watching a
+channel live and replaying a programme from that channel are different sources,
+so they neither collide nor share: they are two ordinary streams on two
+connections. Two devices on the same live channel, or on the same catch-up
+programme, do collide and are offered the join.
+
+Being removed from a room by its host is not a ban. You can come back, but you
+have to ask: the host approves you as they would anyone else. That applies to
+the device that was removed, not to your account: removing one of your devices
+leaves your others exactly as they were, and the removed one has to ask like
+anybody would. Signing out and back in on it starts a new session and clears
+that, which is the point of a kick rather than a ban.
 
 The reason is your provider's connection limit. Two devices watching one live
 channel together share a single connection to your provider, so joining costs
