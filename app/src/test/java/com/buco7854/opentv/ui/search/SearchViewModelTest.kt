@@ -94,6 +94,34 @@ class SearchViewModelTest {
     }
 
     @Test
+    fun `hub guide decoration is scoped to search results and cannot fail the search`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        try {
+            val result = CatalogSearchResult(
+                live = listOf(
+                    item("news", ChannelKind.LIVE).copy(tvgId = "guide-news"),
+                    item("sport", ChannelKind.LIVE).copy(tvgId = "guide-sport"),
+                ),
+            )
+            val gateway = CatalogGatewayFake(SourceId.Hub(1, 2)).apply {
+                searchResult = CatalogResult.Success(result)
+                guideIdsResult = CatalogResult.Unreachable
+            }
+            val viewModel = SearchViewModel(gateway.source, gateway)
+
+            viewModel.query.value = "news"
+            advanceTimeBy(250)
+            advanceUntilIdle()
+
+            assertEquals(listOf(setOf("guide-news", "guide-sport")), gateway.guideIdRequests)
+            assertEquals(result, viewModel.state.value.results)
+            assertEquals(null, viewModel.state.value.error)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
     fun `hub signed out and unreachable searches surface typed states`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         try {

@@ -103,7 +103,9 @@ class HubCatalogGatewayTest {
     @Test
     fun favoritesAndResumeUseOnlyHubOwnedState() = runTest {
         val backend = FakeHubBackend().apply {
-            resolved = FavoritesResolvedDto(live = listOf(channel("favorite-1", "Favorite")))
+            resolved = FavoritesResolvedDto(
+                live = listOf(channel("favorite-1", "Favorite").copy(xtreamStreamId = null)),
+            )
             favoriteRows = listOf(FavoriteDto("favorite-1", 7, "provider-secret", 1, 1))
             resumeRows = listOf(ResumePointDto("favorite-1", 20, 100, 4))
             guideRows = listOf("guide")
@@ -119,6 +121,8 @@ class HubCatalogGatewayTest {
         assertEquals(.2f, favorites.items.single().progress)
         assertTrue(favorites.items.single().hasGuide)
         assertEquals("Now", favorites.items.single().nowAiring?.title)
+        assertEquals(listOf("guide"), backend.nowAiringTvgIds)
+        assertEquals(listOf("guide"), backend.guideTvgIds)
         assertEquals(1, backend.resolvedFavoriteCalls)
 
         val resume = gateway.resumePoints().successValue()
@@ -129,6 +133,24 @@ class HubCatalogGatewayTest {
         assertFalse(gateway.toggleFavorite(ContentRef.HubContent("favorite-1")).successValue())
         assertEquals(listOf("favorite-1"), backend.removedFavorites)
         assertTrue(backend.localWriteAttempts.isEmpty())
+    }
+
+    @Test
+    fun favoriteDecorationFailureDoesNotFailTheLoadedFavorites() = runTest {
+        val backend = FakeHubBackend().apply {
+            resolved = FavoritesResolvedDto(
+                live = listOf(channel("favorite-1", "Favorite").copy(xtreamStreamId = null)),
+            )
+            decorationFailure = IllegalStateException("guide unavailable")
+        }
+
+        val favorites = HubCatalogGateway(SourceId.Hub(3, 7), backend)
+            .favorites()
+            .successValue()
+
+        assertEquals(listOf("Favorite"), favorites.items.map { it.title })
+        assertFalse(favorites.items.single().hasGuide)
+        assertEquals(null, favorites.items.single().nowAiring)
     }
 
     @Test
@@ -172,8 +194,8 @@ class HubCatalogGatewayTest {
         gateway.xtreamSeries("Shows").successValue()
         gateway.episodes("series", null).successValue()
         gateway.search("news").successValue()
-        val nowAiring = gateway.nowAiring().successValue()
-        gateway.guideIds().successValue()
+        val nowAiring = gateway.nowAiring(setOf("guide")).successValue()
+        gateway.guideIds(setOf("guide")).successValue()
         gateway.favorites().successValue()
         gateway.resumePoints().successValue()
         gateway.guideFor(ContentRef.HubContent("stable-1")).successValue()
@@ -599,8 +621,11 @@ class HubCatalogGatewayTest {
     }
 }
 
-private fun <T> CatalogResult<T>.successValue(): T =
-    (this as CatalogResult.Success<T>).value
+private fun <T> CatalogResult<T>.successValue(): T = when (this) {
+    is CatalogResult.Success -> value
+    is CatalogResult.Failed -> throw AssertionError("Expected success", cause)
+    else -> error("Expected success, got $this")
+}
 
 private data class ChannelRequest(
     val kind: Int,
@@ -646,6 +671,7 @@ private class FakeHubBackend : HubCatalogBackend {
     var channelRequest: ChannelRequest? = null
     var episodeSeriesKey: String? = null
     var failure: Throwable? = null
+    var decorationFailure: Throwable? = null
     var resumeCalls = 0
     var resolvedFavoriteCalls = 0
     var contentCalls = 0
@@ -655,6 +681,8 @@ private class FakeHubBackend : HubCatalogBackend {
     var groupKind: Pair<String, Int?>? = null
     var updateRequest: PlaylistUpdateRequest? = null
     var editCalls = 0
+    var nowAiringTvgIds = emptyList<String>()
+    var guideTvgIds = emptyList<String>()
     var detailDto = detailDto("Provider", "xtream", isXtreamNative = true)
     var editDto = PlaylistEditDto(
         id = 7,
@@ -765,8 +793,16 @@ private class FakeHubBackend : HubCatalogBackend {
         checkNotNull(xtreamDetail)
 
     override suspend fun search(query: String) = SearchResultsDto()
-    override suspend fun nowAiring(): List<ProgrammeDto> = nowRows
-    override suspend fun guideIds(): List<String> = guideRows
+    override suspend fun nowAiring(tvgIds: List<String>): List<ProgrammeDto> =
+        nowRows.also {
+            decorationFailure?.let { throw it }
+            nowAiringTvgIds = tvgIds
+        }
+    override suspend fun guideIds(tvgIds: List<String>): List<String> =
+        guideRows.also {
+            decorationFailure?.let { throw it }
+            guideTvgIds = tvgIds
+        }
     override suspend fun favorites() = favoriteRows
 
     override suspend fun favoritesResolved() =
@@ -827,7 +863,9 @@ private class RecordingHubTransport : HttpTransport {
     val seen = mutableListOf<HttpRequestSpec>()
     override suspend fun execute(request: HttpRequestSpec): HttpResponseSpec {
         seen += request
-        if (request.method != "GET") {
+        val decorationPost = request.method == "POST" &&
+            ("/now-airing" in request.url || "/guide-ids" in request.url)
+        if (request.method != "GET" && !decorationPost) {
             return HttpResponseSpec(204, emptyMap(), "")
         }
         val body = when {
@@ -902,6 +940,7 @@ private class RecordingHubTransport : HttpTransport {
                         ),
                     ),
                 )
+            "/guide-ids" in request.url -> "[\"guide\"]"
             "/favorites/resolved" in request.url ->
                 SERVER_JSON.encodeToString(FavoritesResolvedDto())
             "/content/stable-1/guide" in request.url -> "[]"

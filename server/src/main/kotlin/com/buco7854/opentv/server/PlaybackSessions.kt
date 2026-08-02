@@ -36,6 +36,7 @@ class PlaybackSessionRegistry(
     reapInBackground: Boolean = true,
 ) : AutoCloseable {
     internal data class MediaScope(val group: String, val generation: Long)
+    internal data class PlaybackIdentity(val contentId: String, val sourceUrl: String)
 
     private val reaperScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -70,14 +71,23 @@ class PlaybackSessionRegistry(
         internal val capabilities: MediaCapabilities,
         val commands: ConcurrentLinkedQueue<SessionCommandDto> = ConcurrentLinkedQueue(),
     ) {
+        internal val playbackIdentity = PlaybackIdentity(contentId, sourceUrl)
         internal var commandSequence: Long = 0
     }
 
     /** A watch-together room. The host owns it and can grant playback control to guests;
      *  everyone in [controllers] (the host plus whoever it allowed) can drive, the rest mirror. */
-    private class Room(val id: String, @Volatile var hostId: String) {
+    private class Room(
+        val id: String,
+        @Volatile var hostId: String,
+        val playbackIdentity: PlaybackIdentity,
+    ) {
         val members: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
         val controllers: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+        // A kick suppresses only this room's same-account automatic admission. Host approval
+        // removes the account from this set, so this remains a rejoin prompt rather than a ban.
+        val autoAdmissionExcludedUsers: MutableSet<String> =
+            java.util.concurrent.ConcurrentHashMap.newKeySet()
         // The room shares one remux read, so one audio track: whichever a controller last chose.
         @Volatile var audioIndex: Int = 0
         // Members that have finished reloading after a track change; when it covers everyone the
@@ -99,14 +109,14 @@ class PlaybackSessionRegistry(
     // A kicked lease remains command-readable only for the notice grace; it cannot re-enter a
     // room or authorize media during that interval.
     private val terminating: MutableSet<String> = ConcurrentHashMap.newKeySet()
-    // A host that declined a peer for some content isn't pestered with a modal again for it.
-    private val declined = ConcurrentHashMap<String, MutableSet<String>>()
-    private fun declineKey(peerId: String, contentKey: String) = "$peerId@$contentKey"
+    // A host that declined a peer for one playback variant isn't pestered again for that variant.
+    private data class DeclineKey(val peerId: String, val playbackIdentity: PlaybackIdentity)
+    private val declined = ConcurrentHashMap<String, MutableSet<DeclineKey>>()
     private data class PendingJoin(
         val id: String,
         val requesterId: String,
         val targetId: String,
-        val contentId: String,
+        val playbackIdentity: PlaybackIdentity,
         val expiresAtMs: Long,
     )
     private val pendingJoins = ConcurrentHashMap<String, PendingJoin>()
@@ -227,11 +237,15 @@ class PlaybackSessionRegistry(
         return enqueue(id, command)
     }
 
-    /** Other live viewers watching the same [contentKey] as [selfId] - watch-together candidates. */
+    /** Other viewers on [selfId]'s exact playback variant - watch-together candidates. */
     fun sameContentPeers(selfId: String, contentKey: String): List<Live> {
         if (contentKey.isBlank()) return emptyList()
+        val self = sessions[selfId] ?: return emptyList()
+        if (self.contentId != contentKey) return emptyList()
         return active().filter {
-            it.id != selfId && it.id !in terminating && it.contentId == contentKey
+            it.id != selfId &&
+                it.id !in terminating &&
+                it.playbackIdentity == self.playbackIdentity
         }
     }
 
@@ -248,7 +262,7 @@ class PlaybackSessionRegistry(
             other.startedOrder < self.startedOrder &&
                 other.id !in terminating &&
                 other.userId == self.userId &&
-                other.contentId == self.contentId &&
+                other.playbackIdentity == self.playbackIdentity &&
                 (selfRoom == null || memberRoom[other.id] != selfRoom)
         }
     }
@@ -268,40 +282,62 @@ class PlaybackSessionRegistry(
         val requester = sessions[requesterId] ?: return null
         if (targetId in terminating || requesterId in terminating ||
             targetId == requesterId || target.contentId != contentKey ||
-            requester.contentId != contentKey
+            requester.contentId != contentKey ||
+            target.playbackIdentity != requester.playbackIdentity
         ) return null
         val targetRoom = roomFor(targetId)
+        if (targetRoom != null && targetRoom.playbackIdentity != requester.playbackIdentity) {
+            return null
+        }
         val sameAccount = target.userId == requester.userId
+        val autoAdmissionExcluded = sameAccount &&
+            targetRoom?.autoAdmissionExcludedUsers?.contains(requester.userId) == true
         // A different account must still address the host. Another device of a member's own
-        // account may follow that member into its current room without asking the host again.
-        if (targetRoom != null && targetRoom.hostId != targetId && !sameAccount) return null
+        // account may follow that member unless a kick made host approval mandatory. In that
+        // case a request aimed at the account's remaining device is routed to the actual host.
+        if (targetRoom != null && targetRoom.hostId != targetId &&
+            !sameAccount && !autoAdmissionExcluded
+        ) return null
+        val admissionTarget = if (autoAdmissionExcluded) {
+            sessions[targetRoom.hostId] ?: return null
+        } else {
+            target
+        }
         val requesterRoom = roomFor(requesterId)
-        if (requesterRoom != null && requesterRoom.id == targetRoom?.id) return null
+        if (requesterRoom != null && requesterRoom.id == targetRoom?.id) {
+            // Two own devices can race the same automatic admission. The first request may have
+            // already pulled both into the room before the second reaches this monitor; from the
+            // second caller's perspective the requested state is satisfied, so keep it idempotent.
+            return UUID.randomUUID().toString().takeIf { sameAccount }
+        }
         val now = clock.nowMs()
         pendingJoins.entries.removeIf {
             it.value.expiresAtMs <= now ||
-                (it.value.requesterId == requesterId && it.value.targetId == targetId)
+                (it.value.requesterId == requesterId && it.value.targetId == admissionTarget.id)
         }
         val request = PendingJoin(
-            UUID.randomUUID().toString(), requesterId, targetId, contentKey, now + JOIN_REQUEST_TTL_MS,
+            UUID.randomUUID().toString(), requesterId, admissionTarget.id,
+            requester.playbackIdentity, now + JOIN_REQUEST_TTL_MS,
         )
-        if (sameAccount) {
-            // Both leases represent the same person. Admission is automatic, and the new device
-            // inherits the target device's control right so pause/seek cannot deadlock on an
-            // approval prompt. This never elevates an account that is only a viewer in a room.
+        if (sameAccount && !autoAdmissionExcluded) {
+            // Every live lease for this account/variant must land in one room. With three devices,
+            // joining only the selected newer lease would leave an older lease outside: the client
+            // would receive room-state even though the media boundary still (correctly) refused it.
+            // Anchor the batch on the oldest lease, whose playback was admitted first, so a blocked
+            // newer device cannot become host and seek the established stream back to its idle
+            // position. Existing rooms are never merged implicitly.
             return request.id.takeIf {
-                admitJoin(
-                    target = target,
+                admitSameAccountJoin(
+                    selectedTarget = target,
                     requester = requester,
-                    targetRoom = targetRoom,
                     requestId = request.id,
-                    requesterControls = targetRoom?.controllers?.contains(targetId) ?: true,
                 )
             }
         }
         pendingJoins[request.id] = request
-        val quiet = declined[targetId]?.contains(declineKey(requesterId, contentKey)) == true
-        if (!enqueue(targetId, SessionCommandDto(
+        val declineKey = DeclineKey(requesterId, requester.playbackIdentity)
+        val quiet = declined[admissionTarget.id]?.contains(declineKey) == true
+        if (!enqueue(admissionTarget.id, SessionCommandDto(
                 type = "join-request",
                 peerId = requesterId,
                 peerName = peerName,
@@ -316,7 +352,7 @@ class PlaybackSessionRegistry(
     }
 
     /** The host's answer to a join request. On accept both share a room; on decline it's
-     *  remembered so the same peer can't pop another modal for the same content. */
+     *  remembered so the same peer can't pop another modal for the same playback variant. */
     @Synchronized
     fun answerJoin(targetId: String, requestId: String, accept: Boolean): Boolean {
         val request = pendingJoins[requestId] ?: return false
@@ -328,11 +364,12 @@ class PlaybackSessionRegistry(
         val target = sessions[targetId] ?: return false
         val requester = sessions[request.requesterId] ?: return false
         if (targetId in terminating || requester.id in terminating ||
-            target.contentId != request.contentId || requester.contentId != request.contentId
+            target.playbackIdentity != request.playbackIdentity ||
+            requester.playbackIdentity != request.playbackIdentity
         ) return false
         if (!accept) {
             declined.computeIfAbsent(targetId) { java.util.concurrent.ConcurrentHashMap.newKeySet() }
-                .add(declineKey(request.requesterId, request.contentId))
+                .add(DeclineKey(request.requesterId, request.playbackIdentity))
             return enqueue(
                 request.requesterId,
                 SessionCommandDto(type = "join-response", accepted = false, requestId = requestId),
@@ -340,15 +377,30 @@ class PlaybackSessionRegistry(
         }
         val targetRoom = roomFor(targetId)
         if (targetRoom != null && targetRoom.hostId != targetId) return false
-        declined[targetId]?.remove(declineKey(request.requesterId, request.contentId))
-        return admitJoin(
+        // Host approval cannot make an unrelated room satisfy this account's duplicate rule.
+        // The destination must already contain every older own-device lease that blocks this
+        // requester, or room-state would claim success while the media boundary still returned 409.
+        if (hasOlderSameAccountLeaseOutside(requester, targetRoom?.id)) return false
+        declined[targetId]?.remove(DeclineKey(request.requesterId, request.playbackIdentity))
+        val admitted = admitJoin(
             target = target,
             requester = requester,
             targetRoom = targetRoom,
             requestId = requestId,
             requesterControls = false,
         )
+        if (admitted) roomFor(requester.id)?.autoAdmissionExcludedUsers?.remove(requester.userId)
+        return admitted
     }
+
+    private fun hasOlderSameAccountLeaseOutside(requester: Live, roomId: String?): Boolean =
+        sessions.values.any { other ->
+            other.startedOrder < requester.startedOrder &&
+                other.id !in terminating &&
+                other.userId == requester.userId &&
+                other.playbackIdentity == requester.playbackIdentity &&
+                (roomId == null || memberRoom[other.id] != roomId)
+        }
 
     /** Complete the already-authorized membership transition shared by automatic and approved joins. */
     private fun admitJoin(
@@ -358,11 +410,16 @@ class PlaybackSessionRegistry(
         requestId: String,
         requesterControls: Boolean,
     ): Boolean {
+        if (target.playbackIdentity != requester.playbackIdentity ||
+            targetRoom?.playbackIdentity?.let { it != requester.playbackIdentity } == true
+        ) return false
         roomFor(requester.id)?.let { previous ->
             if (previous.id == targetRoom?.id) return false
             removeFromRoom(previous, requester.id)
         }
-        val room = targetRoom ?: Room("r-${target.id}", target.id).also {
+        val room = targetRoom ?: Room(
+            "r-${target.id}", target.id, target.playbackIdentity,
+        ).also {
             it.members.add(target.id)
             it.controllers.add(target.id)
             it.capabilities[target.id] = target.capabilities
@@ -381,6 +438,68 @@ class PlaybackSessionRegistry(
         // Membership changes the share group used by live sharing and any required remux. Every
         // member renegotiates against the capability intersection. Fully capable direct-play VOD
         // deliberately remains lease-owned and may still consume one provider seat per member.
+        startReload(room)
+        return true
+    }
+
+    /**
+     * Admit all of one account's live leases for one playback variant as one atomic own-device join.
+     *
+     * A lease already in another room makes the batch ambiguous: moving it would silently alter
+     * that other room, while leaving it behind would preserve a media conflict. Refuse instead of
+     * weakening the one-independent-playback rule. Solo leases may follow the oldest lease into
+     * its room without approval, which is the same-account policy applied consistently to N
+     * devices rather than only two.
+     */
+    private fun admitSameAccountJoin(
+        selectedTarget: Live,
+        requester: Live,
+        requestId: String,
+    ): Boolean {
+        val devices = sessions.values
+            .filter {
+                it.id !in terminating &&
+                    it.userId == requester.userId &&
+                    it.playbackIdentity == requester.playbackIdentity
+            }
+            .sortedBy { it.startedOrder }
+        val anchor = devices.firstOrNull() ?: return false
+        val destination = roomFor(anchor.id)
+        if (destination?.playbackIdentity?.let { it != requester.playbackIdentity } == true) {
+            return false
+        }
+        if (devices.any { device ->
+                roomFor(device.id)?.let { it.id != destination?.id } == true
+            }
+        ) return false
+        val room = destination ?: Room(
+            "r-${anchor.id}", anchor.id, anchor.playbackIdentity,
+        ).also {
+            it.members.add(anchor.id)
+            it.controllers.add(anchor.id)
+            it.capabilities[anchor.id] = anchor.capabilities
+            rooms[it.id] = it
+            memberRoom[anchor.id] = it.id
+        }
+        val addedControls = if (destination == null) {
+            true
+        } else {
+            val controlSource = selectedTarget.takeIf { it.id in room.members } ?: anchor
+            controlSource.id in room.controllers
+        }
+        devices.forEach { device ->
+            if (device.id !in room.members) {
+                room.members.add(device.id)
+                if (addedControls) room.controllers.add(device.id)
+                room.capabilities[device.id] = device.capabilities
+                memberRoom[device.id] = room.id
+            }
+        }
+        enqueue(
+            requester.id,
+            SessionCommandDto(type = "join-response", accepted = true, requestId = requestId),
+        )
+        pushRoomState(room)
         startReload(room)
         return true
     }
@@ -421,9 +540,13 @@ class PlaybackSessionRegistry(
     fun kick(hostId: String, targetId: String): Boolean {
         val room = roomFor(hostId) ?: return false
         if (room.hostId != hostId || targetId == hostId || targetId !in room.members) return false
+        val target = sessions[targetId] ?: return false
         // Membership and access to the shared read end immediately. Keep the lease's command
         // channel alive only for a short bounded grace so room-ended can be pushed (or drained
         // by the HTTP fallback); the server-owned timer revokes the lease even if the client stalls.
+        // Exclusion is by account within this room: another device cannot undo the kick through
+        // own-account auto-admission, while approval clears it and room teardown forgets it.
+        room.autoAdmissionExcludedUsers.add(target.userId)
         terminating.add(targetId)
         removeFromRoom(room, targetId)
         enqueue(targetId, SessionCommandDto(type = "room-ended"))

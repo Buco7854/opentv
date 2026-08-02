@@ -226,6 +226,7 @@ class SearchViewModel private constructor(
     private suspend fun search(raw: String, generation: Long) {
         val term = raw.trim()
         if (term.length < 2) {
+            if (sourceId is SourceId.Hub) mutableGuideIds.value = emptySet()
             mutableState.value = mutableState.value.copy(
                 results = CatalogSearchResult(),
                 loading = false,
@@ -233,12 +234,18 @@ class SearchViewModel private constructor(
             )
             return
         }
+        if (sourceId is SourceId.Hub) mutableGuideIds.value = emptySet()
         mutableState.value = mutableState.value.copy(loading = true, error = null)
         val result = safeCall { gateway.search(term) }
         if (generation != searchGeneration) return
         when (result) {
-            is CatalogResult.Success ->
+            is CatalogResult.Success -> {
                 mutableState.value = SearchUiState(results = result.value)
+                reloadGuideIds(
+                    result.value.live.mapNotNullTo(linkedSetOf()) { it.tvgId },
+                    generation,
+                )
+            }
             CatalogResult.SignedOut -> fail(CatalogLoadError.SignedOut)
             CatalogResult.Unreachable -> fail(CatalogLoadError.Unreachable)
             is CatalogResult.Failed -> {
@@ -291,7 +298,10 @@ class SearchViewModel private constructor(
         }
     }
 
-    private fun reloadGuideIds() {
+    private fun reloadGuideIds(
+        tvgIds: Set<String> = emptySet(),
+        generation: Long = searchGeneration,
+    ) {
         val local = sourceId as? SourceId.LocalPlaylist
         if (graph != null && local != null) {
             viewModelScope.launch {
@@ -299,12 +309,15 @@ class SearchViewModel private constructor(
             }
             return
         }
+        if (tvgIds.isEmpty()) return
         viewModelScope.launch {
-            when (val result = safeCall(gateway::guideIds)) {
-                is CatalogResult.Success -> mutableGuideIds.value = result.value
-                CatalogResult.SignedOut -> fail(CatalogLoadError.SignedOut)
-                CatalogResult.Unreachable -> fail(CatalogLoadError.Unreachable)
-                is CatalogResult.Failed -> fail(CatalogLoadError.Failed(result.cause))
+            when (val result = safeCall { gateway.guideIds(tvgIds) }) {
+                is CatalogResult.Success -> if (generation == searchGeneration) {
+                    mutableGuideIds.value = result.value
+                }
+                CatalogResult.SignedOut,
+                CatalogResult.Unreachable,
+                is CatalogResult.Failed -> Unit
             }
         }
     }

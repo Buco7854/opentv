@@ -81,6 +81,7 @@ abstract class OpenTvServerDatabase : RoomDatabase(), CatalogDaos {
     abstract fun activity(): ActivityDao
     abstract fun downloads(): DownloadDao
     abstract fun maintenance(): MaintenanceDao
+    abstract fun guideDecorations(): GuideDecorationDao
     abstract fun guideMaintenance(): GuideMaintenanceDao
 }
 

@@ -4,6 +4,7 @@ import com.buco7854.opentv.contract.AuthCapabilitiesDto
 import com.buco7854.opentv.contract.AuthFlowDto
 import com.buco7854.opentv.contract.AccountInfoDto
 import com.buco7854.opentv.contract.ChannelDto
+import com.buco7854.opentv.contract.ChannelDecorationRequestDto
 import com.buco7854.opentv.contract.ChannelPageDto
 import com.buco7854.opentv.contract.CurrentUserDto
 import com.buco7854.opentv.contract.DeviceLinkPollRequestDto
@@ -282,16 +283,31 @@ class HubApi(
     suspend fun search(c: HubCredentials, playlistId: Long, query: String): SearchResultsDto =
         get(c, HubEndpoints.search(c.baseUrl, playlistId, query), SearchResultsDto.serializer())
 
-    suspend fun nowAiring(c: HubCredentials, playlistId: Long): List<ProgrammeDto> =
-        getMap(
+    suspend fun nowAiring(
+        c: HubCredentials,
+        playlistId: Long,
+        tvgIds: List<String>,
+    ): List<ProgrammeDto> =
+        post(
             c,
             HubEndpoints.nowAiring(c.baseUrl, playlistId),
-            String.serializer(),
-            ProgrammeDto.serializer(),
+            ChannelDecorationRequestDto.serializer(),
+            ChannelDecorationRequestDto(tvgIds),
+            MapSerializer(String.serializer(), ProgrammeDto.serializer()),
         ).values.toList()
 
-    suspend fun guideIds(c: HubCredentials, playlistId: Long): List<String> =
-        getList(c, HubEndpoints.guideIds(c.baseUrl, playlistId), String.serializer())
+    suspend fun guideIds(
+        c: HubCredentials,
+        playlistId: Long,
+        tvgIds: List<String>,
+    ): List<String> =
+        post(
+            c,
+            HubEndpoints.guideIds(c.baseUrl, playlistId),
+            ChannelDecorationRequestDto.serializer(),
+            ChannelDecorationRequestDto(tvgIds),
+            ListSerializer(String.serializer()),
+        )
 
     suspend fun content(c: HubCredentials, contentId: String): ChannelDto =
         get(c, HubEndpoints.content(c.baseUrl, contentId), ChannelDto.serializer())
@@ -389,17 +405,6 @@ class HubApi(
 
     private suspend fun <R> getList(c: HubCredentials, url: String, serializer: KSerializer<R>): List<R> =
         json.decodeFromString(ListSerializer(serializer), send(c, "GET", url, null).bodyText)
-
-    private suspend fun <K, V> getMap(
-        c: HubCredentials,
-        url: String,
-        keySerializer: KSerializer<K>,
-        valueSerializer: KSerializer<V>,
-    ): Map<K, V> =
-        json.decodeFromString(
-            MapSerializer(keySerializer, valueSerializer),
-            send(c, "GET", url, null).bodyText,
-        )
 
     private suspend fun <T, R> post(
         c: HubCredentials,

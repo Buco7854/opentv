@@ -81,8 +81,8 @@ interface CatalogGateway {
     ): CatalogResult<Page<CatalogItem>>
 
     suspend fun search(query: String): CatalogResult<CatalogSearchResult>
-    suspend fun nowAiring(): CatalogResult<Map<String, CatalogProgramme>>
-    suspend fun guideIds(): CatalogResult<Set<String>>
+    suspend fun nowAiring(tvgIds: Set<String>): CatalogResult<Map<String, CatalogProgramme>>
+    suspend fun guideIds(tvgIds: Set<String>): CatalogResult<Set<String>>
 
     suspend fun favorites(
         offset: Int = 0,

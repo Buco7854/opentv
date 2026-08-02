@@ -17,6 +17,7 @@ import com.buco7854.opentv.core.model.Programme
 import com.buco7854.opentv.core.model.ResumePoint
 import com.buco7854.opentv.core.model.SeriesGroup
 import com.buco7854.opentv.core.model.XtreamSeries
+import com.buco7854.opentv.core.storage.ChannelIdentityProjection
 import com.buco7854.opentv.core.storage.ChannelStore
 import com.buco7854.opentv.core.storage.DownloadStore
 import com.buco7854.opentv.core.storage.EpgStore
@@ -202,6 +203,13 @@ class RoomStorage(
             ids.distinct().chunked(MAX_BOUND_VARIABLES)
                 .flatMap { db.channelDao().byIds(it) }
                 .map { it.toModel() }
+
+        override suspend fun identityPage(
+            playlistId: Long,
+            afterId: Long,
+            limit: Int,
+        ): List<ChannelIdentityProjection> =
+            db.channelDao().identityPage(playlistId, afterId, limit)
 
         override suspend fun getByUrl(playlistId: Long, url: String): Channel? =
             db.channelDao().getByUrl(playlistId, url)?.toModel()

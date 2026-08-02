@@ -6,6 +6,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Update
+import com.buco7854.opentv.data.db.ProgrammeRow
 
 @Dao
 interface UserDao {
@@ -589,6 +590,34 @@ interface MaintenanceDao {
 
     @Query("DELETE FROM playlist_deletions WHERE playlistId = :playlistId")
     suspend fun finishPlaylistDeletion(playlistId: Long)
+}
+
+/** Read-only guide projections for the bounded set of channels a client is displaying. */
+@Dao
+interface GuideDecorationDao {
+    /** Provider guides can overlap; the active row with the latest start owns that channel. */
+    @Query("""
+        SELECT p.* FROM programmes AS p
+        WHERE p.playlistId = :playlistId AND p.tvgId IN (:tvgIds)
+          AND p.startMs <= :now AND p.endMs > :now
+          AND NOT EXISTS (
+              SELECT 1 FROM programmes AS n
+              WHERE n.playlistId = p.playlistId AND n.tvgId = p.tvgId
+                AND n.startMs <= :now AND n.endMs > :now
+                AND n.startMs > p.startMs
+          )
+    """)
+    suspend fun nowAiring(
+        playlistId: Long,
+        tvgIds: List<String>,
+        now: Long,
+    ): List<ProgrammeRow>
+
+    @Query("""
+        SELECT DISTINCT tvgId FROM programmes
+        WHERE playlistId = :playlistId AND tvgId IN (:tvgIds)
+    """)
+    suspend fun guideIds(playlistId: Long, tvgIds: List<String>): List<String>
 }
 
 /** Server-only chunk seams for guide mutations that would otherwise monopolize SQLite's writer. */

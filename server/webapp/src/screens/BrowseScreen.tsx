@@ -2,7 +2,7 @@
 // handles the category level, filtering, list/grid toggle, now-airing lines,
 // guide sheet and group-kind correction for M3U playlists.
 
-import { ReactNode, useCallback, useEffect, useState } from 'react';
+import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import {
   api, canShowGuide, Channel, ChannelKind, ChannelListItem, GroupCount, hasCatchup,
@@ -60,8 +60,6 @@ export function BrowseScreen() {
   const [nowAiring, setNowAiring] = useState<Record<string, Programme>>({});
 
   const isXtreamNative = detail?.isXtreamNative ?? false;
-  const { guideIds, reload: reloadGuideIds } = useGuideIds(playlistId);
-
   const setTabGroup = useCallback((tabIndex: number, g: string | null, replace = false) => {
     const q = new URLSearchParams();
     q.set('t', String(tabIndex));
@@ -69,13 +67,6 @@ export function BrowseScreen() {
     setSearch(q, { replace });
     setFilter('');
   }, [setSearch]);
-
-  // Background refresh (throttled server-side).
-  useEffect(() => {
-    if (!canRefreshInApp) return;
-    api.refreshPlaylist(playlistId, false).then(reloadGuideIds, (cause: unknown) =>
-      reportErrorAs((message) => t('browse.refreshFailed', { message }), cause));
-  }, [canRefreshInApp, playlistId, reloadGuideIds]);
 
   const groupsRequest = useAsync(
     async () => ({ tab, items: await api.groups(playlistId, tab) }),
@@ -101,6 +92,22 @@ export function BrowseScreen() {
     },
     `channels:${listingKey}`,
   );
+  const decorationTvgIds = useMemo(
+    () => tab === ChannelKind.LIVE
+      ? [...new Set(pagedChannels.pageItems.map((channel) => channel.tvgId)
+        .filter((tvgId): tvgId is string => tvgId != null))]
+      : [],
+    [pagedChannels.pageItems, tab],
+  );
+  const decorationScopeKey = JSON.stringify(decorationTvgIds);
+  const { guideIds, reload: reloadGuideIds } = useGuideIds(playlistId, decorationTvgIds);
+
+  // Background refresh (throttled server-side).
+  useEffect(() => {
+    if (!canRefreshInApp) return;
+    api.refreshPlaylist(playlistId, false).then(reloadGuideIds, (cause: unknown) =>
+      reportErrorAs((message) => t('browse.refreshFailed', { message }), cause));
+  }, [canRefreshInApp, playlistId, reloadGuideIds]);
   const pagedSeries = useServerPaged(
     async (offset, limit) => {
       if (group == null || tab !== ChannelKind.SERIES || isXtreamNative) {
@@ -122,13 +129,21 @@ export function BrowseScreen() {
 
   // Keep "now airing" rows fresh during long sessions.
   useEffect(() => {
-    if (tab !== ChannelKind.LIVE) return;
+    if (decorationTvgIds.length === 0) {
+      setNowAiring({});
+      return;
+    }
     let cancelled = false;
-    const load = () => api.nowAiring(playlistId).then((d) => { if (!cancelled) setNowAiring(d); }).catch(() => {});
+    setNowAiring({});
+    const load = () => api.nowAiring(playlistId, decorationTvgIds)
+      .then((d) => { if (!cancelled) setNowAiring(d); })
+      .catch(() => {});
     load();
     const timer = setInterval(load, 60_000);
     return () => { cancelled = true; clearInterval(timer); };
-  }, [playlistId, tab]);
+  // The serialized scope is stable while an unchanged page re-renders.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playlistId, decorationScopeKey]);
 
   const matches = useCallback(
     (s: string) => !filter.trim() || s.toLowerCase().includes(filter.trim().toLowerCase()),

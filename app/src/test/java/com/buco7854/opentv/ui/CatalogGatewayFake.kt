@@ -49,6 +49,8 @@ internal class CatalogGatewayFake(
     var favoriteBlock: suspend (Int, Int) -> CatalogResult<Page<CatalogItem>> =
         { _, _ -> CatalogResult.Success(Page(emptyList(), 0)) }
     val channelRequests = mutableListOf<Pair<Int, Int>>()
+    val nowAiringRequests = mutableListOf<Set<String>>()
+    val guideIdRequests = mutableListOf<Set<String>>()
     val categoryCorrections = mutableListOf<Pair<String, Int?>>()
     var categoryCorrectionResult: CatalogResult<Unit> = CatalogResult.Success(Unit)
 
@@ -96,9 +98,15 @@ internal class CatalogGatewayFake(
 
     override suspend fun search(query: String) = searchBlock(query)
 
-    override suspend fun nowAiring() = nowAiringResult
+    override suspend fun nowAiring(tvgIds: Set<String>): CatalogResult<Map<String, CatalogProgramme>> {
+        nowAiringRequests += tvgIds
+        return nowAiringResult
+    }
 
-    override suspend fun guideIds() = guideIdsResult
+    override suspend fun guideIds(tvgIds: Set<String>): CatalogResult<Set<String>> {
+        guideIdRequests += tvgIds
+        return guideIdsResult
+    }
 
     override suspend fun favorites(offset: Int, limit: Int) =
         favoriteBlock(offset, limit)

@@ -10,6 +10,7 @@ import androidx.room.Transaction
 import androidx.room.Update
 import com.buco7854.opentv.core.model.GroupCount
 import com.buco7854.opentv.core.model.SeriesGroup
+import com.buco7854.opentv.core.storage.ChannelIdentityProjection
 import com.buco7854.opentv.core.storage.ChannelListing
 import com.buco7854.opentv.core.storage.ListingPage
 import com.buco7854.opentv.core.storage.XtreamSeriesListing
@@ -221,6 +222,16 @@ interface ChannelDao {
 
     @Query("SELECT * FROM channels WHERE id = :id")
     suspend fun get(id: Long): ChannelRow?
+
+    @Query(
+        "SELECT id, kind, url, xtreamStreamId, seriesKey FROM channels " +
+            "WHERE playlistId = :playlistId AND id > :afterId ORDER BY id LIMIT :limit"
+    )
+    suspend fun identityPage(
+        playlistId: Long,
+        afterId: Long,
+        limit: Int,
+    ): List<ChannelIdentityProjection>
 
     @Query("SELECT * FROM channels WHERE playlistId = :playlistId AND url = :url LIMIT 1")
     suspend fun getByUrl(playlistId: Long, url: String): ChannelRow?

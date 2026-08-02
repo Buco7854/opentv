@@ -131,12 +131,16 @@ class LocalCatalogGateway internal constructor(
         )
     }
 
-    override suspend fun nowAiring(): CatalogResult<Map<String, CatalogProgramme>> = localCall {
-        backend.nowAiring().mapValues { (_, programme) -> programme.toCatalogProgramme() }
+    override suspend fun nowAiring(
+        tvgIds: Set<String>,
+    ): CatalogResult<Map<String, CatalogProgramme>> = localCall {
+        backend.nowAiring()
+            .filterKeys(tvgIds::contains)
+            .mapValues { (_, programme) -> programme.toCatalogProgramme() }
     }
 
-    override suspend fun guideIds(): CatalogResult<Set<String>> = localCall {
-        backend.guideIds()
+    override suspend fun guideIds(tvgIds: Set<String>): CatalogResult<Set<String>> = localCall {
+        backend.guideIds().intersect(tvgIds)
     }
 
     override suspend fun favorites(offset: Int, limit: Int): CatalogResult<Page<CatalogItem>> =

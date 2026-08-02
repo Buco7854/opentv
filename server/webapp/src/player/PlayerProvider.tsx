@@ -280,7 +280,7 @@ function LeasedPlayerSurface({
   }, [finishPlayback, recoverMediaGrant]);
 
   // Non-live files (VOD, downloads, raw-TS VOD) and catch-up go through the remux; live `.ts`
-  // is excluded. Watch-together needs the same fact: a same-content viewer shares its read.
+  // is excluded. Watch-together needs the same fact: a same-variant viewer shares its read.
   const remuxEligible = !live;
   // Whether this stream draws on the provider at all (downloads are local).
   const providerBacked = !direct;

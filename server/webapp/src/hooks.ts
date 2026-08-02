@@ -169,8 +169,15 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[]): {
 }
 
 /** tvg ids with guide data, for canShowGuide(). */
-export function useGuideIds(playlistId: number): { guideIds: Set<string>; reload: () => void } {
-  const { data, reload } = useAsync(() => api.guideIds(playlistId), [playlistId]);
+export function useGuideIds(
+  playlistId: number,
+  tvgIds: string[],
+): { guideIds: Set<string>; reload: () => void } {
+  const scopeKey = JSON.stringify(tvgIds);
+  const { data, reload } = useAsync(
+    () => tvgIds.length === 0 ? Promise.resolve([]) : api.guideIds(playlistId, tvgIds),
+    [playlistId, scopeKey],
+  );
   const guideIds = useMemo(() => new Set(data ?? []), [data]);
   return { guideIds, reload };
 }

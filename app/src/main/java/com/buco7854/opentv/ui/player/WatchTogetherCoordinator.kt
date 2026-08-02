@@ -143,14 +143,18 @@ internal class WatchTogetherCoordinator(
     private var lastAppliedCommandSequence: Long? = null
     private var lastApplied: AppliedSync? = null
     private var pendingSeek: PendingSeek? = null
+    private var pendingHostSnap = false
     private var pendingSync: SyncStateDto? = null
     private var pendingForcedPaused: Boolean? = null
     private var pendingRoomAudio: PendingRoomAudio? = null
+    private var pendingSoloReloadPositionMs: Long? = null
+    private var pendingSoloReloadShouldResume = false
     private var roomMembershipReloadPending = false
     // This is the server-issued room barrier generation, not a device-local counter.
     private var barrierGeneration = 0L
     private var reloadRequested = false
     private var readySent = false
+    private var resumeAfterBarrier = false
     private var readyFloorJob: Job? = null
     private var readyJob: Job? = null
     private var failOpenJob: Job? = null
@@ -244,7 +248,7 @@ internal class WatchTogetherCoordinator(
             startSolo = true
         }
         if (atCapacity) onProviderCapacity()
-        if (startSolo) onStartMedia(false)
+        if (startSolo) startSoloMedia()
     }
 
     fun watchAlone() {
@@ -259,8 +263,7 @@ internal class WatchTogetherCoordinator(
                     // duplicate response is a refusal.
                     hub.watchAlone()
                     mutate { copy(requiresJoin = false) }
-                    onStartMedia(false)
-                    player?.play()
+                    startSoloMedia(forcePlay = true)
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: HubDuplicatePlaybackException) {
@@ -278,8 +281,7 @@ internal class WatchTogetherCoordinator(
             scope.launch { onProviderCapacity() }
         } else {
             scope.launch {
-                onStartMedia(false)
-                player?.play()
+                startSoloMedia(forcePlay = true)
             }
         }
     }
@@ -357,22 +359,28 @@ internal class WatchTogetherCoordinator(
     suspend fun leave() {
         val currentPlayer = player
         val mustReload = currentPlayer != null && !hub.direct
-        val resumeAfterReload = mustReload && currentPlayer?.paused == false
+        val resumeAfterReload = mustReload && currentPlayer.paused == false
         val positionMs = currentPlayer?.positionMs?.coerceAtLeast(0) ?: 0
-        if (mustReload) currentPlayer?.pause()
+        if (mustReload) currentPlayer.pause()
         mutate { copy(transitioning = true) }
         try {
             hub.leave()
             onRoomMembershipChanged(false)
             resetRoom()
             if (mustReload) {
-                reloadAfterLeave(positionMs)
-                if (resumeAfterReload) currentPlayer?.play()
+                pendingSoloReloadPositionMs = positionMs
+                pendingSoloReloadShouldResume = resumeAfterReload
             }
+            // Leaving an own-device room restores the same-account conflict. Re-run the same
+            // authoritative preflight as web before opening a solo transport; otherwise the
+            // media boundary rejects the doomed reload a moment later.
+            checkIntent(force = true)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Throwable) {
-            if (resumeAfterReload) currentPlayer?.play()
+            pendingSoloReloadPositionMs = null
+            pendingSoloReloadShouldResume = false
+            if (resumeAfterReload) currentPlayer.play()
             showNotice(WatchTogetherNoticeKind.ACTION_FAILED)
         } finally {
             mutate { copy(transitioning = false) }
@@ -482,9 +490,12 @@ internal class WatchTogetherCoordinator(
             )
         }
         val current = mutableState.value
+        if (!current.isHost) pendingHostSnap = false
         if (previous.inRoom != current.inRoom) {
             roomMembershipReloadPending = onRoomMembershipChanged(current.inRoom)
             if (current.inRoom) {
+                pendingSoloReloadPositionMs = null
+                pendingSoloReloadShouldResume = false
                 scope.launch { onStartMedia(true) }
             }
         }
@@ -494,7 +505,8 @@ internal class WatchTogetherCoordinator(
             beginAudioBarrier(pending.audioIndex, pending.generation, resumePending = true)
         }
         if (current.isHost && roster.size > previous.members.size && roster.size >= 2) {
-            publishSync(seek = true, guarded = false)
+            pendingHostSnap = true
+            publishPendingHostSnap()
         }
     }
 
@@ -510,6 +522,11 @@ internal class WatchTogetherCoordinator(
             currentPlayer.playbackRate,
             clock(),
         )
+        if (mutableState.value.loading) {
+            resumeAfterBarrier = !paused
+            currentPlayer.pause()
+            return
+        }
         if (paused) currentPlayer.pause() else currentPlayer.play()
     }
 
@@ -521,7 +538,10 @@ internal class WatchTogetherCoordinator(
             return
         }
         lastApplied = AppliedSync(sync.positionMs, sync.paused, sync.rate, clock())
-        if (sync.paused != currentPlayer.paused) {
+        if (mutableState.value.loading) {
+            resumeAfterBarrier = !sync.paused
+            currentPlayer.pause()
+        } else if (sync.paused != currentPlayer.paused) {
             if (sync.paused) currentPlayer.pause() else currentPlayer.play()
         }
         if (sync.rate > 0 && abs(sync.rate - currentPlayer.playbackRate) > RATE_EPSILON) {
@@ -552,20 +572,22 @@ internal class WatchTogetherCoordinator(
             return
         }
         if (generation == barrierGeneration && !resumePending) return
-        // Direct playback has every audio track in-band, so there is nothing to
-        // reload. Acknowledge anyway: the server only broadcasts room-go once
-        // EVERY member reports ready, so staying silent would strand the peers
-        // that do have to switch format.
-        if (hub.direct && !roomMembershipReloadPending) {
+        val currentPlayer = player
+        // A direct live player already switched between its solo and room source at the membership
+        // seam, and later track barriers keep that in-band source. Direct VOD is different: direct
+        // describes the lease's own report, not the new room intersection, so it must ask the
+        // remux endpoint again. That request either keeps an all-capable room direct or returns the
+        // shared remux required by an incapable member.
+        if (hub.direct && currentPlayer?.isLive == true && !roomMembershipReloadPending) {
             barrierGeneration = generation
             readyFloorJob?.cancel()
             readyJob?.cancel()
             reloadJob?.cancel()
             readySent = false
+            if (mutableState.value.loading) scheduleBarrierFailOpen(generation)
             requestReady(generation, requireLoading = false)
             return
         }
-        val currentPlayer = player
         if (currentPlayer == null) {
             barrierGeneration = generation
             reloadRequested = false
@@ -584,7 +606,7 @@ internal class WatchTogetherCoordinator(
         readySent = false
         prepareAudioBarrier(currentPlayer, generation)
         val positionMs = currentPlayer.positionMs
-        if (hub.direct) {
+        if (hub.direct && currentPlayer.isLive) {
             roomMembershipReloadPending = false
             reloadRequested = true
             readyFloorJob = scope.launch {
@@ -612,6 +634,7 @@ internal class WatchTogetherCoordinator(
     }
 
     private fun prepareAudioBarrier(currentPlayer: WatchTogetherPlayer, generation: Long) {
+        if (!mutableState.value.loading) resumeAfterBarrier = !currentPlayer.paused
         barrierGeneration = generation
         reloadRequested = false
         pendingRoomAudio = null
@@ -621,6 +644,11 @@ internal class WatchTogetherCoordinator(
         reloadJob?.cancel()
         mutate { copy(loading = true) }
         currentPlayer.pause()
+        scheduleBarrierFailOpen(generation)
+    }
+
+    private fun scheduleBarrierFailOpen(generation: Long) {
+        failOpenJob?.cancel()
         failOpenJob = scope.launch {
             delay(BARRIER_FAIL_OPEN_MS)
             if (generation == barrierGeneration && mutableState.value.loading) {
@@ -628,7 +656,9 @@ internal class WatchTogetherCoordinator(
                 reloadJob = null
                 readyJob?.cancel()
                 mutate { copy(loading = false) }
-                player?.play()
+                val resume = resumeAfterBarrier
+                resumeAfterBarrier = false
+                if (resume) player?.play()
             }
         }
     }
@@ -669,6 +699,10 @@ internal class WatchTogetherCoordinator(
 
     private fun finishAudioBarrier(generation: Long) {
         if (generation != barrierGeneration) return
+        // room-go may arrive while the media element is detached. In that case loading never
+        // became true, but the deferred room-audio is still complete and must not be replayed
+        // against a player that attaches later.
+        pendingRoomAudio = null
         readyFloorJob?.cancel()
         readyJob?.cancel()
         failOpenJob?.cancel()
@@ -678,7 +712,9 @@ internal class WatchTogetherCoordinator(
         readySent = false
         if (!mutableState.value.loading) return
         mutate { copy(loading = false) }
-        player?.play()
+        val resume = resumeAfterBarrier
+        resumeAfterBarrier = false
+        if (resume) player?.play()
     }
 
     private suspend fun roomEnded() {
@@ -686,9 +722,7 @@ internal class WatchTogetherCoordinator(
             hub.leave()
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (_: Throwable) {
-            Unit
-        }
+        } catch (_: Throwable) {}
         resetRoom()
         showNotice(WatchTogetherNoticeKind.ROOM_ENDED)
     }
@@ -702,7 +736,9 @@ internal class WatchTogetherCoordinator(
         reloadJob = null
         reloadRequested = false
         readySent = false
+        resumeAfterBarrier = false
         pendingRoomAudio = null
+        pendingHostSnap = false
         pendingSync = null
         pendingForcedPaused = null
         roomMembershipReloadPending = false
@@ -785,6 +821,20 @@ internal class WatchTogetherCoordinator(
         }
     }
 
+    private suspend fun startSoloMedia(forcePlay: Boolean? = null) {
+        val reloadPosition = pendingSoloReloadPositionMs
+        if (reloadPosition == null) {
+            onStartMedia(false)
+            if (forcePlay == true) player?.play()
+            return
+        }
+        val resume = forcePlay ?: pendingSoloReloadShouldResume
+        pendingSoloReloadPositionMs = null
+        pendingSoloReloadShouldResume = false
+        reloadAfterLeave(reloadPosition)
+        if (resume) player?.play()
+    }
+
     private fun showNotice(kind: WatchTogetherNoticeKind, text: String? = null) {
         mutate { copy(notice = WatchTogetherNotice(++noticeId, kind, text)) }
     }
@@ -798,10 +848,21 @@ internal class WatchTogetherCoordinator(
             while (true) {
                 delay(ANCHOR_MS)
                 if (!mutableState.value.loading) {
-                    publishSync(seek = false, guarded = false)
+                    if (pendingHostSnap) {
+                        publishPendingHostSnap()
+                    } else {
+                        publishSync(seek = false, guarded = false)
+                    }
                 }
             }
         }
+    }
+
+    private fun publishPendingHostSnap() {
+        val currentPlayer = player ?: return
+        if (mutableState.value.loading || isSeekSettling(currentPlayer)) return
+        pendingHostSnap = false
+        publishSync(seek = true, guarded = false)
     }
 
     private inline fun mutate(transform: WatchTogetherState.() -> WatchTogetherState) {

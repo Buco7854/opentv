@@ -60,6 +60,7 @@ const MIRRORS: ReadonlyArray<readonly [string, string]> = [
   ['SessionDto', 'Session'],
   ['ChannelDto', 'Channel'],
   ['ChannelListItemDto', 'ChannelListItem'],
+  ['ChannelDecorationRequestDto', 'ChannelDecorationRequest'],
   ['EpisodeListItemDto', 'EpisodeListItem'],
   ['MetadataDto', 'Metadata'],
   ['FavoriteDto', 'Favorite'],
@@ -131,6 +132,7 @@ const INPUT_MIRRORS = new Set([
   'PlaylistUpdateRequest',
   'UpdateUserRequestDto',
   'DeviceLinkStartRequestDto',
+  'ChannelDecorationRequestDto',
 ]);
 
 function matchingParen(source: string, open: number): number {
@@ -460,10 +462,10 @@ describe('hand-written server contract mirror', () => {
       /suspend fun nowAiring\([^)]*\):\s*Map<String,\s*ProgrammeDto>/,
     );
     expect(browserApi).toMatch(
-      /nowAiring:\s*\(id:\s*number\)\s*=>\s*j<Record<string,\s*Programme>>/,
+      /nowAiring:\s*\(id:\s*number,\s*tvgIds:\s*string\[\]\)\s*=>\s*j<Record<string,\s*Programme>>/,
     );
     expect(hubApi).toMatch(
-      /suspend fun nowAiring\([^)]*\):\s*List<ProgrammeDto>\s*=\s*getMap\(/,
+      /suspend fun nowAiring\([^)]*tvgIds:\s*List<String>[^)]*\):\s*List<ProgrammeDto>/,
     );
   });
 });

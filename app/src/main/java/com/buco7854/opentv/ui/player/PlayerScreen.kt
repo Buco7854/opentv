@@ -534,7 +534,7 @@ fun PlayerScreen(
                         showGuide = false
                         session.pause()
                         // NavHost cross-fades destinations, so the outgoing ViewModel otherwise
-                        // retains its same-content lease while the replacement asks for one.
+                        // retains its provider lease while the replacement asks for one.
                         viewModel.closePlayerAndAwait()
                         onPlayTarget(catchupTarget)
                     }

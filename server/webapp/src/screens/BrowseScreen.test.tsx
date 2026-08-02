@@ -107,6 +107,10 @@ describe('BrowseScreen', () => {
     });
     const view = renderBrowse();
     expect(await view.findByText('Live bulletin')).toBeTruthy();
+    expect(api.nowAiring).toHaveBeenCalledTimes(1);
+    expect(api.nowAiring).toHaveBeenCalledWith(1, ['news']);
+    expect(api.guideIds).toHaveBeenCalledTimes(1);
+    expect(api.guideIds).toHaveBeenCalledWith(1, ['news']);
     expect(view.getByTestId('query').textContent).toBe('?t=0&g=All+channels');
 
     fireEvent.click(view.getByText('movies tab'));
@@ -116,6 +120,27 @@ describe('BrowseScreen', () => {
     expect(view.getByText('Action')).toBeTruthy();
     expect(view.container.querySelector('button button')).toBeNull();
     expect(view.queryByText('Empty category')).toBeNull();
+    view.unmount();
+  });
+
+  it('keeps a loaded catalog when scoped decorations fail', async () => {
+    vi.mocked(api.channels).mockResolvedValue({
+      items: [{
+        contentId: 'live-1', id: 1, name: 'News', logo: null, tvgId: 'news',
+        kind: ChannelKind.LIVE, xtreamStreamId: null, catchupDays: 0, hasCatchup: false,
+      }],
+      total: 1,
+      offset: 0,
+      limit: 50,
+    } as never);
+    vi.mocked(api.nowAiring).mockRejectedValue(new Error('decoration unavailable'));
+    vi.mocked(api.guideIds).mockRejectedValue(new Error('decoration unavailable'));
+
+    const view = renderBrowse();
+
+    expect(await view.findByText('News')).toBeTruthy();
+    expect(view.queryByText('decoration unavailable')).toBeNull();
+    expect(view.container.querySelector('.spinner')).toBeNull();
     view.unmount();
   });
 

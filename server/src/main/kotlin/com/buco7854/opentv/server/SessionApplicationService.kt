@@ -1,12 +1,41 @@
 package com.buco7854.opentv.server
 
 import com.buco7854.opentv.contract.*
+import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.core.model.ChannelKind
+import com.buco7854.opentv.core.repo.GuideEntry
 import com.buco7854.opentv.core.storage.Storage
 import com.buco7854.opentv.core.repo.XtreamRepository
 import kotlinx.coroutines.channels.ReceiveChannel
 
 data class PlaybackClient(val ip: String, val userAgent: String)
+
+private const val CATCHUP_DAY_MS = 24L * 60 * 60 * 1_000
+
+internal suspend fun requireReplayableCatchup(
+    channel: Channel,
+    startMs: Long,
+    durationMs: Long,
+    nowMs: Long,
+    loadGuide: suspend () -> List<GuideEntry>,
+): Long {
+    fun unavailable(): Nothing = throw ResourceNotFound("catchup", "Catch-up is unavailable")
+
+    if (channel.catchupDays <= 0 || durationMs <= 0) unavailable()
+    val endMs = try {
+        Math.addExact(startMs, durationMs)
+    } catch (_: ArithmeticException) {
+        unavailable()
+    }
+    val windowStartMs = try {
+        Math.subtractExact(nowMs, Math.multiplyExact(channel.catchupDays.toLong(), CATCHUP_DAY_MS))
+    } catch (_: ArithmeticException) {
+        unavailable()
+    }
+    if (startMs < windowStartMs || endMs > nowMs) unavailable()
+    if (loadGuide().none { it.replayable && it.startMs == startMs && it.endMs == endMs }) unavailable()
+    return endMs
+}
 
 /** Actor-aware playback lease and watch-together application service. */
 class SessionApplicationService(
@@ -22,6 +51,7 @@ class SessionApplicationService(
     private val xtream: XtreamRepository,
     private val downloads: DownloadManager,
     private val cleanup: UserStateCleanupCoordinator = NoopUserStateCleanupCoordinator,
+    private val clock: () -> Long = System::currentTimeMillis,
 ) {
     suspend fun create(
         actor: Actor,
@@ -55,11 +85,17 @@ class SessionApplicationService(
             require(catchupStartMs != null && catchupDurationMs != null) {
                 "Catch-up start and duration are required"
             }
-            require(catchupDurationMs > 0) { "Catch-up duration must be positive" }
+            val catchupEndMs = requireReplayableCatchup(
+                channel = requireNotNull(channel),
+                startMs = catchupStartMs,
+                durationMs = catchupDurationMs,
+                nowMs = clock(),
+                loadGuide = { xtream.guideFor(channel) },
+            )
             xtream.catchupUrlFor(
-                requireNotNull(channel),
+                channel,
                 catchupStartMs,
-                catchupStartMs + catchupDurationMs,
+                catchupEndMs,
             ) ?: throw ResourceNotFound("catchup", "Catch-up is unavailable")
         } else if (request.mode == "download") {
             val downloadId = request.downloadId ?: throw IllegalArgumentException("Download id is required")
