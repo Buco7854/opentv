@@ -18,6 +18,7 @@ import com.buco7854.opentv.core.xtream.XtreamAuthException
 import com.buco7854.opentv.serverdata.db.PlaylistDeletionRow
 import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
 import com.buco7854.opentv.serverdata.db.deleteCatalogPlaylist
+import com.buco7854.opentv.serverdata.db.favoriteSeriesListings
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -470,30 +471,17 @@ class PlaylistApplicationService(
                 .map { (contentId, channel) -> channel.toDto(cipher, contentId, actor.userId) }
             val movies = resolved.filter { it.second.kind == ChannelKind.MOVIE }
                 .map { (contentId, channel) -> channel.toDto(cipher, contentId, actor.userId) }
-            val series = mutableListOf<SeriesHitDto>()
-            val panel = storage.xtreamSeries.observeAll(id).first()
-            val panelIdentities = content.xtreamSeriesIdentities(panel)
-            panel.forEach { entry ->
-                val contentId = panelIdentities[entry.seriesId]?.contentId ?: return@forEach
-                if (contentId !in ids) return@forEach
-                series += SeriesHitDto(
-                    contentId, entry.name, 0,
-                    cipher.encryptOrNull(entry.cover, actor.userId, id),
-                    entry.categoryName, entry.seriesId.toString(),
+            val series = userDatabase.favoriteSeriesListings(actor.userId, id).map { entry ->
+                SeriesHitDto(
+                    entry.contentId,
+                    entry.seriesKey,
+                    entry.count,
+                    cipher.encryptOrNull(entry.logo, actor.userId, id),
+                    entry.groupTitle,
+                    entry.xtreamSeriesId,
                 )
             }
-            val m3u = storage.channels.observeAllSeries(id).first()
-                .filterNot { it.seriesKey.startsWith("xs:") }
-            val m3uIdentities = content.m3uSeriesIdentities(id, m3u)
-            m3u.forEach { entry ->
-                val contentId = m3uIdentities[entry.seriesKey]?.contentId ?: return@forEach
-                if (contentId !in ids) return@forEach
-                series += SeriesHitDto(
-                    contentId, entry.seriesKey, entry.count,
-                    cipher.encryptOrNull(entry.logo, actor.userId, id), entry.groupTitle,
-                )
-            }
-            FavoritesResolvedDto(live, movies, series.sortedBy { it.seriesKey.lowercase() })
+            FavoritesResolvedDto(live, movies, series)
         }
     }
 
@@ -536,50 +524,20 @@ class PlaylistApplicationService(
             .map { (favorite, channel) ->
                 channel.toDto(cipher, favorite.contentId, actor.userId)
             }
-        val series = resolveUserFavoriteSeries(
-            actor,
-            favorites.filter { it.kind == ChannelKind.SERIES },
-        )
-        return UserFavoritesResolvedDto(live, movies, series)
-    }
-
-    private suspend fun resolveUserFavoriteSeries(
-        actor: Actor,
-        favorites: List<AuthorizedFavorite>,
-    ): List<UserFavoriteSeriesDto> {
-        val resolved = mutableMapOf<String, UserFavoriteSeriesDto>()
-        favorites.groupBy(AuthorizedFavorite::playlistId).forEach { (playlistId, playlistFavorites) ->
-            val byFingerprint = playlistFavorites.associateBy(AuthorizedFavorite::providerFingerprint)
-            storage.xtreamSeries.observeAll(playlistId).first().forEach { entry ->
-                val favorite = byFingerprint[content.xtreamSeriesFingerprint(entry.seriesId)]
-                    ?: return@forEach
-                resolved[favorite.contentId] = UserFavoriteSeriesDto(
-                    contentId = favorite.contentId,
-                    playlistId = playlistId,
-                    seriesKey = entry.name,
-                    count = 0,
-                    logo = cipher.encryptOrNull(entry.cover, actor.userId, playlistId),
-                    groupTitle = entry.categoryName,
-                    xtreamSeriesId = entry.seriesId.toString(),
+        val series = userDatabase.favoriteSeriesListings(actor.userId)
+            .filter { access.allows(it.playlistId) }
+            .map { entry ->
+                UserFavoriteSeriesDto(
+                    contentId = entry.contentId,
+                    playlistId = entry.playlistId,
+                    seriesKey = entry.seriesKey,
+                    count = entry.count,
+                    logo = cipher.encryptOrNull(entry.logo, actor.userId, entry.playlistId),
+                    groupTitle = entry.groupTitle,
+                    xtreamSeriesId = entry.xtreamSeriesId,
                 )
             }
-            storage.channels.observeAllSeries(playlistId).first()
-                .filterNot { it.seriesKey.startsWith("xs:") }
-                .forEach { entry ->
-                    val favorite = byFingerprint[content.m3uSeriesFingerprint(entry.seriesKey)]
-                        ?: return@forEach
-                    resolved[favorite.contentId] = UserFavoriteSeriesDto(
-                        contentId = favorite.contentId,
-                        playlistId = playlistId,
-                        seriesKey = entry.seriesKey,
-                        count = entry.count,
-                        logo = cipher.encryptOrNull(entry.logo, actor.userId, playlistId),
-                        groupTitle = entry.groupTitle,
-                    )
-                }
-        }
-        return favorites.mapNotNull { resolved[it.contentId] }
-            .sortedBy { it.seriesKey.lowercase() }
+        return UserFavoritesResolvedDto(live, movies, series)
     }
 
     suspend fun episodes(

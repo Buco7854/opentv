@@ -105,6 +105,16 @@ class XtreamTest {
     }
 
     @Test
+    fun unquoted_provider_ids_above_javascript_safe_integer_are_preserved() = runTest {
+        val providerId = 9_007_199_254_740_993L
+        val api = XtreamApi {
+            """[{"stream_id":$providerId,"name":"Precise"}]"""
+        }
+
+        assertEquals(providerId, api.fetchLiveStreams(creds).single().streamId)
+    }
+
+    @Test
     fun invalid_or_oversized_provider_ids_are_rejected_without_crashing() = runTest {
         val api = XtreamApi {
             """
@@ -136,6 +146,108 @@ class XtreamTest {
         assertEquals(
             listOf(9_007_199_254_740_993L),
             api.fetchSeriesList(creds).map { it.seriesId },
+        )
+    }
+
+    @Test
+    fun mixed_string_and_number_fields_keep_category_assignment_inputs_equal() = runTest {
+        var request = 0
+        val api = XtreamApi {
+            request++
+            if (request == 1) {
+                """[{"category_id":7,"category_name":"News"}]"""
+            } else {
+                """[{"stream_id":"42","name":"Channel","category_id":7,"tv_archive":"1","tv_archive_duration":3}]"""
+            }
+        }
+
+        val categories = api.fetchCategories(creds, "get_live_categories")
+        val stream = api.fetchLiveStreams(creds).single()
+
+        assertEquals("News", categories[stream.categoryId])
+        assertEquals(3, stream.archiveDays)
+    }
+
+    @Test
+    fun array_of_season_arrays_keeps_the_outer_season_number() = runTest {
+        val api = XtreamApi {
+            """
+            {"episodes":[
+              [{"id":"101","title":"First","episode_num":1}],
+              [{"id":"201","title":"Second","episode_num":"1"}]
+            ]}
+            """.trimIndent()
+        }
+
+        assertEquals(listOf(1, 2), api.fetchSeriesEpisodes(creds, 9).map { it.season })
+    }
+
+    @Test
+    fun flat_episode_array_uses_each_rows_season_fields() = runTest {
+        val api = XtreamApi {
+            """
+            {"episodes":[
+              {"id":101,"title":"First","season":"1","episode_num":1},
+              {"id":"201","title":"Second","season":2,"episode_num":"1"}
+            ]}
+            """.trimIndent()
+        }
+
+        val episodes = api.fetchSeriesEpisodes(creds, 9)
+
+        assertEquals(listOf("101", "201"), episodes.map { it.episodeId })
+        assertEquals(listOf(1, 2), episodes.map { it.season })
+    }
+
+    @Test
+    fun invalid_epg_intervals_and_overflowing_timestamps_are_skipped() = runTest {
+        val api = XtreamApi {
+            """
+            {"epg_listings":[
+              {"start_timestamp":"1700003600","stop_timestamp":"1700000000","title":"Backwards"},
+              {"start_timestamp":"1700000000","stop_timestamp":"1700000000","title":"Zero"},
+              {"start_timestamp":"9223372036854776","stop_timestamp":"9223372036854777","title":"Overflow"},
+              {"start_timestamp":1700000000,"stop_timestamp":"1700003600","title":"Valid"}
+            ]}
+            """.trimIndent()
+        }
+
+        assertEquals(listOf("Valid"), api.fetchChannelEpg(creds, 42).map { it.title })
+    }
+
+    @Test
+    fun overflowing_account_epoch_fields_become_absent() = runTest {
+        val api = XtreamApi {
+            """
+            {"user_info":{
+              "status":"Active",
+              "exp_date":"9223372036854776",
+              "created_at":"-9223372036854776"
+            }}
+            """.trimIndent()
+        }
+
+        val account = api.fetchAccountInfo(creds)
+
+        assertNull(account.expiresAtMs)
+        assertNull(account.createdAtMs)
+    }
+
+    @Test
+    fun panel_epg_is_sorted_even_when_provider_rows_are_out_of_order() = runTest {
+        val api = XtreamApi {
+            """
+            {"epg_listings":[
+              {"start_timestamp":"1700007200","stop_timestamp":"1700010800","title":"Third"},
+              {"start_timestamp":"1700000000","stop_timestamp":"1700003600","title":"First"},
+              {"start_timestamp":"1700003600","stop_timestamp":"1700007200","title":"Second"}
+            ]}
+            """.trimIndent()
+        }
+
+        assertEquals(
+            listOf("First", "Second", "Third"),
+            api.fetchChannelEpg(creds, 42).map { it.title },
         )
     }
 }

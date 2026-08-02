@@ -8,7 +8,9 @@ import com.buco7854.opentv.core.storage.ChannelListing
 import com.buco7854.opentv.core.storage.Storage
 import com.buco7854.opentv.core.storage.XtreamSeriesListing
 import com.buco7854.opentv.serverdata.db.ContentIdentityRow
+import com.buco7854.opentv.serverdata.db.ContentSeriesLocatorRow
 import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
+import com.buco7854.opentv.serverdata.db.ensureContentSeriesLocators
 import com.buco7854.opentv.serverdata.db.writeContentIdentityReconciliation
 import java.net.URI
 import java.security.MessageDigest
@@ -129,11 +131,22 @@ class ContentIdentityService(
     ): Map<Long, ContentIdentityRow> {
         if (series.isEmpty()) return emptyMap()
         val result = mutableMapOf<Long, ContentIdentityRow>()
+        val locators = mutableListOf<ContentSeriesLocatorRow>()
         series.groupBy(XtreamSeries::playlistId).forEach { (playlistId, entries) ->
             val keys = entries.associate { it.seriesId to xtreamSeriesKey(it.seriesId) }
             val resolved = identities(playlistId, keys.values.toList())
-            entries.forEach { result[it.seriesId] = requireNotNull(resolved[keys[it.seriesId]]) }
+            entries.forEach { entry ->
+                val identity = requireNotNull(resolved[keys[entry.seriesId]])
+                result[entry.seriesId] = identity
+                locators += ContentSeriesLocatorRow(
+                    identity.contentId,
+                    playlistId,
+                    SERIES_SOURCE_XTREAM,
+                    entry.seriesId.toString(),
+                )
+            }
         }
+        db.ensureContentSeriesLocators(locators)
         return result
     }
 
@@ -142,11 +155,22 @@ class ContentIdentityService(
     ): Map<Long, ContentIdentityRow> {
         if (series.isEmpty()) return emptyMap()
         val result = mutableMapOf<Long, ContentIdentityRow>()
+        val locators = mutableListOf<ContentSeriesLocatorRow>()
         series.groupBy(XtreamSeriesListing::playlistId).forEach { (playlistId, entries) ->
             val keys = entries.associate { it.seriesId to xtreamSeriesKey(it.seriesId) }
             val resolved = identities(playlistId, keys.values.toList())
-            entries.forEach { result[it.seriesId] = requireNotNull(resolved[keys[it.seriesId]]) }
+            entries.forEach { entry ->
+                val identity = requireNotNull(resolved[keys[entry.seriesId]])
+                result[entry.seriesId] = identity
+                locators += ContentSeriesLocatorRow(
+                    identity.contentId,
+                    playlistId,
+                    SERIES_SOURCE_XTREAM,
+                    entry.seriesId.toString(),
+                )
+            }
         }
+        db.ensureContentSeriesLocators(locators)
         return result
     }
 
@@ -155,7 +179,18 @@ class ContentIdentityService(
 
     suspend fun m3uSeries(playlistId: Long, seriesKey: String): ContentIdentityRow {
         val key = m3uSeriesKey(seriesKey)
-        return requireNotNull(identities(playlistId, listOf(key))[key])
+        val identity = requireNotNull(identities(playlistId, listOf(key))[key])
+        db.ensureContentSeriesLocators(
+            listOf(
+                ContentSeriesLocatorRow(
+                    identity.contentId,
+                    playlistId,
+                    SERIES_SOURCE_M3U,
+                    seriesKey,
+                ),
+            ),
+        )
+        return identity
     }
 
     suspend fun m3uSeriesIdentities(
@@ -165,7 +200,20 @@ class ContentIdentityService(
         if (series.isEmpty()) return emptyMap()
         val keys = series.associate { it.seriesKey to m3uSeriesKey(it.seriesKey) }
         val resolved = identities(playlistId, keys.values.toList())
-        return series.associate { it.seriesKey to requireNotNull(resolved[keys[it.seriesKey]]) }
+        val result = series.associate { entry ->
+            entry.seriesKey to requireNotNull(resolved[keys[entry.seriesKey]])
+        }
+        db.ensureContentSeriesLocators(
+            series.map { entry ->
+                ContentSeriesLocatorRow(
+                    requireNotNull(result[entry.seriesKey]).contentId,
+                    playlistId,
+                    SERIES_SOURCE_M3U,
+                    entry.seriesKey,
+                )
+            },
+        )
+        return result
     }
 
     /** The identity alone. Prefer this over [resolve] when the channel is not needed: the
@@ -263,6 +311,7 @@ class ContentIdentityService(
                     .let { if (it == Long.MAX_VALUE) it else it + 1 },
             )
             val pending = linkedMapOf<IdentityKey, ContentIdentityRow>()
+            val seriesLocators = mutableListOf<ContentSeriesLocatorRow>()
             channels.forEach { channel ->
                 val key = IdentityKey(channel.kind, channelFingerprint(channel))
                 pending[key] = existing[key]?.let { current ->
@@ -275,28 +324,38 @@ class ContentIdentityService(
             }
             xtreamSeries.forEach { series ->
                 val key = xtreamSeriesKey(series.seriesId)
-                pending.putIfAbsent(
-                    key,
+                val identity = pending.getOrPut(key) {
                     existing[key]?.let { current ->
                         current.copy(
                             lastSeenAtMs = if (retireMissing) seenAt else current.lastSeenAtMs,
                             retired = false,
                         )
                     }
-                        ?: newIdentity(playlistId, key, null, seenAt),
+                        ?: newIdentity(playlistId, key, null, seenAt)
+                }
+                seriesLocators += ContentSeriesLocatorRow(
+                    identity.contentId,
+                    playlistId,
+                    SERIES_SOURCE_XTREAM,
+                    series.seriesId.toString(),
                 )
             }
             m3uSeries.forEach { series ->
                 val key = m3uSeriesKey(series.seriesKey)
-                pending.putIfAbsent(
-                    key,
+                val identity = pending.getOrPut(key) {
                     existing[key]?.let { current ->
                         current.copy(
                             lastSeenAtMs = if (retireMissing) seenAt else current.lastSeenAtMs,
                             retired = false,
                         )
                     }
-                        ?: newIdentity(playlistId, key, null, seenAt),
+                        ?: newIdentity(playlistId, key, null, seenAt)
+                }
+                seriesLocators += ContentSeriesLocatorRow(
+                    identity.contentId,
+                    playlistId,
+                    SERIES_SOURCE_M3U,
+                    series.seriesKey,
                 )
             }
             val inserts = pending.filterKeys { it !in existing }.values.toList()
@@ -306,6 +365,7 @@ class ContentIdentityService(
                 updates,
                 playlistId,
                 seenAt.takeIf { retireMissing },
+                seriesLocators,
             )
         }
     }
@@ -424,14 +484,6 @@ class ContentIdentityService(
     private fun m3uSeriesKey(seriesKey: String) =
         IdentityKey(ChannelKind.SERIES, fingerprint("m3u:series:${seriesKey.trim()}"))
 
-    /** Matches already-resolved favorite identities to series catalog rows without another
-     * identity query for every playlist represented on the favorites page. */
-    internal fun xtreamSeriesFingerprint(seriesId: Long): String =
-        xtreamSeriesKey(seriesId).fingerprint
-
-    internal fun m3uSeriesFingerprint(seriesKey: String): String =
-        m3uSeriesKey(seriesKey).fingerprint
-
     private fun newIdentity(
         playlistId: Long,
         key: IdentityKey,
@@ -474,6 +526,8 @@ class ContentIdentityService(
 
     private companion object {
         const val MAX_BOUND_VARIABLES = 500
+        const val SERIES_SOURCE_XTREAM = "xtream"
+        const val SERIES_SOURCE_M3U = "m3u"
     }
 }
 

@@ -3,6 +3,7 @@ package com.buco7854.opentv.server
 import com.buco7854.opentv.contract.*
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
+import com.buco7854.opentv.serverdata.db.FavoriteIdentityRow
 import com.buco7854.opentv.serverdata.db.UserFavoriteRow
 import com.buco7854.opentv.serverdata.db.UserResumeRow
 
@@ -10,7 +11,6 @@ internal data class AuthorizedFavorite(
     val contentId: String,
     val playlistId: Long,
     val kind: Int,
-    val providerFingerprint: String,
     val currentChannelId: Long?,
     val addedMs: Long,
 )
@@ -75,29 +75,24 @@ class UserActivityService(
             .map { it.toDto() }
     }
 
-    /**
-     * Reads the user's favorite rows and their identities in batches, then applies one
-     * current entitlement snapshot. The work grows with favorites, not with playlists.
-     */
+    /** Reads favorites and stable identities in one query, then applies one entitlement snapshot. */
     internal suspend fun authorizedFavorites(
         userId: String,
         access: PlaylistAccess,
-    ): List<AuthorizedFavorite> {
-        val rows = db.activity().favorites(userId)
-        val identities = content.identitiesByContentId(rows.map { it.contentId })
-        return rows.mapNotNull { favorite ->
-            val identity = identities[favorite.contentId]
-                ?.takeIf { access.allows(it.playlistId) }
-                ?: return@mapNotNull null
-            AuthorizedFavorite(
-                contentId = favorite.contentId,
-                playlistId = identity.playlistId,
-                kind = identity.kind,
-                providerFingerprint = identity.providerFingerprint,
-                currentChannelId = identity.currentChannelId,
-                addedMs = favorite.addedAtMs,
-            )
-        }
+    ): List<AuthorizedFavorite> = db.activity().favoriteIdentities(userId)
+        .mapNotNull { it.toAuthorizedFavorite(access) }
+
+    private fun FavoriteIdentityRow.toAuthorizedFavorite(
+        access: PlaylistAccess,
+    ): AuthorizedFavorite? {
+        if (retired || !access.allows(playlistId)) return null
+        return AuthorizedFavorite(
+            contentId = contentId,
+            playlistId = playlistId,
+            kind = kind,
+            currentChannelId = currentChannelId,
+            addedMs = addedAtMs,
+        )
     }
 
     suspend fun addFavorite(actor: Actor, contentId: String) {

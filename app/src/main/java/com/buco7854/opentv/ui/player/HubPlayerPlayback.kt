@@ -15,6 +15,7 @@ import com.buco7854.opentv.hub.playback.HubPlaybackSocket
 import com.buco7854.opentv.hub.playback.HubPlaybackState
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
@@ -50,6 +51,7 @@ internal interface HubPlayerPlayback : WatchTogetherHub {
     fun setLiveRoom(inRoom: Boolean): Boolean
     fun sharesLiveRoomRead(): Boolean
     fun stop()
+    suspend fun stopAndAwait() = stop()
 
     override suspend fun intent(): WatchIntentResponse? = null
     override suspend fun requestJoin(peerId: String) = Unit
@@ -81,6 +83,7 @@ internal class DefaultHubPlayerPlayback(
 
     private val lifecycle = Mutex()
     private val closed = AtomicBoolean(false)
+    private val stopCompleted = CompletableDeferred<Unit>()
     private var controller: HubPlaybackController? = null
     private var stateJob: Job? = null
     private var commandJob: Job? = null
@@ -193,14 +196,23 @@ internal class DefaultHubPlayerPlayback(
     override fun stop() {
         if (!closed.compareAndSet(false, true)) return
         graph.applicationScope.launch {
-            lifecycle.withLock {
-                stateJob?.cancel()
-                stateJob = null
-                commandJob?.cancel()
-                commandJob = null
-                controller?.stop()
+            try {
+                lifecycle.withLock {
+                    stateJob?.cancel()
+                    stateJob = null
+                    commandJob?.cancel()
+                    commandJob = null
+                    controller?.stop()
+                }
+            } finally {
+                stopCompleted.complete(Unit)
             }
         }
+    }
+
+    override suspend fun stopAndAwait() {
+        stop()
+        stopCompleted.await()
     }
 
     private suspend fun startLocked(request: StartRequest): Boolean {

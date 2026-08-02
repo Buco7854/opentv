@@ -96,17 +96,23 @@ internal class SharedHlsCache(
             }
         }
 
-        val candidate = scope.async(start = CoroutineStart.LAZY) {
-            fetch(key, uri).also { response ->
-                if (response.statusCode in 200..299 && isGroupActive(group)) cache(key, response)
+        val (load, created) = synchronized(lock) {
+            loads[key]?.let { return@synchronized it to false }
+            if (loads.size >= MAX_TOTAL_IN_FLIGHT_LOADS ||
+                loads.keys.count { it.group == group } >= MAX_GROUP_IN_FLIGHT_LOADS
+            ) {
+                throw SharedHlsCapacityException()
             }
+            scope.async(start = CoroutineStart.LAZY) {
+                fetch(key, uri).also { response ->
+                    if (response.statusCode in 200..299 && isGroupActive(group)) cache(key, response)
+                }
+            }.also { loads[key] = it } to true
         }
-        val existing = loads.putIfAbsent(key, candidate)
-        val load = existing ?: candidate.also { mine ->
-            mine.invokeOnCompletion { loads.remove(key, mine) }
-            mine.start()
+        if (created) {
+            load.invokeOnCompletion { loads.remove(key, load) }
+            load.start()
         }
-        if (existing != null) candidate.cancel()
         return load.await().also {
             touchGroup(group)
         }
@@ -342,6 +348,10 @@ internal class SharedHlsCache(
         const val MAX_GROUP_BYTES = 64L * 1024 * 1024
         const val MAX_TOTAL_BYTES = 256L * 1024 * 1024
         const val MAX_TOTAL_ENTRIES = 256
+        // An unknown-length response can temporarily occupy both the collector and result array.
+        // Eight maximum-size reads therefore cap that transient footprint at roughly 512 MiB.
+        const val MAX_GROUP_IN_FLIGHT_LOADS = 8
+        const val MAX_TOTAL_IN_FLIGHT_LOADS = 8
         const val MAX_RESOURCE_BYTES = 32L * 1024 * 1024
         const val MAX_PLAYLIST_BYTES = 2L * 1024 * 1024
         const val PLAYLIST_TTL_MS = 1_000L

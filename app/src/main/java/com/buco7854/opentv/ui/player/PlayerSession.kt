@@ -22,6 +22,7 @@ import com.buco7854.opentv.data.prefs.PlayerSettings
 import com.buco7854.opentv.diag.ErrorLog
 import com.buco7854.opentv.playback.PlaybackMonitor
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -66,10 +67,12 @@ internal class PlayerSession(
 ) : AutoCloseable, WatchTogetherPlayer {
 
     private val closed = AtomicBoolean(false)
+    private val playbackMonitorToken = Any()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var resumeApplied = false
     private var resumeAfterStart = false
     private var currentUrl = url
+    private var progressEnabled = !initialLive
 
     private val _state = MutableStateFlow(PlaybackUiState(isLive = initialLive))
     val state: StateFlow<PlaybackUiState> = _state.asStateFlow()
@@ -80,10 +83,15 @@ internal class PlayerSession(
 
     val player: ExoPlayer = createPlayer(context, url, settings, dataSourceFactory)
     override val positionMs: Long get() = currentPositionMs()
-    override val paused: Boolean get() = !player.playWhenReady
-    override val playbackRate: Double get() = player.playbackParameters.speed.toDouble()
+    override val paused: Boolean get() = closed.get() || !player.playWhenReady
+    override val playbackRate: Double
+        get() = if (closed.get()) 1.0 else player.playbackParameters.speed.toDouble()
     override val isLive: Boolean
-        get() = player.isCurrentMediaItemLive || player.isCurrentMediaItemDynamic
+        get() = if (closed.get()) {
+            state.value.isLive
+        } else {
+            player.isCurrentMediaItemLive || player.isCurrentMediaItemDynamic
+        }
 
     private val listener = object : Player.Listener {
         override fun onPlayerError(playbackError: PlaybackException) {
@@ -138,14 +146,18 @@ internal class PlayerSession(
                     }
                 }
             } else if (playbackState == Player.STATE_ENDED) {
-                clearProgress()
+                if (progressEnabled) clearProgress()
+                // playWhenReady remains true at end-of-stream unless we clear it, which
+                // leaves the chrome/PiP showing Pause and makes a replay action ineffective.
+                player.pause()
+                update { copy(playing = false, buffering = false) }
             }
         }
     }
 
     init {
         player.addListener(listener)
-        PlaybackMonitor.playbackStarted(url)
+        updatePlaybackMonitor(url)
         scope.launch {
             while (true) {
                 update {
@@ -166,43 +178,60 @@ internal class PlayerSession(
     }
 
     fun togglePlayback() {
-        if (player.playWhenReady) player.pause() else player.play()
+        if (closed.get()) return
+        when (playerToggleAction(player.playWhenReady, player.playbackState == Player.STATE_ENDED)) {
+            PlayerToggleAction.PAUSE -> player.pause()
+            PlayerToggleAction.PLAY -> player.play()
+            PlayerToggleAction.RESTART -> restartPlayback()
+        }
     }
 
     fun seekBack() {
+        if (closed.get()) return
         resumeApplied = true
         player.seekBack()
     }
 
     fun seekForward() {
+        if (closed.get()) return
         resumeApplied = true
         player.seekForward()
     }
 
     override fun seekTo(positionMs: Long) {
+        if (closed.get()) return
         // A room sync can arrive while the initial source is still preparing.
         // That explicit seek supersedes the stored solo resume point.
         resumeApplied = true
         player.seekTo(positionMs)
     }
 
-    fun currentPositionMs(): Long = player.currentPosition.coerceAtLeast(0)
+    fun currentPositionMs(): Long =
+        if (closed.get()) state.value.positionMs else player.currentPosition.coerceAtLeast(0)
 
     override fun play() {
-        player.play()
+        if (closed.get()) return
+        if (player.playbackState == Player.STATE_ENDED) restartPlayback() else player.play()
     }
 
     override fun pause() {
+        if (closed.get()) return
         player.pause()
     }
 
     override fun setPlaybackRate(rate: Double) {
+        if (closed.get()) return
         player.setPlaybackSpeed(rate.toFloat())
     }
 
     fun playCatchup(url: String) {
+        if (closed.get()) return
         resumeApplied = true
+        // In-screen live catch-up has no durable content identity of its own. Saving
+        // it through the original callback would create a VOD resume on the live URL.
+        progressEnabled = false
         currentUrl = url
+        updatePlaybackMonitor(url)
         update { copy(error = null, isLive = false, buffering = true) }
         player.setMediaItem(MediaItem.fromUri(url))
         player.prepare()
@@ -210,9 +239,11 @@ internal class PlayerSession(
     }
 
     fun replaceMediaItem(url: String, positionMs: Long?) {
+        if (closed.get()) return
         if (url == currentUrl) return
         val resumePlayback = player.playWhenReady
         currentUrl = url
+        updatePlaybackMonitor(url)
         resumeApplied = true
         update { copy(error = null, buffering = true) }
         val mediaItem = MediaItem.fromUri(url)
@@ -227,16 +258,31 @@ internal class PlayerSession(
     }
 
     fun stopWithError(message: String) {
+        if (closed.get()) return
+        player.pause()
         player.stop()
         update { copy(playing = false, buffering = false, error = message) }
     }
 
+    /** Explicit recovery after ExoPlayer has exhausted its automatic load retries. */
+    fun retry() {
+        if (closed.get()) return
+        update { copy(error = null, buffering = true) }
+        player.prepare()
+        player.play()
+    }
+
     fun onHostStopped() {
+        if (closed.get()) return
         resumeAfterStart = player.playWhenReady
+        // A stopped process can be killed without another player callback. Save the
+        // exact point now instead of losing the last polling interval (or a recent seek).
+        persistProgressIfNeeded(onlyWhilePlaying = false)
         player.pause()
     }
 
     fun onHostStarted() {
+        if (closed.get()) return
         if (resumeAfterStart) player.play()
         resumeAfterStart = false
     }
@@ -244,22 +290,45 @@ internal class PlayerSession(
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         persistProgressIfNeeded(onlyWhilePlaying = false)
-        PlaybackMonitor.playbackStopped()
+        if (playbackMonitorOwner.compareAndSet(playbackMonitorToken, null)) {
+            PlaybackMonitor.playbackStopped()
+        }
         player.removeListener(listener)
         player.release()
         scope.cancel()
     }
 
     private fun persistProgressIfNeeded(onlyWhilePlaying: Boolean) {
+        if (!progressEnabled) return
         if (onlyWhilePlaying && !player.isPlaying) return
         val live = player.isCurrentMediaItemLive || player.isCurrentMediaItemDynamic
         val durationMs = player.duration
         if (!shouldPersistProgress(durationMs, live)) return
-        saveProgress(player.currentPosition, durationMs)
+        saveProgress(player.currentPosition.coerceAtLeast(0), durationMs)
+    }
+
+    private fun updatePlaybackMonitor(url: String) {
+        playbackMonitorOwner.set(playbackMonitorToken)
+        PlaybackMonitor.playbackStarted(url)
+    }
+
+    private fun restartPlayback() {
+        resumeApplied = true
+        if (player.isCurrentMediaItemLive || player.isCurrentMediaItemDynamic) {
+            player.seekToDefaultPosition()
+        } else {
+            player.seekTo(0)
+        }
+        player.play()
     }
 
     private inline fun update(transform: PlaybackUiState.() -> PlaybackUiState) {
         _state.value = _state.value.transform()
+    }
+
+    private companion object {
+        /** Animated player-to-player navigation briefly composes both sessions. */
+        val playbackMonitorOwner = AtomicReference<Any?>()
     }
 }
 

@@ -160,4 +160,106 @@ class M3uParserTest {
         assertNull(header?.epgUrl)
         assertEquals(0, entries.size)
     }
+
+    @Test
+    fun utf8_bom_does_not_hide_header_attributes() {
+        val (header, entries) = parse(
+            "\uFEFF#EXTM3U x-tvg-url=\"http://epg.example/guide.xml\"\n" +
+                "#EXTINF:-1,Channel\n" +
+                "http://host/channel.ts"
+        )
+
+        assertEquals("http://epg.example/guide.xml", header?.epgUrl)
+        assertEquals(listOf("Channel"), entries.map { it.name })
+    }
+
+    @Test
+    fun extgrp_applies_to_only_the_entry_that_declares_it() {
+        val (_, entries) = parse(
+            """
+            #EXTM3U
+            #EXTINF:-1,Grouped
+            #EXTGRP:Sports
+            http://host/grouped.ts
+            #EXTINF:-1,Un-grouped
+            http://host/ungrouped.ts
+            """.trimIndent()
+        )
+
+        assertEquals(listOf("Sports", "Uncategorized"), entries.map { it.groupTitle })
+    }
+
+    @Test
+    fun malformed_entries_are_dropped_without_losing_later_valid_entries() {
+        val (_, entries) = parse(
+            """
+            #EXTM3U
+            http://host/orphan.ts
+            #EXTINF:-1,Missing URL
+            #EXTINF:-1 tvg-id="good",Good Channel
+            http://host/good.ts
+            #EXTINF:-1,Also Missing URL
+            """.trimIndent()
+        )
+
+        assertEquals(listOf("Good Channel"), entries.map { it.name })
+        assertEquals("good", entries.single().tvgId)
+    }
+
+    @Test
+    fun duplicate_rows_are_preserved_because_metadata_may_differ() {
+        val (_, entries) = parse(
+            """
+            #EXTM3U
+            #EXTINF:-1 group-title="News",Channel
+            http://host/shared.ts
+            #EXTINF:-1 group-title="Regional",Channel
+            http://host/shared.ts
+            """.trimIndent()
+        )
+
+        assertEquals(listOf("News", "Regional"), entries.map { it.groupTitle })
+    }
+
+    @Test
+    fun negative_catchup_windows_are_treated_as_unavailable() {
+        val (_, entries) = parse(
+            """
+            #EXTM3U
+            #EXTINF:-1 catchup-days="-3",Channel
+            http://host/channel.ts
+            """.trimIndent()
+        )
+
+        assertEquals(0, entries.single().catchupDays)
+    }
+
+    @Test
+    fun escaped_quotes_inside_attributes_do_not_truncate_fallback_name() {
+        val (_, entries) = parse(
+            """
+            #EXTM3U
+            #EXTINF:-1 tvg-name="Bob \"The\" News" group-title="News, Local",
+            http://host/channel.ts
+            """.trimIndent()
+        )
+
+        assertEquals("Bob \"The\" News", entries.single().name)
+        assertEquals("News, Local", entries.single().groupTitle)
+    }
+
+    @Test
+    fun attribute_padding_is_not_part_of_provider_identity_or_group_name() {
+        val (header, entries) = parse(
+            """
+            #EXTM3U url-tvg="  http://epg.example/guide.xml  "
+            #EXTINF:-1 tvg-id="  bbc one  " group-title="  UK News  ",Channel
+            http://host/channel.ts
+            """.trimIndent()
+        )
+
+        assertEquals("http://epg.example/guide.xml", header?.epgUrl)
+        assertEquals("bbc one", entries.single().tvgId)
+        assertEquals("UK News", entries.single().groupTitle)
+    }
 }

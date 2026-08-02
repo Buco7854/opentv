@@ -14,6 +14,8 @@ import com.buco7854.opentv.core.storage.Storage
 import com.buco7854.opentv.core.util.nowMs
 import com.buco7854.opentv.core.xtream.Xtream
 import com.buco7854.opentv.core.xtream.XtreamApi
+import com.buco7854.opentv.core.xtream.XtreamApiException
+import com.buco7854.opentv.core.xtream.XtreamCredentials
 import com.buco7854.opentv.core.xtream.XtreamEpgEntry
 import kotlinx.datetime.TimeZone
 import kotlinx.coroutines.sync.Mutex
@@ -45,6 +47,7 @@ class XtreamRepository(
     private val epg: EpgRepository,
     private val account: AccountRepository,
     private val log: CoreLog,
+    private val clock: () -> Long = ::nowMs,
 ) {
     companion object {
         const val EPISODES_CACHE_MS = 24L * 60 * 60 * 1000
@@ -62,7 +65,7 @@ class XtreamRepository(
         mutex.withLock {
             val series = storage.xtreamSeries.get(playlistId, seriesId) ?: return
             val seriesKey = xtreamSeriesKey(seriesId)
-            val now = nowMs()
+            val now = clock()
             if (!force && series.episodesFetchedAtMs > 0 &&
                 now - series.episodesFetchedAtMs < EPISODES_CACHE_MS
             ) return
@@ -107,7 +110,7 @@ class XtreamRepository(
     suspend fun vodMetadata(channel: Channel): Metadata? {
         val streamId = channel.xtreamStreamId ?: return null
         val cacheKey = "xtreamvod:${channel.playlistId}:$streamId"
-        val now = nowMs()
+        val now = clock()
         storage.metadata.get(cacheKey)
             ?.takeIf { now - it.fetchedAtMs < VOD_INFO_CACHE_MS }
             ?.let { return it.takeIf(::hasPanelDetail) }
@@ -148,6 +151,7 @@ class XtreamRepository(
 
     private class CachedEpg(val entries: List<XtreamEpgEntry>, val atMs: Long)
     private val epgCache = HashMap<String, CachedEpg>()
+    private val slowPanelUntilMs = HashMap<Long, Long>()
     private val epgCacheMutex = Mutex()
 
     private suspend fun cachedEpg(key: String, now: Long): List<XtreamEpgEntry>? =
@@ -163,8 +167,46 @@ class XtreamRepository(
         }
     }
 
+    private suspend fun panelEpgBackedOff(playlistId: Long, now: Long): Boolean =
+        epgCacheMutex.withLock {
+            val until = slowPanelUntilMs[playlistId] ?: return@withLock false
+            if (now < until) true else {
+                slowPanelUntilMs.remove(playlistId)
+                false
+            }
+        }
+
+    private suspend fun backOffPanelEpg(playlistId: Long) {
+        epgCacheMutex.withLock {
+            slowPanelUntilMs[playlistId] = clock() + SLOW_PANEL_BACKOFF_MS
+        }
+    }
+
+    private suspend fun fetchPanelEpg(
+        playlistId: Long,
+        creds: XtreamCredentials,
+        streamId: Long,
+    ): List<XtreamEpgEntry> {
+        if (panelEpgBackedOff(playlistId, clock())) return emptyList()
+        val entries = withTimeoutOrNull(PANEL_EPG_TIMEOUT_MS) {
+            runCatching { xtreamApi.fetchChannelEpg(creds, streamId) }
+                .getOrElse {
+                    it.rethrowCancellation()
+                    log.log("Channel EPG", it)
+                    emptyList()
+                }
+        }
+        if (entries != null) return entries
+        backOffPanelEpg(playlistId)
+        log.log("Channel EPG", XtreamApiException("Panel EPG timed out"))
+        return emptyList()
+    }
+
     suspend fun forgetPlaylist(playlistId: Long) {
-        epgCacheMutex.withLock { epgCache.keys.removeAll { it.startsWith("$playlistId:") } }
+        epgCacheMutex.withLock {
+            epgCache.keys.removeAll { it.startsWith("$playlistId:") }
+            slowPanelUntilMs.remove(playlistId)
+        }
     }
 
     /**
@@ -173,15 +215,14 @@ class XtreamRepository(
      * programmes and an archive flag; falls back to stored XMLTV.
      */
     suspend fun guideFor(channel: Channel): List<GuideEntry> {
-        val now = nowMs()
+        val now = clock()
         val streamId = channel.xtreamStreamId
         if (streamId != null) {
             val creds = storage.playlists.get(channel.playlistId)?.credentials()
             if (creds != null) {
                 val key = "${channel.playlistId}:$streamId"
                 val cached = cachedEpg(key, now)
-                    ?: runCatching { xtreamApi.fetchChannelEpg(creds, streamId) }
-                        .getOrElse { it.rethrowCancellation(); log.log("Channel EPG", it); emptyList() }
+                    ?: fetchPanelEpg(channel.playlistId, creds, streamId)
                         .also { storeEpg(key, it, now) }
                 if (cached.isNotEmpty()) {
                     // has_archive is unreliable (often 0 on archived channels), so also
@@ -217,18 +258,23 @@ class XtreamRepository(
      * catchup-source templates, or the Xtream /timeshift/ endpoint.
      */
     suspend fun catchupUrlFor(channel: Channel, startMs: Long, endMs: Long): String? {
+        val durationMs = endMs - startMs
+        if (endMs <= startMs || durationMs <= 0) return null
         // M3U catchup-source template wins when present.
         channel.catchupSource?.let { template ->
-            return Catchup.fromTemplate(template, startMs, endMs)
+            return Catchup.fromTemplate(template, startMs, endMs, nowMs = clock())
         }
-        // Xtream timeshift; guideFor already decided replayability.
+        // Xtream timeshift. This builder validates arithmetic; a caller accepting raw
+        // timestamps must separately require a replayable guide row/archive window.
         val playlist = storage.playlists.get(channel.playlistId) ?: return null
         val creds = playlist.credentials() ?: return null
         val streamId = channel.xtreamStreamId
             ?: Regex("""/(\d+)\.\w{1,5}$""")
                 .find(channel.url.substringBefore('?'))?.groupValues?.get(1)?.toLongOrNull()
             ?: return null
-        val durationMinutes = ((endMs - startMs + 59_999) / 60_000L).toInt()
+        val durationMinutesLong = (durationMs - 1) / 60_000L + 1
+        if (durationMinutesLong > Int.MAX_VALUE) return null
+        val durationMinutes = durationMinutesLong.toInt()
         return Xtream.catchupUrl(creds, streamId, startMs, durationMinutes, panelTimeZone(playlist))
     }
 

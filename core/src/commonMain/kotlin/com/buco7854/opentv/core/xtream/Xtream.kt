@@ -111,6 +111,12 @@ private fun JsonObject.providerId(key: String): Long? {
     return raw.toLongOrNull()?.takeIf { it.toString() == raw }
 }
 
+private fun epochSecondsToMilliseconds(raw: String?): Long? {
+    val seconds = raw?.toLongOrNull() ?: return null
+    if (seconds < Long.MIN_VALUE / 1000 || seconds > Long.MAX_VALUE / 1000) return null
+    return seconds * 1000
+}
+
 /** Pure URL construction and detection for Xtream-codes panels. */
 object Xtream {
     /** "host:port" or a full URL -> normalized "scheme://host:port", or null if unusable. */
@@ -237,20 +243,20 @@ class XtreamApi(private val http: HttpFetcher) {
         return buildList {
             for (element in listings) {
                 val o = element as? JsonObject ?: continue
-                val startSec = o.text("start_timestamp")?.toLongOrNull()
-                val endSec = o.text("stop_timestamp")?.toLongOrNull()
-                if (startSec == null || endSec == null) continue
+                val startMs = epochSecondsToMilliseconds(o.text("start_timestamp")) ?: continue
+                val endMs = epochSecondsToMilliseconds(o.text("stop_timestamp")) ?: continue
+                if (endMs <= startMs) continue
                 add(
                     XtreamEpgEntry(
                         title = decodeMaybeBase64(o.textOr("title")).ifBlank { "Programme" },
                         description = decodeMaybeBase64(o.textOr("description")).takeIf { it.isNotBlank() },
-                        startMs = startSec * 1000,
-                        endMs = endSec * 1000,
+                        startMs = startMs,
+                        endMs = endMs,
                         hasArchive = o.int("has_archive") == 1,
                     )
                 )
             }
-        }
+        }.sortedWith(compareBy<XtreamEpgEntry> { it.startMs }.thenBy { it.endMs })
     }
 
     suspend fun fetchAccountInfo(creds: XtreamCredentials): AccountInfo {
@@ -266,10 +272,10 @@ class XtreamApi(private val http: HttpFetcher) {
             activeConnections = info.text("active_cons")?.toIntOrNull() ?: 0,
             maxConnections = info.text("max_connections")?.toIntOrNull() ?: 0,
             status = info.textOr("status", "Unknown"),
-            expiresAtMs = info.text("exp_date")?.toLongOrNull()?.times(1000),
+            expiresAtMs = epochSecondsToMilliseconds(info.text("exp_date")),
             username = info.text("username")?.takeIf { it.isNotBlank() },
             isTrial = info.text("is_trial") == "1",
-            createdAtMs = info.text("created_at")?.toLongOrNull()?.times(1000),
+            createdAtMs = epochSecondsToMilliseconds(info.text("created_at")),
             timezone = json.obj("server_info")?.text("timezone")?.takeIf { it.isNotBlank() },
         )
     }
@@ -394,8 +400,11 @@ class XtreamApi(private val http: HttpFetcher) {
             is JsonObject -> for ((key, value) in eps) {
                 (value as? JsonArray)?.let { parseEpisodeArray(it, key.toIntOrNull()) }
             }
-            is JsonArray -> for (seasons in eps) {
-                (seasons as? JsonArray)?.let { parseEpisodeArray(it, null) }
+            is JsonArray -> {
+                if (eps.any { it is JsonObject }) parseEpisodeArray(eps, null)
+                for ((index, seasons) in eps.withIndex()) {
+                    (seasons as? JsonArray)?.let { parseEpisodeArray(it, index + 1) }
+                }
             }
             else -> {}
         }

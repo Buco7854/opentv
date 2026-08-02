@@ -53,14 +53,14 @@ class PlayerViewModelTest {
     @Test
     fun `bootstrap restores settings resume channel and now-next data`() = runTest(dispatcher) {
         val source = FakePlayerDataSource()
-        val viewModel = PlayerViewModel(source, LOCAL_TARGET)
+        val viewModel = PlayerViewModel(source, LOCAL_VOD_TARGET)
 
         advanceUntilIdle()
 
         assertEquals(PlayerBootstrap(source.settings.value, RESUME_POSITION_MS), viewModel.bootstrap.value)
         assertSame(source.channel, viewModel.channel.value)
         assertEquals(source.nowNext, viewModel.nowNext.value)
-        assertEquals(listOf(LOCAL_TARGET), source.resumeRequests)
+        assertEquals(listOf(LOCAL_VOD_TARGET), source.resumeRequests)
     }
 
     @Test
@@ -100,15 +100,52 @@ class PlayerViewModelTest {
     @Test
     fun `progress operations preserve the player target identity`() = runTest(dispatcher) {
         val source = FakePlayerDataSource()
-        val viewModel = PlayerViewModel(source, LOCAL_TARGET)
+        val viewModel = PlayerViewModel(source, LOCAL_VOD_TARGET)
         advanceUntilIdle()
 
+        assertEquals(RESUME_POSITION_MS, viewModel.resumePositionForSession(RESUME_POSITION_MS))
         viewModel.saveProgress(positionMs = 42_000, durationMs = 120_000)
+        assertEquals(42_000, viewModel.resumePositionForSession(RESUME_POSITION_MS))
         viewModel.clearProgress()
 
-        assertEquals(ProgressSave(LOCAL_TARGET, 42_000, 120_000), source.progressSave)
-        assertEquals(listOf(LOCAL_TARGET), source.clearedProgress)
+        assertEquals(ProgressSave(LOCAL_VOD_TARGET, 42_000, 120_000), source.progressSave)
+        assertEquals(listOf(LOCAL_VOD_TARGET), source.clearedProgress)
+        assertEquals(0, viewModel.resumePositionForSession(RESUME_POSITION_MS))
     }
+
+    @Test
+    fun `live and catch-up targets cannot read or overwrite resume progress`() =
+        runTest(dispatcher) {
+            val source = FakePlayerDataSource()
+            val live = PlayerViewModel(source, LOCAL_TARGET)
+            val catchUp = PlayerViewModel(source, HUB_CATCH_UP_TARGET)
+            advanceUntilIdle()
+
+            assertEquals(0L, live.bootstrap.value?.resumePositionMs)
+            assertEquals(0L, catchUp.bootstrap.value?.resumePositionMs)
+            assertTrue(source.resumeRequests.isEmpty())
+
+            live.saveProgress(42_000, 120_000)
+            live.clearProgress()
+            catchUp.saveProgress(42_000, 120_000)
+            catchUp.clearProgress()
+
+            assertNull(source.progressSave)
+            assertTrue(source.clearedProgress.isEmpty())
+        }
+
+    @Test
+    fun `retained session resume follows the same end boundary as persisted progress`() =
+        runTest(dispatcher) {
+            val viewModel = PlayerViewModel(FakePlayerDataSource(), HUB_VOD_TARGET)
+            advanceUntilIdle()
+
+            viewModel.saveProgress(positionMs = 105_000, durationMs = 120_000)
+            assertEquals(105_000, viewModel.resumePositionForSession(RESUME_POSITION_MS))
+
+            viewModel.saveProgress(positionMs = 105_001, durationMs = 120_000)
+            assertEquals(0, viewModel.resumePositionForSession(RESUME_POSITION_MS))
+        }
 
     @Test
     fun `hub target creates a lease with reported capabilities`() = runTest(dispatcher) {
@@ -220,6 +257,24 @@ class PlayerViewModelTest {
     }
 
     @Test
+    fun `failed hub preparation can be retried`() = runTest(dispatcher) {
+        val playback = FakeHubPlayback()
+        val viewModel = hubViewModel(playback)
+        advanceUntilIdle()
+        playback.mutableState.value = HubPlaybackState.Failed(IllegalStateException("offline"))
+        advanceUntilIdle()
+
+        viewModel.retryHubPlayback()
+        advanceUntilIdle()
+
+        assertNull(viewModel.problem.value)
+        assertEquals(
+            listOf("lease", "intent", "media:solo", "lease", "intent", "media:solo"),
+            playback.startupEvents,
+        )
+    }
+
+    @Test
     fun `404 during hub playback does not stop or auto-retry the lease`() = runTest(dispatcher) {
         val playback = FakeHubPlayback()
         val viewModel = hubViewModel(playback)
@@ -262,6 +317,39 @@ class PlayerViewModelTest {
             advanceUntilIdle()
 
             assertEquals(PlayerProblem.FAILED, viewModel.problem.value)
+
+            viewModel.retryHubPlayback()
+            advanceUntilIdle()
+            assertEquals(PlayerProblem.FAILED, viewModel.problem.value)
+        }
+
+    @Test
+    fun `retry repeats capability discovery when it failed before lease creation`() =
+        runTest(dispatcher) {
+            val playback = FakeHubPlayback()
+            var reportCalls = 0
+            val viewModel = PlayerViewModel(
+                source = FakePlayerDataSource(),
+                target = HUB_TARGET,
+                hubPlaybackFactory = { playback },
+                capabilityReporter = {
+                    reportCalls++
+                    if (reportCalls == 1) error("codec query failed")
+                    ReportedCapabilities(listOf("h264"), listOf("aac"))
+                },
+            )
+            advanceUntilIdle()
+            assertEquals(PlayerProblem.FAILED, viewModel.problem.value)
+
+            viewModel.retryHubPlayback()
+            advanceUntilIdle()
+
+            assertEquals(2, reportCalls)
+            assertNull(viewModel.problem.value)
+            assertEquals(
+                ClientCapabilitiesDto(listOf("h264"), listOf("aac"), true),
+                playback.contentStart?.capabilities,
+            )
         }
 
     @Test
@@ -276,6 +364,19 @@ class PlayerViewModelTest {
 
         assertEquals(1, playback.stopCalls)
     }
+
+    @Test
+    fun `player replacement waits for the old hub lease to stop exactly once`() =
+        runTest(dispatcher) {
+            val playback = FakeHubPlayback()
+            val viewModel = hubViewModel(playback)
+            advanceUntilIdle()
+
+            viewModel.closePlayerAndAwait()
+            viewModel.closePlayerAndAwait()
+
+            assertEquals(1, playback.stopCalls)
+        }
 
     @Test
     fun `closing before startup runs cannot create a late lease`() = runTest(dispatcher) {
@@ -717,6 +818,7 @@ class PlayerViewModelTest {
             TVG_ID,
             live = true,
         )
+        val LOCAL_VOD_TARGET = LOCAL_TARGET.copy(live = false)
         val HUB_TARGET = PlayerTarget.HubContent(
             HUB_ID,
             PLAYLIST_ID,
@@ -725,5 +827,13 @@ class PlayerViewModelTest {
             live = true,
         )
         val HUB_VOD_TARGET = HUB_TARGET.copy(live = false)
+        val HUB_CATCH_UP_TARGET = PlayerTarget.HubCatchUp(
+            hubId = HUB_ID,
+            playlistId = PLAYLIST_ID,
+            contentId = CONTENT_ID,
+            title = "Replay",
+            startMs = 1_000,
+            durationMs = 60_000,
+        )
     }
 }

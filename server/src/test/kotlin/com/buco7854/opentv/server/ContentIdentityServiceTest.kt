@@ -3,9 +3,15 @@ package com.buco7854.opentv.server
 import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.model.Playlist
+import com.buco7854.opentv.core.model.XtreamSeries
 import com.buco7854.opentv.core.storage.Storage
+import com.buco7854.opentv.serverdata.UserRole
+import com.buco7854.opentv.serverdata.UserStatus
 import com.buco7854.opentv.serverdata.createOpenTvServerStorage
 import com.buco7854.opentv.serverdata.db.ContentIdentityRow
+import com.buco7854.opentv.serverdata.db.UserFavoriteRow
+import com.buco7854.opentv.serverdata.db.UserRow
+import com.buco7854.opentv.serverdata.db.favoriteSeriesListings
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import java.nio.file.Files
@@ -157,6 +163,69 @@ class ContentIdentityServiceTest {
             assertEquals(setOf(7L), requestedIds.toSet())
             assertEquals("A human title", titles[resolvedContentId])
             assertNull(titles["missing-content"])
+        } finally {
+            storage.close()
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun reconciliationBuildsSparseSeriesFavoriteLocators() = runTest {
+        val dir = Files.createTempDirectory("content-series-locators")
+        val persistence = createOpenTvServerStorage(dir.resolve("opentv.db").toString())
+        val storage = persistence.catalog
+        val db = persistence.database
+        try {
+            val playlistId = storage.playlists.insert(Playlist(name = "P", url = null))
+            val service = ContentIdentityService(db, storage) { 1_000L }
+            val panel = XtreamSeries(
+                playlistId = playlistId,
+                seriesId = 42,
+                name = "Panel Show",
+                categoryName = "Drama",
+                cover = "https://fixture.invalid/panel.jpg",
+                plot = null,
+                castNames = null,
+                genre = null,
+                rating = null,
+            )
+            storage.xtreamSeries.insertAll(listOf(panel))
+            storage.channels.insertAll(
+                listOf(1, 2).map { episode ->
+                    Channel(
+                        playlistId = playlistId,
+                        name = "Episode $episode",
+                        url = "https://fixture.invalid/m3u/$episode",
+                        logo = "https://fixture.invalid/m3u.jpg",
+                        groupTitle = "M3U Drama",
+                        tvgId = null,
+                        kind = ChannelKind.SERIES,
+                        seriesKey = "M3U Show",
+                        season = 1,
+                        episode = episode,
+                        position = episode,
+                    )
+                },
+            )
+            service.reconcilePlaylist(playlistId)
+            val panelContent = service.xtreamSeries(panel).contentId
+            val m3uContent = service.m3uSeries(playlistId, "M3U Show").contentId
+            db.users().insert(
+                UserRow(
+                    "u1", "Alice", "alice", "Alice", UserStatus.ACTIVE, UserRole.USER,
+                    false, 1, 1, null,
+                ),
+            )
+            db.activity().addFavorite(UserFavoriteRow("u1", panelContent, 1))
+            db.activity().addFavorite(UserFavoriteRow("u1", m3uContent, 2))
+
+            val listings = db.favoriteSeriesListings("u1")
+
+            assertEquals(setOf(panelContent, m3uContent), listings.mapTo(mutableSetOf()) { it.contentId })
+            assertEquals(0, listings.single { it.contentId == panelContent }.count)
+            assertEquals("42", listings.single { it.contentId == panelContent }.xtreamSeriesId)
+            assertEquals(2, listings.single { it.contentId == m3uContent }.count)
+            assertNull(listings.single { it.contentId == m3uContent }.xtreamSeriesId)
         } finally {
             storage.close()
             dir.toFile().deleteRecursively()

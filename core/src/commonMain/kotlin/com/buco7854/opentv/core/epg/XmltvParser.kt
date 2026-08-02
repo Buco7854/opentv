@@ -45,7 +45,7 @@ object XmltvParser {
                 is Token.StartTag -> when (token.name) {
                     "programme" -> {
                         inProgramme = !token.selfClosing
-                        channel = token.attributes["channel"]
+                        channel = token.attributes["channel"]?.trim()?.takeIf { it.isNotEmpty() }
                         start = parseTime(token.attributes["start"])
                         end = parseTime(token.attributes["stop"])
                         title = null
@@ -74,7 +74,8 @@ object XmltvParser {
                         val ch = channel
                         val s = start
                         val e = end
-                        if (inProgramme && ch != null && s != null && e != null &&
+                        // Missing or non-positive intervals are bad rows, not a bad guide.
+                        if (inProgramme && ch != null && s != null && e != null && e > s &&
                             ch in wantedChannelIds && e > windowStartMs && s < windowEndMs
                         ) {
                             batch.add(

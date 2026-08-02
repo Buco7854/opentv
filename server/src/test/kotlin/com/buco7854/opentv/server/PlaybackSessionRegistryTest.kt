@@ -1064,6 +1064,35 @@ class PlaybackSessionRegistryTest {
     }
 
     @Test
+    fun stalledLeaseRetainsOnlyABoundedCommandBacklog() {
+        val sessions = PlaybackSessionRegistry(reapInBackground = false)
+        val lease = create(sessions, "stalled")
+        val offered = 10_000
+
+        repeat(offered) { index ->
+            assertTrue(
+                sessions.enqueue(
+                    lease,
+                    SessionCommandDto(type = "message", text = "message-$index"),
+                ),
+            )
+        }
+
+        val retained = sessions.drainCommands(lease)
+        println("PLAYBACK_COMMAND_BACKLOG offered=$offered retained=${retained.size}")
+        assertEquals(PlaybackSessionRegistry.MAX_QUEUED_COMMANDS_PER_LEASE, retained.size)
+        assertEquals(
+            "message-${offered - PlaybackSessionRegistry.MAX_QUEUED_COMMANDS_PER_LEASE}",
+            retained.first().text,
+        )
+        assertEquals("message-${offered - 1}", retained.last().text)
+        assertTrue(retained.zipWithNext().all { (first, second) ->
+            requireNotNull(first.sequence) < requireNotNull(second.sequence)
+        })
+        sessions.close()
+    }
+
+    @Test
     fun reconnectResendsAnActiveReloadBarrierAfterTheRoster() {
         val sessions = PlaybackSessionRegistry(reapInBackground = false)
         val host = create(sessions, "host")

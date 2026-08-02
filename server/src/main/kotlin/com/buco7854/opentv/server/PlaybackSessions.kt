@@ -209,6 +209,9 @@ class PlaybackSessionRegistry(
             check(live.commandSequence < Long.MAX_VALUE) { "Playback command sequence exhausted" }
             live.commandSequence++
             live.commands.add(command.copy(sequence = live.commandSequence))
+            while (live.commands.size > MAX_QUEUED_COMMANDS_PER_LEASE) {
+                live.commands.poll()
+            }
         }
         wake(id).trySend(Unit)
         return true
@@ -727,6 +730,8 @@ class PlaybackSessionRegistry(
         private const val DEFAULT_KICK_NOTICE_GRACE_MS = 750L
         // Must outlive every media grant so stale lease-scoped URLs consistently return 410.
         private const val JOIN_REQUEST_TTL_MS = 60_000L
+        /** Commands are best-effort state changes, not an unbounded reliable-delivery log. */
+        internal const val MAX_QUEUED_COMMANDS_PER_LEASE = 256
     }
 
     override fun close() {

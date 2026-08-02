@@ -70,6 +70,11 @@ fun PlayerScreen(
     val problem by viewModel.problem.collectAsStateWithLifecycle()
     val inPip by PipController.isInPip.collectAsStateWithLifecycle()
 
+    fun closeLeaseAndGoBack() {
+        viewModel.closePlayer()
+        onBack()
+    }
+
     DisposableEffect(viewModel) {
         onDispose {
             val changingConfigurations = (context as? Activity)?.isChangingConfigurations == true
@@ -77,8 +82,11 @@ fun PlayerScreen(
         }
     }
 
-    fun watchTogetherActions(closeSheet: () -> Unit) = WatchTogetherActions(
-        onClose = onBack,
+    fun watchTogetherActions(
+        closeSheet: () -> Unit,
+        closePlayer: () -> Unit,
+    ) = WatchTogetherActions(
+        onClose = closePlayer,
         onWatchAlone = {
             viewModel.watchAlone()
             closeSheet()
@@ -109,11 +117,13 @@ fun PlayerScreen(
 
     val initial = bootstrap
     if (initial == null) {
+        BackHandler(onBack = ::closeLeaseAndGoBack)
         Box(Modifier.fillMaxSize().background(Color.Black))
         return
     }
     val mediaSource = playbackSource
     if (mediaSource == null) {
+        BackHandler(onBack = ::closeLeaseAndGoBack)
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             if (problem == null) {
                 CircularProgressIndicator(
@@ -122,17 +132,18 @@ fun PlayerScreen(
                     strokeWidth = 3.dp,
                 )
             } else {
+                val action = playerErrorAction(problem)
                 PlayerErrorOverlay(
                     message = problemMessage(problem!!),
-                    onClose = onBack,
-                    actionLabel = when (problem) {
-                        PlayerProblem.SIGNED_OUT -> stringResource(R.string.hub_sign_in_again)
-                        PlayerProblem.AT_CAPACITY -> stringResource(R.string.common_retry)
+                    onClose = ::closeLeaseAndGoBack,
+                    actionLabel = when (action) {
+                        PlayerErrorAction.SIGN_IN -> stringResource(R.string.hub_sign_in_again)
+                        PlayerErrorAction.RETRY_HUB -> stringResource(R.string.common_retry)
                         else -> null
                     },
-                    onAction = when (problem) {
-                        PlayerProblem.SIGNED_OUT -> onSignIn
-                        PlayerProblem.AT_CAPACITY -> viewModel::retryHubPlayback
+                    onAction = when (action) {
+                        PlayerErrorAction.SIGN_IN -> onSignIn
+                        PlayerErrorAction.RETRY_HUB -> viewModel::retryHubPlayback
                         else -> null
                     },
                 )
@@ -149,13 +160,17 @@ fun PlayerScreen(
         if (shouldShowWatchTogetherBeforeMedia(watchTogether)) {
             WatchTogetherSheet(
                 state = watchTogether,
-                actions = watchTogetherActions(closeSheet = {}),
+                actions = watchTogetherActions(
+                    closeSheet = {},
+                    closePlayer = ::closeLeaseAndGoBack,
+                ),
                 // There is no player chrome to return to before media starts. Closing
                 // a required decision therefore cancels playback instead of silently
                 // submitting "watch alone" on the viewer's behalf. The ordinary optional
                 // offer keeps its established dismiss-means-solo behaviour.
                 onDismiss = {
-                    if (watchTogether.requiresJoin) onBack() else viewModel.watchAlone()
+                    if (watchTogether.requiresJoin) closeLeaseAndGoBack()
+                    else viewModel.watchAlone()
                 },
             )
         }
@@ -179,7 +194,7 @@ fun PlayerScreen(
             title = target.title,
             settings = initial.settings,
             initialLive = target.live,
-            resumeTargetMs = initial.resumePositionMs,
+            resumeTargetMs = viewModel.resumePositionForSession(initial.resumePositionMs),
             saveProgress = viewModel::saveProgress,
             clearProgress = viewModel::clearProgress,
             dataSourceFactory = dataSourceFactory,
@@ -200,6 +215,11 @@ fun PlayerScreen(
     val playback by session.state.collectAsStateWithLifecycle()
     val systemController = rememberPlayerSystemController(session.player)
     PlayerSystemEffects(session, systemController)
+
+    fun closePlayerAndGoBack() {
+        session.pause()
+        closeLeaseAndGoBack()
+    }
     var currentTitle by remember(session) { mutableStateOf(target.title) }
     var controlsVisible by remember(session) { mutableStateOf(true) }
     var controlsFocused by remember(session) { mutableStateOf(false) }
@@ -286,11 +306,39 @@ fun PlayerScreen(
             PlayerBackAction.DISMISS_NOTICE ->
                 watchTogether.notice?.let { viewModel.dismissWatchTogetherNotice(it.id) }
             PlayerBackAction.HIDE_CONTROLS -> controlsVisible = false
-            PlayerBackAction.EXIT -> onBack()
+            PlayerBackAction.EXIT -> closePlayerAndGoBack()
         }
     }
 
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .onPreviewKeyEvent { event ->
+                val native = event.nativeKeyEvent
+                val action = playerMediaAction(native.keyCode, native.action)
+                if (action == PlayerMediaAction.NONE || playback.error != null) {
+                    return@onPreviewKeyEvent false
+                }
+                if (watchTogether.loading) return@onPreviewKeyEvent true
+                when (action) {
+                    PlayerMediaAction.TOGGLE_PLAYBACK -> session.togglePlayback()
+                    PlayerMediaAction.PLAY -> session.play()
+                    PlayerMediaAction.PAUSE -> session.pause()
+                    PlayerMediaAction.SEEK_BACK -> {
+                        session.seekBack()
+                        hint = seekBackHint
+                    }
+                    PlayerMediaAction.SEEK_FORWARD -> {
+                        session.seekForward()
+                        hint = seekForwardHint
+                    }
+                    PlayerMediaAction.NONE -> Unit
+                }
+                markInteraction()
+                true
+            },
+    ) {
         AndroidView(
             factory = { surfaceContext ->
                 VideoSurface(surfaceContext).apply {
@@ -364,7 +412,7 @@ fun PlayerScreen(
                     pipSupported = systemController.pipSupported,
                 ),
                 actions = PlayerChromeActions(
-                    onBack = onBack,
+                    onBack = ::closePlayerAndGoBack,
                     onInteraction = ::markInteraction,
                     onChromeFocusChanged = { controlsFocused = it },
                     onTogglePlayback = {
@@ -435,18 +483,22 @@ fun PlayerScreen(
 
         if (!inPip) {
             playback.error?.let { message ->
+                val action = playerErrorAction(problem)
                 PlayerErrorOverlay(
                     message = message,
-                    onClose = onBack,
-                    actionLabel = when (problem) {
-                        PlayerProblem.SIGNED_OUT -> stringResource(R.string.hub_sign_in_again)
-                        PlayerProblem.AT_CAPACITY -> stringResource(R.string.common_retry)
-                        else -> null
+                    onClose = ::closePlayerAndGoBack,
+                    actionLabel = when (action) {
+                        PlayerErrorAction.SIGN_IN -> stringResource(R.string.hub_sign_in_again)
+                        PlayerErrorAction.RETRY_SESSION,
+                        PlayerErrorAction.RETRY_HUB,
+                        -> stringResource(R.string.common_retry)
+                        PlayerErrorAction.NONE -> null
                     },
-                    onAction = when (problem) {
-                        PlayerProblem.SIGNED_OUT -> onSignIn
-                        PlayerProblem.AT_CAPACITY -> viewModel::retryHubPlayback
-                        else -> null
+                    onAction = when (action) {
+                        PlayerErrorAction.SIGN_IN -> onSignIn
+                        PlayerErrorAction.RETRY_SESSION -> session::retry
+                        PlayerErrorAction.RETRY_HUB -> viewModel::retryHubPlayback
+                        PlayerErrorAction.NONE -> null
                     },
                 )
             }
@@ -480,6 +532,10 @@ fun PlayerScreen(
                         session.playCatchup(catchupTarget.url)
                     } else {
                         showGuide = false
+                        session.pause()
+                        // NavHost cross-fades destinations, so the outgoing ViewModel otherwise
+                        // retains its same-content lease while the replacement asks for one.
+                        viewModel.closePlayerAndAwait()
                         onPlayTarget(catchupTarget)
                     }
                 }
@@ -524,12 +580,15 @@ fun PlayerScreen(
     if (showWatchTogether) {
         WatchTogetherSheet(
             state = watchTogether,
-            actions = watchTogetherActions { showWatchTogether = false },
+            actions = watchTogetherActions(
+                closeSheet = { showWatchTogether = false },
+                closePlayer = ::closePlayerAndGoBack,
+            ),
             onDismiss = {
                 if (watchTogether.duplicateRefused ||
                     (watchTogether.choosing && watchTogether.requiresJoin)
                 ) {
-                    onBack()
+                    closePlayerAndGoBack()
                 } else {
                     if (watchTogether.choosing) viewModel.watchAlone()
                     showWatchTogether = false

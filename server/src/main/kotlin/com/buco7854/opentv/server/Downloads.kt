@@ -92,7 +92,7 @@ class DownloadManager(
             db.downloads().upsertBlob(blob)
         }
         val (association, existing) = withBlobLock(blob.id) {
-            val prior = db.downloads().forUser(userId).firstOrNull { it.blobId == blob.id }
+            val prior = db.downloads().forUserBlob(userId, blob.id)
             val linked = prior?.copy(active = true, suspended = false, updatedAtMs = now)
                 ?: UserDownloadRow(UUID.randomUUID().toString(), userId, blob.id, true, false, now, now)
             db.downloads().upsertUserDownload(linked)
@@ -115,14 +115,10 @@ class DownloadManager(
     }
 
     suspend fun list(userId: String): List<Pair<UserDownloadRow, DownloadBlobRow>> =
-        db.downloads().forUser(userId).mapNotNull { user ->
-            db.downloads().blob(user.blobId)?.let { user to it }
-        }
+        db.downloads().listingForUser(userId).map { it.userDownload() to it.blob() }
 
     suspend fun adminList(): List<Pair<UserDownloadRow, DownloadBlobRow>> =
-        db.downloads().allUserDownloads().mapNotNull { user ->
-            db.downloads().blob(user.blobId)?.let { user to it }
-        }
+        db.downloads().allListings().map { it.userDownload() to it.blob() }
 
     suspend fun get(userId: String, userDownloadId: String): Pair<UserDownloadRow, DownloadBlobRow> {
         val user = owned(userId, userDownloadId)

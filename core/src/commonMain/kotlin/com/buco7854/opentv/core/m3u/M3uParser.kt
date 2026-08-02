@@ -18,9 +18,13 @@ class M3uEntry(
 
 class M3uHeader(val epgUrl: String?)
 
-/** Single-pass streaming parser: emits entries via callback so large playlists stay off-heap. */
+/**
+ * Single-pass streaming parser: emits entries via callback so large playlists stay off-heap.
+ * Orphan URLs and incomplete `#EXTINF` rows are deliberately ignored; one malformed row must
+ * not reject the usable remainder of a provider playlist.
+ */
 object M3uParser {
-    private val ATTR = Regex("""([\w-]+)="([^"]*)"""")
+    private val ATTR = Regex("""([\w-]+)="((?:\\.|[^"])*)"""")
 
     suspend fun parse(
         lines: Sequence<String>,
@@ -38,13 +42,14 @@ object M3uParser {
         var pendingInfo = false
 
         for (line in lines) {
-            val trimmed = line.trim()
+            val trimmed = line.trim().trimStart('\uFEFF')
             when {
                 trimmed.startsWith("#EXTM3U", ignoreCase = true) -> {
                     val attrs = parseAttrs(trimmed)
                     onHeader(M3uHeader(attrs["url-tvg"] ?: attrs["x-tvg-url"]))
                 }
                 trimmed.startsWith("#EXTINF", ignoreCase = true) -> {
+                    extGrp = null
                     val comma = titleSeparator(trimmed)
                     val attrs = parseAttrs(
                         if (comma >= 0) trimmed.substring(0, comma) else trimmed
@@ -54,8 +59,11 @@ object M3uParser {
                     logo = attrs["tvg-logo"]?.takeIf { it.isNotBlank() }
                     group = attrs["group-title"]?.takeIf { it.isNotBlank() }
                     tvgId = attrs["tvg-id"]?.takeIf { it.isNotBlank() }
-                    catchupDays = attrs["catchup-days"]?.toIntOrNull()
-                        ?: attrs["tv-archive-duration"]?.toIntOrNull() ?: 0
+                    catchupDays = (
+                        attrs["catchup-days"]?.toIntOrNull()
+                            ?: attrs["tv-archive-duration"]?.toIntOrNull()
+                            ?: 0
+                        ).coerceAtLeast(0)
                     catchupSource = attrs["catchup-source"]?.takeIf { it.isNotBlank() }
                     catchupMode = attrs["catchup"]?.lowercase()?.takeIf { it.isNotBlank() }
                     pendingInfo = true
@@ -73,6 +81,7 @@ object M3uParser {
                     pendingInfo = false
                     logo = null; group = null; tvgId = null
                     catchupDays = 0; catchupSource = null; catchupMode = null
+                    extGrp = null
                 }
             }
         }
@@ -82,7 +91,7 @@ object M3uParser {
         var quoted = false
         for (i in line.indices) {
             when (line[i]) {
-                '"' -> quoted = !quoted
+                '"' -> if (!isEscaped(line, i)) quoted = !quoted
                 ',' -> if (!quoted) return i
             }
         }
@@ -90,7 +99,34 @@ object M3uParser {
     }
 
     private fun parseAttrs(line: String): Map<String, String> =
-        ATTR.findAll(line).associate { it.groupValues[1].lowercase() to it.groupValues[2] }
+        ATTR.findAll(line).associate {
+            it.groupValues[1].lowercase() to unescapeAttribute(it.groupValues[2]).trim()
+        }
+
+    private fun isEscaped(text: String, index: Int): Boolean {
+        var slashes = 0
+        var cursor = index - 1
+        while (cursor >= 0 && text[cursor] == '\\') {
+            slashes++
+            cursor--
+        }
+        return slashes % 2 == 1
+    }
+
+    private fun unescapeAttribute(value: String): String = buildString(value.length) {
+        var index = 0
+        while (index < value.length) {
+            if (value[index] == '\\' && index + 1 < value.length &&
+                (value[index + 1] == '\\' || value[index + 1] == '"')
+            ) {
+                append(value[index + 1])
+                index += 2
+            } else {
+                append(value[index])
+                index++
+            }
+        }
+    }
 
     private fun buildEntry(
         name: String,

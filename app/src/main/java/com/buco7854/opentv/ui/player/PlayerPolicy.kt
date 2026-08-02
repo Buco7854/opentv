@@ -27,7 +27,10 @@ internal fun shouldApplyResume(
     targetMs: Long,
     durationMs: Long,
     endGuardMs: Long = 15_000,
-): Boolean = targetMs in 1 until (durationMs - endGuardMs).coerceAtLeast(1)
+): Boolean =
+    targetMs > 0 &&
+        durationMs > endGuardMs &&
+        targetMs <= durationMs - endGuardMs
 
 /**
  * Whether a reported position is worth persisting.
@@ -40,12 +43,37 @@ internal fun shouldApplyResume(
 internal fun shouldPersistProgress(durationMs: Long, live: Boolean): Boolean =
     !live && durationMs > 0
 
+/** Only on-demand content with a stable identity participates in resume storage. */
+internal fun shouldTrackProgress(target: PlayerTarget): Boolean =
+    !target.live && target !is PlayerTarget.HubCatchUp
+
 /**
  * A navigation disposal ends the lease. An Activity recreation does not: the
  * retained ViewModel still owns that same lease and resumes it after recreation.
  */
 internal fun shouldClosePlayerOnDispose(isChangingConfigurations: Boolean): Boolean =
     !isChangingConfigurations
+
+/** Auto-PiP follows active playback intent, not a paused or failed player. */
+internal fun shouldAutoEnterPip(playWhenReady: Boolean, hasError: Boolean): Boolean =
+    playWhenReady && !hasError
+
+internal enum class PlayerErrorAction {
+    RETRY_SESSION,
+    RETRY_HUB,
+    SIGN_IN,
+    NONE,
+}
+
+/** The recovery control shown for a terminal player surface. */
+internal fun playerErrorAction(problem: PlayerProblem?): PlayerErrorAction = when (problem) {
+    null -> PlayerErrorAction.RETRY_SESSION
+    PlayerProblem.AT_CAPACITY,
+    PlayerProblem.FAILED,
+    -> PlayerErrorAction.RETRY_HUB
+    PlayerProblem.SIGNED_OUT -> PlayerErrorAction.SIGN_IN
+    PlayerProblem.PLAYBACK_ENDED -> PlayerErrorAction.NONE
+}
 
 /** Media is deliberately absent while the initial alone/together decision is unresolved. */
 internal fun shouldShowWatchTogetherBeforeMedia(state: WatchTogetherState): Boolean =
@@ -101,6 +129,42 @@ internal enum class PlayerRemoteAction {
     NONE,
 }
 
+internal enum class PlayerMediaAction {
+    TOGGLE_PLAYBACK,
+    PLAY,
+    PAUSE,
+    SEEK_BACK,
+    SEEK_FORWARD,
+    NONE,
+}
+
+internal enum class PlayerToggleAction {
+    PAUSE,
+    PLAY,
+    RESTART,
+}
+
+/** An ended timeline needs an explicit seek; changing playWhenReady alone cannot replay it. */
+internal fun playerToggleAction(playWhenReady: Boolean, ended: Boolean): PlayerToggleAction =
+    when {
+        ended -> PlayerToggleAction.RESTART
+        playWhenReady -> PlayerToggleAction.PAUSE
+        else -> PlayerToggleAction.PLAY
+    }
+
+/** Hardware media keys work independently of which chrome control owns focus. */
+internal fun playerMediaAction(keyCode: Int, keyAction: Int): PlayerMediaAction {
+    if (keyAction != KeyEvent.ACTION_DOWN) return PlayerMediaAction.NONE
+    return when (keyCode) {
+        KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> PlayerMediaAction.TOGGLE_PLAYBACK
+        KeyEvent.KEYCODE_MEDIA_PLAY -> PlayerMediaAction.PLAY
+        KeyEvent.KEYCODE_MEDIA_PAUSE -> PlayerMediaAction.PAUSE
+        KeyEvent.KEYCODE_MEDIA_REWIND -> PlayerMediaAction.SEEK_BACK
+        KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> PlayerMediaAction.SEEK_FORWARD
+        else -> PlayerMediaAction.NONE
+    }
+}
+
 /** Key policy for the otherwise touch-only surface while player chrome is hidden. */
 internal fun playerRemoteAction(
     enabled: Boolean,
@@ -114,14 +178,9 @@ internal fun playerRemoteAction(
         KeyEvent.KEYCODE_DPAD_DOWN,
         KeyEvent.KEYCODE_ENTER,
         KeyEvent.KEYCODE_NUMPAD_ENTER,
-        KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
         -> PlayerRemoteAction.SHOW_CONTROLS
-        KeyEvent.KEYCODE_DPAD_LEFT,
-        KeyEvent.KEYCODE_MEDIA_REWIND,
-        -> PlayerRemoteAction.SEEK_BACK
-        KeyEvent.KEYCODE_DPAD_RIGHT,
-        KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
-        -> PlayerRemoteAction.SEEK_FORWARD
+        KeyEvent.KEYCODE_DPAD_LEFT -> PlayerRemoteAction.SEEK_BACK
+        KeyEvent.KEYCODE_DPAD_RIGHT -> PlayerRemoteAction.SEEK_FORWARD
         else -> PlayerRemoteAction.NONE
     }
 }

@@ -338,12 +338,15 @@ private fun TrackOption(
     }
 }
 
-private fun trackLabel(format: Format): String? {
+internal fun trackLabel(format: Format): String? {
     val language = format.language
         ?.takeIf { it.isNotBlank() && !it.equals("und", ignoreCase = true) }
         ?.let { Locale.forLanguageTag(it).displayLanguage.replaceFirstChar { character -> character.uppercase() } }
-    return format.label ?: language
+    return visibleTrackLabel(format.label, language)
 }
+
+internal fun visibleTrackLabel(label: String?, language: String?): String? =
+    label?.takeIf { it.isNotBlank() } ?: language
 
 private fun selectTrack(player: Player, group: Tracks.Group, trackIndex: Int) {
     player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()

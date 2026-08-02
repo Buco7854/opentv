@@ -81,6 +81,7 @@ abstract class OpenTvServerDatabase : RoomDatabase(), CatalogDaos {
     abstract fun activity(): ActivityDao
     abstract fun downloads(): DownloadDao
     abstract fun maintenance(): MaintenanceDao
+    abstract fun guideMaintenance(): GuideMaintenanceDao
 }
 
 @Suppress("NO_ACTUAL_FOR_EXPECT", "EXPECT_ACTUAL_CLASSIFIERS_ARE_IN_BETA_WARNING")

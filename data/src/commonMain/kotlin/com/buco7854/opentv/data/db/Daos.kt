@@ -369,9 +369,14 @@ interface EpgDao {
     @Query("DELETE FROM programmes WHERE playlistId = :playlistId AND endMs <= :beforeMs")
     suspend fun prune(playlistId: Long, beforeMs: Long)
 
+    /** Provider guides can overlap; the active row with the latest start owns that channel. */
     @Query(
-        "SELECT * FROM programmes WHERE playlistId = :playlistId " +
-            "AND startMs <= :now AND endMs > :now"
+        "SELECT p.* FROM programmes AS p WHERE p.playlistId = :playlistId " +
+            "AND p.startMs <= :now AND p.endMs > :now AND NOT EXISTS (" +
+            "SELECT 1 FROM programmes AS n " +
+            "WHERE n.playlistId = p.playlistId AND n.tvgId = p.tvgId " +
+            "AND n.startMs <= :now AND n.endMs > :now " +
+            "AND n.startMs > p.startMs)"
     )
     suspend fun nowAiring(playlistId: Long, now: Long): List<ProgrammeRow>
 

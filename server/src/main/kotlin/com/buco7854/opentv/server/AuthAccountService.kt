@@ -128,20 +128,26 @@ internal class AuthAccountService(
             if (db.credentials().webAuthn(user.id).isNotEmpty()) add("webauthn")
             if (db.oidc().forUser(user.id).isNotEmpty()) add("oidc")
         }
-        return AdminUserDto(
-            id = user.id,
-            username = user.username,
-            displayName = user.displayName,
-            status = user.status,
-            manualRole = user.manualRole,
-            effectiveRole = effectiveRole(user),
-            authMethods = methods,
-            playlistIds = db.grants().forUser(user.id),
-            createdAtMs = user.createdAtMs,
-            lastLoginAtMs = user.lastLoginAtMs,
-            settableStatuses = AdminUserLifecycle.settableStatuses,
-        )
+        return adminUserDto(user, methods, db.grants().forUser(user.id))
     }
+
+    fun adminUserDto(
+        user: UserRow,
+        methods: List<String>,
+        playlistIds: List<Long>,
+    ): AdminUserDto = AdminUserDto(
+        id = user.id,
+        username = user.username,
+        displayName = user.displayName,
+        status = user.status,
+        manualRole = user.manualRole,
+        effectiveRole = effectiveRole(user),
+        authMethods = methods,
+        playlistIds = playlistIds,
+        createdAtMs = user.createdAtMs,
+        lastLoginAtMs = user.lastLoginAtMs,
+        settableStatuses = AdminUserLifecycle.settableStatuses,
+    )
 
     suspend fun currentUserDto(
         user: UserRow,

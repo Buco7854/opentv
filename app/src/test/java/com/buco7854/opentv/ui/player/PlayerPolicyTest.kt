@@ -37,7 +37,11 @@ class PlayerPolicyTest {
     fun `resume is applied only before the end guard`() {
         assertFalse(shouldApplyResume(0, 120_000))
         assertTrue(shouldApplyResume(10_000, 120_000))
-        assertFalse(shouldApplyResume(105_000, 120_000))
+        // Persistence retains this exact boundary, so playback must honor it too.
+        assertTrue(shouldApplyResume(105_000, 120_000))
+        assertFalse(shouldApplyResume(105_001, 120_000))
+        assertFalse(shouldApplyResume(10_000, Long.MIN_VALUE + 1))
+        assertFalse(shouldApplyResume(1, 15_000))
     }
 
     @Test
@@ -47,6 +51,25 @@ class PlayerPolicyTest {
         assertFalse(shouldPersistProgress(0, live = false))
         assertFalse(shouldPersistProgress(120_000, live = true))
         assertTrue(shouldPersistProgress(120_000, live = false))
+    }
+
+    @Test
+    fun `only stable on-demand targets participate in resume storage`() {
+        assertTrue(shouldTrackProgress(LOCAL_VOD_TARGET))
+        assertTrue(shouldTrackProgress(HUB_VOD_TARGET))
+        assertFalse(shouldTrackProgress(LOCAL_VOD_TARGET.copy(live = true)))
+        assertFalse(
+            shouldTrackProgress(
+                PlayerTarget.HubCatchUp(
+                    hubId = 1,
+                    playlistId = 2,
+                    contentId = "channel",
+                    title = "Programme",
+                    startMs = 1_000,
+                    durationMs = 60_000,
+                ),
+            ),
+        )
     }
 
     @Test
@@ -61,6 +84,34 @@ class PlayerPolicyTest {
     fun `configuration disposal retains the hub lease but real navigation ends it`() {
         assertFalse(shouldClosePlayerOnDispose(isChangingConfigurations = true))
         assertTrue(shouldClosePlayerOnDispose(isChangingConfigurations = false))
+    }
+
+    @Test
+    fun `auto pip follows playback intent and refuses failed playback`() {
+        assertTrue(shouldAutoEnterPip(playWhenReady = true, hasError = false))
+        assertFalse(shouldAutoEnterPip(playWhenReady = false, hasError = false))
+        assertFalse(shouldAutoEnterPip(playWhenReady = true, hasError = true))
+    }
+
+    @Test
+    fun `player failures expose the recovery that can actually help`() {
+        assertEquals(PlayerErrorAction.RETRY_SESSION, playerErrorAction(null))
+        assertEquals(
+            PlayerErrorAction.RETRY_HUB,
+            playerErrorAction(PlayerProblem.FAILED),
+        )
+        assertEquals(
+            PlayerErrorAction.RETRY_HUB,
+            playerErrorAction(PlayerProblem.AT_CAPACITY),
+        )
+        assertEquals(
+            PlayerErrorAction.SIGN_IN,
+            playerErrorAction(PlayerProblem.SIGNED_OUT),
+        )
+        assertEquals(
+            PlayerErrorAction.NONE,
+            playerErrorAction(PlayerProblem.PLAYBACK_ENDED),
+        )
     }
 
     @Test
@@ -150,6 +201,77 @@ class PlayerPolicyTest {
         assertEquals(
             PlayerRemoteAction.NONE,
             playerRemoteAction(true, KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.ACTION_UP),
+        )
+    }
+
+    @Test
+    fun `hardware media keys work regardless of chrome focus`() {
+        assertEquals(
+            PlayerMediaAction.TOGGLE_PLAYBACK,
+            playerMediaAction(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.ACTION_DOWN),
+        )
+        assertEquals(
+            PlayerMediaAction.PLAY,
+            playerMediaAction(KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.ACTION_DOWN),
+        )
+        assertEquals(
+            PlayerMediaAction.PAUSE,
+            playerMediaAction(KeyEvent.KEYCODE_MEDIA_PAUSE, KeyEvent.ACTION_DOWN),
+        )
+        assertEquals(
+            PlayerMediaAction.SEEK_BACK,
+            playerMediaAction(KeyEvent.KEYCODE_MEDIA_REWIND, KeyEvent.ACTION_DOWN),
+        )
+        assertEquals(
+            PlayerMediaAction.SEEK_FORWARD,
+            playerMediaAction(KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.ACTION_DOWN),
+        )
+        assertEquals(
+            PlayerMediaAction.NONE,
+            playerMediaAction(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.ACTION_UP),
+        )
+    }
+
+    @Test
+    fun `ended playback restarts instead of toggling an ineffective play intent`() {
+        assertEquals(
+            PlayerToggleAction.PAUSE,
+            playerToggleAction(playWhenReady = true, ended = false),
+        )
+        assertEquals(
+            PlayerToggleAction.PLAY,
+            playerToggleAction(playWhenReady = false, ended = false),
+        )
+        assertEquals(
+            PlayerToggleAction.RESTART,
+            playerToggleAction(playWhenReady = false, ended = true),
+        )
+        assertEquals(
+            PlayerToggleAction.RESTART,
+            playerToggleAction(playWhenReady = true, ended = true),
+        )
+    }
+
+    @Test
+    fun `blank provider track labels fall back to a visible language`() {
+        assertEquals("French", visibleTrackLabel(" ", "French"))
+        assertEquals("Director commentary", visibleTrackLabel("Director commentary", "English"))
+    }
+
+    private companion object {
+        val LOCAL_VOD_TARGET = PlayerTarget.LocalUrl(
+            url = "https://provider.test/movie",
+            title = "Movie",
+            playlistId = 1,
+            tvgId = null,
+            live = false,
+        )
+        val HUB_VOD_TARGET = PlayerTarget.HubContent(
+            hubId = 1,
+            playlistId = 2,
+            contentId = "movie",
+            title = "Movie",
+            live = false,
         )
     }
 }

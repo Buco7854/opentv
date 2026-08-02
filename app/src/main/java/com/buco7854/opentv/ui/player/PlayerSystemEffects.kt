@@ -24,6 +24,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
 import com.buco7854.opentv.R
 
 private const val PIP_ACTION_TOGGLE = "com.buco7854.opentv.player.PIP_TOGGLE"
@@ -62,7 +63,9 @@ internal class PlayerSystemController(
                 pipAspectRatio(player.videoSize.width, player.videoSize.height)?.let { ratio ->
                     setAspectRatio(Rational((ratio * 1_000).toInt(), 1_000))
                 }
-                setActions(listOf(playPauseAction(context, player.isPlaying)))
+                // The action toggles playWhenReady, so its icon must represent that same
+                // intent. isPlaying also becomes false while buffering or focus-suppressed.
+                setActions(listOf(playPauseAction(context, player.playWhenReady)))
             }
             .build()
 }
@@ -108,7 +111,11 @@ internal fun PlayerSystemEffects(
 
     DisposableEffect(session.player, controller) {
         val listener = object : Player.Listener {
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                if (PipController.isInPip.value) controller.refreshPictureInPicture()
+            }
+
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
                 if (PipController.isInPip.value) controller.refreshPictureInPicture()
             }
         }
@@ -116,11 +123,18 @@ internal fun PlayerSystemEffects(
         onDispose { session.player.removeListener(listener) }
     }
 
-    DisposableEffect(controller, controller.pipSupported) {
-        if (controller.pipSupported) {
-            PipController.onUserLeave = controller::enterPictureInPicture
+    DisposableEffect(session, controller, controller.pipSupported) {
+        val unregister = if (controller.pipSupported) {
+            PipController.registerOnUserLeave {
+                val playback = session.state.value
+                if (shouldAutoEnterPip(playback.playing, playback.error != null)) {
+                    controller.enterPictureInPicture()
+                }
+            }
+        } else {
+            {}
         }
-        onDispose { PipController.onUserLeave = null }
+        onDispose(unregister)
     }
 
     DisposableEffect(session.player) {
@@ -155,12 +169,14 @@ internal fun PlayerSystemEffects(
     }
 }
 
-private fun playPauseAction(context: Context, isPlaying: Boolean): RemoteAction {
+private fun playPauseAction(context: Context, playWhenReady: Boolean): RemoteAction {
     val icon = Icon.createWithResource(
         context,
-        if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
+        if (playWhenReady) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
     )
-    val label = context.getString(if (isPlaying) R.string.common_pause else R.string.common_play)
+    val label = context.getString(
+        if (playWhenReady) R.string.common_pause else R.string.common_play,
+    )
     val pendingIntent = PendingIntent.getBroadcast(
         context,
         0,

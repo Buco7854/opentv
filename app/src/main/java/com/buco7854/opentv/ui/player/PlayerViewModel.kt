@@ -237,6 +237,7 @@ internal class PlayerViewModel(
     }
     private var pendingHubPositionMs: Long? = null
     private var latestHubPositionMs = 0L
+    private var retainedResumePositionMs: Long? = null
     private var attachedPlayer: WatchTogetherPlayer? = null
     private val watchTogether = hubPlayback?.let { playback ->
         WatchTogetherCoordinator(
@@ -305,7 +306,11 @@ internal class PlayerViewModel(
                 if (_bootstrap.value == null) {
                     _bootstrap.value = PlayerBootstrap(
                         settings = value,
-                        resumePositionMs = source.resumePositionFor(target) ?: 0L,
+                        resumePositionMs = if (shouldTrackProgress(target)) {
+                            source.resumePositionFor(target) ?: 0L
+                        } else {
+                            0L
+                        },
                     )
                 }
             }
@@ -384,24 +389,7 @@ internal class PlayerViewModel(
             viewModelScope.launch {
                 if (closed.get()) return@launch
                 try {
-                    val reported = capabilityReporter()
-                    if (closed.get()) return@launch
-                    val capabilities = ClientCapabilitiesDto(
-                        reported.videoCodecs,
-                        reported.audioCodecs,
-                        reported.selectsTracksInBand,
-                    )
-                    val leaseCreated = when (target) {
-                        is PlayerTarget.HubContent ->
-                            hubPlayback.start(target.contentId, capabilities)
-                        is PlayerTarget.HubCatchUp -> hubPlayback.startCatchUp(
-                            target.contentId,
-                            target.startMs,
-                            target.durationMs,
-                            capabilities,
-                        )
-                        is PlayerTarget.LocalUrl -> false
-                    }
+                    val leaseCreated = startHubLease(hubPlayback)
                     if (leaseCreated && !closed.get()) watchTogether?.checkIntent()
                 } catch (cancelled: CancellationException) {
                     throw cancelled
@@ -431,12 +419,22 @@ internal class PlayerViewModel(
     }
 
     fun saveProgress(positionMs: Long, durationMs: Long) {
+        if (!shouldTrackProgress(target)) return
+        retainedResumePositionMs = positionMs.takeIf {
+            shouldApplyResume(it, durationMs, ResumeRepository.END_GUARD_MS)
+        } ?: 0L
         source.saveProgress(target, positionMs, durationMs)
     }
 
     fun clearProgress() {
+        if (!shouldTrackProgress(target)) return
+        retainedResumePositionMs = 0L
         source.clearProgress(target)
     }
+
+    /** Survives an Activity recreation with the retained ViewModel and lease. */
+    fun resumePositionForSession(fallbackMs: Long): Long =
+        retainedResumePositionMs ?: fallbackMs
 
     fun updatePlaybackSnapshot(state: PlaybackUiState?) {
         val playback = hubPlayback ?: return
@@ -473,7 +471,20 @@ internal class PlayerViewModel(
         _problem.value = null
         _playbackSource.value = null
         viewModelScope.launch {
-            if (playback.retry()) watchTogether?.checkIntent(force = true)
+            try {
+                val leaseCreated = if (playback.state.value == HubPlaybackState.Preparing) {
+                    // Capability discovery can fail before HubPlayerPlayback has a request
+                    // to retry. Re-run that initial step instead of clearing into a spinner.
+                    startHubLease(playback)
+                } else {
+                    playback.retry()
+                }
+                if (leaseCreated) watchTogether?.checkIntent(force = true)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                _problem.value = PlayerProblem.FAILED
+            }
         }
     }
 
@@ -546,8 +557,35 @@ internal class PlayerViewModel(
         playback.stop()
     }
 
+    /** Ends the old lease before an in-player navigation creates its replacement. */
+    suspend fun closePlayerAndAwait() {
+        val playback = hubPlayback ?: return
+        if (!closed.compareAndSet(false, true)) return
+        playback.stopAndAwait()
+    }
+
     override fun onCleared() {
         closePlayer()
+    }
+
+    private suspend fun startHubLease(playback: HubPlayerPlayback): Boolean {
+        val reported = capabilityReporter()
+        if (closed.get()) return false
+        val capabilities = ClientCapabilitiesDto(
+            reported.videoCodecs,
+            reported.audioCodecs,
+            reported.selectsTracksInBand,
+        )
+        return when (target) {
+            is PlayerTarget.HubContent -> playback.start(target.contentId, capabilities)
+            is PlayerTarget.HubCatchUp -> playback.startCatchUp(
+                target.contentId,
+                target.startMs,
+                target.durationMs,
+                capabilities,
+            )
+            is PlayerTarget.LocalUrl -> false
+        }
     }
 
     private fun updateSettings(transform: PlayerSettings.() -> PlayerSettings) {

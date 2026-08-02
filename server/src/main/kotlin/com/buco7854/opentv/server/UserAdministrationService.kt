@@ -148,7 +148,21 @@ internal class UserAdministrationService(
 
     suspend fun users(actor: Actor): List<AdminUserDto> {
         requireAdmin(actor)
-        return db.users().all().map { accounts.adminUserDto(it) }
+        val methods = db.users().credentialMethods().associateBy { it.userId }
+        val grants = db.grants().allUserGrants().groupBy { it.userId }
+        return db.users().all().map { user ->
+            val flags = methods[user.id]
+            accounts.adminUserDto(
+                user,
+                buildList {
+                    if (flags?.hasPassword == true) add("password")
+                    if (flags?.hasTotp == true) add("totp")
+                    if (flags?.hasWebAuthn == true) add("webauthn")
+                    if (flags?.hasOidc == true) add("oidc")
+                },
+                grants[user.id].orEmpty().map { it.playlistId },
+            )
+        }
     }
 
     suspend fun resume(actor: Actor, userId: String): List<AdminResumeDto> {

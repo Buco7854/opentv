@@ -24,6 +24,15 @@ data class UserRow(
     val lastLoginAtMs: Long?,
 )
 
+/** Credential-presence flags for the admin account list, projected for every user at once. */
+data class UserCredentialMethodsRow(
+    val userId: String,
+    val hasPassword: Boolean,
+    val hasTotp: Boolean,
+    val hasWebAuthn: Boolean,
+    val hasOidc: Boolean,
+)
+
 @Entity(
     tableName = "password_credentials",
     primaryKeys = ["userId"],
@@ -300,6 +309,36 @@ data class UserFavoriteRow(
     val addedAtMs: Long,
 )
 
+/** Favorite plus its stable catalog identity, projected in one account-wide query. */
+data class FavoriteIdentityRow(
+    val contentId: String,
+    val playlistId: Long,
+    val kind: Int,
+    val currentChannelId: Long?,
+    val retired: Boolean,
+    val addedAtMs: Long,
+)
+
+/** Rebuildable lookup from a stable identity to its provider's series key. */
+data class ContentSeriesLocatorRow(
+    val contentId: String,
+    val playlistId: Long,
+    val sourceKind: String,
+    val sourceKey: String,
+)
+
+/** Renderable series favorite projected directly from the user's sparse favorite set. */
+data class FavoriteSeriesListingRow(
+    val contentId: String,
+    val playlistId: Long,
+    val addedAtMs: Long,
+    val seriesKey: String,
+    val count: Int,
+    val logo: String?,
+    val groupTitle: String,
+    val xtreamSeriesId: String?,
+)
+
 @Entity(
     tableName = "download_blobs",
     primaryKeys = ["id"],
@@ -343,6 +382,51 @@ data class UserDownloadRow(
     val createdAtMs: Long,
     val updatedAtMs: Long,
 )
+
+/** One joined listing row, avoiding one blob lookup for every user-download association. */
+data class DownloadListingRow(
+    val userDownloadId: String,
+    val userId: String,
+    val blobId: String,
+    val active: Boolean,
+    val suspended: Boolean,
+    val userCreatedAtMs: Long,
+    val userUpdatedAtMs: Long,
+    val contentId: String,
+    val title: String,
+    val sourceUrl: String,
+    val filePath: String,
+    val status: String,
+    val totalBytes: Long,
+    val downloadedBytes: Long,
+    val error: String?,
+    val blobCreatedAtMs: Long,
+    val blobUpdatedAtMs: Long,
+) {
+    fun userDownload() = UserDownloadRow(
+        userDownloadId,
+        userId,
+        blobId,
+        active,
+        suspended,
+        userCreatedAtMs,
+        userUpdatedAtMs,
+    )
+
+    fun blob() = DownloadBlobRow(
+        blobId,
+        contentId,
+        title,
+        sourceUrl,
+        filePath,
+        status,
+        totalBytes,
+        downloadedBytes,
+        error,
+        blobCreatedAtMs,
+        blobUpdatedAtMs,
+    )
+}
 
 @Entity(tableName = "playlist_deletions", primaryKeys = ["playlistId"])
 data class PlaylistDeletionRow(

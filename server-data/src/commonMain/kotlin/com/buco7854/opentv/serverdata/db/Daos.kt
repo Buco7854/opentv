@@ -12,6 +12,18 @@ interface UserDao {
     @Query("SELECT * FROM users ORDER BY normalizedUsername")
     suspend fun all(): List<UserRow>
 
+    @Query("""
+        SELECT users.id AS userId,
+               EXISTS(SELECT 1 FROM password_credentials WHERE userId = users.id) AS hasPassword,
+               EXISTS(SELECT 1 FROM totp_credentials
+                      WHERE userId = users.id AND confirmed = 1) AS hasTotp,
+               EXISTS(SELECT 1 FROM webauthn_credentials
+                      WHERE userId = users.id) AS hasWebAuthn,
+               EXISTS(SELECT 1 FROM oidc_identities WHERE userId = users.id) AS hasOidc
+        FROM users ORDER BY users.normalizedUsername
+    """)
+    suspend fun credentialMethods(): List<UserCredentialMethodsRow>
+
     @Query("SELECT * FROM users WHERE id = :id")
     suspend fun get(id: String): UserRow?
 
@@ -278,6 +290,9 @@ interface GrantDao {
     @Query("SELECT playlistId FROM user_playlist_grants WHERE userId = :userId ORDER BY playlistId")
     suspend fun forUser(userId: String): List<Long>
 
+    @Query("SELECT * FROM user_playlist_grants ORDER BY userId, playlistId")
+    suspend fun allUserGrants(): List<UserPlaylistGrantRow>
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun grant(row: UserPlaylistGrantRow)
 
@@ -377,6 +392,21 @@ interface ActivityDao {
     @Query("SELECT * FROM user_favorites WHERE userId = :userId ORDER BY addedAtMs DESC")
     suspend fun favorites(userId: String): List<UserFavoriteRow>
 
+    @Query("""
+        SELECT user_favorites.contentId AS contentId,
+               content_identities.playlistId AS playlistId,
+               content_identities.kind AS kind,
+               content_identities.currentChannelId AS currentChannelId,
+               content_identities.retired AS retired,
+               user_favorites.addedAtMs AS addedAtMs
+        FROM user_favorites
+        JOIN content_identities
+          ON content_identities.contentId = user_favorites.contentId
+        WHERE user_favorites.userId = :userId
+        ORDER BY user_favorites.addedAtMs DESC
+    """)
+    suspend fun favoriteIdentities(userId: String): List<FavoriteIdentityRow>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun addFavorite(row: UserFavoriteRow)
 
@@ -454,8 +484,60 @@ interface DownloadDao {
     @Query("SELECT * FROM user_downloads WHERE userId = :userId ORDER BY createdAtMs DESC")
     suspend fun forUser(userId: String): List<UserDownloadRow>
 
+    @Query("SELECT * FROM user_downloads WHERE userId = :userId AND blobId = :blobId")
+    suspend fun forUserBlob(userId: String, blobId: String): UserDownloadRow?
+
+    @Query("""
+        SELECT user_downloads.id AS userDownloadId,
+               user_downloads.userId AS userId,
+               download_blobs.id AS blobId,
+               user_downloads.active AS active,
+               user_downloads.suspended AS suspended,
+               user_downloads.createdAtMs AS userCreatedAtMs,
+               user_downloads.updatedAtMs AS userUpdatedAtMs,
+               download_blobs.contentId AS contentId,
+               download_blobs.title AS title,
+               download_blobs.sourceUrl AS sourceUrl,
+               download_blobs.filePath AS filePath,
+               download_blobs.status AS status,
+               download_blobs.totalBytes AS totalBytes,
+               download_blobs.downloadedBytes AS downloadedBytes,
+               download_blobs.error AS error,
+               download_blobs.createdAtMs AS blobCreatedAtMs,
+               download_blobs.updatedAtMs AS blobUpdatedAtMs
+        FROM user_downloads
+        JOIN download_blobs ON download_blobs.id = user_downloads.blobId
+        WHERE user_downloads.userId = :userId
+        ORDER BY user_downloads.createdAtMs DESC
+    """)
+    suspend fun listingForUser(userId: String): List<DownloadListingRow>
+
     @Query("SELECT * FROM user_downloads ORDER BY createdAtMs DESC")
     suspend fun allUserDownloads(): List<UserDownloadRow>
+
+    @Query("""
+        SELECT user_downloads.id AS userDownloadId,
+               user_downloads.userId AS userId,
+               download_blobs.id AS blobId,
+               user_downloads.active AS active,
+               user_downloads.suspended AS suspended,
+               user_downloads.createdAtMs AS userCreatedAtMs,
+               user_downloads.updatedAtMs AS userUpdatedAtMs,
+               download_blobs.contentId AS contentId,
+               download_blobs.title AS title,
+               download_blobs.sourceUrl AS sourceUrl,
+               download_blobs.filePath AS filePath,
+               download_blobs.status AS status,
+               download_blobs.totalBytes AS totalBytes,
+               download_blobs.downloadedBytes AS downloadedBytes,
+               download_blobs.error AS error,
+               download_blobs.createdAtMs AS blobCreatedAtMs,
+               download_blobs.updatedAtMs AS blobUpdatedAtMs
+        FROM user_downloads
+        JOIN download_blobs ON download_blobs.id = user_downloads.blobId
+        ORDER BY user_downloads.createdAtMs DESC
+    """)
+    suspend fun allListings(): List<DownloadListingRow>
 
     @Query("SELECT * FROM user_downloads WHERE blobId = :blobId")
     suspend fun forBlob(blobId: String): List<UserDownloadRow>
@@ -507,4 +589,33 @@ interface MaintenanceDao {
 
     @Query("DELETE FROM playlist_deletions WHERE playlistId = :playlistId")
     suspend fun finishPlaylistDeletion(playlistId: Long)
+}
+
+/** Server-only chunk seams for guide mutations that would otherwise monopolize SQLite's writer. */
+@Dao
+interface GuideMaintenanceDao {
+    @Query("""
+        DELETE FROM programmes WHERE id IN (
+            SELECT id FROM programmes
+            WHERE playlistId = :playlistId AND startMs >= :fromMs
+            ORDER BY startMs LIMIT :limit
+        )
+    """)
+    suspend fun deleteFromChunk(playlistId: Long, fromMs: Long, limit: Int): Int
+
+    @Query("""
+        DELETE FROM programmes WHERE id IN (
+            SELECT id FROM programmes
+            WHERE playlistId = :playlistId AND endMs <= :beforeMs
+            ORDER BY endMs LIMIT :limit
+        )
+    """)
+    suspend fun pruneChunk(playlistId: Long, beforeMs: Long, limit: Int): Int
+
+    @Query("""
+        DELETE FROM programmes WHERE id IN (
+            SELECT id FROM programmes WHERE playlistId = :playlistId LIMIT :limit
+        )
+    """)
+    suspend fun deleteForPlaylistChunk(playlistId: Long, limit: Int): Int
 }

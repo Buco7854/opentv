@@ -19,6 +19,7 @@ import java.net.URI
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
@@ -31,6 +32,57 @@ class SharedHlsCacheTest {
     private fun cipher() = StreamCipher(
         Base64.getEncoder().encodeToString(ByteArray(32) { (it + 1).toByte() }),
     )
+
+    @Test
+    fun `distinct parked resources have a bounded in-flight footprint`() = runBlocking {
+        val offered = 32
+        val admitted = 8
+        val started = CountDownLatch(admitted)
+        val release = CountDownLatch(1)
+        val executor = Executors.newCachedThreadPool { task ->
+            Thread(task, "shared-hls-cap-test").apply { isDaemon = true }
+        }
+        val upstream = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+            this.executor = executor
+            createContext("/") { exchange ->
+                exchange.responseHeaders.add("Content-Type", "video/mp2t")
+                exchange.sendResponseHeaders(200, 0)
+                exchange.responseBody.use { output ->
+                    started.countDown()
+                    release.await(10, TimeUnit.SECONDS)
+                    runCatching { output.write(byteArrayOf(1)) }
+                }
+            }
+            start()
+        }
+        val connections = ProviderConnections()
+        val gate = StreamGate(connections)
+        val cache = SharedHlsCache(ServerHttp(), gate, { 1 })
+        val group = "room-inflight-cap"
+        val base = "http://127.0.0.1:${upstream.address.port}/live"
+        val reads = List(offered) { index ->
+            async(Dispatchers.IO) {
+                runCatching { cache.read(group, URI("$base/$index.ts"), null) { true } }
+            }
+        }
+
+        try {
+            assertTrue(started.await(5, TimeUnit.SECONDS))
+            val loading = cache.stats(group).loading
+            println("SHARED_HLS_INFLIGHT offered=$offered loading=$loading")
+            assertEquals(admitted, loading)
+        } finally {
+            release.countDown()
+            val results = reads.awaitAll()
+            assertEquals(admitted, results.count { it.isSuccess })
+            assertEquals(offered - admitted, results.count { it.exceptionOrNull() is SharedHlsCapacityException })
+            cache.close()
+            gate.close()
+            connections.closeAll()
+            upstream.stop(0)
+            executor.shutdownNow()
+        }
+    }
 
     @Test
     fun `three room members share one manifest segment fetch and provider seat`() {

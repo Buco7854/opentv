@@ -1,6 +1,7 @@
 package com.buco7854.opentv.core.catchup
 
 import kotlinx.datetime.TimeZone
+import kotlin.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -79,5 +80,33 @@ class CatchupTest {
     fun template_without_placeholders_is_returned_verbatim() {
         val out = fromTemplate("http://h/fixed.ts")
         assertTrue(out.startsWith("http://h/"))
+    }
+
+    @Test
+    fun named_panel_timezone_applies_dst_to_xtream_wall_clock() {
+        val london = TimeZone.of("Europe/London")
+        val beforeJump = Instant.parse("2024-03-31T00:30:00Z").toEpochMilliseconds()
+        val afterJump = Instant.parse("2024-03-31T01:30:00Z").toEpochMilliseconds()
+
+        assertTrue(
+            Catchup.xtreamTimeshift("http://host", "u", "p", 42, beforeJump, 60, london)
+                .contains("/2024-03-31:00-30/"),
+        )
+        assertTrue(
+            Catchup.xtreamTimeshift("http://host", "u", "p", 42, afterJump, 60, london)
+                .contains("/2024-03-31:02-30/"),
+        )
+    }
+
+    @Test
+    fun xtream_wall_clock_protocol_is_ambiguous_during_fall_back() {
+        val london = TimeZone.of("Europe/London")
+        val firstOneThirty = Instant.parse("2024-10-27T00:30:00Z").toEpochMilliseconds()
+        val secondOneThirty = Instant.parse("2024-10-27T01:30:00Z").toEpochMilliseconds()
+
+        val first = Catchup.xtreamTimeshift("http://host", "u", "p", 42, firstOneThirty, 60, london)
+        val second = Catchup.xtreamTimeshift("http://host", "u", "p", 42, secondOneThirty, 60, london)
+
+        assertEquals(first, second)
     }
 }

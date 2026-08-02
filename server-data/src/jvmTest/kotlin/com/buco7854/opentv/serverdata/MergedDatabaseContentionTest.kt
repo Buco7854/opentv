@@ -7,12 +7,17 @@ import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.model.Playlist
 import com.buco7854.opentv.core.model.XtreamSeries
+import com.buco7854.opentv.data.db.ProgrammeRow
 import com.buco7854.opentv.serverdata.db.AuthSessionRow
 import com.buco7854.opentv.serverdata.db.CONTENT_IDENTITY_WRITE_CHUNK_SIZE
 import com.buco7854.opentv.serverdata.db.ContentIdentityRow
+import com.buco7854.opentv.serverdata.db.ContentSeriesLocatorRow
+import com.buco7854.opentv.serverdata.db.GUIDE_WRITE_CHUNK_SIZE
 import com.buco7854.opentv.serverdata.db.UserRow
 import com.buco7854.opentv.serverdata.db.deleteCatalogPlaylist
+import com.buco7854.opentv.serverdata.db.deleteGuideFromInChunks
 import com.buco7854.opentv.serverdata.db.writeContentIdentityReconciliation
+import com.buco7854.opentv.serverdata.db.writeContentSeriesLocators
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -25,6 +30,61 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class MergedDatabaseContentionTest {
+    @Test
+    fun guideIngestionBatchDoesNotStarveSessionWrites() = runTest {
+        withPersistence { persistence ->
+            val storage = persistence.catalog
+            val db = persistence.database
+            val playlistId = storage.playlists.insert(Playlist(name = "Guide", url = null))
+            db.users().insert(user())
+            db.sessions().insert(session())
+            val batch = List(GUIDE_INGEST_BATCH_ROWS) { index ->
+                ProgrammeRow(
+                    playlistId = playlistId,
+                    tvgId = "tvg-$index",
+                    title = "Programme $index",
+                    description = null,
+                    startMs = index * 1_000L,
+                    endMs = (index + 1L) * 1_000L,
+                )
+            }
+
+            val started = CompletableDeferred<Unit>()
+            val insert = async(Dispatchers.IO) {
+                db.useWriterConnection { connection ->
+                    connection.immediateTransaction {
+                        started.complete(Unit)
+                        db.epgDao().insertAll(batch)
+                    }
+                }
+            }
+            started.await()
+            val touch = async(Dispatchers.IO) {
+                measureTimeMillis {
+                    assertEquals(1, db.sessions().touch("session", 2, 1_000_002))
+                }
+            }
+            insert.await()
+            val touchMs = touch.await()
+
+            println("MERGED_DB_GUIDE_INSERT rows=$GUIDE_INGEST_BATCH_ROWS touchMs=$touchMs")
+            assertEquals(
+                GUIDE_INGEST_BATCH_ROWS.toLong(),
+                db.useReaderConnection { connection ->
+                    connection.usePrepared("SELECT COUNT(*) FROM programmes WHERE playlistId = ?") {
+                        it.bindLong(1, playlistId)
+                        check(it.step())
+                        it.getLong(0)
+                    }
+                },
+            )
+            assertTrue(
+                touchMs < MAX_GUIDE_CHUNK_WRITE_MS,
+                "A guide ingest batch blocked a session write for ${touchMs}ms",
+            )
+        }
+    }
+
     @Test
     fun realisticCatalogReplacementContentionBenchmark() = runTest {
         val requestedRows = System.getenv("OPENTV_CATALOG_CONTENTION_ROWS")?.toIntOrNull()
@@ -75,6 +135,10 @@ class MergedDatabaseContentionTest {
             val touchMs = touch.await()
 
             println("MERGED_DB_CATALOG_CONTENTION rows=$rowCount touchMs=$touchMs")
+            assertTrue(
+                touchMs < MAX_CATALOG_REPLACEMENT_WRITE_MS,
+                "A $rowCount-row catalog replacement blocked a session write for ${touchMs}ms",
+            )
             assertEquals(rowCount, totalChannelCount(storage, playlistId))
         }
     }
@@ -191,6 +255,144 @@ class MergedDatabaseContentionTest {
                 touchMs < MAX_IDENTITY_WRITE_MS,
                 "A set-wise $rowCount-row identity retirement blocked a session write for " +
                     "${touchMs}ms",
+            )
+        }
+    }
+
+    @Test
+    fun realisticSeriesLocatorContentionBenchmark() = runTest {
+        val requestedRows = System.getenv("OPENTV_SERIES_LOCATOR_CONTENTION_ROWS")?.toIntOrNull()
+        assumeTrue(
+            "Set OPENTV_SERIES_LOCATOR_CONTENTION_ROWS to run the benchmark",
+            requestedRows != null,
+        )
+        val rowCount = requireNotNull(requestedRows)
+        withPersistence { persistence ->
+            val storage = persistence.catalog
+            val db = persistence.database
+            val playlistId = storage.playlists.insert(Playlist(name = "Series", url = null))
+            db.users().insert(user())
+            db.sessions().insert(session())
+            db.content().insertAll(
+                List(rowCount) { index ->
+                    ContentIdentityRow(
+                        contentId = "series-$index",
+                        playlistId = playlistId,
+                        kind = ChannelKind.SERIES,
+                        providerFingerprint = "series-fingerprint-$index",
+                        currentChannelId = null,
+                        lastSeenAtMs = 1,
+                        retired = false,
+                    )
+                },
+            )
+            val locators = List(rowCount) { index ->
+                ContentSeriesLocatorRow(
+                    contentId = "series-$index",
+                    playlistId = playlistId,
+                    sourceKind = "xtream",
+                    sourceKey = (index + 1L).toString(),
+                )
+            }
+
+            val started = CompletableDeferred<Unit>()
+            val write = async(Dispatchers.IO) {
+                db.useWriterConnection { connection ->
+                    connection.immediateTransaction {
+                        started.complete(Unit)
+                        db.writeContentSeriesLocators(locators.take(500))
+                    }
+                }
+                db.writeContentSeriesLocators(locators.drop(500))
+            }
+            started.await()
+            val touch = async(Dispatchers.IO) {
+                measureTimeMillis {
+                    assertEquals(1, db.sessions().touch("session", 2, 1_000_002))
+                }
+            }
+            write.await()
+            val touchMs = touch.await()
+
+            println("MERGED_DB_SERIES_LOCATOR_CONTENTION rows=$rowCount touchMs=$touchMs")
+            assertTrue(
+                touchMs < MAX_IDENTITY_WRITE_MS,
+                "A chunked $rowCount-row series locator write blocked a session for ${touchMs}ms",
+            )
+        }
+    }
+
+    @Test
+    fun realisticGuideDeletionContentionBenchmark() = runTest {
+        val requestedRows = System.getenv("OPENTV_GUIDE_DELETE_CONTENTION_ROWS")?.toIntOrNull()
+        assumeTrue(
+            "Set OPENTV_GUIDE_DELETE_CONTENTION_ROWS to run the benchmark",
+            requestedRows != null,
+        )
+        val rowCount = requireNotNull(requestedRows)
+        withPersistence { persistence ->
+            val storage = persistence.catalog
+            val db = persistence.database
+            val playlistId = storage.playlists.insert(Playlist(name = "Guide", url = null))
+            db.users().insert(user())
+            db.sessions().insert(session())
+            db.useWriterConnection { connection ->
+                connection.usePrepared(
+                    """
+                    WITH RECURSIVE fixture(n) AS (
+                        VALUES(0)
+                        UNION ALL
+                        SELECT n + 1 FROM fixture WHERE n + 1 < $rowCount
+                    )
+                    INSERT INTO programmes(
+                        playlistId, tvgId, title, description, startMs, endMs
+                    )
+                    SELECT $playlistId, 'tvg-' || (n % 100000), 'Programme ' || n,
+                           NULL, n, n + 3600000
+                    FROM fixture
+                    """.trimIndent(),
+                ) { statement -> statement.step() }
+            }
+
+            val started = CompletableDeferred<Unit>()
+            val deletion = async(Dispatchers.IO) {
+                db.useWriterConnection { connection ->
+                    connection.immediateTransaction {
+                        started.complete(Unit)
+                        db.guideMaintenance().deleteFromChunk(
+                            playlistId,
+                            0,
+                            GUIDE_WRITE_CHUNK_SIZE,
+                        )
+                    }
+                }
+                db.deleteGuideFromInChunks(playlistId, 0)
+            }
+            started.await()
+            val touch = async(Dispatchers.IO) {
+                measureTimeMillis {
+                    assertEquals(1, db.sessions().touch("session", 2, 1_000_002))
+                }
+            }
+            deletion.await()
+            val touchMs = touch.await()
+
+            println("MERGED_DB_GUIDE_DELETE_CONTENTION rows=$rowCount touchMs=$touchMs")
+            assertTrue(
+                touchMs < MAX_GUIDE_CHUNK_WRITE_MS,
+                "Chunked deletion of $rowCount guide rows blocked a session write for ${touchMs}ms",
+            )
+            assertEquals(
+                0L,
+                db.useReaderConnection { connection ->
+                    connection.usePrepared(
+                        "SELECT COUNT(*) FROM programmes WHERE playlistId = ?",
+                    ) { statement ->
+                        statement.bindLong(1, playlistId)
+                        check(statement.step())
+                        statement.getLong(0)
+                    }
+                },
             )
         }
     }
@@ -457,7 +659,10 @@ class MergedDatabaseContentionTest {
 
     private companion object {
         const val CONTENTION_ROWS = 20_000
+        const val GUIDE_INGEST_BATCH_ROWS = 500
         const val MAX_IDENTITY_WRITE_MS = 1_000L
+        const val MAX_GUIDE_CHUNK_WRITE_MS = 1_000L
+        const val MAX_CATALOG_REPLACEMENT_WRITE_MS = 5_000L
         const val MAX_BLOCKING_WRITE_MS = 2_000L
     }
 }
