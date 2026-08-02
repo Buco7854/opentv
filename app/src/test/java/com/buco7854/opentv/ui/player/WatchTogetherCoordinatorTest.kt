@@ -440,6 +440,35 @@ class WatchTogetherCoordinatorTest {
     }
 
     @Test
+    fun leavingAnOwnDeviceRoomRechecksBeforeOpeningAForbiddenSoloStream() = runTest {
+        val hub = FakeWatchTogetherHub().apply {
+            intentResponse = WatchIntentResponse(
+                sameContent = listOf(WatchIntentPeer("other-device", "Me", sameAccount = true)),
+                full = false,
+                limit = 2,
+                requiresJoin = true,
+            )
+        }
+        val player = FakeWatchTogetherPlayer(positionMs = 31_000)
+        val soloReloads = mutableListOf<Long>()
+        val coordinator = WatchTogetherCoordinator(
+            hub = hub,
+            scope = backgroundScope,
+            reloadAudio = { _, _ -> },
+            reloadAfterLeave = { soloReloads += it },
+            clock = { testScheduler.currentTime },
+        ).also { it.attachPlayer(player) }
+        putInRoom(coordinator)
+
+        coordinator.leave()
+
+        assertTrue(coordinator.state.value.requiresJoin)
+        assertTrue(coordinator.state.value.choosing)
+        assertTrue(player.paused)
+        assertTrue(soloReloads.isEmpty())
+    }
+
+    @Test
     fun roomStateReplacesTheRosterOnReconnect() = runTest {
         val coordinator = coordinator(FakeWatchTogetherHub(), FakeWatchTogetherPlayer())
         coordinator.handleCommand(
@@ -487,7 +516,25 @@ class WatchTogetherCoordinatorTest {
     }
 
     @Test
-    fun directPlayingRoomSkipsTheReloadButStillReportsReady() = runTest {
+    fun roomGoKeepsADeliberatelyPausedRoomPaused() = runTest {
+        val hub = FakeWatchTogetherHub()
+        val player = FakeWatchTogetherPlayer(positionMs = 42_000).apply { paused = true }
+        val coordinator = coordinator(hub, player)
+        putInRoom(coordinator)
+
+        coordinator.handleCommand(command(type = "room-audio", audioIndex = 1))
+        runCurrent()
+        player.emitReady()
+        runCurrent()
+        coordinator.handleCommand(command(type = "room-go"))
+
+        assertFalse(coordinator.state.value.loading)
+        assertTrue(player.paused)
+        assertEquals(0, player.playCalls)
+    }
+
+    @Test
+    fun directPlayingVodRenegotiatesTheNewRoomIntersectionBeforeReportingReady() = runTest {
         val hub = FakeWatchTogetherHub().apply { direct = true }
         val player = FakeWatchTogetherPlayer(positionMs = 7_000)
         val reloads = mutableListOf<Pair<Int, Long>>()
@@ -497,12 +544,14 @@ class WatchTogetherCoordinatorTest {
         coordinator.handleCommand(command(type = "room-audio", audioIndex = 1))
         runCurrent()
 
-        // Nothing to reload: in-band tracks are all present already...
-        assertTrue(reloads.isEmpty())
-        assertFalse(coordinator.state.value.loading)
-        assertEquals(0, player.pauseCalls)
-        // ...but the server waits for EVERY member before broadcasting room-go,
-        // so silence here would strand the peers that must switch format.
+        // The device may be direct only under its own capability report. Re-negotiate against
+        // the room intersection: an all-native room gets no_extra_tracks and stays direct, while
+        // an incapable joiner makes this call return the room's shared remux.
+        assertEquals(listOf(1 to 7_000L), reloads)
+        assertTrue(coordinator.state.value.loading)
+        assertTrue(player.paused)
+        player.emitReady()
+        runCurrent()
         assertEquals(1, hub.readyCalls)
     }
 
@@ -572,6 +621,30 @@ class WatchTogetherCoordinatorTest {
 
         assertTrue(firstCancelled.isCompleted)
         assertEquals(listOf(2), completed)
+    }
+
+    @Test
+    fun directLiveSecondBarrierRetainsTheClientFailOpenWindow() = runTest {
+        val hub = FakeWatchTogetherHub()
+        val player = FakeWatchTogetherPlayer(positionMs = 7_000).apply { isLive = true }
+        val coordinator = WatchTogetherCoordinator(
+            hub = hub,
+            scope = backgroundScope,
+            reloadAudio = { _, _ -> hub.direct = true },
+            clock = { testScheduler.currentTime },
+        ).also { it.attachPlayer(player) }
+        putInRoom(coordinator)
+
+        coordinator.handleCommand(command(type = "room-audio", audioIndex = 1, generation = 1))
+        runCurrent()
+        assertTrue(coordinator.state.value.loading)
+        coordinator.handleCommand(command(type = "room-audio", audioIndex = 1, generation = 2))
+        runCurrent()
+
+        advanceTimeBy(12_000)
+        runCurrent()
+        assertFalse(coordinator.state.value.loading)
+        assertFalse(player.paused)
     }
 
     @Test
@@ -768,6 +841,28 @@ class WatchTogetherCoordinatorTest {
     }
 
     @Test
+    fun roomGoBeforePlayerAttachmentDiscardsTheCompletedPendingBarrier() = runTest {
+        val hub = FakeWatchTogetherHub()
+        val coordinator = WatchTogetherCoordinator(
+            hub = hub,
+            scope = backgroundScope,
+            reloadAudio = { _, _ -> },
+            clock = { testScheduler.currentTime },
+        )
+        putInRoom(coordinator)
+
+        coordinator.handleCommand(command(type = "room-audio", audioIndex = 2, generation = 7))
+        coordinator.handleCommand(command(type = "room-go", generation = 7))
+        val player = FakeWatchTogetherPlayer(positionMs = 7_000)
+        coordinator.attachPlayer(player)
+        runCurrent()
+
+        assertFalse(coordinator.state.value.loading)
+        assertEquals(0, player.pauseCalls)
+        assertEquals(0, hub.readyCalls)
+    }
+
+    @Test
     fun syncUsesWebThresholdsForAnchorsAndDeliberateSeeks() = runTest {
         val player = FakeWatchTogetherPlayer(positionMs = 10_000)
         val coordinator = coordinator(FakeWatchTogetherHub(), player)
@@ -870,6 +965,58 @@ class WatchTogetherCoordinatorTest {
         advanceTimeBy(2_000)
         runCurrent()
         assertEquals(listOf(60_000L), hub.syncs.map(SyncStateDto::positionMs))
+    }
+
+    @Test
+    fun promotedHostDoesNotSnapANewJoinerToItsStalePositionMidSeek() = runTest {
+        val hub = FakeWatchTogetherHub()
+        val player = FakeWatchTogetherPlayer(positionMs = 10_000)
+        val coordinator = coordinator(hub, player)
+        coordinator.handleCommand(
+            command(
+                type = "room-state",
+                members = listOf(
+                    RoomMemberDto("old-host", "Host", host = true, controller = true),
+                    RoomMemberDto("self", "Me", host = false, controller = true),
+                    RoomMemberDto("peer", "Peer", host = false, controller = true),
+                ),
+            ),
+        )
+        coordinator.handleCommand(
+            command(
+                type = "sync",
+                sync = SyncStateDto(60_000, paused = false, seek = true),
+            ),
+        )
+        coordinator.handleCommand(
+            command(
+                type = "room-state",
+                members = listOf(
+                    RoomMemberDto("self", "Me", host = true, controller = true),
+                    RoomMemberDto("peer", "Peer", host = false, controller = true),
+                ),
+            ),
+        )
+        hub.syncs.clear()
+
+        coordinator.handleCommand(
+            command(
+                type = "room-state",
+                members = listOf(
+                    RoomMemberDto("self", "Me", host = true, controller = true),
+                    RoomMemberDto("peer", "Peer", host = false, controller = true),
+                    RoomMemberDto("new", "New peer", host = false, controller = false),
+                ),
+            ),
+        )
+        runCurrent()
+
+        assertTrue(hub.syncs.isEmpty())
+        player.positionMs = 60_000
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals(listOf(60_000L), hub.syncs.map(SyncStateDto::positionMs))
+        assertEquals(listOf(true), hub.syncs.map(SyncStateDto::seek))
     }
 
     @Test

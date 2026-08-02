@@ -404,4 +404,18 @@ class ContentIdentityServiceTest {
                 dir.toFile().deleteRecursively()
             }
         }
+
+    @Test
+    fun unchanged_reconciliation_does_not_rewrite_an_identity_generation() =
+        withServices { service, storage, playlistId, advanceClock ->
+            val channel = channel(playlistId, 1L, 1L)
+            storage.channels.insertAll(listOf(channel))
+            service.reconcilePlaylist(playlistId)
+            val before = service.channel(channel)
+
+            advanceClock(60_000L)
+            service.reconcilePlaylist(playlistId)
+
+            assertEquals(before, service.channel(channel))
+        }
 }

@@ -363,12 +363,17 @@ class HubApiTest {
             ),
         )
 
-        val programmes = HubApi(transport).nowAiring(HubCredentials(BASE, "t"), 7)
+        val programmes = HubApi(transport).nowAiring(
+            HubCredentials(BASE, "t"),
+            7,
+            listOf("news", "sport"),
+        )
 
         assertEquals("Headlines", programmes.single().title)
         val request = transport.seen.single()
-        assertEquals("GET", request.method)
+        assertEquals("POST", request.method)
         assertEquals("$BASE/api/v1/playlists/7/now-airing", request.url)
+        assertEquals("""{"tvgIds":["news","sport"]}""", request.body)
     }
 
     @Test

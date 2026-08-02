@@ -6,6 +6,7 @@ import com.buco7854.opentv.core.model.Playlist
 import com.buco7854.opentv.serverdata.db.UserRow
 import com.buco7854.opentv.serverdata.db.favoriteSeriesListings
 import java.nio.file.Files
+import kotlin.system.measureNanoTime
 import kotlin.system.measureTimeMillis
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -15,6 +16,42 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assume.assumeTrue
 
 class ServerQueryScaleTest {
+    @Test
+    fun visibleGuideDecorationScopeDoesNotMaterializeOtherChannels() = runTest {
+        withPersistence { persistence ->
+            val db = persistence.database
+            val playlistId = persistence.catalog.playlists.insert(
+                Playlist(name = "Guide scope", url = null),
+            )
+            db.useWriterConnection { connection ->
+                connection.usePrepared(
+                    """
+                    INSERT INTO programmes(
+                        playlistId, tvgId, title, description, startMs, endMs
+                    ) VALUES
+                        ($playlistId, 'visible-a', 'Older', NULL, 0, 2000),
+                        ($playlistId, 'visible-a', 'Newest active', NULL, 500, 1500),
+                        ($playlistId, 'visible-a', 'Invalid', NULL, 1200, 1100),
+                        ($playlistId, 'visible-b', 'Boundary ended', NULL, 0, 1000),
+                        ($playlistId, 'visible-b', 'Boundary started', NULL, 1000, 2000),
+                        ($playlistId, 'offscreen', 'Hidden', NULL, 0, 2000)
+                    """.trimIndent(),
+                ) { it.step() }
+            }
+
+            val requested = setOf("visible-a", "visible-b")
+            val nowAiring = db.guideDecorations().nowAiring(playlistId, requested.toList(), 1_000)
+            val guideIds = db.guideDecorations().guideIds(playlistId, requested.toList())
+
+            assertEquals(requested, nowAiring.mapTo(mutableSetOf()) { it.tvgId })
+            assertEquals(
+                mapOf("visible-a" to "Newest active", "visible-b" to "Boundary started"),
+                nowAiring.associate { it.tvgId to it.title },
+            )
+            assertEquals(requested, guideIds.toSet())
+        }
+    }
+
     @Test
     fun m3uSeriesFavoritesProbeOneSeriesInsteadOfScanningAllEpisodes() = runTest {
         val requestedRows = System.getenv("OPENTV_M3U_FAVORITES_BENCHMARK_ROWS")?.toIntOrNull()
@@ -163,7 +200,7 @@ class ServerQueryScaleTest {
     }
 
     @Test
-    fun catalogWideGuideSurfacesMaterializeOneRowPerChannel() = runTest {
+    fun visibleGuideSurfacesStayBoundedAtCatalogScale() = runTest {
         val requestedRows = System.getenv("OPENTV_GUIDE_SURFACE_BENCHMARK_ROWS")?.toIntOrNull()
         assumeTrue(
             "Set OPENTV_GUIDE_SURFACE_BENCHMARK_ROWS to run the benchmark",
@@ -199,20 +236,27 @@ class ServerQueryScaleTest {
                 ) { it.step() }
             }
 
+            val visibleTvgIds = List(minOf(500, channelCount)) { "tvg-$it" }
             var nowRows = 0
-            val nowMs = measureTimeMillis {
-                nowRows = db.epgDao().nowAiring(playlistId, now).size
+            val nowNs = measureNanoTime {
+                nowRows = db.guideDecorations()
+                    .nowAiring(playlistId, visibleTvgIds, now).size
             }
             var guideIds = 0
-            val idsMs = measureTimeMillis {
-                guideIds = db.epgDao().observeGuideIds(playlistId).first().size
+            val idsNs = measureNanoTime {
+                guideIds = db.guideDecorations()
+                    .guideIds(playlistId, visibleTvgIds).size
             }
+            val nowMs = nowNs / 1_000_000.0
+            val idsMs = idsNs / 1_000_000.0
             println(
-                "GUIDE_CATALOG_SURFACES programmeRows=$programmeRows channels=$channelCount " +
-                    "nowAiringRows=$nowRows nowAiringMs=$nowMs guideIdRows=$guideIds guideIdsMs=$idsMs",
+                "GUIDE_SCOPED_SURFACES programmeRows=$programmeRows channels=$channelCount " +
+                    "visible=${visibleTvgIds.size} pollRequests=2 nowAiringRows=$nowRows " +
+                    "nowAiringMs=$nowMs guideIdRows=$guideIds guideIdsMs=$idsMs " +
+                    "pollingDbMs=${nowMs + idsMs}",
             )
-            assertEquals(channelCount, nowRows)
-            assertEquals(channelCount, guideIds)
+            assertEquals(visibleTvgIds.size, nowRows)
+            assertEquals(visibleTvgIds.size, guideIds)
         }
     }
 

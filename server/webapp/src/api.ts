@@ -157,6 +157,8 @@ export interface ChannelListItem {
   hasCatchup: boolean;
 }
 
+export interface ChannelDecorationRequest { tvgIds: string[] }
+
 export interface EpisodeListItem {
   contentId: string;
   id: number;
@@ -455,9 +457,9 @@ export interface HeartbeatResponse { commands: SessionCommand[] }
 
 export interface Message { message: string }
 
-/** A viewer already on this content, offered as someone to watch together with. */
+/** A viewer already on this exact content/source playback variant. */
 export interface WatchIntentPeer { id: string; name: string; sameAccount: boolean }
-/** Who else is on this content, and whether the provider's connections are all in use. */
+/** Who else is on this playback variant, and whether the provider's connections are all in use. */
 export interface WatchIntent {
   sameContent: WatchIntentPeer[];
   full: boolean;
@@ -613,8 +615,16 @@ export const api = {
   channels: listChannels,
   seriesGroups: listSeriesGroups,
   xtreamSeries: listXtreamSeries,
-  nowAiring: (id: number) => j<Record<string, Programme>>(`/playlists/${id}/now-airing`),
-  guideIds: (id: number) => j<string[]>(`/playlists/${id}/guide-ids`),
+  nowAiring: (id: number, tvgIds: string[]) =>
+    j<Record<string, Programme>>(
+      `/playlists/${id}/now-airing`,
+      post({ tvgIds } satisfies ChannelDecorationRequest),
+    ),
+  guideIds: (id: number, tvgIds: string[]) =>
+    j<string[]>(
+      `/playlists/${id}/guide-ids`,
+      post({ tvgIds } satisfies ChannelDecorationRequest),
+    ),
   search: (id: number, q: string, signal?: AbortSignal) =>
     j<SearchResults>(`/playlists/${id}/search?q=${encodeURIComponent(q)}`, { signal }),
   account: (id: number, force: boolean) =>

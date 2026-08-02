@@ -25,6 +25,86 @@ import org.junit.Test
 class ConditionalFetcherTest {
 
     @Test
+    fun providerTextUsesDeclaredCharsetOrTheSameStreamingUtf8Fallback() = runBlocking {
+        data class Case(
+            val name: String,
+            val bytes: ByteArray,
+            val contentType: String?,
+            val expected: String,
+        )
+
+        val latin1Cafe = byteArrayOf(0x43, 0x61, 0x66, 0xE9.toByte())
+        val utf8Cafe = byteArrayOf(0x43, 0x61, 0x66, 0xC3.toByte(), 0xA9.toByte())
+        val truncatedAtBoundary = ByteArray(8 * 1_024) { 'a'.code.toByte() }
+            .also { it[it.lastIndex] = 0xC3.toByte() }
+        val splitAtBoundary = truncatedAtBoundary + 0xA9.toByte()
+        val cases = listOf(
+            Case("Latin-1 fallback", latin1Cafe, null, "Caf\u00e9"),
+            Case("UTF-8", utf8Cafe, null, "Caf\u00e9"),
+            Case(
+                "UTF-8 BOM",
+                byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte()) + utf8Cafe,
+                null,
+                "Caf\u00e9",
+            ),
+            Case("declared Latin-1", latin1Cafe, "text/plain; charset=ISO-8859-1", "Caf\u00e9"),
+            Case(
+                "declaration wins over contradictory bytes",
+                utf8Cafe,
+                "text/plain; charset=ISO-8859-1",
+                "Caf\u00c3\u00a9",
+            ),
+            Case(
+                "UTF-8 code point split at reader buffer boundary",
+                splitAtBoundary,
+                null,
+                "a".repeat(truncatedAtBoundary.lastIndex) + "\u00e9",
+            ),
+            Case(
+                "truncated UTF-8 at reader buffer boundary",
+                truncatedAtBoundary,
+                null,
+                "a".repeat(truncatedAtBoundary.lastIndex) + "\u00c3",
+            ),
+        )
+
+        val server = MockWebServer()
+        cases.forEach { case ->
+            val response = MockResponse()
+                .setResponseCode(200)
+                .setBody(Buffer().write(case.bytes))
+            case.contentType?.let { response.addHeader("Content-Type", it) }
+            server.enqueue(response)
+        }
+        server.start()
+        try {
+            val fetcher = createConditionalFetcher(
+                client = { OkHttpClient() },
+                userAgent = { "OpenTV-Test" },
+            )
+            cases.forEachIndexed { index, case ->
+                val fetched = fetcher.conditionalGet(
+                    server.url("/feed-$index").toString(),
+                    null,
+                    null,
+                ) as ConditionalFetch.Success
+                val actual = fetched.body.readChars { chars ->
+                    buildString {
+                        while (true) {
+                            val next = chars.nextChar()
+                            if (next == -1) break
+                            append(next.toChar())
+                        }
+                    }
+                }
+                assertEquals(case.name, case.expected, actual)
+            }
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
     fun largePlaylistIsStreamedAndParsedOffTheCallerThread() = runBlocking {
         val server = MockWebServer()
         val body = Buffer()

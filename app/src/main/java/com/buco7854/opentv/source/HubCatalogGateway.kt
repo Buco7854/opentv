@@ -268,35 +268,58 @@ class HubCatalogGateway internal constructor(
         )
     }
 
-    override suspend fun nowAiring(): CatalogResult<Map<String, CatalogProgramme>> = hubCall {
-        backend.nowAiring().associate {
+    override suspend fun nowAiring(
+        tvgIds: Set<String>,
+    ): CatalogResult<Map<String, CatalogProgramme>> = hubCall {
+        backend.nowAiring(tvgIds.toList()).associate {
             it.tvgId to CatalogProgramme(it.tvgId, it.title, it.description, it.startMs, it.endMs)
         }
     }
 
-    override suspend fun guideIds(): CatalogResult<Set<String>> = hubCall {
-        backend.guideIds().toSet()
+    override suspend fun guideIds(tvgIds: Set<String>): CatalogResult<Set<String>> = hubCall {
+        backend.guideIds(tvgIds.toList()).toSet()
     }
 
     override suspend fun favorites(offset: Int, limit: Int): CatalogResult<Page<CatalogItem>> =
         hubCall {
             val progress = progress()
-            val nowAiring = backend.nowAiring().associateBy { it.tvgId }
-            val guideIds = backend.guideIds().toSet()
             val resolved = backend.favoritesResolved()
             val items = buildList {
                 addAll(resolved.live.map {
-                    it.toCatalogItem(progress[it.contentId], image(it.logo)).copy(
-                        hasGuide = it.xtreamStreamId != null || it.tvgId in guideIds,
-                        nowAiring = nowAiring[it.tvgId]?.toCatalogProgramme(),
-                    )
+                    it.toCatalogItem(progress[it.contentId], image(it.logo))
                 })
                 addAll(resolved.movies.map {
                     it.toCatalogItem(progress[it.contentId], image(it.logo))
                 })
                 addAll(resolved.series.map { it.toCatalogItem(image(it.logo)) })
             }
-            Page(items.drop(offset).take(limit), items.size)
+            val liveContentIds = resolved.live.mapTo(mutableSetOf(), ChannelDto::contentId)
+            val pageItems = items.drop(offset).take(limit)
+            val tvgIds = pageItems.asSequence()
+                .filter { it.ref.hubContentId() in liveContentIds }
+                .mapNotNull(CatalogItem::tvgId)
+                .distinct()
+                .take(MAX_FAVORITE_DECORATION_CHANNELS)
+                .toList()
+            val nowAiring = if (tvgIds.isEmpty()) emptyMap() else {
+                optionalDecoration(emptyMap()) {
+                    backend.nowAiring(tvgIds).associateBy { it.tvgId }
+                }
+            }
+            val guideIds = if (tvgIds.isEmpty()) emptySet() else {
+                optionalDecoration(emptySet()) {
+                    backend.guideIds(tvgIds).toSet()
+                }
+            }
+            Page(
+                pageItems.map { item ->
+                    if (item.ref.hubContentId() !in liveContentIds) item else item.copy(
+                        hasGuide = item.hasGuide || item.tvgId in guideIds,
+                        nowAiring = nowAiring[item.tvgId]?.toCatalogProgramme(),
+                    )
+                },
+                items.size,
+            )
         }
 
     override suspend fun resumePoints(): CatalogResult<List<CatalogResumePoint>> = hubCall {
@@ -424,6 +447,14 @@ class HubCatalogGateway internal constructor(
     } catch (error: Throwable) {
         CatalogResult.Failed(error)
     }
+
+    private suspend fun <T> optionalDecoration(fallback: T, block: suspend () -> T): T = try {
+        block()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Throwable) {
+        fallback
+    }
 }
 
 private fun ContentRef.hubContentId(): String =
@@ -450,8 +481,8 @@ internal interface HubCatalogBackend {
     suspend fun episodes(seriesKey: String, season: Int?, offset: Int, limit: Int): EpisodePageDto
     suspend fun xtreamSeriesDetail(seriesId: String): XtreamSeriesDetailDto
     suspend fun search(query: String): SearchResultsDto
-    suspend fun nowAiring(): List<ProgrammeDto>
-    suspend fun guideIds(): List<String>
+    suspend fun nowAiring(tvgIds: List<String>): List<ProgrammeDto>
+    suspend fun guideIds(tvgIds: List<String>): List<String>
     suspend fun favorites(): List<FavoriteDto>
     suspend fun favoritesResolved(): FavoritesResolvedDto
     suspend fun addFavorite(contentId: String)
@@ -516,8 +547,10 @@ private class RegistryHubCatalogBackend(
     override suspend fun xtreamSeriesDetail(seriesId: String) =
         call { xtreamSeriesDetail(it, source.playlistId, seriesId) }
     override suspend fun search(query: String) = call { search(it, source.playlistId, query) }
-    override suspend fun nowAiring() = call { nowAiring(it, source.playlistId) }
-    override suspend fun guideIds() = call { guideIds(it, source.playlistId) }
+    override suspend fun nowAiring(tvgIds: List<String>) =
+        call { nowAiring(it, source.playlistId, tvgIds) }
+    override suspend fun guideIds(tvgIds: List<String>) =
+        call { guideIds(it, source.playlistId, tvgIds) }
     override suspend fun favorites() = call { favorites(it, source.playlistId) }
     override suspend fun favoritesResolved() = call { favoritesResolved(it, source.playlistId) }
     override suspend fun addFavorite(contentId: String) =
@@ -615,6 +648,7 @@ private fun AccountInfoDto.toCatalogAccount() = ProviderAccountInfo(
 )
 
 private const val REFRESH_POLL_INTERVAL_MS = 500L
+private const val MAX_FAVORITE_DECORATION_CHANNELS = 1_000
 
 private fun ChannelDto.toCatalogItem(progress: Float?, imageUrl: String?) = CatalogItem(
     ref = ContentRef.HubContent(contentId),

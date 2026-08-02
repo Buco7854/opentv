@@ -22,6 +22,7 @@ data class WatchIntentPeer(
 
 @Serializable
 data class WatchIntentResponse(
+    /** Other leases on this exact content/source playback variant. */
     val sameContent: List<WatchIntentPeer>,
     val full: Boolean,
     val limit: Int,

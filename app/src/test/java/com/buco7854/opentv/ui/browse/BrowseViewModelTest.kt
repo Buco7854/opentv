@@ -111,6 +111,44 @@ class BrowseViewModelTest {
     }
 
     @Test
+    fun `hub decorations follow the loaded live rows without paging the poll`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        try {
+            val gateway = CatalogGatewayFake(SourceId.Hub(3, 9)).apply {
+                groupsResult = CatalogResult.Success(listOf(CatalogGroup("All", 75)))
+                channelPage = { offset, _ ->
+                    val count = if (offset == 0) 50 else 25
+                    CatalogResult.Success(
+                        Page(List(count) { index -> item(offset + index) }, total = 75),
+                    )
+                }
+            }
+            val viewModel = BrowseViewModel(gateway.source, gateway)
+            advanceUntilIdle()
+
+            viewModel.group.value = "All"
+            advanceUntilIdle()
+            assertEquals(1, gateway.nowAiringRequests.size)
+            assertEquals(1, gateway.guideIdRequests.size)
+            assertEquals((0 until 50).mapTo(mutableSetOf()) { "guide-$it" }, gateway.nowAiringRequests.single())
+            assertEquals(gateway.nowAiringRequests.single(), gateway.guideIdRequests.single())
+
+            viewModel.loadMore()
+            advanceUntilIdle()
+            assertEquals(2, gateway.nowAiringRequests.size)
+            assertEquals(2, gateway.guideIdRequests.size)
+            assertEquals((0 until 75).mapTo(mutableSetOf()) { "guide-$it" }, gateway.nowAiringRequests.last())
+
+            viewModel.reloadNowAiring()
+            advanceUntilIdle()
+            assertEquals(3, gateway.nowAiringRequests.size)
+            assertEquals(75, gateway.nowAiringRequests.last().size)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
     fun `route seed keeps its group when it also changes the initial tab`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         try {
@@ -193,14 +231,19 @@ class BrowseViewModelTest {
             val groups = listOf(CatalogGroup("News", 3))
             val gateway = CatalogGatewayFake(SourceId.Hub(3, 9)).apply {
                 groupsResult = CatalogResult.Success(groups)
+                channelPage = { _, _ ->
+                    CatalogResult.Success(Page(listOf(item(1)), total = 1))
+                }
             }
             val viewModel = BrowseViewModel(gateway.source, gateway)
+            advanceUntilIdle()
+            viewModel.group.value = "News"
             advanceUntilIdle()
             assertEquals(groups, viewModel.catalog.value.groups)
 
             // The browse screen refreshes this on a timer; one lost poll must
             // not replace the catalog the user is reading.
-            gateway.nowAiringResult = CatalogResult.Unreachable
+            gateway.nowAiringResult = CatalogResult.SignedOut
             viewModel.reloadNowAiring()
             advanceUntilIdle()
 
@@ -279,5 +322,6 @@ class BrowseViewModelTest {
         imageUrl = null,
         kind = ChannelKind.LIVE,
         group = "All",
+        tvgId = "guide-$index",
     )
 }

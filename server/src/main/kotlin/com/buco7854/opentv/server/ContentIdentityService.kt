@@ -4,6 +4,7 @@ import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.model.SeriesGroup
 import com.buco7854.opentv.core.model.XtreamSeries
+import com.buco7854.opentv.core.storage.ChannelIdentityProjection
 import com.buco7854.opentv.core.storage.ChannelListing
 import com.buco7854.opentv.core.storage.Storage
 import com.buco7854.opentv.core.storage.XtreamSeriesListing
@@ -286,25 +287,13 @@ class ContentIdentityService(
         retireMissing: Boolean,
     ) {
         val observedAt = clock()
-        val channels = mutableListOf<Channel>()
-        listOf(ChannelKind.LIVE, ChannelKind.MOVIE, ChannelKind.SERIES).forEach { kind ->
-            storage.channels.observeGroups(playlistId, kind).first().forEach { group ->
-                channels += storage.channels.observeInGroup(
-                    playlistId,
-                    kind,
-                    group.groupTitle,
-                ).first()
-            }
-        }
         val xtreamSeries = storage.xtreamSeries.observeAll(playlistId).first()
-        val m3uSeries = storage.channels.observeAllSeries(playlistId).first()
-            .filterNot { it.seriesKey.startsWith("xs:") }
         reconciliation.withLock {
             val existing = db.content().forPlaylist(playlistId)
                 .associateBy { IdentityKey(it.kind, it.providerFingerprint) }
-            // lastSeenAtMs is the reconciliation generation as well as a timestamp. Two
-            // refreshes can finish in one clock millisecond, so make the generation strictly
-            // increase or the second pass cannot distinguish its missing rows from its own.
+            // Created, rebound, or reactivated rows receive a strictly increasing generation.
+            // Unchanged liveness is established by membership in the complete pending key set
+            // below, so seeing an identical row no longer requires rewriting its generation.
             val seenAt = maxOf(
                 observedAt,
                 (existing.values.maxOfOrNull(ContentIdentityRow::lastSeenAtMs) ?: Long.MIN_VALUE)
@@ -312,24 +301,31 @@ class ContentIdentityService(
             )
             val pending = linkedMapOf<IdentityKey, ContentIdentityRow>()
             val seriesLocators = mutableListOf<ContentSeriesLocatorRow>()
-            channels.forEach { channel ->
-                val key = IdentityKey(channel.kind, channelFingerprint(channel))
-                pending[key] = existing[key]?.let { current ->
-                    current.copy(
-                        currentChannelId = channel.id,
-                        lastSeenAtMs = if (retireMissing) seenAt else current.lastSeenAtMs,
-                        retired = false,
-                    )
-                } ?: newIdentity(playlistId, key, channel.id, seenAt)
+            val m3uSeriesKeys = linkedSetOf<String>()
+            var afterChannelId = 0L
+            while (true) {
+                val page = storage.channels.identityPage(
+                    playlistId,
+                    afterChannelId,
+                    RECONCILIATION_CHANNEL_PAGE_SIZE,
+                )
+                page.forEach { channel ->
+                    val key = IdentityKey(channel.kind, channelFingerprint(channel))
+                    pending[key] = existing[key]?.let { current ->
+                        current.reconciled(channel.id, seenAt, retireMissing)
+                    } ?: newIdentity(playlistId, key, channel.id, seenAt)
+                    channel.seriesKey
+                        ?.takeIf { channel.kind == ChannelKind.SERIES && !it.startsWith("xs:") }
+                        ?.let(m3uSeriesKeys::add)
+                }
+                afterChannelId = page.lastOrNull()?.id ?: afterChannelId
+                if (page.size < RECONCILIATION_CHANNEL_PAGE_SIZE) break
             }
             xtreamSeries.forEach { series ->
                 val key = xtreamSeriesKey(series.seriesId)
                 val identity = pending.getOrPut(key) {
                     existing[key]?.let { current ->
-                        current.copy(
-                            lastSeenAtMs = if (retireMissing) seenAt else current.lastSeenAtMs,
-                            retired = false,
-                        )
+                        current.reconciled(null, seenAt, retireMissing)
                     }
                         ?: newIdentity(playlistId, key, null, seenAt)
                 }
@@ -340,14 +336,11 @@ class ContentIdentityService(
                     series.seriesId.toString(),
                 )
             }
-            m3uSeries.forEach { series ->
-                val key = m3uSeriesKey(series.seriesKey)
+            m3uSeriesKeys.forEach { seriesKey ->
+                val key = m3uSeriesKey(seriesKey)
                 val identity = pending.getOrPut(key) {
                     existing[key]?.let { current ->
-                        current.copy(
-                            lastSeenAtMs = if (retireMissing) seenAt else current.lastSeenAtMs,
-                            retired = false,
-                        )
+                        current.reconciled(null, seenAt, retireMissing)
                     }
                         ?: newIdentity(playlistId, key, null, seenAt)
                 }
@@ -355,17 +348,32 @@ class ContentIdentityService(
                     identity.contentId,
                     playlistId,
                     SERIES_SOURCE_M3U,
-                    series.seriesKey,
+                    seriesKey,
                 )
             }
             val inserts = pending.filterKeys { it !in existing }.values.toList()
-            val updates = pending.filterKeys { it in existing }.values.toList()
+            val updates = pending.mapNotNull { (key, row) ->
+                existing[key]?.takeIf { it != row }?.let { row }
+            }
+            // This pass has seen the complete catalog while its gate is closed. Its set
+            // difference is therefore the liveness proof formerly encoded by bumping every
+            // seen row before a generation-cutoff retirement query.
+            val retirements = if (retireMissing) {
+                existing.asSequence()
+                    .filter { (key, _) -> key !in pending }
+                    .map { (_, row) -> row }
+                    .filter { !it.retired || it.currentChannelId != null }
+                    .map { it.copy(currentChannelId = null, retired = true) }
+                    .toList()
+            } else {
+                emptyList()
+            }
             db.writeContentIdentityReconciliation(
                 inserts,
-                updates,
+                updates + retirements,
                 playlistId,
-                seenAt.takeIf { retireMissing },
-                seriesLocators,
+                retireMissingBeforeMs = null,
+                seriesLocators = seriesLocators,
             )
         }
     }
@@ -473,10 +481,27 @@ class ContentIdentityService(
         channel.xtreamStreamId?.let { fingerprint("xtream:${channel.kind}:$it") }
             ?: fingerprint("m3u:${channel.kind}:${normalizeUrl(channel.url)}")
 
+    private fun channelFingerprint(channel: ChannelIdentityProjection): String =
+        channel.xtreamStreamId?.let { fingerprint("xtream:${channel.kind}:$it") }
+            ?: fingerprint("m3u:${channel.kind}:${normalizeUrl(channel.url)}")
+
     private fun Channel.matches(identity: ContentIdentityRow): Boolean =
         playlistId == identity.playlistId &&
             kind == identity.kind &&
             channelFingerprint(this) == identity.providerFingerprint
+
+    private fun ContentIdentityRow.reconciled(
+        channelId: Long?,
+        seenAt: Long,
+        advanceGeneration: Boolean,
+    ): ContentIdentityRow {
+        if (currentChannelId == channelId && !retired) return this
+        return copy(
+            currentChannelId = channelId,
+            lastSeenAtMs = if (advanceGeneration) seenAt else lastSeenAtMs,
+            retired = false,
+        )
+    }
 
     private fun xtreamSeriesKey(seriesId: Long) =
         IdentityKey(ChannelKind.SERIES, fingerprint("xtream:series:$seriesId"))
@@ -526,6 +551,7 @@ class ContentIdentityService(
 
     private companion object {
         const val MAX_BOUND_VARIABLES = 500
+        const val RECONCILIATION_CHANNEL_PAGE_SIZE = 50_000
         const val SERIES_SOURCE_XTREAM = "xtream"
         const val SERIES_SOURCE_M3U = "m3u"
     }

@@ -171,6 +171,9 @@ data class ProgrammeDto(
 )
 
 @Serializable
+data class ChannelDecorationRequestDto(val tvgIds: List<String>)
+
+@Serializable
 data class GuideEntryDto(
     val title: String,
     val description: String?,

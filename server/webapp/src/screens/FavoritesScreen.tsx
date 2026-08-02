@@ -74,32 +74,6 @@ export function FavoritesScreen() {
       filter === ALL_PLAYLISTS || item.playlistId === filter),
   }), [filter, resolved]);
 
-  const livePlaylistIds = useMemo(
-    () => [...new Set((resolved?.live ?? []).map((item) => item.playlistId))].sort((a, b) => a - b),
-    [resolved],
-  );
-  const livePlaylistKey = livePlaylistIds.join(',');
-  useEffect(() => {
-    let cancelled = false;
-    setGuideIds({});
-    setNowAiring({});
-    livePlaylistIds.forEach((playlistId) => {
-      api.guideIds(playlistId).then((ids) => {
-        if (!cancelled) {
-          setGuideIds((current) => ({ ...current, [playlistId]: new Set(ids) }));
-        }
-      }).catch(() => {});
-      api.nowAiring(playlistId).then((airing) => {
-        if (!cancelled) {
-          setNowAiring((current) => ({ ...current, [playlistId]: airing }));
-        }
-      }).catch(() => {});
-    });
-    return () => { cancelled = true; };
-  // The sorted value is the dependency; a new array with the same ids must not refetch.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [livePlaylistKey]);
-
   // Unfavorite through the playlist that owns this row. Undo uses that same identity.
   const remove = async (favorite: Fav) => {
     const undo = async () => {
@@ -127,6 +101,39 @@ export function FavoritesScreen() {
   const pagedLive = usePaged(visible.live, `live:${filter}`);
   const pagedMovies = usePaged(visible.movies, `movies:${filter}`);
   const pagedSeries = usePaged(visible.series, `series:${filter}`);
+  const liveDecorationScopes = useMemo(() => {
+    const scopes = new Map<number, Set<string>>();
+    pagedLive.pageItems.forEach((item) => {
+      if (item.tvgId == null) return;
+      const ids = scopes.get(item.playlistId) ?? new Set<string>();
+      ids.add(item.tvgId);
+      scopes.set(item.playlistId, ids);
+    });
+    return [...scopes]
+      .sort(([left], [right]) => left - right)
+      .map(([playlistId, ids]): [number, string[]] => [playlistId, [...ids]]);
+  }, [pagedLive.pageItems]);
+  const liveDecorationKey = JSON.stringify(liveDecorationScopes);
+  useEffect(() => {
+    let cancelled = false;
+    setGuideIds({});
+    setNowAiring({});
+    liveDecorationScopes.forEach(([playlistId, tvgIds]) => {
+      api.guideIds(playlistId, tvgIds).then((ids) => {
+        if (!cancelled) {
+          setGuideIds((current) => ({ ...current, [playlistId]: new Set(ids) }));
+        }
+      }).catch(() => {});
+      api.nowAiring(playlistId, tvgIds).then((airing) => {
+        if (!cancelled) {
+          setNowAiring((current) => ({ ...current, [playlistId]: airing }));
+        }
+      }).catch(() => {});
+    });
+    return () => { cancelled = true; };
+  // The serialized scope is stable while an unchanged favorites page re-renders.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveDecorationKey]);
   const isEmpty = resolved && !resolved.live.length && !resolved.movies.length && !resolved.series.length;
   const now = Date.now();
 

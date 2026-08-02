@@ -14,6 +14,7 @@ import com.buco7854.opentv.core.repo.XtreamUnreachableException
 import com.buco7854.opentv.core.repo.xtreamSeriesKey
 import com.buco7854.opentv.core.storage.SEARCH_RESULTS_PER_KIND
 import com.buco7854.opentv.core.storage.Storage
+import com.buco7854.opentv.core.util.nowMs
 import com.buco7854.opentv.core.xtream.XtreamAuthException
 import com.buco7854.opentv.serverdata.db.PlaylistDeletionRow
 import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
@@ -336,14 +337,37 @@ class PlaylistApplicationService(
         )
     }
 
-    suspend fun nowAiring(actor: Actor, id: Long): Map<String, ProgrammeDto> {
+    suspend fun nowAiring(
+        actor: Actor,
+        id: Long,
+        request: ChannelDecorationRequestDto,
+    ): Map<String, ProgrammeDto> {
         requireAccess(actor, id)
-        return epg.nowAiring(id).mapValues { it.value.toDto() }
+        val tvgIds = request.validTvgIds()
+        if (tvgIds.isEmpty()) return emptyMap()
+        return userDatabase.guideDecorations().nowAiring(id, tvgIds, nowMs())
+            .associate { row ->
+                row.tvgId to ProgrammeDto(
+                    row.id,
+                    row.playlistId,
+                    row.tvgId,
+                    row.title,
+                    row.description,
+                    row.startMs,
+                    row.endMs,
+                )
+            }
     }
 
-    suspend fun guideIds(actor: Actor, id: Long): Set<String> {
+    suspend fun guideIds(
+        actor: Actor,
+        id: Long,
+        request: ChannelDecorationRequestDto,
+    ): Set<String> {
         requireAccess(actor, id)
-        return epg.observeGuideIds(id).first()
+        val tvgIds = request.validTvgIds()
+        if (tvgIds.isEmpty()) return emptySet()
+        return userDatabase.guideDecorations().guideIds(id, tvgIds).toSet()
     }
 
     suspend fun search(actor: Actor, id: Long, query: String): SearchResultsDto {
@@ -733,4 +757,12 @@ private fun PlaylistUpdateRequest.requireApplicableTo(mode: String) {
 private fun String?.orKeeping(existing: String?): String =
     this?.trim()?.takeIf(String::isNotEmpty) ?: existing.orEmpty()
 
+private fun ChannelDecorationRequestDto.validTvgIds(): List<String> {
+    require(tvgIds.size <= MAX_DECORATION_CHANNELS) {
+        "tvgIds must contain at most $MAX_DECORATION_CHANNELS entries"
+    }
+    return tvgIds.distinct()
+}
+
+internal const val MAX_DECORATION_CHANNELS = 1_000
 private const val MAX_REFRESH_JOBS = 128

@@ -458,10 +458,11 @@ private class FakeCatalogGateway(
         CatalogResult.Success(Page(emptyList<CatalogItem>(), 0))
 
     override suspend fun search(query: String) = CatalogResult.Success(CatalogSearchResult())
-    override suspend fun nowAiring() =
+    override suspend fun nowAiring(tvgIds: Set<String>) =
         CatalogResult.Success(emptyMap<String, CatalogProgramme>())
 
-    override suspend fun guideIds() = CatalogResult.Success(emptySet<String>())
+    override suspend fun guideIds(tvgIds: Set<String>) =
+        CatalogResult.Success(emptySet<String>())
     override suspend fun resumePoints() =
         CatalogResult.Success(emptyList<CatalogResumePoint>())
 

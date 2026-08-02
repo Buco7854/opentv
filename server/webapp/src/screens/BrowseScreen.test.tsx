@@ -1,4 +1,4 @@
-import { act, fireEvent, render } from '@testing-library/react';
+import { act, fireEvent, render, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -50,6 +50,12 @@ const renderBrowse = () => render(
     </Routes>
   </MemoryRouter>,
 );
+
+// A path marker is on screen both before and after a navigation, so `findByTestId`
+// resolves against the one already mounted and reads the route we are navigating
+// away from. The router may settle a tick later than the click, so wait on the text.
+const expectPath = (view: ReturnType<typeof render>, path: string) =>
+  waitFor(() => expect(view.getByTestId('path').textContent).toBe(path));
 
 function LocationMarker() {
   const location = useLocation();
@@ -107,6 +113,10 @@ describe('BrowseScreen', () => {
     });
     const view = renderBrowse();
     expect(await view.findByText('Live bulletin')).toBeTruthy();
+    expect(api.nowAiring).toHaveBeenCalledTimes(1);
+    expect(api.nowAiring).toHaveBeenCalledWith(1, ['news']);
+    expect(api.guideIds).toHaveBeenCalledTimes(1);
+    expect(api.guideIds).toHaveBeenCalledWith(1, ['news']);
     expect(view.getByTestId('query').textContent).toBe('?t=0&g=All+channels');
 
     fireEvent.click(view.getByText('movies tab'));
@@ -116,6 +126,27 @@ describe('BrowseScreen', () => {
     expect(view.getByText('Action')).toBeTruthy();
     expect(view.container.querySelector('button button')).toBeNull();
     expect(view.queryByText('Empty category')).toBeNull();
+    view.unmount();
+  });
+
+  it('keeps a loaded catalog when scoped decorations fail', async () => {
+    vi.mocked(api.channels).mockResolvedValue({
+      items: [{
+        contentId: 'live-1', id: 1, name: 'News', logo: null, tvgId: 'news',
+        kind: ChannelKind.LIVE, xtreamStreamId: null, catchupDays: 0, hasCatchup: false,
+      }],
+      total: 1,
+      offset: 0,
+      limit: 50,
+    } as never);
+    vi.mocked(api.nowAiring).mockRejectedValue(new Error('decoration unavailable'));
+    vi.mocked(api.guideIds).mockRejectedValue(new Error('decoration unavailable'));
+
+    const view = renderBrowse();
+
+    expect(await view.findByText('News')).toBeTruthy();
+    expect(view.queryByText('decoration unavailable')).toBeNull();
+    expect(view.container.querySelector('.spinner')).toBeNull();
     view.unmount();
   });
 
@@ -216,7 +247,7 @@ describe('BrowseScreen', () => {
 
     fireEvent.click(await view.findByRole('button', { name: t('playlists.account') }));
 
-    expect((await view.findByTestId('path')).textContent).toBe('/manage/provider');
+    await expectPath(view, '/manage/provider');
     expect(api.refreshPlaylist).not.toHaveBeenCalled();
     expect(account).not.toHaveBeenCalled();
     view.unmount();
@@ -237,7 +268,7 @@ describe('BrowseScreen', () => {
     await view.findByText('Action');
     fireEvent.click(view.getAllByRole('button', { name: t('browse.correctCategory') })[0]!);
 
-    expect((await view.findByTestId('path')).textContent).toBe('/manage/categories');
+    await expectPath(view, '/manage/categories');
     expect(setGroupKind).not.toHaveBeenCalled();
     view.unmount();
   });

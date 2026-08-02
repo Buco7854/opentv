@@ -65,6 +65,15 @@ data class ChannelListing(
     val airDate: String?,
 )
 
+/** Inputs for a channel identity and, when present, its containing M3U series identity. */
+data class ChannelIdentityProjection(
+    val id: Long,
+    val kind: Int,
+    val url: String,
+    val xtreamStreamId: Long?,
+    val seriesKey: String?,
+)
+
 /** Columns needed to identify and render a native Xtream series in a category listing. */
 data class XtreamSeriesListing(
     val playlistId: Long,
@@ -139,6 +148,12 @@ interface ChannelStore {
     suspend fun get(id: Long): Channel?
     /** Batch form of [get]; a screen resolving many rows must not issue one query each. */
     suspend fun getMany(ids: List<Long>): List<Channel>
+    /** Keyset-paged identity input; avoids loading full channel rows during reconciliation. */
+    suspend fun identityPage(
+        playlistId: Long,
+        afterId: Long,
+        limit: Int,
+    ): List<ChannelIdentityProjection>
     suspend fun getByUrl(playlistId: Long, url: String): Channel?
     suspend fun distinctLiveTvgIds(playlistId: Long): List<String>
     suspend fun countEpisodes(playlistId: Long, seriesKey: String): Int

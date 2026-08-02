@@ -109,6 +109,57 @@ class PlaybackSessionRegistryTest {
     }
 
     @Test
+    fun thirdOwnDeviceJoinCollapsesEveryDuplicateLeaseIntoOneAdmittedRoom() {
+        val sessions = PlaybackSessionRegistry(reapInBackground = false)
+        val phoneActor = device("viewer", "phone-auth", "Phone")
+        val tabletActor = device("viewer", "tablet-auth", "Tablet")
+        val televisionActor = device("viewer", "tv-auth", "Television")
+        val phone = sessions.create(
+            phoneActor, 1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        val tablet = sessions.create(
+            tabletActor, 1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        val television = sessions.create(
+            televisionActor, 1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        val grants = PlaybackMediaGrants(sessions)
+        val televisionGrant = grants.issue(televisionActor, television.id)
+
+        assertEquals(
+            setOf(phone.id, tablet.id),
+            sessions.sameContentPeers(television.id, "movie").mapTo(mutableSetOf()) { it.id },
+        )
+        assertNotNull(sessions.requestJoin(tablet.id, television.id, "Television", "movie"))
+
+        assertEquals(
+            setOf(phone.id, tablet.id, television.id),
+            sessions.roomMembers(television.id),
+        )
+        assertEquals(null, sessions.sameAccountConflict(television.id))
+        assertEquals(television.id, grants.validate(television.id, televisionGrant.token).id)
+        listOf(phone.id, tablet.id, television.id).forEach { member ->
+            val roster = sessions.drainCommands(member)
+                .last { it.type == "room-state" }
+                .members.orEmpty()
+            assertEquals(3, roster.size)
+            assertTrue(roster.all { it.controller })
+            assertEquals(phone.id, roster.single { it.host }.id)
+        }
+        // A concurrent own-device request can arrive after the first one already admitted the
+        // whole batch. Treat that observation as idempotent success, not a contradictory 404.
+        assertNotNull(sessions.requestJoin(phone.id, tablet.id, "Tablet", "movie"))
+        assertTrue(sessions.drainCommands(tablet.id).isEmpty())
+
+        sessions.leaveRoom(television.id)
+        assertNotNull(sessions.sameAccountConflict(television.id))
+        assertFailsWith<SameContentAlreadyPlayingException> {
+            grants.validate(television.id, televisionGrant.token)
+        }
+        sessions.close()
+    }
+
+    @Test
     fun declinedRequiredJoinTombstonesItsLeaseAndMediaGrantImmediately() {
         val sessions = PlaybackSessionRegistry(reapInBackground = false)
         val phoneActor = device("viewer", "phone-auth", "Phone")
@@ -156,10 +207,10 @@ class PlaybackSessionRegistryTest {
         val viewerActor = device("viewer", "phone-auth", "Phone")
         val secondDeviceActor = device("viewer", "tv-auth", "Television")
         val viewer = sessions.create(
-            viewerActor, 1, "same", "https://example.test/movie.mkv", "", "",
+            viewerActor, 1, "same", "https://example.test/stream", "", "",
         )
         val secondDevice = sessions.create(
-            secondDeviceActor, 1, "same", "https://example.test/movie.mkv", "", "",
+            secondDeviceActor, 1, "same", "https://example.test/stream", "", "",
         )
         val firstRequest = assertNotNull(
             sessions.requestJoin(host, viewer.id, "Phone", "same"),
@@ -200,6 +251,58 @@ class PlaybackSessionRegistryTest {
     }
 
     @Test
+    fun approvedUnrelatedRoomCannotHideAnOlderOwnDeviceConflict() {
+        val sessions = PlaybackSessionRegistry(reapInBackground = false)
+        val phoneActor = device("viewer", "phone-auth", "Phone")
+        val televisionActor = device("viewer", "tv-auth", "Television")
+        sessions.create(
+            phoneActor, 1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        val television = sessions.create(
+            televisionActor, 1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        val unrelatedHost = sessions.create(
+            actor("friend"), 1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        val request = assertNotNull(
+            sessions.requestJoin(unrelatedHost.id, television.id, "Television", "movie"),
+        )
+
+        assertFalse(sessions.answerJoin(unrelatedHost.id, request, true))
+        assertEquals(null, sessions.roomOf(television.id))
+        assertNotNull(sessions.sameAccountConflict(television.id))
+        sessions.close()
+    }
+
+    @Test
+    fun approvedHostJoinMayResolveConflictWhenTheOlderOwnDeviceIsAlreadyThere() {
+        val sessions = PlaybackSessionRegistry(reapInBackground = false)
+        val unrelatedHost = sessions.create(
+            actor("friend"), 1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        val phone = sessions.create(
+            device("viewer", "phone-auth", "Phone"),
+            1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        val phoneRequest = assertNotNull(
+            sessions.requestJoin(unrelatedHost.id, phone.id, "Phone", "movie"),
+        )
+        assertTrue(sessions.answerJoin(unrelatedHost.id, phoneRequest, true))
+        val television = sessions.create(
+            device("viewer", "tv-auth", "Television"),
+            1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        val televisionRequest = assertNotNull(
+            sessions.requestJoin(unrelatedHost.id, television.id, "Television", "movie"),
+        )
+
+        assertTrue(sessions.answerJoin(unrelatedHost.id, televisionRequest, true))
+        assertEquals(sessions.roomOf(phone.id), sessions.roomOf(television.id))
+        assertEquals(null, sessions.sameAccountConflict(television.id))
+        sessions.close()
+    }
+
+    @Test
     fun sameAccountDifferentTitlesRemainIndependentAndMediaAdmitted() {
         val sessions = PlaybackSessionRegistry(reapInBackground = false)
         val phoneActor = device("viewer", "phone-auth", "Phone")
@@ -224,7 +327,7 @@ class PlaybackSessionRegistryTest {
     }
 
     @Test
-    fun duplicateKeyIsContentIdNotSourceUrlOrPlaybackVariant() {
+    fun duplicateKeyIncludesTheResolvedPlaybackSourceVariant() {
         val sessions = PlaybackSessionRegistry(reapInBackground = false)
         val phoneActor = device("viewer", "phone-auth", "Phone")
         val televisionActor = device("viewer", "tv-auth", "Television")
@@ -244,7 +347,38 @@ class PlaybackSessionRegistryTest {
             "",
             "",
         )
-        assertEquals(live.id, sessions.sameAccountConflict(catchup.id)?.id)
+        assertEquals(null, sessions.sameAccountConflict(catchup.id))
+        assertTrue(sessions.sameContentPeers(catchup.id, "channel-content").isEmpty())
+        assertEquals(
+            null,
+            sessions.requestJoin(live.id, catchup.id, "Television", "channel-content"),
+        )
+        assertFalse(sessions.shareGroup(live.id) == sessions.shareGroup(catchup.id))
+        val grants = PlaybackMediaGrants(sessions)
+        assertEquals(live.id, grants.validate(live.id, grants.issue(phoneActor, live.id).token).id)
+        assertEquals(
+            catchup.id,
+            grants.validate(catchup.id, grants.issue(televisionActor, catchup.id).token).id,
+        )
+
+        val sameCatchup = sessions.create(
+            phoneActor,
+            1,
+            "channel-content",
+            catchup.sourceUrl,
+            "",
+            "",
+        )
+        assertEquals(catchup.id, sessions.sameAccountConflict(sameCatchup.id)?.id)
+        assertEquals(
+            listOf(catchup.id),
+            sessions.sameContentPeers(sameCatchup.id, "channel-content").map { it.id },
+        )
+        assertNotNull(
+            sessions.requestJoin(catchup.id, sameCatchup.id, "Phone", "channel-content"),
+        )
+        assertEquals(sessions.shareGroup(catchup.id), sessions.shareGroup(sameCatchup.id))
+        assertFalse(sessions.shareGroup(live.id) == sessions.shareGroup(catchup.id))
 
         val otherPlaylistIdentity = sessions.create(
             televisionActor,
@@ -432,6 +566,39 @@ class PlaybackSessionRegistryTest {
         assertFalse(sessions.setRoomAudio(guest, 1))
         assertTrue(sessions.setRoomAudio(host, 1))
         assertEquals(1, sessions.roomAudio(guest))
+    }
+
+    @Test
+    fun ownDeviceControllersCoalesceSeekStormsToTheLatestServerArrival() {
+        val sessions = PlaybackSessionRegistry(reapInBackground = false)
+        val phone = sessions.create(
+            device("viewer", "phone-auth", "Phone"),
+            1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        val tablet = sessions.create(
+            device("viewer", "tablet-auth", "Tablet"),
+            1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        val television = sessions.create(
+            device("viewer", "tv-auth", "Television"),
+            1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        assertNotNull(sessions.requestJoin(phone.id, television.id, "Television", "movie"))
+        listOf(phone.id, tablet.id, television.id).forEach(sessions::drainCommands)
+
+        sessions.syncRoom(
+            phone.id,
+            SyncStateDto(positionMs = 20_000, paused = false, rate = 1.0, seek = true),
+        )
+        sessions.syncRoom(
+            tablet.id,
+            SyncStateDto(positionMs = 45_000, paused = true, rate = 1.0, seek = true),
+        )
+
+        val televisionSync = sessions.drainCommands(television.id).single { it.type == "sync" }
+        assertEquals(45_000L, televisionSync.sync?.positionMs)
+        assertEquals(true, televisionSync.sync?.paused)
+        sessions.close()
     }
 
     @Test
@@ -637,6 +804,82 @@ class PlaybackSessionRegistryTest {
             grants.validate(television.id, grant.token)
         }
         assertEquals("room-ended", sessions.drainCommands(television.id).single().type)
+        sessions.close()
+    }
+
+    @Test
+    fun kickedDeviceReplacementMustAskWhileAnotherAccountDeviceAutoJoins() {
+        val sessions = PlaybackSessionRegistry(
+            kickNoticeGraceMs = 10_000,
+            reapInBackground = false,
+        )
+        val phoneActor = device("viewer", "phone-auth", "Phone")
+        val televisionActor = device("viewer", "tv-auth", "Television")
+        val host = sessions.create(
+            actor("host"), 1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        val phone = sessions.create(
+            phoneActor,
+            1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        val phoneRequest = assertNotNull(
+            sessions.requestJoin(host.id, phone.id, "Phone", "movie"),
+        )
+        assertTrue(sessions.answerJoin(host.id, phoneRequest, true))
+        val television = sessions.create(
+            televisionActor,
+            1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        assertNotNull(sessions.requestJoin(phone.id, television.id, "Television", "movie"))
+        listOf(host.id, phone.id, television.id).forEach(sessions::drainCommands)
+
+        assertTrue(sessions.kick(host.id, television.id))
+        sessions.drainCommands(host.id)
+        sessions.drainCommands(phone.id)
+        sessions.drainCommands(television.id)
+
+        val replacement = sessions.create(
+            device("viewer", televisionActor.authSessionId, "Replacement TV"),
+            1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        val replacementRequest = assertNotNull(
+            sessions.requestJoin(phone.id, replacement.id, "Replacement TV", "movie"),
+        )
+
+        assertEquals(null, sessions.roomOf(replacement.id))
+        assertTrue(sessions.drainCommands(phone.id).none { it.type == "join-request" })
+        assertTrue(sessions.drainCommands(host.id).any {
+            it.type == "join-request" &&
+                it.requestId == replacementRequest &&
+                it.peerId == replacement.id
+        })
+
+        val tabletActor = device("viewer", "tablet-auth", "Tablet")
+        val tablet = sessions.create(
+            tabletActor,
+            1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        listOf(host.id, phone.id, replacement.id).forEach(sessions::drainCommands)
+        assertNotNull(sessions.requestJoin(phone.id, tablet.id, "Tablet", "movie"))
+        assertEquals(sessions.roomOf(host.id), sessions.roomOf(tablet.id))
+        assertEquals(null, sessions.roomOf(replacement.id))
+        assertEquals(null, sessions.sameAccountConflict(tablet.id))
+        assertTrue(sessions.drainCommands(host.id).none { it.type == "join-request" })
+
+        assertTrue(sessions.answerJoin(host.id, replacementRequest, true))
+        assertEquals(sessions.roomOf(host.id), sessions.roomOf(replacement.id))
+        assertEquals(null, sessions.sameAccountConflict(replacement.id))
+
+        val sameDeviceAgain = sessions.create(
+            device("viewer", televisionActor.authSessionId, "Replacement TV again"),
+            1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        listOf(host.id, phone.id, tablet.id, replacement.id).forEach(sessions::drainCommands)
+        assertNotNull(
+            sessions.requestJoin(replacement.id, sameDeviceAgain.id, "Replacement TV again", "movie"),
+        )
+        assertEquals(sessions.roomOf(host.id), sessions.roomOf(sameDeviceAgain.id))
+        assertTrue(sessions.drainCommands(host.id).none { it.type == "join-request" })
         sessions.close()
     }
 
@@ -1042,6 +1285,38 @@ class PlaybackSessionRegistryTest {
         sessions.leaveRoom(guest)
         sessions.leaveRoom(guest)
         assertEquals(setOf(host), sessions.roomMembers(host))
+        sessions.close()
+    }
+
+    @Test
+    fun lateReadyFromSupersededBarrierCannotReleaseTheNewerBarrier() {
+        val sessions = PlaybackSessionRegistry(reapInBackground = false)
+        val host = create(sessions, "host")
+        val guest = create(sessions, "guest")
+        assertTrue(join(sessions, host, guest))
+        val firstGeneration = assertNotNull(
+            sessions.drainCommands(host).single { it.type == "room-audio" }.generation,
+        )
+        sessions.drainCommands(guest)
+
+        assertTrue(sessions.setRoomAudio(host, 2))
+        val secondGeneration = assertNotNull(
+            sessions.drainCommands(host).single { it.type == "room-audio" }.generation,
+        )
+        sessions.drainCommands(guest)
+        assertTrue(secondGeneration > firstGeneration)
+
+        assertFalse(sessions.markReady(host, firstGeneration))
+        assertFalse(sessions.markReady(guest, firstGeneration))
+        assertTrue(sessions.drainCommands(host).none { it.type == "room-go" })
+        assertTrue(sessions.markReady(host, secondGeneration))
+        assertTrue(sessions.drainCommands(host).none { it.type == "room-go" })
+        assertTrue(sessions.markReady(guest, secondGeneration))
+
+        assertEquals(
+            secondGeneration,
+            sessions.drainCommands(host).single { it.type == "room-go" }.generation,
+        )
         sessions.close()
     }
 

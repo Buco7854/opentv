@@ -169,8 +169,6 @@ class BrowseViewModel private constructor(
         loadGroups(tab.value)
         group.value?.let { loadGatewayListing(tab.value, it) }
         reloadFavorites()
-        reloadNowAiring()
-        reloadGuideIds()
     }
 
     fun loadMore() {
@@ -261,17 +259,21 @@ class BrowseViewModel private constructor(
     /**
      * Now-airing rows decorate a catalog that is already on screen, and the
      * browse screen refreshes them on a timer, so a lost poll reports nothing:
-     * it must not replace the catalog with a failure state. A dead session
-     * still does, because nothing else on the screen works either.
+     * it must not replace the catalog with a failure state. Even an auth failure
+     * here is only a failed decoration; the next foreground action owns sign-out.
      */
     fun reloadNowAiring() {
+        val requested = decorationTvgIds()
+        if (requested.isEmpty()) return
         viewModelScope.launch {
-            when (val result = gateway.nowAiring()) {
-                is CatalogResult.Success -> mutableNowAiring.value = result.value
-                CatalogResult.SignedOut -> if (sourceId is SourceId.Hub) {
-                    fail(CatalogLoadError.SignedOut)
+            when (val result = gateway.nowAiring(requested)) {
+                is CatalogResult.Success -> {
+                    mutableNowAiring.value =
+                        (mutableNowAiring.value - requested) + result.value
                 }
-                CatalogResult.Unreachable, is CatalogResult.Failed -> Unit
+                CatalogResult.SignedOut,
+                CatalogResult.Unreachable,
+                is CatalogResult.Failed -> Unit
             }
         }
     }
@@ -341,6 +343,7 @@ class BrowseViewModel private constructor(
                         loading = false,
                         error = null,
                     )
+                    if (tab.value == ChannelKind.LIVE) reloadNowAiring()
                 }
         }
         viewModelScope.launch {
@@ -385,8 +388,6 @@ class BrowseViewModel private constructor(
 
     private fun observeAncillary() {
         reloadFavorites()
-        reloadNowAiring()
-        reloadGuideIds()
     }
 
     private fun loadGroups(kind: Int) {
@@ -423,6 +424,8 @@ class BrowseViewModel private constructor(
         pager?.cancel()
         pagerCollection?.cancel()
         val requestGeneration = listingGeneration
+        mutableNowAiring.value = emptyMap()
+        mutableGuideIds.value = emptySet()
         val next = ServerPagedState(viewModelScope, keyOf = { it.ref }) { offset, limit ->
             when {
                 kind == ChannelKind.SERIES && traits.hasXtreamSeries ->
@@ -442,6 +445,10 @@ class BrowseViewModel private constructor(
                     loading = snapshot.loading,
                     error = snapshot.error,
                 )
+                if (!snapshot.loading && snapshot.error == null && kind == ChannelKind.LIVE) {
+                    reloadNowAiring()
+                    reloadGuideIds()
+                }
             }
         }
     }
@@ -456,6 +463,8 @@ class BrowseViewModel private constructor(
             items = emptyList(),
             total = 0,
         )
+        mutableNowAiring.value = emptyMap()
+        mutableGuideIds.value = emptySet()
     }
 
     private fun reloadFavorites() {
@@ -490,15 +499,28 @@ class BrowseViewModel private constructor(
 
     private fun reloadGuideIds() {
         if (graph != null && sourceId is SourceId.LocalPlaylist) return
+        val requested = decorationTvgIds()
+        if (requested.isEmpty()) return
         viewModelScope.launch {
-            when (val result = safeCall(gateway::guideIds)) {
-                is CatalogResult.Success -> mutableGuideIds.value = result.value
-                CatalogResult.SignedOut -> if (sourceId is SourceId.Hub) {
-                    fail(CatalogLoadError.SignedOut)
+            when (val result = safeCall { gateway.guideIds(requested) }) {
+                is CatalogResult.Success -> {
+                    mutableGuideIds.value =
+                        (mutableGuideIds.value - requested) + result.value
                 }
-                CatalogResult.Unreachable, is CatalogResult.Failed -> Unit
+                CatalogResult.SignedOut,
+                CatalogResult.Unreachable,
+                is CatalogResult.Failed -> Unit
             }
         }
+    }
+
+    private fun decorationTvgIds(): Set<String> {
+        if (tab.value != ChannelKind.LIVE) return emptySet()
+        return mutableCatalog.value.items.asReversed().asSequence()
+            .mapNotNull(CatalogItem::tvgId)
+            .distinct()
+            .take(MAX_DECORATION_CHANNELS)
+            .toSet()
     }
 
     private fun refreshLocal(playlistId: Long) {
@@ -560,3 +582,5 @@ class BrowseViewModel private constructor(
         CatalogResult.Failed(error)
     }
 }
+
+private const val MAX_DECORATION_CHANNELS = 1_000

@@ -81,11 +81,11 @@ internal fun Route.playlistRoutes(service: PlaylistApplicationService) = route("
                 ?: throw IllegalArgumentException("Missing category")
             call.respond(service.xtreamSeries(call.actor, call.id(), category, call.listingRequest()))
         }
-        get("/now-airing") {
-            call.respond(service.nowAiring(call.actor, call.id()))
+        post("/now-airing") {
+            call.respond(service.nowAiring(call.actor, call.id(), call.receive()))
         }
-        get("/guide-ids") {
-            call.respond(service.guideIds(call.actor, call.id()))
+        post("/guide-ids") {
+            call.respond(service.guideIds(call.actor, call.id(), call.receive()))
         }
         get("/search") {
             call.respond(service.search(call.actor, call.id(), call.request.queryParameters["q"].orEmpty()))

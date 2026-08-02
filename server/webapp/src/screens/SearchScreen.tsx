@@ -1,7 +1,7 @@
 // Debounced search across live/movies/series with collapsible sections.
 // Mirrors SearchScreen.kt.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { api, canShowGuide, Channel, ChannelKind, hasCatchup, SearchResults } from '../api';
 import { mediaTags } from '../components/Badges';
@@ -28,7 +28,6 @@ export function SearchScreen() {
   const [guideChannel, setGuideChannel] = useState<Channel | null>(null);
   const { favoriteContentIds, toggleFavorite } = useFavorites(playlistId);
   const downloads = useDownloads();
-  const { guideIds } = useGuideIds(playlistId);
 
   useEffect(() => {
     setError(null);
@@ -56,6 +55,12 @@ export function SearchScreen() {
   const pagedLive = usePaged(results?.live ?? [], `l:${pageKey}`);
   const pagedMovies = usePaged(results?.movies ?? [], `m:${pageKey}`);
   const pagedSeries = usePaged(results?.series ?? [], `s:${pageKey}`);
+  const guideTvgIds = useMemo(
+    () => [...new Set(pagedLive.pageItems.map((channel) => channel.tvgId)
+      .filter((tvgId): tvgId is string => tvgId != null))],
+    [pagedLive.pageItems],
+  );
+  const { guideIds } = useGuideIds(playlistId, guideTvgIds);
 
   const section = (key: keyof typeof expanded, label: string, count: number) => (
     <button

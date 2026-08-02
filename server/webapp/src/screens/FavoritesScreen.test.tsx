@@ -21,7 +21,7 @@ const channel = (
   name,
   logo: null,
   groupTitle: kind === ChannelKind.LIVE ? 'News' : 'Drama',
-  tvgId: null,
+  tvgId: kind === ChannelKind.LIVE ? `guide-${contentId}` : null,
   kind,
   seriesKey: null,
   season: null,
@@ -94,6 +94,12 @@ describe('FavoritesScreen', () => {
     expect(view.getByText('Series · 1')).toBeTruthy();
     expect(view.getByRole('button', { name: 'Playlist One Live' })).toBeTruthy();
     expect(view.getByRole('button', { name: 'Playlist Two Live' })).toBeTruthy();
+    await waitFor(() => {
+      expect(api.guideIds).toHaveBeenCalledWith(1, ['guide-live-one']);
+      expect(api.guideIds).toHaveBeenCalledWith(2, ['guide-live-two']);
+      expect(api.nowAiring).toHaveBeenCalledWith(1, ['guide-live-one']);
+      expect(api.nowAiring).toHaveBeenCalledWith(2, ['guide-live-two']);
+    });
 
     fireEvent.click(view.getByRole('button', { name: 'Playlist One' }));
 
