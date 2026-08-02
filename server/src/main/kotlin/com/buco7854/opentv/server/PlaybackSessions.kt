@@ -84,9 +84,9 @@ class PlaybackSessionRegistry(
     ) {
         val members: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
         val controllers: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
-        // A kick suppresses only this room's same-account automatic admission. Host approval
-        // removes the account from this set, so this remains a rejoin prompt rather than a ban.
-        val autoAdmissionExcludedUsers: MutableSet<String> =
+        // A kick suppresses only this room's automatic admission for the kicked device session.
+        // Host approval removes the session, so this remains a rejoin prompt rather than a ban.
+        val autoAdmissionExcludedAuthSessions: MutableSet<String> =
             java.util.concurrent.ConcurrentHashMap.newKeySet()
         // The room shares one remux read, so one audio track: whichever a controller last chose.
         @Volatile var audioIndex: Int = 0
@@ -258,12 +258,14 @@ class PlaybackSessionRegistry(
     fun sameAccountConflict(id: String): Live? {
         val self = sessions[id] ?: throw PlaybackRevokedException()
         val selfRoom = memberRoom[id]
+        val selfRoomExclusions = selfRoom?.let { rooms[it]?.autoAdmissionExcludedAuthSessions }
         return active().firstOrNull { other ->
             other.startedOrder < self.startedOrder &&
                 other.id !in terminating &&
                 other.userId == self.userId &&
                 other.playbackIdentity == self.playbackIdentity &&
-                (selfRoom == null || memberRoom[other.id] != selfRoom)
+                (selfRoom == null || memberRoom[other.id] != selfRoom) &&
+                other.authSessionId !in (selfRoomExclusions ?: emptySet())
         }
     }
 
@@ -291,10 +293,10 @@ class PlaybackSessionRegistry(
         }
         val sameAccount = target.userId == requester.userId
         val autoAdmissionExcluded = sameAccount &&
-            targetRoom?.autoAdmissionExcludedUsers?.contains(requester.userId) == true
+            targetRoom?.autoAdmissionExcludedAuthSessions?.contains(requester.authSessionId) == true
         // A different account must still address the host. Another device of a member's own
-        // account may follow that member unless a kick made host approval mandatory. In that
-        // case a request aimed at the account's remaining device is routed to the actual host.
+        // account may follow that member unless that device session was kicked. In that case a
+        // request aimed at the account's remaining device is routed to the actual host.
         if (targetRoom != null && targetRoom.hostId != targetId &&
             !sameAccount && !autoAdmissionExcluded
         ) return null
@@ -389,7 +391,11 @@ class PlaybackSessionRegistry(
             requestId = requestId,
             requesterControls = false,
         )
-        if (admitted) roomFor(requester.id)?.autoAdmissionExcludedUsers?.remove(requester.userId)
+        if (admitted) {
+            roomFor(requester.id)
+                ?.autoAdmissionExcludedAuthSessions
+                ?.remove(requester.authSessionId)
+        }
         return admitted
     }
 
@@ -399,7 +405,10 @@ class PlaybackSessionRegistry(
                 other.id !in terminating &&
                 other.userId == requester.userId &&
                 other.playbackIdentity == requester.playbackIdentity &&
-                (roomId == null || memberRoom[other.id] != roomId)
+                (roomId == null || memberRoom[other.id] != roomId) &&
+                other.authSessionId !in (
+                    roomId?.let { rooms[it]?.autoAdmissionExcludedAuthSessions } ?: emptySet()
+                )
         }
 
     /** Complete the already-authorized membership transition shared by automatic and approved joins. */
@@ -443,26 +452,35 @@ class PlaybackSessionRegistry(
     }
 
     /**
-     * Admit all of one account's live leases for one playback variant as one atomic own-device join.
+     * Admit all eligible device leases of one account/variant as one atomic own-device join.
      *
      * A lease already in another room makes the batch ambiguous: moving it would silently alter
      * that other room, while leaving it behind would preserve a media conflict. Refuse instead of
      * weakening the one-independent-playback rule. Solo leases may follow the oldest lease into
      * its room without approval, which is the same-account policy applied consistently to N
-     * devices rather than only two.
+     * devices rather than only two. Device sessions excluded by a kick are deliberately left out:
+     * another device's automatic join must not carry the kicked device back into the room.
      */
     private fun admitSameAccountJoin(
         selectedTarget: Live,
         requester: Live,
         requestId: String,
     ): Boolean {
-        val devices = sessions.values
+        val allDevices = sessions.values
             .filter {
                 it.id !in terminating &&
                     it.userId == requester.userId &&
                     it.playbackIdentity == requester.playbackIdentity
             }
             .sortedBy { it.startedOrder }
+        val existingRooms = allDevices.mapNotNull { roomFor(it.id) }.distinctBy(Room::id)
+        if (existingRooms.size > 1) return false
+        val exclusionRoom = existingRooms.singleOrNull()
+        val devices = allDevices.filter { device ->
+            exclusionRoom == null ||
+                device.id in exclusionRoom.members ||
+                device.authSessionId !in exclusionRoom.autoAdmissionExcludedAuthSessions
+        }
         val anchor = devices.firstOrNull() ?: return false
         val destination = roomFor(anchor.id)
         if (destination?.playbackIdentity?.let { it != requester.playbackIdentity } == true) {
@@ -544,9 +562,11 @@ class PlaybackSessionRegistry(
         // Membership and access to the shared read end immediately. Keep the lease's command
         // channel alive only for a short bounded grace so room-ended can be pushed (or drained
         // by the HTTP fallback); the server-owned timer revokes the lease even if the client stalls.
-        // Exclusion is by account within this room: another device cannot undo the kick through
-        // own-account auto-admission, while approval clears it and room teardown forgets it.
-        room.autoAdmissionExcludedUsers.add(target.userId)
+        // The auth session is the device handle: replacement leases from this device must ask,
+        // while the account's other sessions retain ordinary automatic admission. Signing out and
+        // back in creates a new auth session and therefore escapes this exclusion deliberately -
+        // re-authentication is an explicit act, and a kick is not an account or device ban.
+        room.autoAdmissionExcludedAuthSessions.add(target.authSessionId)
         terminating.add(targetId)
         removeFromRoom(room, targetId)
         enqueue(targetId, SessionCommandDto(type = "room-ended"))

@@ -105,9 +105,11 @@ connections. Two devices on the same live channel, or on the same catch-up
 programme, do collide and are offered the join.
 
 Being removed from a room by its host is not a ban. You can come back, but you
-have to ask: the host approves you as they would anyone else. That holds between
-your own devices too, so removing one of them means something rather than being
-undone a second later.
+have to ask: the host approves you as they would anyone else. That applies to
+the device that was removed, not to your account: removing one of your devices
+leaves your others exactly as they were, and the removed one has to ask like
+anybody would. Signing out and back in on it starts a new session and clears
+that, which is the point of a kick rather than a ban.
 
 The reason is your provider's connection limit. Two devices watching one live
 channel together share a single connection to your provider, so joining costs
