@@ -173,9 +173,11 @@ only when no other user refers to it.
   server's entry in the sources panel. A stored session the device can no longer
   decrypt reads the same way, so the server stays where it is and offers you a
   sign-in rather than quietly disappearing.
-- **A series that opens with no episodes**: the server has none for it at that
-  moment, which is what a favorite looks like while the playlist it came from is
-  being refreshed. It fills in once the refresh finishes.
+- **A series that opens with no episodes**: the series page says so and offers a
+  retry, rather than showing a poster above an empty space. The server has no
+  episodes for it at that moment, which is what a favorite looks like while the
+  playlist it came from is being refreshed; retrying once that finishes fills it
+  in. A series still loading its first page is not this, and does not say it.
 - **"Playback capacity"**: your provider's connection limit is reached; try
   again shortly.
 - **Playback stopped with "Playback ended"**: an administrator ended the
