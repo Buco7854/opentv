@@ -30,6 +30,7 @@ import io.ktor.server.testing.testApplication
 import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -97,12 +98,44 @@ class UserFavoritesResolvedTest {
         }
     }
 
+    @Test
+    fun a_favorited_series_reopens_on_the_key_it_was_listed_under() = runBlocking {
+        // The journey a viewer takes: favorite a series, then open it from the favorites
+        // page. The app has only what the favorites listing gave it, so whatever seriesKey
+        // comes back there has to be the key the episodes endpoint answers to. If those two
+        // disagree the series opens with no episodes and no season selector, and nothing
+        // reports an error, because an empty page is a perfectly valid answer.
+        val fixture = Fixture()
+        try {
+            val playlistId = fixture.seedSeries()
+            val seriesContent = fixture.content.m3uSeries(playlistId, "A Show").contentId
+            fixture.db.activity().addFavorite(UserFavoriteRow(USER_ID, seriesContent, 1_000L))
+
+            val listed = fixture.service.resolvedFavorites(fixture.actor, playlistId).series.single()
+            assertEquals(seriesContent, listed.contentId)
+
+            val reopened = fixture.service.episodes(
+                fixture.actor,
+                playlistId,
+                seriesKey = listed.seriesKey,
+                season = null,
+                page = ListingRequest(offset = 0, limit = 50),
+            )
+
+            assertEquals(2, reopened.total, "the favorite must reopen on its own episodes")
+            assertEquals(listOf(1), reopened.seasons)
+            assertEquals(seriesContent, reopened.seriesContentId)
+        } finally {
+            fixture.close()
+        }
+    }
+
     private class Fixture {
         private val directory: Path = Files.createTempDirectory("user-favorites-resolved")
         private val persistence = createOpenTvServerStorage(directory.resolve("opentv.db").toString())
         val storage: Storage = persistence.catalog
         val db = persistence.database
-        private val content = ContentIdentityService(db, storage)
+        val content = ContentIdentityService(db, storage)
         private val auth = AuthService(db, authConfig(), directory)
         private val downloads: DownloadManager
         val service: PlaylistApplicationService
@@ -184,6 +217,34 @@ class UserFavoritesResolvedTest {
                 deniedContent,
                 otherUsersContent,
             )
+        }
+
+        /** One M3U series, two episodes in season 1, granted to the viewer. */
+        suspend fun seedSeries(): Long {
+            db.users().insert(user(USER_ID, "viewer", "Viewer"))
+            val playlistId = storage.playlists.insert(
+                Playlist(name = "Series", url = "https://series.example/playlist.m3u"),
+            )
+            storage.channels.insertAll(
+                listOf(1, 2).map { episode ->
+                    Channel(
+                        playlistId = playlistId,
+                        name = "A Show S01E0$episode",
+                        url = "https://series.example/$episode",
+                        logo = null,
+                        groupTitle = "Drama",
+                        tvgId = null,
+                        kind = ChannelKind.SERIES,
+                        seriesKey = "A Show",
+                        season = 1,
+                        episode = episode,
+                        position = episode,
+                    )
+                },
+            )
+            content.reconcilePlaylist(playlistId)
+            db.grants().grant(UserPlaylistGrantRow(USER_ID, playlistId, 1_000L))
+            return playlistId
         }
 
         private suspend fun playlist(

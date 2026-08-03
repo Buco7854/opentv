@@ -304,6 +304,34 @@ private fun DownloadSlot(state: Download?, onDownload: () -> Unit) {
     }
 }
 
+/**
+ * Whether a series has finished loading and has nothing to list.
+ *
+ * Not merely "no episodes on screen": the server sends the full season list with an
+ * empty first page, so an episode list that is still filling looks identical from the
+ * rows alone. Only a total of zero means there is genuinely nothing.
+ */
+internal fun showsNoEpisodes(loading: Boolean, episodes: Int, episodeTotal: Int): Boolean =
+    !loading && episodes == 0 && episodeTotal == 0
+
+/**
+ * A series with no episodes, which is otherwise a blank screen.
+ *
+ * The poster and title still render, so without this the page looks like it simply
+ * forgot to draw the episode list, and there is nothing to report or retry. It happens
+ * for real: a favorite whose playlist is mid-refresh has no episodes for a moment.
+ */
+@Composable
+internal fun NoEpisodes(onRetry: () -> Unit) {
+    Text(
+        stringResource(R.string.details_no_episodes),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(10.dp))
+    OtvButton(onClick = onRetry) { Text(stringResource(R.string.common_retry)) }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SeriesDetailScreen(
@@ -426,7 +454,9 @@ fun SeriesDetailScreen(
                 }
                 MetadataBlock(meta)
                 Spacer(Modifier.height(18.dp))
-                if (seasons.isNotEmpty()) {
+                if (showsNoEpisodes(state.loading, episodes.size, state.episodeTotal)) {
+                    NoEpisodes(viewModel::retry)
+                } else if (seasons.isNotEmpty()) {
                     SeasonPicker(
                         seasons = seasons,
                         selected = selectedSeason,

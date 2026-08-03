@@ -215,6 +215,7 @@
         <item quantity="other">%1$d seasons</item>
     </plurals>
     <string name="details_loading_episodes">Loading episodes…</string>
+    <string name="details_no_episodes">No episodes to show for this series. If its playlist is being refreshed, they will come back when that finishes.</string>
 
     <!-- Settings -->
     <string name="settings_appearance">Appearance</string>

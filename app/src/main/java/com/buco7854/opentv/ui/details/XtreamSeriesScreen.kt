@@ -195,6 +195,8 @@ fun XtreamSeriesScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    showsNoEpisodes(state.loading, episodes.size, state.episodeTotal) ->
+                        NoEpisodes(viewModel::retry)
                     seasons.isNotEmpty() -> {
                         SeasonPicker(
                             seasons = seasons,
