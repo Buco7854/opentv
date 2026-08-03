@@ -33,7 +33,14 @@ class FavoriteRepositoryTest {
         val favorites = listOf(FavoriteRef("live", 0), FavoriteRef("series", 2))
 
         repository.restoreAll(3, favorites)
-        assertEquals(setOf(Favorite(3, "live", 0), Favorite(3, "series", 2)), store.rows.value.toSet())
+        // Compare what this test is about. Favorite.addedMs defaults to the clock, so it
+        // is read once when restoreAll builds the row and again when the expectation is
+        // built here; comparing whole rows means passing only while both land in the same
+        // millisecond, which is a race the test does not control and eventually loses.
+        assertEquals(
+            setOf(Triple(3L, "live", 0), Triple(3L, "series", 2)),
+            store.rows.value.mapTo(mutableSetOf()) { Triple(it.playlistId, it.key, it.kind) },
+        )
 
         repository.removeAll(3, favorites)
         assertTrue(store.rows.value.isEmpty())
