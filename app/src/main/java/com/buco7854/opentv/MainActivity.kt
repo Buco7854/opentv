@@ -187,8 +187,13 @@ internal class CatalogSourceAvailabilityViewModel(app: Application) : AndroidVie
         withContext(Dispatchers.IO) {
             CatalogSourceAvailability(
                 localPlaylistIds = playlists.map { it.id },
+                // Whether a session exists, not whether it decrypts right now. A
+                // Keystore that declines once would otherwise drop the server out of
+                // the shell, taking its playlists and every route that reaches them,
+                // with nothing on screen to say why. An unreadable session still fails
+                // its next call, and that surfaces as signed out with a way back in.
                 signedInHubIds = hubs.mapNotNullTo(mutableSetOf()) { hub ->
-                    hub.id.takeIf { graph.hubVault.token(hub.id) != null }
+                    hub.id.takeIf { graph.hubVault.hasStoredSession(hub.id) }
                 },
             )
         }

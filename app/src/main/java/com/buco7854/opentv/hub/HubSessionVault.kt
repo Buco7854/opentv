@@ -2,6 +2,7 @@ package com.buco7854.opentv.hub
 
 import android.content.SharedPreferences
 import android.security.keystore.KeyGenParameterSpec
+import com.buco7854.opentv.diag.ErrorLog
 import android.security.keystore.KeyProperties
 import java.security.KeyStore
 import java.util.Base64
@@ -34,8 +35,22 @@ class HubSessionVault(
         val blob = prefs.getString(key(hubId), null) ?: return null
         return runCatching {
             cipher.decrypt(Base64.getDecoder().decode(blob)).decodeToString()
-        }.getOrNull()
+        }.onFailure { ErrorLog.log("Hub session decrypt", it) }.getOrNull()
     }
+
+    /**
+     * Whether a session is stored for this hub, readable or not.
+     *
+     * [token] cannot tell "you never signed in" apart from "the Keystore would not
+     * decrypt this just now", and the two deserve different treatment: the first means
+     * the server is not connected, while the second is a server you did connect whose
+     * session we failed to read. Treating the second as the first makes the server
+     * disappear from the app entirely, with no way back in. Callers deciding whether a
+     * connection still exists ask this; callers needing to authenticate ask [token] and
+     * handle its absence as a signed-out session, which offers signing in again.
+     */
+    @Synchronized
+    fun hasStoredSession(hubId: Long): Boolean = prefs.contains(key(hubId))
 
     @Synchronized
     fun store(hubId: Long, token: String) {

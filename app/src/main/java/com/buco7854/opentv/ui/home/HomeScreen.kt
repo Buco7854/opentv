@@ -36,6 +36,7 @@ import com.buco7854.opentv.R
 import com.buco7854.opentv.core.model.Playlist
 import com.buco7854.opentv.source.SourceId
 import com.buco7854.opentv.ui.components.PlaylistDialog
+import com.buco7854.opentv.ui.components.SourceUnreachable
 
 /** Forwards into the active (or first) playlist, or greets a fresh install. */
 @Composable
@@ -48,6 +49,7 @@ fun HomeScreen(
     val settings by viewModel.settings.collectAsStateWithLifecycle(initialValue = null)
     val catalogSources by viewModel.catalogSources.collectAsStateWithLifecycle()
     val catalogSourcesLoading by viewModel.catalogSourcesLoading.collectAsStateWithLifecycle()
+    val unreachableHubs by viewModel.unreachableHubs.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     var showAdd by remember { mutableStateOf(false) }
@@ -70,12 +72,15 @@ fun HomeScreen(
     }
 
     Box(Modifier.fillMaxSize()) {
-        when {
-            playlists == null || catalogSourcesLoading -> CircularProgressIndicator(
+        when (homeState(playlists, catalogSources, catalogSourcesLoading, unreachableHubs)) {
+            HomeState.LOADING -> CircularProgressIndicator(
                 Modifier.align(Alignment.Center),
                 color = MaterialTheme.colorScheme.onSurface,
             )
-            playlists!!.isEmpty() && catalogSources.isEmpty() -> Column(
+            HomeState.UNREACHABLE -> SourceUnreachable(
+                onRetry = viewModel::retryCatalogSources,
+            )
+            HomeState.WELCOME -> Column(
                 modifier = Modifier.fillMaxSize().padding(32.dp),
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -108,7 +113,7 @@ fun HomeScreen(
                     Text(stringResource(R.string.shell_add_playlist))
                 }
             }
-            else -> {}
+            HomeState.CONTENT -> {}
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
     }
@@ -126,6 +131,28 @@ fun HomeScreen(
             onConnectHub = { showAdd = false; onConnectHub() },
         )
     }
+}
+
+internal enum class HomeState { LOADING, UNREACHABLE, WELCOME, CONTENT }
+
+/**
+ * What an empty home screen actually means.
+ *
+ * The welcome is a first-run screen, so it may only appear when we know there is
+ * nothing to show. A server that refused to answer is not an account without
+ * playlists, and someone whose playlists all live on a server would otherwise be
+ * told they have none and asked to add one they already have.
+ */
+internal fun homeState(
+    playlists: List<Playlist>?,
+    catalogSources: List<CatalogSourceEntry>,
+    catalogSourcesLoading: Boolean,
+    unreachableHubs: Int,
+): HomeState = when {
+    playlists == null || catalogSourcesLoading -> HomeState.LOADING
+    playlists.isNotEmpty() || catalogSources.isNotEmpty() -> HomeState.CONTENT
+    unreachableHubs > 0 -> HomeState.UNREACHABLE
+    else -> HomeState.WELCOME
 }
 
 internal fun homeSource(

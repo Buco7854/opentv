@@ -47,6 +47,24 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     private val _catalogSourcesLoading = MutableStateFlow(true)
     val catalogSourcesLoading: StateFlow<Boolean> = _catalogSourcesLoading
 
+    /**
+     * How many connected servers refused to list their playlists this round.
+     *
+     * A server we could not reach is not a server holding nothing, and the difference
+     * matters: someone whose playlists all live on one server would otherwise be shown
+     * the first-run welcome, telling them they have no playlists and inviting them to
+     * add one they added long ago.
+     */
+    private val _unreachableHubs = MutableStateFlow(0)
+    val unreachableHubs: StateFlow<Int> = _unreachableHubs
+
+    private val retryNonce = MutableStateFlow(0)
+
+    /** Ask the connected servers again, without waiting for a stored value to change. */
+    fun retryCatalogSources() {
+        retryNonce.value += 1
+    }
+
     private val _busy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = _busy
 
@@ -55,19 +73,28 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         viewModelScope.launch {
-            combine(graph.playlists.playlists, graph.hubAccounts.sources) { local, hubs ->
-                local to hubs
-            }.collectLatest { (local, hubs) ->
+            combine(
+                graph.playlists.playlists,
+                graph.hubAccounts.sources,
+                retryNonce,
+            ) { local, hubs, _ -> local to hubs }.collectLatest { (local, hubs) ->
                 _catalogSourcesLoading.value = true
                 val entries = local.map {
                     CatalogSourceEntry(SourceId.LocalPlaylist(it.id), it.name)
                 }.toMutableList()
+                var unreachable = 0
                 hubs.forEach { hub ->
-                    val client = graph.hubs.clientFor(hub.id) ?: return@forEach
+                    val client = graph.hubs.clientFor(hub.id)
+                    if (client == null) {
+                        unreachable += 1
+                        return@forEach
+                    }
                     val playlists = try {
                         client.call { playlists(it) }
                     } catch (error: Exception) {
                         error.rethrowCancellation()
+                        ErrorLog.log("Hub playlists", error)
+                        unreachable += 1
                         emptyList()
                     }
                     playlists
@@ -80,6 +107,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                         }
                 }
                 _catalogSources.value = entries
+                _unreachableHubs.value = unreachable
                 _catalogSourcesLoading.value = false
             }
         }

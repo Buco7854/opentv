@@ -66,6 +66,22 @@ class HubSessionVaultTest {
         })
         prefs.edit().putString("hub-token-1", "not-base64-!!").apply()
         assertNull(vault.token(1))
+
+        // Unreadable is not unconnected. The shell decides which servers exist from
+        // this, and a Keystore that declines once must not erase a server the viewer
+        // did connect -- the failing call reports it as signed out and offers a way in.
+        assertTrue(vault.hasStoredSession(1))
+        assertFalse(vault.hasStoredSession(2))
+    }
+
+    @Test
+    fun aClearedHubHasNoStoredSession() {
+        vault.store(1, "token-one")
+        assertTrue(vault.hasStoredSession(1))
+
+        vault.clear(1)
+
+        assertFalse(vault.hasStoredSession(1))
     }
 
     @Test

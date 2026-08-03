@@ -383,7 +383,12 @@ class HubCatalogGateway internal constructor(
             )
         } else {
             val page = backend.episodes(seriesKey, season = null, offset = 0, limit = 1)
-            require(page.seriesContentId == contentId) {
+            // The server only mints a series identity once it has episodes to bind it to,
+            // so a series with none reports null here. That is not a mismatched identity:
+            // it is a series we can legitimately show as empty, which is what a favourite
+            // looks like while the playlist it came from is mid-refresh and its channels
+            // have been replaced. Only compare when the server actually stated an identity.
+            require(page.seriesContentId == null || page.seriesContentId == contentId) {
                 "Series identity does not match the requested content"
             }
             val first = page.items.firstOrNull()

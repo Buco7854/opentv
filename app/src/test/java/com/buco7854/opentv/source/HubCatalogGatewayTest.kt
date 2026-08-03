@@ -619,6 +619,35 @@ class HubCatalogGatewayTest {
             ) is CatalogResult.Failed,
         )
     }
+
+    @Test
+    fun m3uSeriesWithNoEpisodesOpensEmptyRatherThanFailingTheIdentityCheck() = runTest {
+        // The server mints a series identity from its episodes, so it reports none for a
+        // series that currently has no episodes -- which is what a favourite looks like
+        // while its playlist is being refreshed and the channel table has been replaced.
+        // Reading that as a mismatched identity failed the screen outright, leaving a
+        // favourited series with no episodes and therefore no play or download control.
+        val backend = FakeHubBackend().apply {
+            episodePage = EpisodePageDto(
+                items = emptyList(),
+                total = 0,
+                offset = 0,
+                limit = 1,
+                seasons = emptyList(),
+                seriesContentId = null,
+            )
+        }
+
+        val detail = HubCatalogGateway(SourceId.Hub(3, 7), backend).seriesDetail(
+            ContentRef.HubContent("m3u-content"),
+            seriesKey = "A Show",
+            seriesId = null,
+        ).successValue()
+
+        assertEquals("A Show", detail?.item?.title)
+        assertEquals(0, detail?.item?.count)
+        assertEquals(ContentRef.HubContent("m3u-content"), detail?.item?.ref)
+    }
 }
 
 private fun <T> CatalogResult<T>.successValue(): T = when (this) {
