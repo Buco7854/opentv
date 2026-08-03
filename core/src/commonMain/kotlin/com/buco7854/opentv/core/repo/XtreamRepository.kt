@@ -66,11 +66,15 @@ class XtreamRepository(
             val series = storage.xtreamSeries.get(playlistId, seriesId) ?: return
             val seriesKey = xtreamSeriesKey(seriesId)
             val now = clock()
-            if (!force && series.episodesFetchedAtMs > 0 &&
+            val cached = storage.channels.countEpisodes(playlistId, seriesKey) > 0
+            // A cache window over nothing is not a cache. Honouring the timestamp
+            // without checking that it stands for stored episodes is what let a single
+            // empty reply hold a series blank for a day, and it would go on doing so
+            // for every series already stamped that way before this was fixed.
+            if (!force && cached && series.episodesFetchedAtMs > 0 &&
                 now - series.episodesFetchedAtMs < EPISODES_CACHE_MS
             ) return
 
-            val cached = storage.channels.countEpisodes(playlistId, seriesKey) > 0
             val creds = storage.playlists.get(playlistId)?.credentials() ?: return
             val episodes = xtreamApi.fetchSeriesEpisodes(creds, seriesId)
             if (episodes.isEmpty()) {
