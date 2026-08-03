@@ -178,6 +178,11 @@ only when no other user refers to it.
   episodes for it at that moment, which is what a favorite looks like while the
   playlist it came from is being refreshed; retrying once that finishes fills it
   in. A series still loading its first page is not this, and does not say it.
+  For a series from an Xtream panel the retry does reach the panel again: an
+  answer with no episodes is never recorded as the answer, so it is asked afresh
+  each time you open the page. The server log notes each empty reply, which is
+  what tells a series the panel has nothing for apart from one it described in a
+  way we could not read.
 - **"Playback capacity"**: your provider's connection limit is reached; try
   again shortly.
 - **Playback stopped with "Playback ended"**: an administrator ended the
