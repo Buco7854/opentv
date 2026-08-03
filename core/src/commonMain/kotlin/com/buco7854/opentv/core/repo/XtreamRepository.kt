@@ -73,8 +73,25 @@ class XtreamRepository(
             val cached = storage.channels.countEpisodes(playlistId, seriesKey) > 0
             val creds = storage.playlists.get(playlistId)?.credentials() ?: return
             val episodes = xtreamApi.fetchSeriesEpisodes(creds, seriesId)
-            if (episodes.isEmpty() && cached) {
-                storage.xtreamSeries.setEpisodesFetched(playlistId, seriesId, now)
+            if (episodes.isEmpty()) {
+                // Say so where it can be read back. Whether the panel truly has no
+                // episodes or replied in a shape we could not parse is the one thing
+                // an empty series page cannot tell you from the outside.
+                log.log(
+                    "Series episodes",
+                    XtreamApiException("Panel listed no episodes for series $seriesId"),
+                )
+                // An empty answer is not proof that the series is empty: a panel that
+                // hiccups, rate-limits, or replies in a shape we could not read looks
+                // exactly like one with no episodes. Keep whatever we already had.
+                //
+                // Only record the attempt when we did. Stamping an empty first fetch
+                // silences the next day of asking, and since the stamp is what the
+                // early return above consults, the series page stays blank and its
+                // retry cannot reach the panel at all. Leaving it unstamped costs one
+                // panel call each time that page is opened, which is the right price
+                // for the difference between "no episodes" and "we never got any".
+                if (cached) storage.xtreamSeries.setEpisodesFetched(playlistId, seriesId, now)
                 return
             }
 
