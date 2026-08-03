@@ -166,8 +166,16 @@ only when no other user refers to it.
 - **"Couldn't reach the server"**: the app could not contact it. Check the
   address and that your device is on a network that can reach it. Server sources
   are not cached, so nothing from that server appears until it is reachable.
+  You see this on the home screen too when a connected server will not list its
+  playlists. It is deliberately not the same as the welcome screen: an empty
+  home means you have nothing connected, never that we failed to ask.
 - **"Signed out"**: your session ended or was revoked. Sign in again from the
-  server's entry in the sources panel.
+  server's entry in the sources panel. A stored session the device can no longer
+  decrypt reads the same way, so the server stays where it is and offers you a
+  sign-in rather than quietly disappearing.
+- **A series that opens with no episodes**: the server has none for it at that
+  moment, which is what a favorite looks like while the playlist it came from is
+  being refreshed. It fills in once the refresh finishes.
 - **"Playback capacity"**: your provider's connection limit is reached; try
   again shortly.
 - **Playback stopped with "Playback ended"**: an administrator ended the
