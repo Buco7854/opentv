@@ -71,6 +71,7 @@ import com.buco7854.opentv.source.ContentRef
 import com.buco7854.opentv.source.FavoritesSection
 import com.buco7854.opentv.source.SourceId
 import com.buco7854.opentv.source.encode
+import com.buco7854.opentv.source.seriesEpisodeCount
 import com.buco7854.opentv.ui.components.EmptyState
 import com.buco7854.opentv.ui.components.GuideSheet
 import com.buco7854.opentv.ui.components.MediaListRow
@@ -448,7 +449,7 @@ fun AllFavoritesScreen(
                                                 key,
                                                 item.imageUrl,
                                                 item.title,
-                                                item.count?.let {
+                                                seriesEpisodeCount(item.count)?.let {
                                                     resources.getQuantityString(
                                                         R.plurals.details_episode_count,
                                                         it,
@@ -479,7 +480,7 @@ fun AllFavoritesScreen(
                                             title = item.title,
                                             logo = item.imageUrl,
                                             fallbackKind = item.kind,
-                                            subtitle = item.count?.let {
+                                            subtitle = seriesEpisodeCount(item.count)?.let {
                                                 pluralStringResource(
                                                     R.plurals.details_episode_count,
                                                     it,

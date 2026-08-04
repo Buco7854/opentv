@@ -80,6 +80,7 @@ import com.buco7854.opentv.source.PlaylistCapabilities
 import com.buco7854.opentv.source.PlaylistOperation
 import com.buco7854.opentv.source.SourceId
 import com.buco7854.opentv.source.encode
+import com.buco7854.opentv.source.seriesEpisodeCount
 import com.buco7854.opentv.ui.components.BadgeRow
 import com.buco7854.opentv.ui.components.ChannelLogo
 import com.buco7854.opentv.ui.components.DownloadStateIcon
@@ -355,11 +356,13 @@ fun BrowseScreen(
                             items = shown.map {
                                 PosterItem(
                                     it.ref.encode(), it.imageUrl, it.title,
-                                    pluralStringResource(
-                                        R.plurals.details_episode_count,
-                                        it.count ?: 0,
-                                        it.count ?: 0,
-                                    ),
+                                    seriesEpisodeCount(it.count)?.let { episodes ->
+                                        pluralStringResource(
+                                            R.plurals.details_episode_count,
+                                            episodes,
+                                            episodes,
+                                        )
+                                    },
                                 )
                             },
                             fallback = kindIcon(ChannelKind.SERIES),
@@ -638,11 +641,9 @@ private fun SeriesList(
         items(series, key = { it.ref.encode() }) { item ->
             MediaListRow(
                 title = item.title,
-                subtitle = pluralStringResource(
-                    R.plurals.details_episode_count,
-                    item.count ?: 0,
-                    item.count ?: 0,
-                ),
+                subtitle = seriesEpisodeCount(item.count)?.let { episodes ->
+                    pluralStringResource(R.plurals.details_episode_count, episodes, episodes)
+                } ?: item.group,
                 logo = item.imageUrl,
                 fallbackKind = ChannelKind.SERIES,
                 onClick = { onSelect(item) },

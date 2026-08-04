@@ -23,6 +23,18 @@ data class CatalogItem(
     val nowAiring: CatalogProgramme? = null,
 )
 
+/**
+ * A series episode count only when there is one.
+ *
+ * [CatalogItem.count] holds a real count for an M3U series, whose episodes are rows the
+ * server can count, and zero for a panel series, whose episodes it would have to fetch
+ * from the provider to know. A listing never contains an M3U series with no episodes,
+ * so zero always means "not counted" rather than "counted, and there are none". Printing
+ * it states as fact something nobody measured, and every panel series in a listing then
+ * describes itself as having no episodes.
+ */
+internal fun seriesEpisodeCount(count: Int?): Int? = count?.takeIf { it > 0 }
+
 data class Page<T>(
     val items: List<T>,
     val total: Int,

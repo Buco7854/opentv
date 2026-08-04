@@ -185,6 +185,10 @@ suspend fun OpenTvServerDatabase.favoriteSeriesListings(
                favorites.addedAtMs,
                CASE WHEN locators.sourceKind = 'xtream'
                     THEN panel.name ELSE locators.sourceKey END AS seriesKey,
+               -- Zero for a panel series means "not counted": its episodes live with the
+               -- provider until something fetches them, so there is nothing here to count.
+               -- The HAVING below drops an M3U series with no episodes, so a listed row
+               -- never carries a genuine zero and a reader may treat one as unknown.
                CASE WHEN locators.sourceKind = 'xtream'
                     THEN 0 ELSE COUNT(episodes.id) END AS episodeCount,
                CASE WHEN locators.sourceKind = 'xtream'
