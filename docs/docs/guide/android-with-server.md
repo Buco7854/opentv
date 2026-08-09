@@ -84,6 +84,12 @@ Where a file does need converting, because of a codec your device lacks or
 because it is catch-up, the server prepares it and the app plays that instead.
 Audio track and subtitle selection work either way.
 
+A film's cast, rating and description come from the server for a server playlist,
+which is a separate request from the one that opens the page: the film's catalog
+entry does not carry them, whereas a series detail does. They fill in a moment
+after the page appears, and a film the provider knows nothing about simply shows
+none, the same as one from a local playlist.
+
 ## Watch together
 
 If someone else is watching the same thing, the player offers to watch together.
@@ -183,6 +189,12 @@ only when no other user refers to it.
   each time you open the page. The server log notes each empty reply, which is
   what tells a series the panel has nothing for apart from one it described in a
   way we could not read.
+- **Leaving the app during playback**: the server keeps a stream only while the
+  app keeps reporting in, and Android stops letting it do that after a spell in
+  the background, so a long enough trip away ends the stream. Coming back takes
+  it straight back from where you were. A stream ended while you are watching is
+  somebody's decision rather than an accident, so that one waits, and says so
+  with a retry.
 - **"Playback capacity"**: your provider's connection limit is reached; try
   again shortly.
 - **Playback stopped with "Playback ended"**: an administrator ended the
