@@ -1,5 +1,7 @@
 package com.buco7854.opentv.source
 
+import com.buco7854.opentv.core.model.Metadata
+
 const val DEFAULT_CATALOG_PAGE_SIZE = 50
 
 interface CatalogGateway {
@@ -92,6 +94,18 @@ interface CatalogGateway {
     suspend fun resumePoints(): CatalogResult<List<CatalogResumePoint>>
     suspend fun guideFor(ref: ContentRef): CatalogResult<List<CatalogGuideEntry>>
     suspend fun detail(ref: ContentRef): CatalogResult<CatalogDetail?>
+
+    /**
+     * Cast, rating and the rest of a film's description, where the source has them.
+     *
+     * A series carries these on its detail response, but a film does not: locally they
+     * are looked up from the channel row, and that row does not exist for a source the
+     * server owns. Without asking the server for them, every film on a server playlist
+     * loses its cast while every series keeps one. Null means this source has nothing
+     * to add, which is the honest answer for a plain M3U entry.
+     */
+    suspend fun movieMetadata(ref: ContentRef): CatalogResult<Metadata?> =
+        CatalogResult.Success(null)
 
     suspend fun seriesDetail(
         ref: ContentRef,

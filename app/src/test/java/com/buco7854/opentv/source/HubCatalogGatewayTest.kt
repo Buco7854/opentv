@@ -10,6 +10,7 @@ import com.buco7854.opentv.contract.FavoriteDto
 import com.buco7854.opentv.contract.FavoritesResolvedDto
 import com.buco7854.opentv.contract.GroupCountDto
 import com.buco7854.opentv.contract.GuideEntryDto
+import com.buco7854.opentv.contract.MetadataDto
 import com.buco7854.opentv.contract.ProgrammeDto
 import com.buco7854.opentv.contract.PlaylistCapabilitiesDto
 import com.buco7854.opentv.contract.PlaylistDeleteInfoDto
@@ -56,6 +57,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -621,6 +623,41 @@ class HubCatalogGatewayTest {
     }
 
     @Test
+    fun aFilmsCastComesFromTheServerBecauseNoLocalRowHoldsIt() = runTest {
+        // A series carries its cast on the detail response; a film does not, and the
+        // channel row a local playlist would read it from does not exist for a source
+        // the server owns. Without this call every film on a server playlist loses its
+        // cast and rating while every series beside it keeps them.
+        val backend = FakeHubBackend().apply {
+            vodInfo = MetadataDto(
+                cacheKey = "xtreamvod:7:22",
+                title = "The Film",
+                year = "2011",
+                overview = "A plot",
+                rating = 7.5,
+                castNames = "Alice Isaaz, Kevin Bago",
+                castJson = null,
+                posterUrl = "poster",
+                infoLine = "Drama · 98 min",
+                sourceId = "22",
+                fetchedAtMs = 5,
+            )
+        }
+
+        val metadata = HubCatalogGateway(SourceId.Hub(3, 7), backend)
+            .movieMetadata(ContentRef.HubContent("film-content"))
+            .successValue()
+
+        assertEquals("Alice Isaaz, Kevin Bago", metadata?.castNames)
+        assertEquals(7.5, metadata?.rating)
+        assertEquals("Drama · 98 min", metadata?.infoLine)
+        assertEquals(1, backend.vodInfoCalls)
+        // The panel's own id is text and the local field means the metadata provider's
+        // numeric id, so it is dropped rather than forced into a field of another meaning.
+        assertNull(metadata?.sourceId)
+    }
+
+    @Test
     fun m3uSeriesWithNoEpisodesOpensEmptyRatherThanFailingTheIdentityCheck() = runTest {
         // The server mints a series identity from its episodes, so it reports none for a
         // series that currently has no episodes -- which is what a favourite looks like
@@ -704,6 +741,8 @@ private class FakeHubBackend : HubCatalogBackend {
     var resumeCalls = 0
     var resolvedFavoriteCalls = 0
     var contentCalls = 0
+    var vodInfoCalls = 0
+    var vodInfo: MetadataDto? = null
     var clearProgressCalls = 0
     var deleteCalls = 0
     var refreshStatusCalls = 0
@@ -850,6 +889,10 @@ private class FakeHubBackend : HubCatalogBackend {
 
     override suspend fun content(contentId: String) =
         channel(contentId, "Detail").also { contentCalls++ }
+    override suspend fun vodInfo(contentId: String): MetadataDto {
+        vodInfoCalls++
+        return vodInfo ?: throw IllegalStateException("no vod info configured")
+    }
     override suspend fun guide(contentId: String): List<GuideEntryDto> = emptyList()
 }
 

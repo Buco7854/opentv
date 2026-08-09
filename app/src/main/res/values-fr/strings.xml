@@ -398,7 +398,7 @@
     <string name="favorites_all_title">Favoris</string>
     <string name="favorites_filter_all">Tous</string>
     <string name="favorites_tv_select_hint">Maintenez OK sur un élément, ou utilisez Sélectionner des favoris ci-dessus, pour en sélectionner plusieurs.</string>
-    <string name="player_playback_ended">Lecture terminée.</string>
+    <string name="player_playback_ended">Ce flux a été arrêté par le serveur. Réessayez pour reprendre où vous en étiez.</string>
     <string name="player_signed_out">Votre session sur ce serveur a pris fin. Reconnectez-vous pour continuer.</string>
     <string name="player_at_capacity">Ce serveur a atteint sa capacité de lecture. Réessayez dans un instant.</string>
     <string name="player_stream_failed">Le serveur n\'a pas pu préparer ce flux.</string>

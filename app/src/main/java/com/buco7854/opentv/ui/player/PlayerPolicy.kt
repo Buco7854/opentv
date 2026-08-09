@@ -70,10 +70,46 @@ internal fun playerErrorAction(problem: PlayerProblem?): PlayerErrorAction = whe
     null -> PlayerErrorAction.RETRY_SESSION
     PlayerProblem.AT_CAPACITY,
     PlayerProblem.FAILED,
+    // A lease can end because an administrator ended it, and equally because the
+    // server reclaimed one that stopped reporting in -- which is what happens when
+    // this app spends twelve seconds in the background. Offering nothing treats a
+    // viewer who simply took a phone call as though the film were over. Taking the
+    // stream back is a new lease, which the server is free to refuse if it should.
+    PlayerProblem.PLAYBACK_ENDED,
     -> PlayerErrorAction.RETRY_HUB
     PlayerProblem.SIGNED_OUT -> PlayerErrorAction.SIGN_IN
-    PlayerProblem.PLAYBACK_ENDED -> PlayerErrorAction.NONE
 }
+
+/**
+ * Whether returning to the app should take the stream back without being asked.
+ *
+ * Only for a lease that ended while the app was away: that one is ours to lose, since
+ * the heartbeat is what stopped, and the viewer did nothing but leave and come back.
+ * A lease that ends while they are watching is somebody's decision -- an administrator,
+ * or another device -- and it stays on screen with a retry they choose to press. The
+ * flag is consumed either way, so a refusal cannot become a loop.
+ */
+internal fun shouldReclaimStreamOnReturn(
+    problem: PlayerProblem?,
+    endedWhileAway: Boolean,
+): Boolean = endedWhileAway && problem == PlayerProblem.PLAYBACK_ENDED
+
+/**
+ * Whether a lease that has just ended was lost to being in the background.
+ *
+ * The two events race, and the common order is the wrong way round: the server drops
+ * the lease while the app is away, but the socket close reaches us only once Android
+ * lets the app run again, by which time we are no longer away. Anything arriving in
+ * the first moments back is still the tail of that absence.
+ *
+ * [sinceReturnMs] is measured from returning after an actual absence, so a lease that
+ * ends soon after the player simply opened is not mistaken for one.
+ */
+internal fun endedByBeingAway(hostAway: Boolean, sinceReturnMs: Long): Boolean =
+    hostAway || sinceReturnMs <= RETURN_GRACE_MS
+
+/** Long enough for a queued socket close to be delivered after Android unfreezes us. */
+internal const val RETURN_GRACE_MS = 5_000L
 
 /** Media is deliberately absent while the initial alone/together decision is unresolved. */
 internal fun shouldShowWatchTogetherBeforeMedia(state: WatchTogetherState): Boolean =

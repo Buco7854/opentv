@@ -202,6 +202,10 @@ data class ProviderAccountInfo(
     val stale: Boolean,
 )
 
+/** The value when the call succeeded, and null for every way it did not. */
+internal fun <T> CatalogResult<T>.valueOrNull(): T? =
+    (this as? CatalogResult.Success<T>)?.value
+
 sealed interface CatalogResult<out T> {
     data class Success<T>(val value: T) : CatalogResult<T>
     data object SignedOut : CatalogResult<Nothing>

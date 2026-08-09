@@ -108,10 +108,52 @@ class PlayerPolicyTest {
             PlayerErrorAction.SIGN_IN,
             playerErrorAction(PlayerProblem.SIGNED_OUT),
         )
+        // A lease ends when an administrator ends it and equally when the server
+        // reclaims one that stopped reporting in, which is what a spell in the
+        // background does. Offering nothing told a viewer who took a phone call that
+        // the film was over.
         assertEquals(
-            PlayerErrorAction.NONE,
+            PlayerErrorAction.RETRY_HUB,
             playerErrorAction(PlayerProblem.PLAYBACK_ENDED),
         )
+    }
+
+    @Test
+    fun `a stream lost while the app was away is taken back on return`() {
+        assertTrue(
+            shouldReclaimStreamOnReturn(PlayerProblem.PLAYBACK_ENDED, endedWhileAway = true),
+        )
+    }
+
+    @Test
+    fun `a close delivered just after returning still counts as lost while away`() {
+        // The usual order: the server drops the lease while the app is frozen, and the
+        // socket close only arrives once Android lets it run again. By then we are back,
+        // so asking "are we away right now" answers no and the recovery never fires.
+        assertTrue(endedByBeingAway(hostAway = false, sinceReturnMs = 0))
+        assertTrue(endedByBeingAway(hostAway = false, sinceReturnMs = RETURN_GRACE_MS))
+        assertTrue(endedByBeingAway(hostAway = true, sinceReturnMs = Long.MAX_VALUE / 2))
+    }
+
+    @Test
+    fun `a lease ending long after returning is not blamed on the absence`() {
+        assertFalse(endedByBeingAway(hostAway = false, sinceReturnMs = RETURN_GRACE_MS + 1))
+        // Never having left: the elapsed measure starts far in the past so that an
+        // administrator ending a stream moments after the player opens is left alone.
+        assertFalse(endedByBeingAway(hostAway = false, sinceReturnMs = Long.MAX_VALUE / 2))
+    }
+
+    @Test
+    fun `a stream lost in front of the viewer waits for them to ask`() {
+        // Somebody decided this: an administrator, or another device. It stays on
+        // screen with a retry rather than being silently reclaimed under them.
+        assertFalse(
+            shouldReclaimStreamOnReturn(PlayerProblem.PLAYBACK_ENDED, endedWhileAway = false),
+        )
+        // And returning with any other problem, or none, reclaims nothing.
+        assertFalse(shouldReclaimStreamOnReturn(PlayerProblem.SIGNED_OUT, endedWhileAway = true))
+        assertFalse(shouldReclaimStreamOnReturn(PlayerProblem.AT_CAPACITY, endedWhileAway = true))
+        assertFalse(shouldReclaimStreamOnReturn(null, endedWhileAway = true))
     }
 
     @Test

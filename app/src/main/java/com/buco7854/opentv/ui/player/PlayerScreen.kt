@@ -214,7 +214,12 @@ fun PlayerScreen(
 
     val playback by session.state.collectAsStateWithLifecycle()
     val systemController = rememberPlayerSystemController(session.player)
-    PlayerSystemEffects(session, systemController)
+    PlayerSystemEffects(
+        session,
+        systemController,
+        onHostStopped = viewModel::onHostStopped,
+        onHostStarted = viewModel::onHostStarted,
+    )
 
     fun closePlayerAndGoBack() {
         session.pause()

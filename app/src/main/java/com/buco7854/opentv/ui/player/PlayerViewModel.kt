@@ -269,6 +269,23 @@ internal class PlayerViewModel(
         watchTogether?.state ?: noWatchTogether.asStateFlow()
     private val settingsMutex = Mutex()
     private val closed = AtomicBoolean(false)
+
+    /**
+     * Whether the host is in the background, and whether the lease died while it was.
+     *
+     * The lease is kept alive by a heartbeat this process sends, so a trip to another
+     * app long enough for the server to reclaim it ends playback through no decision of
+     * the viewer's. Remembering that it happened while we were away is what separates it
+     * from a lease an administrator ended, which the viewer should see and act on.
+     */
+    private var hostAway = false
+    private var endedWhileAway = false
+
+    /** Elapsed time at the last return from an actual absence; never set on first open. */
+    private var returnedAtMs = Long.MIN_VALUE / 2
+
+    /** Monotonic, so a device clock correction cannot make an absence look recent. */
+    private fun monotonicMs(): Long = System.nanoTime() / 1_000_000
     private val _bootstrap = MutableStateFlow<PlayerBootstrap?>(null)
     val bootstrap: StateFlow<PlayerBootstrap?> = _bootstrap.asStateFlow()
 
@@ -363,7 +380,18 @@ internal class PlayerViewModel(
                         }
                         HubPlaybackState.Revoked -> {
                             pendingHubPositionMs = null
+                            val away = endedByBeingAway(
+                                hostAway,
+                                monotonicMs() - returnedAtMs,
+                            )
                             _problem.value = PlayerProblem.PLAYBACK_ENDED
+                            // Already back: take it now. Still away: onHostStarted will.
+                            if (away && !hostAway) {
+                                endedWhileAway = false
+                                retryHubPlayback()
+                            } else {
+                                endedWhileAway = away
+                            }
                         }
                         HubPlaybackState.SignedOut -> {
                             pendingHubPositionMs = null
@@ -463,6 +491,25 @@ internal class PlayerViewModel(
         // Reporting a 404 keeps the lease heartbeat alive, but repeatedly
         // preparing the same missing media item would be an infinite retry loop.
         return false
+    }
+
+    /** The host went to the background; a lease lost from here on is lost to that. */
+    fun onHostStopped() {
+        hostAway = true
+    }
+
+    /**
+     * Back in the foreground. If the stream was reclaimed while we were away, take it
+     * back rather than leaving the viewer at a message saying playback ended, which
+     * reads as though the film finished when they only left the app for a moment.
+     */
+    fun onHostStarted() {
+        if (!hostAway) return
+        hostAway = false
+        returnedAtMs = monotonicMs()
+        val reclaim = shouldReclaimStreamOnReturn(_problem.value, endedWhileAway)
+        endedWhileAway = false
+        if (reclaim) retryHubPlayback()
     }
 
     fun retryHubPlayback() {

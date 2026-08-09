@@ -8,6 +8,7 @@ import com.buco7854.opentv.contract.FavoriteDto
 import com.buco7854.opentv.contract.FavoritesResolvedDto
 import com.buco7854.opentv.contract.GroupCountDto
 import com.buco7854.opentv.contract.GuideEntryDto
+import com.buco7854.opentv.contract.MetadataDto
 import com.buco7854.opentv.contract.ProgrammeDto
 import com.buco7854.opentv.contract.PlaylistDeleteInfoDto
 import com.buco7854.opentv.contract.PlaylistDetailDto
@@ -26,6 +27,7 @@ import com.buco7854.opentv.contract.XtreamSeriesPageDto
 import com.buco7854.opentv.contract.XtreamSeriesDetailDto
 import com.buco7854.opentv.contract.PlaylistOperation as WirePlaylistOperation
 import com.buco7854.opentv.core.model.ChannelKind
+import com.buco7854.opentv.core.model.Metadata
 import com.buco7854.opentv.hub.HubCredentials
 import com.buco7854.opentv.hub.HubEndpoints
 import com.buco7854.opentv.hub.HubPlaylistCapabilities
@@ -349,6 +351,14 @@ class HubCatalogGateway internal constructor(
         CatalogDetail(item, description = channel.description)
     }
 
+    /**
+     * The server keeps a film's cast and rating beside its channel row rather than in it,
+     * and only hands them over when asked. A local playlist reaches the same information
+     * through its own channel row, which a server-owned film has no equivalent of.
+     */
+    override suspend fun movieMetadata(ref: ContentRef): CatalogResult<Metadata?> =
+        hubCall<Metadata?> { backend.vodInfo(ref.hubContentId()).toMetadata() }
+
     override suspend fun seriesDetail(
         ref: ContentRef,
         seriesKey: String,
@@ -494,6 +504,7 @@ internal interface HubCatalogBackend {
     suspend fun removeFavorite(contentId: String)
     suspend fun resume(): List<ResumePointDto>
     suspend fun content(contentId: String): ChannelDto
+    suspend fun vodInfo(contentId: String): MetadataDto
     suspend fun guide(contentId: String): List<GuideEntryDto>
 }
 
@@ -564,6 +575,7 @@ private class RegistryHubCatalogBackend(
         call { removeFavorite(it, source.playlistId, contentId) }
     override suspend fun resume() = call { resume(it) }
     override suspend fun content(contentId: String) = call { content(it, contentId) }
+    override suspend fun vodInfo(contentId: String) = call { contentVodInfo(it, contentId) }
     override suspend fun guide(contentId: String) = call { contentGuide(it, contentId) }
 }
 
@@ -671,6 +683,25 @@ private fun ChannelDto.toCatalogItem(progress: Float?, imageUrl: String?) = Cata
     hasCatchup = hasCatchup,
     hasGuide = xtreamStreamId != null,
     progress = progress,
+)
+
+/**
+ * The wire carries the panel's own source id as text; the local model stores the numeric
+ * id of the metadata provider it looks films up in. They are not the same identifier, so
+ * it is dropped rather than coerced into a field that means something else.
+ */
+private fun MetadataDto.toMetadata() = Metadata(
+    cacheKey = cacheKey,
+    title = title,
+    year = year,
+    overview = overview,
+    rating = rating,
+    castNames = castNames,
+    castJson = castJson,
+    posterUrl = posterUrl,
+    infoLine = infoLine,
+    sourceId = null,
+    fetchedAtMs = fetchedAtMs,
 )
 
 private fun ProgrammeDto.toCatalogProgramme() =

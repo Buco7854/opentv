@@ -92,16 +92,24 @@ internal fun rememberPlayerSystemController(player: Player): PlayerSystemControl
 internal fun PlayerSystemEffects(
     session: PlayerSession,
     controller: PlayerSystemController,
+    onHostStopped: () -> Unit = {},
+    onHostStarted: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val view = LocalView.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    DisposableEffect(session, lifecycleOwner) {
+    DisposableEffect(session, lifecycleOwner, onHostStopped, onHostStarted) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_STOP -> session.onHostStopped()
-                Lifecycle.Event.ON_START -> session.onHostStarted()
+                Lifecycle.Event.ON_STOP -> {
+                    session.onHostStopped()
+                    onHostStopped()
+                }
+                Lifecycle.Event.ON_START -> {
+                    session.onHostStarted()
+                    onHostStarted()
+                }
                 else -> Unit
             }
         }

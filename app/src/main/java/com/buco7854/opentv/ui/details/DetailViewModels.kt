@@ -23,6 +23,7 @@ import com.buco7854.opentv.source.ContentRef
 import com.buco7854.opentv.source.ServerPagedState
 import com.buco7854.opentv.source.SourceId
 import com.buco7854.opentv.source.encode
+import com.buco7854.opentv.source.valueOrNull
 import com.buco7854.opentv.source.toCatalogItem
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -120,11 +121,15 @@ internal class MovieDetailViewModel(
                     }
                     mutableState.value = mutableState.value.copy(detail = detail)
                     val channel = localChannel(ref)
-                    val metadata = channel?.xtreamStreamId
-                        ?.let { graph.xtream.vodMetadata(channel) }
-                        ?: if (channel != null) {
-                            graph.metadata.forTitle(isSeries = false, rawName = channel.name)
-                        } else null
+                    val metadata: Metadata? = if (channel != null) {
+                        channel.xtreamStreamId?.let { graph.xtream.vodMetadata(channel) }
+                            ?: graph.metadata.forTitle(isSeries = false, rawName = channel.name)
+                    } else {
+                        // No local channel row means the source owns this film, so its cast
+                        // and rating have to be asked for. Losing them is not worth failing
+                        // a page that has already loaded, so a refusal leaves them absent.
+                        gateway.movieMetadata(ref).valueOrNull()
+                    }
                     val favorite = when (
                         val favoriteResult = safeCall { gateway.isFavorite(ref) }
                     ) {

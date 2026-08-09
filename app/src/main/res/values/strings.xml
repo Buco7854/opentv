@@ -399,7 +399,7 @@
     <string name="favorites_all_title">Favorites</string>
     <string name="favorites_filter_all">All</string>
     <string name="favorites_tv_select_hint">Hold OK on an item, or use Select favorites above, to select more than one.</string>
-    <string name="player_playback_ended">Playback ended.</string>
+    <string name="player_playback_ended">This stream was ended by the server. Retry to pick it up where you left off.</string>
     <string name="player_signed_out">Your session on this server has ended. Sign in again to continue.</string>
     <string name="player_at_capacity">This server is at playback capacity. Try again in a moment.</string>
     <string name="player_stream_failed">The server could not prepare this stream.</string>

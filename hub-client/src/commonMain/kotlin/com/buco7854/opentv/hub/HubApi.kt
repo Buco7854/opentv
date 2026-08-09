@@ -4,6 +4,7 @@ import com.buco7854.opentv.contract.AuthCapabilitiesDto
 import com.buco7854.opentv.contract.AuthFlowDto
 import com.buco7854.opentv.contract.AccountInfoDto
 import com.buco7854.opentv.contract.ChannelDto
+import com.buco7854.opentv.contract.MetadataDto
 import com.buco7854.opentv.contract.ChannelDecorationRequestDto
 import com.buco7854.opentv.contract.ChannelPageDto
 import com.buco7854.opentv.contract.CurrentUserDto
@@ -314,6 +315,10 @@ class HubApi(
 
     suspend fun contentGuide(c: HubCredentials, contentId: String): List<GuideEntryDto> =
         getList(c, HubEndpoints.contentGuide(c.baseUrl, contentId), GuideEntryDto.serializer())
+
+    /** Cast, rating and overview for a film, which its channel row does not carry. */
+    suspend fun contentVodInfo(c: HubCredentials, contentId: String): MetadataDto =
+        get(c, HubEndpoints.contentVodInfo(c.baseUrl, contentId), MetadataDto.serializer())
 
     // ---- User-owned state (contentId-keyed, server-side) -------------------
 
