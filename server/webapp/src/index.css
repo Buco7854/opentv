@@ -163,14 +163,21 @@
  * interface keeps every proportion the design intends, where enlarging only the
  * type would grow words inside controls, paddings and icons that stayed put.
  *
- * `zoom` scales layout, so the boxes keep their relationship and text stays
- * crisp. The step is chosen in script (see uiScale.ts) and recorded here as an
- * attribute rather than being asked for with a width media query, because such a
- * query would be re-evaluated against the scaled viewport and could flicker
- * between matching and not.
+ * `zoom` scales layout rather than painting a bitmap larger, so boxes keep their
+ * relationships and text stays crisp. It follows the viewport, so resizing a
+ * window or turning a tablet lands on the right step without being told.
+ *
+ * If a screen ever settles between two steps, or the units below stop filling
+ * it, the cause is the same one question: whether zoom on the root element also
+ * scales the block that vh and vw resolve against. Change the numbers here.
  */
-:root[data-ui-scale='large'] { zoom: 1.15; }
-:root[data-ui-scale='largest'] { zoom: 1.3; }
+@media (min-width: 1280px) {
+  :root { zoom: 1.15; }
+}
+
+@media (min-width: 1700px) {
+  :root { zoom: 1.3; }
+}
 
 @layer utilities {
   .type-display-small { font: var(--type-display); letter-spacing: -0.5px; }
