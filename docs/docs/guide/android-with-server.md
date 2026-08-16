@@ -178,7 +178,10 @@ only when no other user refers to it.
 - **"Signed out"**: your session ended or was revoked. Sign in again from the
   server's entry in the sources panel. A stored session the device can no longer
   decrypt reads the same way, so the server stays where it is and offers you a
-  sign-in rather than quietly disappearing.
+  sign-in rather than quietly disappearing. A session the server ends while you
+  are watching says the same thing rather than reporting a server it cannot
+  reach, which is a distinction worth having: only one of the two is fixed by
+  signing in, and retrying the other forever looks the same from the outside.
 - **A series that opens with no episodes**: the series page says so and offers a
   retry, rather than showing a poster above an empty space. The server has no
   episodes for it at that moment, which is what a favorite looks like while the

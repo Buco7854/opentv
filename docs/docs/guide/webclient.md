@@ -38,6 +38,12 @@ It ships dark, light and system-following themes and works on big landscape
 touchscreens (including in-car browsers) down to phones, where the dock becomes
 a tab bar.
 
+On a large screen the whole interface is drawn larger, in two steps, from around
+1280 and 1700 pixels of screen width. A car or television screen is wide but
+watched from across a cabin or a room, and the layout is sized for a phone held
+at arm's length, so it would otherwise read small. Everything scales together
+rather than only the text, which keeps the proportions the design intends.
+
 The server supports local password accounts with TOTP or WebAuthn MFA, OIDC
 SSO, administrator/user roles, playlist assignments, and revocable playback
 leases. Provider credentials stay server-side. See
