@@ -1,6 +1,7 @@
 package com.buco7854.opentv.hub.playback
 
 import com.buco7854.opentv.contract.HeartbeatResponseDto
+import com.buco7854.opentv.hub.HubUnauthorizedException
 import com.buco7854.opentv.contract.PlaybackCreateRequest
 import com.buco7854.opentv.contract.PlaybackLeaseDto
 import com.buco7854.opentv.contract.RemuxStartDto
@@ -27,6 +28,7 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -324,6 +326,43 @@ class HubPlaybackSocketTest {
 
             assertEquals(null, scheduled.poll(500, TimeUnit.MILLISECONDS))
             assertEquals(2, api.accessCalls.get())
+        } finally {
+            socket.stop()
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun aRefusedHandshakeReportsTheSessionRatherThanRetryingForever() = runTest {
+        // The server ended this session, so every reconnection will be refused the same
+        // way. Retrying reads to the viewer as a server that cannot be reached, and hides
+        // the only thing that helps, which is signing in again.
+        val server = MockWebServer()
+        repeat(4) { server.enqueue(MockResponse().setResponseCode(401)) }
+        server.start()
+        val scheduled = LinkedBlockingQueue<Long>()
+        val failures = LinkedBlockingQueue<Throwable>()
+        val api = SocketApi(server.url("/").toString())
+        val socket = HubPlaybackSocket(
+            api = api,
+            client = OkHttpClient(),
+            scope = backgroundScope,
+            onReconnectScheduled = scheduled::add,
+        )
+        try {
+            socket.start("lease-1", {}, {}, failures::add)
+            runCurrent()
+            assertEquals("lease-1", api.takeAccessWithinTest())
+
+            val reported = requireNotNull(failures.poll(5, TimeUnit.SECONDS)) {
+                "The refusal was never reported"
+            }
+            assertTrue(reported is HubUnauthorizedException)
+            // Nothing scheduled, and time passing brings no second attempt.
+            assertNull(scheduled.poll())
+            advanceTimeBy(60_000)
+            runCurrent()
+            assertEquals(1, api.accessCalls.get())
         } finally {
             socket.stop()
             server.shutdown()

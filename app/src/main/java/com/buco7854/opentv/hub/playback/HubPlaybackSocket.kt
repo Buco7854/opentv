@@ -5,6 +5,8 @@ import com.buco7854.opentv.contract.SessionCommandDto
 import com.buco7854.opentv.contract.SessionHeartbeatDto
 import com.buco7854.opentv.contract.SyncStateDto
 import com.buco7854.opentv.hub.HubEndpoints
+import com.buco7854.opentv.hub.HubForbiddenException
+import com.buco7854.opentv.hub.HubUnauthorizedException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -143,10 +145,24 @@ class HubPlaybackSocket(
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
             disconnected(webSocket, generation)
-            if (isCurrent(generation)) {
-                onFailure?.invoke(t)
-                reconnect(generation)
+            if (!isCurrent(generation)) return
+            // A refused handshake is not a lost connection. Reporting only the throwable
+            // loses the status that says which, and the controller cannot classify what
+            // it cannot see, so a session the server has ended reconnected forever behind
+            // a "cannot reach the server" while the one thing that helps -- signing in
+            // again -- was never offered. 401 is documented as never retry-looping.
+            val refusal = when (response?.code) {
+                401 -> HubUnauthorizedException(null, "The server ended this session")
+                403 -> HubForbiddenException(null, "This session may no longer play")
+                else -> null
             }
+            if (refusal != null) {
+                stop()
+                onFailure?.invoke(refusal)
+                return
+            }
+            onFailure?.invoke(t)
+            reconnect(generation)
         }
     }
 

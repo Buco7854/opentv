@@ -152,6 +152,26 @@
   --type-display-small: var(--type-display); /* legacy alias */
 }
 
+/* ------------------------------------------------------------------ */
+/* 1b. INTERFACE SCALE                                                 */
+/* ------------------------------------------------------------------ */
+
+/*
+ * This design is sized in pixels, so it renders at one physical size wherever it
+ * runs: right for a phone at arm's length, small on a car or television screen,
+ * which is wide but watched from across a cabin or a room. Scaling the whole
+ * interface keeps every proportion the design intends, where enlarging only the
+ * type would grow words inside controls, paddings and icons that stayed put.
+ *
+ * `zoom` scales layout, so the boxes keep their relationship and text stays
+ * crisp. The step is chosen in script (see uiScale.ts) and recorded here as an
+ * attribute rather than being asked for with a width media query, because such a
+ * query would be re-evaluated against the scaled viewport and could flicker
+ * between matching and not.
+ */
+:root[data-ui-scale='large'] { zoom: 1.15; }
+:root[data-ui-scale='largest'] { zoom: 1.3; }
+
 @layer utilities {
   .type-display-small { font: var(--type-display); letter-spacing: -0.5px; }
   .type-headline-medium { font: var(--type-headline-medium); letter-spacing: -0.4px; }

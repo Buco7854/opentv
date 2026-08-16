@@ -494,6 +494,10 @@ class HubPlaybackController(
                 becomeTerminal(HubPlaybackState.DuplicatePlayback)
             is HubCapacityException -> atCapacity(error.retryAfterMs)
             is HubNotFoundException -> Unit
+            // Anything else is a transport problem the retry loops already handle. Said
+            // out loud because a silent branch here is what let an unclassified failure
+            // pass for one worth retrying.
+            else -> Unit
         }
     }
 
