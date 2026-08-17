@@ -23,9 +23,13 @@ ordinary phone screen. Sent to that screen unconverted it plays very dark, with
 everything below the highlights crushed towards black.
 
 From Android 13 the app asks the decoder to convert those frames as it decodes them,
-which the same hardware does at no extra cost. It asks only when the screen cannot
-show the kind of HDR in hand: a phone with an HDR display still gets the film at its
-full range, and ordinary video is never touched.
+which the same hardware does at no extra cost. Ordinary video is never touched.
+
+It asks for every HDR film, including on a phone whose screen could display one. That
+is not the screen's fault: video is drawn into a TextureView, chosen so a paused frame
+cannot linger over the screen you move to next, and frames drawn that way are composed
+without HDR whatever the panel can do. Restoring the full range on capable phones means
+revisiting that choice first.
 
 Two limits are worth knowing. Below Android 13 there is nothing to ask, so HDR still
 plays dark. And a decoder may decline the request, which looks the same from the
