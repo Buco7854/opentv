@@ -1,8 +1,8 @@
 // Reflects the <video> element into React: playback state, the tracks the browser exposes
 // itself, and the active subtitle cue. Everything here reads the element, never the engine.
 
-import Hls from 'hls.js';
-import mpegts from 'mpegts.js';
+import type Hls from 'hls.js';
+import type mpegts from 'mpegts.js';
 import { MutableRefObject, RefObject, useEffect, useRef } from 'react';
 import { t } from '../i18n';
 import { prefs } from '../preferences';

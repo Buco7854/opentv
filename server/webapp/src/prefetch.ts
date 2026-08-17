@@ -3,9 +3,15 @@
 // small and the bundler caches them, so fetching the reachable ones while the browser is
 // idle turns that visit into a local lookup.
 //
-// The player is the exception in both directions: it carries hls.js and mpegts.js, so it is
-// the biggest win and the biggest download. It waits for a real signal of intent, and never
-// loads itself on a connection the user is paying for by the megabyte.
+// The player used to be the exception, being where hls.js and mpegts.js were bundled: too
+// large to fetch speculatively, so it waited for a signal of intent that was never actually
+// wired, and pressing play paid for the whole download cold. The engines are now fetched
+// only by the source that needs one, which leaves the screen itself as small as any other
+// and worth warming with the rest.
+//
+// The engines are still not prefetched. They are large, most of a session needs at most one
+// of the two, and by the time either is wanted its download overlaps the lease and grant
+// calls that have to happen anyway.
 
 type Loader = () => Promise<unknown>;
 
@@ -53,7 +59,7 @@ const whenIdle = (run: () => void) =>
 export function prefetchReachableScreens() {
   if (frugal()) return;
   whenIdle(() => {
-    (['browse', 'search', 'favorites', 'detail', 'downloads', 'settings'] as const)
+    (['browse', 'search', 'favorites', 'detail', 'downloads', 'settings', 'watch'] as const)
       .forEach(prefetchScreen);
   });
 }

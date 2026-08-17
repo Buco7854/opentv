@@ -5,8 +5,8 @@
 // variant then mpegts.js; other .ts -> mpegts.js; mp4/webm/mkv -> native <video>. A remux
 // session overrides all of it: the file is re-served as a VOD HLS playlist.
 
-import Hls from 'hls.js';
-import mpegts from 'mpegts.js';
+import type Hls from 'hls.js';
+import type mpegts from 'mpegts.js';
 import { MutableRefObject, RefObject, useCallback, useEffect, useRef } from 'react';
 import { api, PlaybackLease } from '../api';
 import { toast } from '../components/Primitives';
@@ -20,6 +20,26 @@ import {
 import { streamKind } from './playbackPolicy';
 import { PlaybackStatusActions } from './playbackStatus';
 import { RemuxController } from './useRemuxSession';
+
+/**
+ * The two playback engines, fetched when a source turns out to need one.
+ *
+ * Together they are most of what the watch screen weighs, and most sources need neither:
+ * a file the browser can play opens on the <video> element alone, and one that needs
+ * hls.js never needs mpegts.js. Importing both up front made every viewer wait for both
+ * before the first frame of anything.
+ *
+ * The module is remembered, so the wait happens once per session at most, and the second
+ * film opens as immediately as it did when they were bundled.
+ */
+let hlsModule: typeof Hls | null = null;
+let mpegtsModule: typeof mpegts | null = null;
+
+const loadHls = async (): Promise<typeof Hls> =>
+  (hlsModule ??= (await import('hls.js')).default);
+
+const loadMpegts = async (): Promise<typeof mpegts> =>
+  (mpegtsModule ??= (await import('mpegts.js')).default);
 
 /** The panel serves an HLS variant of a live .ts under an extra query flag. */
 const engineUrl = (url: string, hlsVariant: boolean) => (hlsVariant ? hlsVariantOf(url) : url);
@@ -106,15 +126,18 @@ export function usePlaybackEngine(opts: {
     const hlsVariant = !currentRemux && sourceKind(lease.streamUrl) === 'livets';
     const authorizedUrl = engineUrl(target, hlsVariant);
     const hls = hlsRef.current;
-    if (hls) {
+    // An instance exists only because the module was fetched to create it, so this is
+    // the loaded one rather than another round trip.
+    const HlsEvents = hlsModule?.Events;
+    if (hls && HlsEvents) {
       const restore = () => {
         restoreMediaPosition(video, snapshot, live);
-        hls.off(Hls.Events.MANIFEST_PARSED, restore);
+        hls.off(HlsEvents.MANIFEST_PARSED, restore);
       };
-      hls.on(Hls.Events.MANIFEST_PARSED, restore);
+      hls.on(HlsEvents.MANIFEST_PARSED, restore);
       hls.loadSource(authorizedUrl);
       hls.startLoad(live ? -1 : snapshot.position);
-      return () => hls.off(Hls.Events.MANIFEST_PARSED, restore);
+      return () => hls.off(HlsEvents.MANIFEST_PARSED, restore);
     }
     if (mpegtsRef.current) {
       mpegtsReload.current?.();
@@ -187,7 +210,15 @@ export function usePlaybackEngine(opts: {
 
     // [relay] serves the room's shared upstream (watch-together live) instead of this viewer's
     // own; the AAC rescue is skipped there, since it would open a second, unshared connection.
-    const playMpegts = (transport: Transport) => {
+    const playMpegts = async (transport: Transport) => {
+      const mpegts = await loadMpegts().catch(() => null);
+      // The effect may have been torn down while the engine was on its way; creating one
+      // now would attach it to a video element nothing is going to clean up.
+      if (cancelled) return;
+      if (!mpegts) {
+        setError(t('player.decodeFailed'));
+        return;
+      }
       if (!mpegts.getFeatureList().mseLivePlayback) {
         setError(t('player.mpegtsUnsupported'));
         return;
@@ -284,7 +315,19 @@ export function usePlaybackEngine(opts: {
       });
     };
 
-    const playHls = (target: string, hlsVariant = false) => {
+    const playHls = async (target: string, hlsVariant = false) => {
+      const Hls = await loadHls().catch(() => null);
+      // Torn down while the engine was arriving: see playMpegts.
+      if (cancelled) return;
+      if (!Hls) {
+        // Native HLS can still carry this, and on iOS it is the only thing that could.
+        if (video.canPlayType('application/vnd.apple.mpegurl')) {
+          video.src = engineUrl(target, hlsVariant);
+        } else {
+          setError(t('player.hlsUnsupported'));
+        }
+        return;
+      }
       // hls.js first even on Safari: only it reports tracks/manifest state to the UI.
       // Native HLS is the no-MSE fallback (iOS).
       if (!Hls.isSupported()) {

@@ -1,4 +1,4 @@
-import { renderHook } from '@testing-library/react';
+import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, PlaybackLease, ResumePoint } from '../api';
 import { PlaybackStatusActions } from './playbackStatus';
@@ -104,7 +104,9 @@ const session: RemuxSession = {
   audio: 2,
 };
 
-function mountEngine(
+// The engines are fetched on demand now, so an instance appears a microtask after the
+// hook mounts rather than during it. Settle that here, once, instead of in ten tests.
+async function mountEngine(
   remuxed: RemuxSession | null = session,
   engineLease: PlaybackLease = lease,
   roomLive = false,
@@ -153,6 +155,7 @@ function mountEngine(
     onTerminate,
   };
   const view = renderHook(() => usePlaybackEngine(opts));
+  await act(async () => { await Promise.resolve(); });
   return {
     ...view,
     video,
@@ -177,8 +180,8 @@ describe('hls playback engine', () => {
     vi.useRealTimers();
   });
 
-  it('re-requests an evicted remux session instead of failing playback', () => {
-    const { hls, video, start, actions } = mountEngine();
+  it('re-requests an evicted remux session instead of failing playback', async () => {
+    const { hls, video, start, actions } = await mountEngine();
     video.currentTime = 942;
 
     hls.emitError({ fatal: true, type: FakeHls.ErrorTypes.NETWORK_ERROR, response: { code: 404 } });
@@ -189,7 +192,7 @@ describe('hls playback engine', () => {
 
   it('drops every pending network retry when the engine is torn down', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const { hls, unmount } = mountEngine();
+    const { hls, unmount } = await mountEngine();
 
     const failure = { fatal: true, type: FakeHls.ErrorTypes.NETWORK_ERROR, response: { code: 500 } };
     hls.emitError(failure);
@@ -201,8 +204,8 @@ describe('hls playback engine', () => {
     expect(hls.startLoad).not.toHaveBeenCalled();
   });
 
-  it('refreshes an expired media grant instead of treating the lease as gone', () => {
-    const { hls, recoverMediaGrant, onTerminate } = mountEngine();
+  it('refreshes an expired media grant instead of treating the lease as gone', async () => {
+    const { hls, recoverMediaGrant, onTerminate } = await mountEngine();
 
     hls.emitError({
       fatal: true,
@@ -217,12 +220,12 @@ describe('hls playback engine', () => {
   it.each([
     [409, 'another device'],
     [429, 'connection limit'],
-  ])('surfaces typed playback admission status %i without a retry loop', (status, copy) => {
+  ])('surfaces typed playback admission status %i without a retry loop', async (status, copy) => {
     const hlsLease = {
       ...lease,
       streamUrl: '/api/v1/stream?u=h.token&sid=lease-1&g=grant-1',
     };
-    const { hls, actions } = mountEngine(null, hlsLease);
+    const { hls, actions } = await mountEngine(null, hlsLease);
 
     hls.emitError({
       fatal: true,
@@ -235,8 +238,8 @@ describe('hls playback engine', () => {
     expect(hls.startLoad).not.toHaveBeenCalled();
   });
 
-  it('destroys hls.js after its fatal network recovery budget is exhausted', () => {
-    const { hls, actions } = mountEngine();
+  it('destroys hls.js after its fatal network recovery budget is exhausted', async () => {
+    const { hls, actions } = await mountEngine();
     const failure = {
       fatal: true,
       type: FakeHls.ErrorTypes.NETWORK_ERROR,
@@ -249,26 +252,26 @@ describe('hls playback engine', () => {
     expect(actions.setError).toHaveBeenLastCalledWith(expect.stringContaining('Playback failed'));
   });
 
-  it('keeps HLS direct and loads the advertised shared room path', () => {
+  it('keeps HLS direct and loads the advertised shared room path', async () => {
     const hlsLease = {
       ...lease,
       streamUrl: '/api/v1/stream?u=h.token&sid=lease-1&g=grant-1',
       sharedHlsUrl: '/api/v1/shared-hls?u=h.token&sid=lease-1&g=grant-1',
     };
 
-    const { hls } = mountEngine(null, hlsLease, true);
+    const { hls } = await mountEngine(null, hlsLease, true);
 
     expect(hls.loadSource).toHaveBeenCalledWith(hlsLease.sharedHlsUrl);
     expect(createMpegtsPlayer).not.toHaveBeenCalled();
   });
 
-  it('destroys mpegts.js after its fatal network recovery budget is exhausted', () => {
+  it('destroys mpegts.js after its fatal network recovery budget is exhausted', async () => {
     const tsLease = {
       ...lease,
       streamUrl: '/api/v1/stream?u=t.token&sid=lease-1&g=grant-1',
       transcodeUrl: '/api/v1/transcode?u=t.token&sid=lease-1&g=grant-1',
     };
-    const { actions } = mountEngine(null, tsLease);
+    const { actions } = await mountEngine(null, tsLease);
     const player = createMpegtsPlayer.mock.results[0]?.value as InstanceType<typeof FakeMpegtsPlayer>;
 
     for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -282,7 +285,7 @@ describe('hls playback engine', () => {
   it('never seeks a torn-down source to a resume point that arrived late', async () => {
     let resolveResume: (points: ResumePoint[]) => void = () => {};
     vi.spyOn(api, 'resumeAll').mockReturnValue(new Promise((resolve) => { resolveResume = resolve; }));
-    const { video, unmount } = mountEngine(null);
+    const { video, unmount } = await mountEngine(null);
 
     unmount();
     resolveResume([{
@@ -294,13 +297,13 @@ describe('hls playback engine', () => {
     expect(video.currentTime).toBe(0);
   });
 
-  it('does not resurrect a destroyed mpegts engine from a queued error callback', () => {
+  it('does not resurrect a destroyed mpegts engine from a queued error callback', async () => {
     const tsLease = {
       ...lease,
       streamUrl: '/api/v1/stream?u=t.token&sid=lease-1&g=grant-1',
       transcodeUrl: '/api/v1/transcode?u=t.token&sid=lease-1&g=grant-1',
     };
-    const { unmount } = mountEngine(null, tsLease);
+    const { unmount } = await mountEngine(null, tsLease);
     const player = createMpegtsPlayer.mock.results[0]?.value as InstanceType<typeof FakeMpegtsPlayer>;
     expect(createMpegtsPlayer).toHaveBeenCalledOnce();
 
