@@ -39,19 +39,43 @@ import com.buco7854.opentv.diag.ErrorLog
 private const val TONE_MAPPING_SDK = Build.VERSION_CODES.TIRAMISU
 
 /**
- * Whether these frames must be converted before they reach this screen.
+ * Whether these frames must be converted before they reach the screen.
  *
- * Only when the screen cannot show the kind of HDR in hand. A phone with an HDR panel
- * displays the stream as its author intended, and converting it there would throw that
- * away to fix a problem the device does not have. Content that is already SDR, or whose
- * transfer we never learned, is left alone: guessing would darken ordinary video.
+ * A capable panel is not on its own enough, because the frames have to survive the way
+ * they are drawn to reach it. This app renders into a TextureView, which hands frames
+ * through the window like any other view and composites them in SDR, so HDR cannot
+ * arrive intact however good the panel is. When the path cannot carry it, convert
+ * regardless of what the screen could have shown: the alternative is the dark picture
+ * this exists to prevent, on exactly the newer phones that look most capable.
+ *
+ * Where the path does carry HDR, only the screen decides, and one that can show the
+ * kind in hand is left alone -- converting there would discard the range it was about
+ * to display. Content that is already SDR, or whose transfer we never learned, is never
+ * touched: guessing would darken ordinary video.
  */
-internal fun shouldToneMapToSdr(colorTransfer: Int?, displayHdrTypes: Set<Int>): Boolean =
-    when (colorTransfer) {
-        C.COLOR_TRANSFER_ST2084 -> !displayHdrTypes.any { it in PQ_DISPLAY_TYPES }
-        C.COLOR_TRANSFER_HLG -> !displayHdrTypes.any { it in HLG_DISPLAY_TYPES }
-        else -> false
+internal fun shouldToneMapToSdr(
+    colorTransfer: Int?,
+    displayHdrTypes: Set<Int>,
+    surfacePresentsHdr: Boolean,
+): Boolean {
+    val displayTypes = when (colorTransfer) {
+        C.COLOR_TRANSFER_ST2084 -> PQ_DISPLAY_TYPES
+        C.COLOR_TRANSFER_HLG -> HLG_DISPLAY_TYPES
+        else -> return false
     }
+    if (!surfacePresentsHdr) return true
+    return !displayHdrTypes.any { it in displayTypes }
+}
+
+/**
+ * Whether video reaches the screen still able to be HDR.
+ *
+ * False, and deliberately a named constant rather than a check: [VideoSurface] draws
+ * into a TextureView on purpose, to avoid a SurfaceView's last frame lingering over the
+ * screen that follows it. That choice is what costs HDR presentation. Anyone restoring
+ * HDR here has to change that first, and should find this waiting for them.
+ */
+private const val SURFACE_PRESENTS_HDR = false
 
 /**
  * Which screens can show which stream, by name rather than by "supports HDR".
@@ -140,7 +164,12 @@ private class ToneMappingVideoRenderer(
             tunnelingAudioSessionId,
         )
         if (Build.VERSION.SDK_INT < TONE_MAPPING_SDK) return mediaFormat
-        if (!shouldToneMapToSdr(format.colorInfo?.colorTransfer, displayHdrTypes)) {
+        if (!shouldToneMapToSdr(
+                format.colorInfo?.colorTransfer,
+                displayHdrTypes,
+                SURFACE_PRESENTS_HDR,
+            )
+        ) {
             return mediaFormat
         }
         mediaFormat.setInteger(
