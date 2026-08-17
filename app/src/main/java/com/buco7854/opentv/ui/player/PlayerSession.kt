@@ -340,7 +340,7 @@ private fun createPlayer(
     dataSourceFactoryOverride: DataSource.Factory?,
 ): ExoPlayer {
     val dataSourceFactory = dataSourceFactoryOverride ?: defaultPlayerDataSourceFactory(context)
-    val renderersFactory = DefaultRenderersFactory(context)
+    val renderersFactory = ToneMappingRenderersFactory(context, displayHdrTypes(context))
         .setEnableDecoderFallback(settings.decoderFallback)
     val loadControl = when (settings.bufferPreset) {
         PlayerSettings.BUFFER_FAST_START ->
