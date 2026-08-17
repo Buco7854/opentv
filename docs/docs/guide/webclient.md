@@ -38,6 +38,13 @@ It ships dark, light and system-following themes and works on big landscape
 touchscreens (including in-car browsers) down to phones, where the dock becomes
 a tab bar.
 
+Each screen is fetched the first time it is reached, and the ones the dock can reach are
+fetched quietly while the browser is idle, so moving around costs nothing after the first
+load. The two playback engines are the exception: they are large, most sessions need at
+most one of them, and many files play on the browser's own video element without either,
+so each is fetched only when a stream turns out to need it, alongside the calls that open
+that stream.
+
 On a large screen the whole interface is drawn larger, in two steps, from 1280
 and 1700 pixels wide. A car or television screen is wide but watched from across
 a cabin or a room, and the layout is sized for a phone held at arm's length, so
