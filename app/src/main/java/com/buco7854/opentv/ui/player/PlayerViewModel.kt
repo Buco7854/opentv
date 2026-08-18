@@ -16,6 +16,9 @@ import com.buco7854.opentv.core.repo.GuideEntry
 import com.buco7854.opentv.core.repo.ResumeRepository
 import com.buco7854.opentv.data.prefs.PlayerSettings
 import com.buco7854.opentv.data.prefs.SubtitleStyle
+import com.buco7854.opentv.hub.HubApi
+import com.buco7854.opentv.hub.HubClient
+import com.buco7854.opentv.hub.HubCredentials
 import com.buco7854.opentv.hub.MediaCapabilityReporter
 import com.buco7854.opentv.hub.ReportedCapabilities
 import com.buco7854.opentv.hub.playback.HubPlaybackSnapshot
@@ -24,8 +27,11 @@ import com.buco7854.opentv.source.CatalogResult
 import com.buco7854.opentv.source.ContentRef
 import com.buco7854.opentv.source.SourceId
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -76,9 +82,48 @@ internal interface PlayerDataSource {
     fun clearProgress(target: PlayerTarget)
 }
 
+/**
+ * Runs the finite progress writes for one player in invocation order.
+ *
+ * There is deliberately no channel consumer or permanently-running coroutine here. Each
+ * enqueue creates one application-scope job chained to the previous finite job, so a final
+ * save survives ViewModel disposal but an older periodic save can never finish after it.
+ */
+internal class PlayerProgressWriteQueue(
+    private val scope: CoroutineScope,
+) {
+    private val lock = Any()
+    private var tail: Job? = null
+
+    fun enqueue(write: suspend () -> Unit) {
+        synchronized(lock) {
+            val predecessor = tail
+            val next = scope.launch(start = CoroutineStart.LAZY) {
+                predecessor?.join()
+                write()
+            }
+            tail = next
+            next.start()
+        }
+    }
+}
+
+/** Binds one player's progress writes to the non-secret credential generation it opened on. */
+internal class HubProgressCredentialBinding(client: HubClient) {
+    private val client = client
+    private val generation = client.credentialGenerationSnapshot()
+
+    suspend fun write(block: suspend HubApi.(HubCredentials) -> Unit): Boolean =
+        client.callIfCredentialGeneration(generation, block)
+
+    fun runIfCurrent(block: () -> Unit): Boolean =
+        client.runIfCredentialGenerationCurrent(generation, block)
+}
+
 private class LocalPlayerDataSource(
     private val graph: AppGraph,
 ) : PlayerDataSource {
+    private val progressWrites = PlayerProgressWriteQueue(graph.applicationScope)
     override val settings: Flow<PlayerSettings> = graph.playerPrefs.settings
 
     override suspend fun channelFor(target: PlayerTarget): Channel? {
@@ -128,12 +173,26 @@ private class LocalPlayerDataSource(
 
     override fun saveProgress(target: PlayerTarget, positionMs: Long, durationMs: Long) {
         val local = target as? PlayerTarget.LocalUrl ?: return
-        graph.resume.save(local.url, positionMs, durationMs)
+        progressWrites.enqueue {
+            val progress = graph.resume.saveNow(local.url, positionMs, durationMs)
+            graph.catalogProgressUpdates.publish(
+                SourceId.LocalPlaylist(local.playlistId),
+                ContentRef.LocalUrl(local.url, channelId = 0),
+                progress,
+            )
+        }
     }
 
     override fun clearProgress(target: PlayerTarget) {
         val local = target as? PlayerTarget.LocalUrl ?: return
-        graph.resume.clear(local.url)
+        progressWrites.enqueue {
+            graph.resume.clearNow(local.url)
+            graph.catalogProgressUpdates.publish(
+                SourceId.LocalPlaylist(local.playlistId),
+                ContentRef.LocalUrl(local.url, channelId = 0),
+                progress = null,
+            )
+        }
     }
 }
 
@@ -141,6 +200,8 @@ private class HubPlayerDataSource(
     private val graph: AppGraph,
     private val source: SourceId.Hub,
 ) : PlayerDataSource {
+    private val progressWrites = PlayerProgressWriteQueue(graph.applicationScope)
+    private val progressCredentials = AtomicReference<HubProgressCredentialBinding?>(null)
     override val settings: Flow<PlayerSettings> = graph.playerPrefs.settings
 
     override suspend fun channelFor(target: PlayerTarget): Channel? = null
@@ -175,6 +236,10 @@ private class HubPlayerDataSource(
         if (target.live) return null
         val content = target.contentRef as? ContentRef.HubContent ?: return null
         val client = graph.hubs.clientFor(source.hubId) ?: return null
+        progressCredentials.compareAndSet(
+            null,
+            HubProgressCredentialBinding(client),
+        )
         return try {
             client.call { resume(it) }
                 .firstOrNull { it.contentId == content.contentId }
@@ -194,10 +259,14 @@ private class HubPlayerDataSource(
     override fun saveProgress(target: PlayerTarget, positionMs: Long, durationMs: Long) {
         if (target.live) return
         val content = target.contentRef as? ContentRef.HubContent ?: return
-        graph.applicationScope.launch {
-            val client = graph.hubs.clientFor(source.hubId) ?: return@launch
-            runCatching {
-                client.call { credentials ->
+        val binding = progressCredentials.get() ?: return
+        progressWrites.enqueue {
+            val storedProgress = if (durationMs <= 0 ||
+                positionMs < ResumeRepository.MIN_POSITION_MS ||
+                positionMs > durationMs - ResumeRepository.END_GUARD_MS
+            ) null else (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
+            val remainedCurrent = runCatching {
+                binding.write { credentials ->
                     if (durationMs <= 0 ||
                         positionMs < ResumeRepository.MIN_POSITION_MS ||
                         positionMs > durationMs - ResumeRepository.END_GUARD_MS
@@ -210,6 +279,10 @@ private class HubPlayerDataSource(
                         )
                     }
                 }
+            }.getOrElse { return@enqueue }
+            if (!remainedCurrent) return@enqueue
+            binding.runIfCurrent {
+                graph.catalogProgressUpdates.publish(source, content, storedProgress)
             }
         }
     }
@@ -217,9 +290,17 @@ private class HubPlayerDataSource(
     override fun clearProgress(target: PlayerTarget) {
         if (target.live) return
         val content = target.contentRef as? ContentRef.HubContent ?: return
-        graph.applicationScope.launch {
-            val client = graph.hubs.clientFor(source.hubId) ?: return@launch
-            runCatching { client.call { deleteResume(it, content.contentId) } }
+        val binding = progressCredentials.get() ?: return
+        progressWrites.enqueue {
+            val remainedCurrent = runCatching {
+                binding.write {
+                    deleteResume(it, content.contentId)
+                }
+            }.getOrElse { return@enqueue }
+            if (!remainedCurrent) return@enqueue
+            binding.runIfCurrent {
+                graph.catalogProgressUpdates.publish(source, content, progress = null)
+            }
         }
     }
 }

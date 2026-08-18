@@ -10,7 +10,11 @@ import { PlaybackErrorBoundary, PlayerSurface, PlayRequest } from '../player/Pla
 
 // Player's own surface while resolving, so it reads as the player loading.
 function WatchLoading() {
-  return <div className="player-frame"><div className="player-spinner" aria-hidden /></div>;
+  return (
+    <div className="player-frame" role="status" aria-label={t('common.working')}>
+      <div className="player-spinner" aria-hidden />
+    </div>
+  );
 }
 
 // Close returns back, falling back to home for deep-links.

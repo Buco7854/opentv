@@ -5,6 +5,8 @@ import com.buco7854.opentv.core.model.HubSource
 import com.buco7854.opentv.core.net.HttpResponseSpec
 import com.buco7854.opentv.core.net.HttpTransport
 import com.buco7854.opentv.core.storage.HubSourceStore
+import com.buco7854.opentv.ui.player.HubProgressCredentialBinding
+import com.buco7854.opentv.ui.player.PlayerProgressWriteQueue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
@@ -28,6 +30,85 @@ class HubSessionVaultTest {
     }
 
     private val vault = HubSessionVault(FakePrefs(), cipher)
+
+    @Test
+    fun queuedProgressWriteCannotUseAReplacementCredentialGeneration() = runTest {
+        vault.store(7, "old-session")
+        val requests = mutableListOf<String?>()
+        val client = HubClient(
+            id = 7,
+            source = HubSource(id = 7, name = "Home", baseUrl = "https://hub.example", addedMs = 1),
+            api = HubApi(
+                HttpTransport { request ->
+                    requests += request.headers["Authorization"]
+                    HttpResponseSpec(204, emptyMap(), "")
+                },
+            ),
+            vault = vault,
+        )
+        val binding = HubProgressCredentialBinding(client)
+        val queue = PlayerProgressWriteQueue(backgroundScope)
+        val releaseOlderWrite = CompletableDeferred<Unit>()
+        var published = false
+
+        queue.enqueue { releaseOlderWrite.await() }
+        queue.enqueue {
+            val remainedCurrent = binding.write {
+                logout(it)
+            }
+            if (remainedCurrent) {
+                binding.runIfCurrent { published = true }
+            }
+        }
+        runCurrent()
+
+        client.storeToken("replacement-session")
+        releaseOlderWrite.complete(Unit)
+        runCurrent()
+
+        assertTrue(requests.isEmpty())
+        assertFalse(published)
+    }
+
+    @Test
+    fun oldInFlightResultIsNotPublishedAfterReauthentication() = runTest {
+        vault.store(7, "old-session")
+        val requestStarted = CompletableDeferred<Unit>()
+        val releaseRequest = CompletableDeferred<Unit>()
+        var authorization: String? = null
+        val client = HubClient(
+            id = 7,
+            source = HubSource(id = 7, name = "Home", baseUrl = "https://hub.example", addedMs = 1),
+            api = HubApi(
+                HttpTransport { request ->
+                    authorization = request.headers["Authorization"]
+                    requestStarted.complete(Unit)
+                    releaseRequest.await()
+                    HttpResponseSpec(204, emptyMap(), "")
+                },
+            ),
+            vault = vault,
+        )
+        val binding = HubProgressCredentialBinding(client)
+        var published = false
+        val operation = async {
+            val remainedCurrent = binding.write {
+                logout(it)
+            }
+            if (remainedCurrent) {
+                binding.runIfCurrent { published = true }
+            }
+            remainedCurrent
+        }
+
+        requestStarted.await()
+        client.storeToken("replacement-session")
+        releaseRequest.complete(Unit)
+
+        assertFalse(operation.await())
+        assertEquals("Bearer old-session", authorization)
+        assertFalse(published)
+    }
 
     @Test
     fun storesAndReadsBackPerHub() {
@@ -310,6 +391,95 @@ class HubSessionVaultTest {
         assertNull(client.source.username)
         assertNull(client.source.role)
         assertNull(client.source.lastSeenMs)
+    }
+
+    @Test
+    fun unauthorizedCallClearsCachedIdentityButKeepsTokenForReauthentication() = runTest {
+        val store = RecordingHubStore()
+        val id = store.upsert(
+            HubSource(
+                name = "Home",
+                baseUrl = "https://hub.example",
+                userId = "user-1",
+                username = "alice",
+                role = "ADMIN",
+                addedMs = 1,
+                lastSeenMs = 2,
+            ),
+        )
+        vault.store(id, "expired-session")
+        val registry = HubRegistry(
+            store,
+            HubApi(HttpTransport { error("the call block supplies the failure") }),
+            vault,
+        )
+        val client = checkNotNull(registry.clientFor(id))
+
+        try {
+            client.call<Unit> {
+                throw HubUnauthorizedException("unauthorized", "signed out")
+            }
+        } catch (_: HubUnauthorizedException) {
+            // Expected: callers still render their typed signed-out state.
+        }
+
+        assertEquals("expired-session", vault.token(id))
+        assertEquals(HubHealth.SIGNED_OUT, client.health.value)
+        assertNull(store.get(id)?.userId)
+        assertNull(store.get(id)?.username)
+        assertNull(store.get(id)?.role)
+        assertNull(store.get(id)?.lastSeenMs)
+        assertNull(client.source.userId)
+        assertNull(client.source.username)
+        assertNull(client.source.role)
+        assertNull(client.source.lastSeenMs)
+    }
+
+    @Test
+    fun lateUnauthorizedCallCannotClearIdentityFromANewerSession() = runTest {
+        val source = HubSource(
+            id = 23,
+            name = "Home",
+            baseUrl = "https://hub.example",
+            userId = "old-user",
+            username = "old-name",
+            role = "USER",
+            addedMs = 1,
+        )
+        val unauthorizedStarted = CompletableDeferred<Unit>()
+        val releaseUnauthorized = CompletableDeferred<Unit>()
+        var persistedClearCalls = 0
+        val client = HubClient(
+            source.id,
+            source,
+            HubApi(HttpTransport { error("the call blocks are used directly") }),
+            vault,
+        ) { _, _ -> persistedClearCalls++ }
+        vault.store(source.id, "old-session")
+
+        val oldCall = async {
+            try {
+                client.call<Unit> {
+                    unauthorizedStarted.complete(Unit)
+                    releaseUnauthorized.await()
+                    throw HubUnauthorizedException("unauthorized", "signed out")
+                }
+            } catch (_: HubUnauthorizedException) {
+                Unit
+            }
+        }
+        unauthorizedStarted.await()
+        client.storeToken("new-session")
+        client.source = source.copy(userId = "new-user", username = "new-name", role = "ADMIN")
+        releaseUnauthorized.complete(Unit)
+        oldCall.await()
+
+        assertEquals("new-session", vault.token(source.id))
+        assertEquals(HubHealth.REACHABLE, client.health.value)
+        assertEquals("new-user", client.source.userId)
+        assertEquals("new-name", client.source.username)
+        assertEquals("ADMIN", client.source.role)
+        assertEquals(0, persistedClearCalls)
     }
 
     @Test

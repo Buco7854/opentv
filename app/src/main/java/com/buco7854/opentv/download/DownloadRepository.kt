@@ -19,6 +19,7 @@ class DownloadRepository(
     private val prefs: PlayerPrefs,
     private val scheduler: DownloadScheduler,
     private val hubDownloads: HubDownloadCoordinator,
+    private val executionLocks: DownloadExecutionLocks = DownloadExecutionLocks(),
 ) {
     val downloads = store.observeAll()
 
@@ -138,20 +139,24 @@ class DownloadRepository(
 
     suspend fun delete(item: Download): String? {
         scheduler.cancel(item.id)
-        val current = store.get(item.id) ?: item
-        val hubSourceId = current.hubSourceId
-        val serverDownloadId = current.serverDownloadId
-        if (hubSourceId != null && serverDownloadId != null) {
-            // Commit the remote obligation while the row still identifies it. From here on,
-            // storage failure, process death, or an unreachable hub cannot erase the request.
-            hubDownloads.localDownloadDeleted(hubSourceId, serverDownloadId)
+        return hubDownloads.withPreparationSettled(item.id) {
+            executionLocks.withDownloadLock(item.id) {
+                val current = store.get(item.id) ?: item
+                val hubSourceId = current.hubSourceId
+                val serverDownloadId = current.serverDownloadId
+                if (hubSourceId != null && serverDownloadId != null) {
+                    // Commit the remote obligation while the row still identifies it. From here on,
+                    // storage failure, process death, or an unreachable hub cannot erase the request.
+                    hubDownloads.localDownloadDeleted(hubSourceId, serverDownloadId)
+                }
+                val deleted = withContext(Dispatchers.IO) {
+                    DownloadStorage.delete(context, current.filePath)
+                }
+                if (!deleted) return@withDownloadLock context.getString(R.string.downloads_delete_failed)
+                store.delete(current.id)
+                null
+            }
         }
-        val deleted = withContext(Dispatchers.IO) {
-            DownloadStorage.delete(context, current.filePath)
-        }
-        if (!deleted) return context.getString(R.string.downloads_delete_failed)
-        store.delete(current.id)
-        return null
     }
 
     data class MoveResult(val moved: Int, val alreadyThere: Int, val failed: Int)

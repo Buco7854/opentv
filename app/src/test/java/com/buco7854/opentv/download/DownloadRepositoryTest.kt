@@ -20,13 +20,17 @@ import com.buco7854.opentv.core.storage.DownloadStore
 import com.buco7854.opentv.data.prefs.PlayerPrefs
 import com.buco7854.opentv.hub.HubUnreachableException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -41,6 +45,53 @@ import java.io.FileNotFoundException
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class)
 class DownloadRepositoryTest {
+    @Test
+    fun `delete waits for a cancelled worker to close its file`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val locks = DownloadExecutionLocks()
+        val fixture = deleteFixture(context, "repository-delete-running-test", locks)
+        val local = File(context.cacheDir, "running-delete-${System.nanoTime()}.mp4")
+        local.writeText("partial")
+        val id = fixture.store.insert(
+            Download(
+                title = "Running",
+                url = "https://provider.invalid/running.mp4",
+                filePath = local.absolutePath,
+                status = DownloadStatus.RUNNING,
+            ),
+        )
+        val workerEntered = CompletableDeferred<Unit>()
+        val releaseWorker = CompletableDeferred<Unit>()
+        val worker = async(Dispatchers.Default) {
+            locks.withDownloadLock(id) {
+                workerEntered.complete(Unit)
+                releaseWorker.await()
+            }
+        }
+
+        try {
+            workerEntered.await()
+            val deletion = async(Dispatchers.Default) {
+                fixture.repository.delete(requireNotNull(fixture.store.get(id)))
+            }
+            fixture.scheduler.cancelSignal.await()
+            delay(50)
+
+            assertTrue("the open worker still owns the file", local.exists())
+            assertNotNull("the row remains until that worker settles", fixture.store.get(id))
+
+            releaseWorker.complete(Unit)
+            assertNull(deletion.await())
+            assertNull(fixture.store.get(id))
+            assertFalse(local.exists())
+        } finally {
+            releaseWorker.complete(Unit)
+            worker.await()
+            fixture.scope.cancel()
+            local.delete()
+        }
+    }
+
     @Test
     fun `new row truncates a stale file left behind by destructive migration`() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
@@ -384,7 +435,11 @@ class DownloadRepositoryTest {
             }
         }
 
-    private fun deleteFixture(context: Context, preferencesName: String): DeleteFixture {
+    private fun deleteFixture(
+        context: Context,
+        preferencesName: String,
+        executionLocks: DownloadExecutionLocks = DownloadExecutionLocks(),
+    ): DeleteFixture {
         val store = RepositoryDownloadStore()
         val scheduler = RepositoryScheduler()
         val scope = CoroutineScope(SupervisorJob())
@@ -398,9 +453,17 @@ class DownloadRepositoryTest {
             scope,
         )
         return DeleteFixture(
-            DownloadRepository(context, store, PlayerPrefs(context), scheduler, coordinator),
+            DownloadRepository(
+                context,
+                store,
+                PlayerPrefs(context),
+                scheduler,
+                coordinator,
+                executionLocks,
+            ),
             store,
             scope,
+            scheduler,
         )
     }
 }
@@ -409,6 +472,7 @@ private data class DeleteFixture(
     val repository: DownloadRepository,
     val store: RepositoryDownloadStore,
     val scope: CoroutineScope,
+    val scheduler: RepositoryScheduler,
 )
 
 private class DeleteOutcomeProvider : ContentProvider() {
@@ -504,13 +568,16 @@ private class RepositoryDownloadStore : DownloadStore {
 private class RepositoryScheduler : DownloadScheduler {
     val enqueued = mutableListOf<Long>()
     val preparations = mutableListOf<Long>()
+    val cancelSignal = CompletableDeferred<Long>()
     override fun enqueue(downloadId: Long) {
         enqueued += downloadId
     }
     override fun enqueuePreparation(downloadId: Long) {
         preparations += downloadId
     }
-    override fun cancel(downloadId: Long) = Unit
+    override fun cancel(downloadId: Long) {
+        cancelSignal.complete(downloadId)
+    }
 }
 
 private object UnusedHubRemote : HubDownloadRemote {

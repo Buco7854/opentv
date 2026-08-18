@@ -208,8 +208,8 @@ function EpisodeRow({ episode, progress, downloads, onOpen }: {
     episode.airDate,
   ].filter(Boolean).join(' · ');
   return (
-    <button className="card" onClick={onOpen}>
-      <div className="episode-row">
+    <div className="card interactive-card episode-row">
+      <button type="button" className="episode-open" aria-label={episode.name} onClick={onOpen}>
         <div className="thumb">
           {episode.logo && !failed
             ? <img loading="lazy" src={imgUrl(episode.logo)} data-src={episode.logo} alt="" onError={(e) => setFailedSrc(e.currentTarget.getAttribute("data-src"))} />
@@ -221,11 +221,11 @@ function EpisodeRow({ episode, progress, downloads, onOpen }: {
           <div className="title">{episode.name}</div>
           {metaLine && <div className="sub">{metaLine}</div>}
         </div>
-        <DownloadStateIcon state={downloads.byContentId.get(episode.contentId)}
-                           onDownload={() => api.enqueueDownload(episode.contentId)}
-                           onChanged={downloads.refresh} />
-      </div>
-    </button>
+      </button>
+      <DownloadStateIcon state={downloads.byContentId.get(episode.contentId)}
+                         onDownload={() => api.enqueueDownload(episode.contentId)}
+                         onChanged={downloads.refresh} />
+    </div>
   );
 }
 

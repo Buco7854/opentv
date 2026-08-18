@@ -194,7 +194,13 @@ export function PlayerSurface(props: {
       </div>
     );
   }
-  if (!lease) return <div className="player-frame"><div className="player-spinner" aria-hidden /></div>;
+  if (!lease) {
+    return (
+      <div className="player-frame" role="status" aria-label={t('common.working')}>
+        <div className="player-spinner" aria-hidden />
+      </div>
+    );
+  }
   return (
     <LeasedPlayerSurface
       {...props}

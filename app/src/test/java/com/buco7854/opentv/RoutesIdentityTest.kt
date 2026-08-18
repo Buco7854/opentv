@@ -31,6 +31,15 @@ class RoutesIdentityTest {
     }
 
     @Test
+    fun reauthenticationReturnsToItsCallerWhileANewHubOpensSettings() {
+        assertNull(destinationAfterHubSignIn(reauthenticatedHubId = 42, completedHubId = 42))
+        assertEquals(
+            Routes.hubSettings(42),
+            destinationAfterHubSignIn(reauthenticatedHubId = null, completedHubId = 42),
+        )
+    }
+
+    @Test
     fun movieArgumentsSurviveTheNavigationPercentEncodingLayer() {
         val source = SourceId.Hub(Long.MIN_VALUE, Long.MAX_VALUE)
         val refs = listOf(

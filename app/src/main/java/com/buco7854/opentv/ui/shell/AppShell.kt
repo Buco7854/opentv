@@ -236,6 +236,7 @@ fun PlaylistsPanel(
 ) {
     val playlists by viewModel.playlists.collectAsStateWithLifecycle(initialValue = null)
     val catalogSources by viewModel.catalogSources.collectAsStateWithLifecycle()
+    val catalogSourcesLoading by viewModel.catalogSourcesLoading.collectAsStateWithLifecycle()
     val hubs by OpenTvApp.graph.hubAccounts.sources.collectAsStateWithLifecycle(initialValue = emptyList())
     val busy by viewModel.busy.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
@@ -260,7 +261,9 @@ fun PlaylistsPanel(
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
-        if (busy) OtvProgressBar(Modifier.fillMaxWidth().padding(horizontal = 20.dp))
+        if (panelSourcesLoading(busy, playlists != null, catalogSourcesLoading)) {
+            OtvProgressBar(Modifier.fillMaxWidth().padding(horizontal = 20.dp))
+        }
         LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
             // Both headers live inside the list so they share its content padding and
             // line up with each other; one outside and one inside sat 12dp apart.
@@ -398,6 +401,16 @@ fun PlaylistsPanel(
         )
     }
 }
+
+/**
+ * The source sheet must not present an empty list while Room or a connected hub is still
+ * answering its first query. That transient state looks exactly like data loss on cold start.
+ */
+internal fun panelSourcesLoading(
+    busy: Boolean,
+    localPlaylistsLoaded: Boolean,
+    catalogSourcesLoading: Boolean,
+): Boolean = busy || !localPlaylistsLoaded || catalogSourcesLoading
 
 @Composable
 private fun PanelPlaylistRow(

@@ -1,5 +1,5 @@
 import { StrictMode } from 'react';
-import { act, render, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, PlaybackLease } from '../api';
 import { ApiError } from '../api/http';
@@ -73,6 +73,14 @@ describe('playback lease ownership', () => {
     view.unmount();
 
     expect(endedLeases()).toEqual(['lease-1', 'lease-2']);
+  });
+
+  it('announces lease acquisition instead of exposing a silent empty player', () => {
+    vi.mocked(api.createPlayback).mockReturnValue(new Promise(() => {}));
+
+    render(<PlayerSurface request={request} onClose={vi.fn()} onPlayCatchup={vi.fn()} />);
+
+    expect(screen.getByRole('status', { name: 'Working…' })).toBeTruthy();
   });
 
   it('retries a grant rotation the transport refused instead of ending playback', async () => {

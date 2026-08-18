@@ -20,6 +20,7 @@ import com.buco7854.opentv.data.net.OkHttpTransport
 import com.buco7854.opentv.data.prefs.PlayerPrefs
 import com.buco7854.opentv.diag.ErrorLog
 import com.buco7854.opentv.download.DownloadRepository
+import com.buco7854.opentv.download.DownloadExecutionLocks
 import com.buco7854.opentv.download.DownloadWorkerDependencies
 import com.buco7854.opentv.download.DownloadWorkerFactory
 import com.buco7854.opentv.download.DownloadWorker
@@ -33,6 +34,7 @@ import com.buco7854.opentv.hub.HubSessionVault
 import com.buco7854.opentv.playback.PlaybackMonitor
 import com.buco7854.opentv.source.AggregatedFavorites
 import com.buco7854.opentv.source.CatalogGateway
+import com.buco7854.opentv.source.CatalogProgressUpdates
 import com.buco7854.opentv.source.HubCatalogGateway
 import com.buco7854.opentv.source.LocalCatalogGateway
 import com.buco7854.opentv.source.SourceId
@@ -77,16 +79,19 @@ class AppGraph(app: Application) : AutoCloseable {
     val hubAccounts: HubAccountRepository by lazy {
         HubAccountRepository(hubs, hubDownloads, hubDownloadPreferences)
     }
+    private val downloadExecutionLocks = DownloadExecutionLocks()
     val downloads = DownloadRepository(
         context = app,
         store = storage.downloads,
         prefs = playerPrefs,
         scheduler = downloadScheduler,
         hubDownloads = hubDownloads,
+        executionLocks = downloadExecutionLocks,
     )
     val favorites = FavoriteRepository(storage.favorites)
     val metadata = MetadataRepository(storage.metadata, Http.fetcher, coreLog)
     val resume = ResumeRepository(storage.resume, applicationScope)
+    val catalogProgressUpdates = CatalogProgressUpdates()
     private val catalogGateways = LinkedHashMap<SourceId, CatalogGateway>(16, 0.75f, true)
     val aggregatedFavorites by lazy {
         AggregatedFavorites(applicationScope, storage, hubs, ::catalogFor)
@@ -135,6 +140,7 @@ class AppGraph(app: Application) : AutoCloseable {
             userAgent = { Http.userAgent },
             activePlaybackHost = PlaybackMonitor.activeHost,
             hubDownloads = hubDownloads,
+            executionLocks = downloadExecutionLocks,
         )
     }
 

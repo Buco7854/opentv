@@ -48,6 +48,10 @@ internal class CatalogGatewayFake(
         CatalogResult.Success(emptySet())
     var favoriteBlock: suspend (Int, Int) -> CatalogResult<Page<CatalogItem>> =
         { _, _ -> CatalogResult.Success(Page(emptyList(), 0)) }
+    var resumeResult: CatalogResult<List<CatalogResumePoint>> =
+        CatalogResult.Success(emptyList())
+    var resumeBlock: suspend () -> CatalogResult<List<CatalogResumePoint>> = { resumeResult }
+    var resumeRequests = 0
     val channelRequests = mutableListOf<Pair<Int, Int>>()
     val nowAiringRequests = mutableListOf<Set<String>>()
     val guideIdRequests = mutableListOf<Set<String>>()
@@ -111,8 +115,10 @@ internal class CatalogGatewayFake(
     override suspend fun favorites(offset: Int, limit: Int) =
         favoriteBlock(offset, limit)
 
-    override suspend fun resumePoints() =
-        CatalogResult.Success<List<CatalogResumePoint>>(emptyList())
+    override suspend fun resumePoints(): CatalogResult<List<CatalogResumePoint>> {
+        resumeRequests += 1
+        return resumeBlock()
+    }
 
     override suspend fun guideFor(ref: ContentRef) = guideBlock(ref)
 

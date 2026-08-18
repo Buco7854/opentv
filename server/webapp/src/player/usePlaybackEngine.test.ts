@@ -4,6 +4,7 @@ import { api, PlaybackLease, ResumePoint } from '../api';
 import { PlaybackStatusActions } from './playbackStatus';
 import { usePlaybackEngine } from './usePlaybackEngine';
 import { RemuxController, RemuxSession } from './useRemuxSession';
+import { watchProgressStore } from '../watchProgress';
 
 type ErrorData = { fatal: boolean; type: string; details?: string; response?: { code: number } };
 type Handler = (event: string, data: ErrorData) => void;
@@ -169,6 +170,7 @@ async function mountEngine(
 
 describe('hls playback engine', () => {
   beforeEach(() => {
+    watchProgressStore.clear();
     FakeHls.last = null;
     createMpegtsPlayer.mockClear();
     vi.spyOn(api, 'resumeAll').mockResolvedValue([]);
@@ -295,6 +297,40 @@ describe('hls playback engine', () => {
     video.dispatchEvent(new Event('loadedmetadata'));
 
     expect(video.currentTime).toBe(0);
+  });
+
+  it('publishes the final position before its cleanup save finishes', async () => {
+    vi.spyOn(api, 'saveResume').mockReturnValue(new Promise(() => {}));
+    const { video, unmount } = await mountEngine();
+    video.currentTime = 600;
+
+    unmount();
+
+    expect(watchProgressStore.getSnapshot().get(lease.contentId)).toBeCloseTo(1 / 6);
+  });
+
+  it('persists periodic and cleanup positions in observation order', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let finishFirst!: (value: null) => void;
+    vi.mocked(api.saveResume)
+      .mockReturnValueOnce(new Promise((resolve) => { finishFirst = resolve; }))
+      .mockResolvedValue(null);
+    const { video, unmount } = await mountEngine();
+    video.currentTime = 300;
+
+    await act(() => vi.advanceTimersByTimeAsync(5000));
+    video.currentTime = 600;
+    unmount();
+
+    // The final write is queued behind the periodic one. Otherwise a slow earlier request can
+    // finish last and move the server's progress backwards after this page has closed.
+    expect(api.saveResume).toHaveBeenCalledTimes(1);
+    finishFirst(null);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(api.saveResume).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(api.saveResume).mock.calls.map((call) => call[1])).toEqual([
+      300_000, 600_000,
+    ]);
   });
 
   it('does not resurrect a destroyed mpegts engine from a queued error callback', async () => {

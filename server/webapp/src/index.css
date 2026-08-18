@@ -787,6 +787,7 @@
   .detail .dl-slot .icon-btn { @apply size-full rounded-[10px]; }
 
   .episode-row { @apply flex items-center gap-3 p-2.5; }
+  .episode-row .episode-open { @apply flex min-w-0 flex-1 items-center gap-3 self-stretch rounded-lg text-left; }
   .episode-row .thumb {
     @apply relative flex h-[66px] w-[116px] flex-none items-center justify-center
            overflow-hidden rounded-lg text-on-surface-variant;

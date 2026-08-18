@@ -203,6 +203,10 @@ class HubDownloadCoordinator internal constructor(
     private val serverDeleteLock = Mutex()
     private var foregroundJob: Job? = null
 
+    /** Waits for an in-flight server enqueue/sync before local deletion inspects the row. */
+    suspend fun <T> withPreparationSettled(downloadId: Long, block: suspend () -> T): T =
+        rowLocks.withKeyLock(downloadId, block)
+
     suspend fun enqueue(
         hubSourceId: Long,
         contentId: String,

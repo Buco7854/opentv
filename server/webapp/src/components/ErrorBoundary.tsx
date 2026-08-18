@@ -1,4 +1,5 @@
 import { Component, ReactNode } from 'react';
+import { useLocation } from 'react-router';
 import { t } from '../i18n';
 import { EmptyState } from './Common';
 import { Icon } from './Icons';
@@ -29,4 +30,14 @@ export class AppErrorBoundary extends Component<Props, State> {
       </EmptyState>
     );
   }
+}
+
+/**
+ * A feature crash belongs to the route that threw it. The dock remains usable outside the
+ * boundary; keying by location lets navigation recover instead of pinning every later route to
+ * the crash screen until the whole tab is reloaded.
+ */
+export function RouteErrorBoundary({ children }: Props) {
+  const { key } = useLocation();
+  return <AppErrorBoundary key={key}>{children}</AppErrorBoundary>;
 }

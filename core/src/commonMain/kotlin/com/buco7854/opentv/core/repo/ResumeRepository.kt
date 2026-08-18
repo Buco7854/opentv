@@ -43,20 +43,26 @@ class ResumeRepository(
 
     /** Save (or clear, near the end) the position for [url]; no-op for live/unknown. */
     fun save(url: String, positionMs: Long, durationMs: Long) {
-        scope.launch {
-            if (durationMs <= 0 || positionMs < MIN_POSITION_MS ||
-                positionMs > durationMs - END_GUARD_MS
-            ) {
-                store.delete(url)
-            } else {
-                store.upsert(ResumePoint(url, positionMs, durationMs, clock()))
-            }
-        }
+        scope.launch { saveNow(url, positionMs, durationMs) }
     }
 
     fun clear(url: String) {
-        scope.launch { store.delete(url) }
+        scope.launch { clearNow(url) }
     }
+
+    /** Persists before returning, for callers that must publish a completed write. */
+    suspend fun saveNow(url: String, positionMs: Long, durationMs: Long): Float? {
+        if (durationMs <= 0 || positionMs < MIN_POSITION_MS ||
+            positionMs > durationMs - END_GUARD_MS
+        ) {
+            store.delete(url)
+            return null
+        }
+        store.upsert(ResumePoint(url, positionMs, durationMs, clock()))
+        return (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
+    }
+
+    suspend fun clearNow(url: String) = store.delete(url)
 
     /** Wipes all saved progress for a playlist's channels. */
     suspend fun clearForPlaylist(playlistId: Long) = store.deleteForPlaylist(playlistId)

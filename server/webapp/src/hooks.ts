@@ -4,6 +4,7 @@ import {
 import { api, Download, DownloadStatus, ListingPage } from './api';
 import { GENERIC, errorMessage, reportError } from './errors';
 import { t } from './i18n';
+import { watchProgressStore } from './watchProgress';
 
 const DEFAULT_PAGE_SIZE = 50;
 
@@ -279,7 +280,10 @@ class DownloadPollingStore {
 const downloadStore = new DownloadPollingStore();
 
 /** Drop user-owned snapshots immediately when the authenticated user changes. */
-export const clearUserActivitySnapshots = () => downloadStore.clear();
+export const clearUserActivitySnapshots = () => {
+  downloadStore.clear();
+  watchProgressStore.clear();
+};
 
 /** Shared downloads snapshot. Pass enabled=false while a covered screen is inactive. */
 export function useDownloads(enabled = true): {
@@ -348,24 +352,13 @@ export function useFavorites(playlistId: number | null) {
 
 /** Stable content id -> watched fraction, from the current user's resume points. */
 export function useWatchProgress(): Map<string, number> {
-  const [map, setMap] = useState<Map<string, number>>(new Map());
+  const map = useSyncExternalStore(watchProgressStore.subscribe, watchProgressStore.getSnapshot);
   useEffect(() => {
-    let active = true;
-    const load = () => {
-      api.resumeAll().then((points) => {
-        if (!active) return;
-        setMap(new Map(
-          points
-            .filter((p) => p.durationMs > 0 && p.positionMs >= 10_000)
-            .map((p) => [p.contentId, Math.min(1, p.positionMs / p.durationMs)]),
-        ));
-      }).catch(() => {});
-    };
+    const load = () => { void watchProgressStore.refresh().catch(() => {}); };
     const onVisible = () => { if (document.visibilityState === 'visible') load(); };
     load();
     document.addEventListener('visibilitychange', onVisible);
     return () => {
-      active = false;
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, []);

@@ -41,6 +41,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -57,6 +58,9 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import coil3.compose.AsyncImage
 import com.buco7854.opentv.R
 import com.buco7854.opentv.core.model.Download
@@ -86,10 +90,25 @@ import com.buco7854.opentv.ui.components.SourceSignedOut
 import com.buco7854.opentv.ui.components.SourceUnreachable
 import com.buco7854.opentv.ui.components.focusHighlight
 import com.buco7854.opentv.ui.components.mediaTags
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
 
 private val YEAR_TAG = Regex("""\b(19|20)\d{2}\b""")
 private val QUALITY_TAG = Regex("""(?i)\b(4K|UHD|2160p|1080p|FHD|720p|HEVC|HD|SD)\b""")
+
+/** Refresh retained detail progress exactly when this navigation destination is visible again. */
+@Composable
+internal fun RefreshProgressOnResume(viewModel: BaseDetailViewModel) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(viewModel, lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            viewModel.onResumed()
+            // Keep this repeat block active until the destination leaves RESUMED. Without
+            // this suspension it would immediately restart and refresh in a tight loop.
+            awaitCancellation()
+        }
+    }
+}
 
 /** Playlist facts plus any enrichment. */
 private fun metaChips(channel: CatalogItem, meta: Metadata?): List<String> = buildList {
@@ -172,7 +191,8 @@ fun MovieDetailScreen(
     }
     val state by viewModel.state.collectAsStateWithLifecycle()
     val downloads by viewModel.downloads.collectAsStateWithLifecycle()
-    val progressByUrl by viewModel.progressByUrl.collectAsStateWithLifecycle()
+    val progressState by viewModel.progress.collectAsStateWithLifecycle()
+    RefreshProgressOnResume(viewModel)
     val channel = state.detail?.item
     val meta = state.metadata
     val snackbar = remember { SnackbarHostState() }
@@ -224,7 +244,6 @@ fun MovieDetailScreen(
             return@Scaffold
         }
         val movie = channel ?: return@Scaffold
-        val localUrl = (movie.ref as? ContentRef.LocalUrl)?.url
         val downloadState = downloads.downloadFor(sourceId, movie.ref)
         LazyColumn(
             Modifier.padding(padding).fillMaxSize(),
@@ -244,7 +263,7 @@ fun MovieDetailScreen(
                 }
                 MetadataBlock(meta)
                 Spacer(Modifier.height(24.dp))
-                val progress = movie.progress ?: localUrl?.let { progressByUrl[it] }
+                val progress = progressState.progressFor(movie)
                 if (progress != null) {
                     WatchProgressBar(progress, Modifier.fillMaxWidth())
                     Spacer(Modifier.height(6.dp))
@@ -348,6 +367,8 @@ fun SeriesDetailScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val episodes by viewModel.episodes.collectAsStateWithLifecycle()
     val downloads by viewModel.downloads.collectAsStateWithLifecycle()
+    val progressState by viewModel.progress.collectAsStateWithLifecycle()
+    RefreshProgressOnResume(viewModel)
     val meta = state.metadata
     val detail = state.detail
     val seriesTitle = detail?.item?.title.orEmpty()
@@ -355,7 +376,6 @@ fun SeriesDetailScreen(
         downloads.filter { it.status != DownloadStatus.CANCELLED && it.status != DownloadStatus.FAILED }
             .associateBy { it.downloadIdentityKey() }
     }
-    val progressByUrl by viewModel.progressByUrl.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val resources = LocalResources.current
@@ -466,7 +486,6 @@ fun SeriesDetailScreen(
                 }
             }
             items(shown, key = { it.ref.encode() }) { episode ->
-                val localUrl = (episode.ref as? ContentRef.LocalUrl)?.url
                 EpisodeRow(
                     episode = episode,
                     downloadState = downloadIdentityKey(sourceId, episode.ref)
@@ -487,7 +506,7 @@ fun SeriesDetailScreen(
                             }
                         }
                     } else null,
-                    progress = episode.progress ?: localUrl?.let { progressByUrl[it] },
+                    progress = progressState.progressFor(episode),
                 )
             }
             if (sourceId is SourceId.Hub && episodes.size < state.episodeTotal) {
@@ -652,7 +671,8 @@ fun EpisodeDetailScreen(
     }
     val state by viewModel.state.collectAsStateWithLifecycle()
     val downloads by viewModel.downloads.collectAsStateWithLifecycle()
-    val progressByUrl by viewModel.progressByUrl.collectAsStateWithLifecycle()
+    val progressState by viewModel.progress.collectAsStateWithLifecycle()
+    RefreshProgressOnResume(viewModel)
     val episode = state.detail?.item
     val seriesTitle = state.seriesTitle
     val info = state.metadata
@@ -698,7 +718,6 @@ fun EpisodeDetailScreen(
             return@Scaffold
         }
         val ep = episode ?: return@Scaffold
-        val localUrl = (ep.ref as? ContentRef.LocalUrl)?.url
         val downloadState = downloads.downloadFor(sourceId, ep.ref)
         val image = info?.posterUrl ?: ep.imageUrl
         val plot = state.detail?.description ?: info?.overview
@@ -767,7 +786,7 @@ fun EpisodeDetailScreen(
                     CastRow(seriesCast)
                 }
                 Spacer(Modifier.height(24.dp))
-                val progress = ep.progress ?: localUrl?.let { progressByUrl[it] }
+                val progress = progressState.progressFor(ep)
                 if (progress != null) {
                     WatchProgressBar(progress, Modifier.fillMaxWidth())
                     Spacer(Modifier.height(6.dp))

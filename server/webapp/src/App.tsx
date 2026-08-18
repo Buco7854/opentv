@@ -4,7 +4,7 @@ import {
 } from 'react-router';
 import { EmptyState } from './components/Common';
 import { Dock } from './components/Dock';
-import { AppErrorBoundary } from './components/ErrorBoundary';
+import { AppErrorBoundary, RouteErrorBoundary } from './components/ErrorBoundary';
 import { Icon } from './components/Icons';
 import { Spinner } from './components/Primitives';
 import { localeStore, t } from './i18n';
@@ -134,7 +134,7 @@ function AuthenticatedApp() {
     <LibraryProvider>
       <PlayerNavigationProvider>
         <main className="shell-content" ref={mainRef} tabIndex={-1}>
-          <AppErrorBoundary>
+          <RouteErrorBoundary>
             <Suspense fallback={<RouteFallback />}>
               <Routes>
                 <Route path="/" element={<HomeScreen />} />
@@ -157,7 +157,7 @@ function AuthenticatedApp() {
                 <Route path="*" element={<HomeScreen />} />
               </Routes>
             </Suspense>
-          </AppErrorBoundary>
+          </RouteErrorBoundary>
         </main>
         <Dock />
       </PlayerNavigationProvider>

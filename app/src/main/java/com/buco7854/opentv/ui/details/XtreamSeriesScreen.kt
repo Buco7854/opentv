@@ -76,11 +76,12 @@ fun XtreamSeriesScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val episodes by viewModel.episodes.collectAsStateWithLifecycle()
     val downloads by viewModel.downloads.collectAsStateWithLifecycle()
+    val progressState by viewModel.progress.collectAsStateWithLifecycle()
+    RefreshProgressOnResume(viewModel)
     val downloadsByUrl = remember(downloads) {
         downloads.filter { it.status != DownloadStatus.CANCELLED && it.status != DownloadStatus.FAILED }
             .associateBy { it.downloadIdentityKey() }
     }
-    val progressByUrl by viewModel.progressByUrl.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val resources = LocalResources.current
@@ -208,7 +209,6 @@ fun XtreamSeriesScreen(
                 }
             }
             items(shown, key = { it.ref.encode() }) { episode ->
-                val localUrl = (episode.ref as? ContentRef.LocalUrl)?.url
                 EpisodeRow(
                     episode = episode,
                     downloadState = downloadIdentityKey(sourceId, episode.ref)
@@ -229,7 +229,7 @@ fun XtreamSeriesScreen(
                             }
                         }
                     } else null,
-                    progress = episode.progress ?: localUrl?.let { progressByUrl[it] },
+                    progress = progressState.progressFor(episode),
                 )
             }
             if (sourceId is SourceId.Hub && episodes.size < state.episodeTotal) {

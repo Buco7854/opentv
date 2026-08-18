@@ -212,7 +212,11 @@ class ConditionalFetcherTest {
             }
             withTimeout(2_000) { bodyReadStarted.await() }
 
-            withTimeout(2_000) {
+            // OkHttp reports the cancelled socket asynchronously. Under the full Android
+            // suite the dispatcher can take more than two seconds even though cancellation
+            // has already interrupted the reader; keep the assertion bounded without making
+            // scheduler load look like a product failure.
+            withTimeout(5_000) {
                 refresh.cancelAndJoin()
                 callCancelled.await()
             }

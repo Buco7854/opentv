@@ -9,8 +9,10 @@ import type Hls from 'hls.js';
 import type mpegts from 'mpegts.js';
 import { MutableRefObject, RefObject, useCallback, useEffect, useRef } from 'react';
 import { api, PlaybackLease } from '../api';
+import { browserAccessToken } from '../api/http';
 import { toast } from '../components/Primitives';
 import { t } from '../i18n';
+import { confirmWatchProgress, publishWatchProgress } from '../watchProgress';
 import {
   captureMediaPosition, isTerminalPlaybackStatus, replaceMediaGrant, restoreMediaPosition,
 } from './mediaGrant';
@@ -456,15 +458,27 @@ export function usePlaybackEngine(opts: {
       }).catch(() => {});
     }
 
+    // The interval and teardown can overlap. Keep the writes in observation order so an older,
+    // slower request cannot commit after the final position and move server progress backwards.
+    let resumeSaveQueue = Promise.resolve();
     const saveResume = () => {
       if (live || catchup) return;
       const duration = remuxRef.current?.duration ?? video.duration;
       if (!duration || !isFinite(duration)) return;
-      api.saveResume(
-        contentId,
-        Math.floor(video.currentTime * 1000),
-        Math.floor(duration * 1000),
-      ).catch(() => {});
+      const positionMs = Math.floor(video.currentTime * 1000);
+      const durationMs = Math.floor(duration * 1000);
+      const sessionToken = browserAccessToken();
+      const revision = publishWatchProgress(contentId, positionMs, durationMs);
+      resumeSaveQueue = resumeSaveQueue
+        .catch(() => {})
+        .then(async () => {
+          // Teardown can queue the final write while authentication is changing. Never let an
+          // old player's queued position be sent under a replacement account's bearer.
+          if (browserAccessToken() !== sessionToken) return;
+          await api.saveResume(contentId, positionMs, durationMs);
+          confirmWatchProgress(contentId, revision);
+        })
+        .catch(() => {});
     };
     const resumeTimer = live || catchup ? undefined : setInterval(saveResume, 5000);
 

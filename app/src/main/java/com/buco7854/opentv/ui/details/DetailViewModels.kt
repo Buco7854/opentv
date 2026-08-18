@@ -20,6 +20,8 @@ import com.buco7854.opentv.source.CatalogItem
 import com.buco7854.opentv.source.CatalogLoadError
 import com.buco7854.opentv.source.CatalogResult
 import com.buco7854.opentv.source.ContentRef
+import com.buco7854.opentv.source.DetailProgressState
+import com.buco7854.opentv.source.DetailProgressTracker
 import com.buco7854.opentv.source.ServerPagedState
 import com.buco7854.opentv.source.SourceId
 import com.buco7854.opentv.source.encode
@@ -41,8 +43,16 @@ internal abstract class BaseDetailViewModel(
     val downloads: StateFlow<List<Download>> = graph.downloads.downloads
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    val progressByUrl: StateFlow<Map<String, Float>> = graph.resume.progressByUrl
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+    private val progressTracker = DetailProgressTracker(
+        source = sourceId,
+        gateway = gateway,
+        scope = viewModelScope,
+        updates = graph.catalogProgressUpdates,
+    )
+    val progress: StateFlow<DetailProgressState> = progressTracker.state
+
+    /** Called by the destination lifecycle, not by a timer. */
+    fun onResumed() = progressTracker.onResumed()
 
     suspend fun enqueue(item: CatalogItem): String? {
         val hub = sourceId as? SourceId.Hub

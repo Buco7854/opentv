@@ -161,6 +161,12 @@ object Routes {
         hubId?.let { "$HUB_SIGN_IN?hubId=$it" } ?: HUB_SIGN_IN
 }
 
+/** Reauthentication resumes its caller; only adding a new connection opens its settings. */
+internal fun destinationAfterHubSignIn(
+    reauthenticatedHubId: Long?,
+    completedHubId: Long,
+): String? = if (reauthenticatedHubId == null) Routes.hubSettings(completedHubId) else null
+
 internal data class CatalogSourceAvailability(
     val localPlaylistIds: List<Long>,
     val signedInHubIds: Set<Long>,
@@ -420,9 +426,9 @@ internal fun AppNav(
             val hubId = entry.arguments!!.getLong("hubId").takeIf { it > 0 }
             HubSignInScreen(
                 hubId = hubId,
-                onDone = { hubId ->
+                onDone = { completedHubId ->
                     nav.popBackStack()
-                    nav.navigate(Routes.hubSettings(hubId))
+                    destinationAfterHubSignIn(hubId, completedHubId)?.let(nav::navigate)
                 },
                 onBack = { nav.popBackStack() },
             )
