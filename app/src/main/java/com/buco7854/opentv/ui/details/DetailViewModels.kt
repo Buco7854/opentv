@@ -259,11 +259,14 @@ internal open class SeriesDetailViewModel(
                             return@launch
                         }
                     }
+                    val metadata = when (sourceId) {
+                        is SourceId.LocalPlaylist -> localMetadata(detail)
+                        is SourceId.Hub -> gateway.seriesMetadata(detail.item.title).valueOrNull()
+                        else -> null
+                    }
                     mutableState.value = SeriesDetailState(
                         detail = detail,
-                        metadata = if (sourceId is SourceId.LocalPlaylist) {
-                            localMetadata(detail)
-                        } else null,
+                        metadata = metadata,
                         isFavorite = favorite,
                         loading = true,
                     )
@@ -423,9 +426,7 @@ internal class XtreamSeriesViewModel(
     ref: ContentRef,
     seriesKey: String?,
     seriesId: String?,
-) : SeriesDetailViewModel(graph, sourceId, ref, seriesKey, seriesId) {
-    override suspend fun localMetadata(detail: CatalogDetail): Metadata? = null
-}
+) : SeriesDetailViewModel(graph, sourceId, ref, seriesKey, seriesId)
 
 @Composable
 internal inline fun <reified VM : ViewModel> detailViewModel(

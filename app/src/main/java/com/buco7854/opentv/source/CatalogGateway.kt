@@ -107,6 +107,10 @@ interface CatalogGateway {
     suspend fun movieMetadata(ref: ContentRef): CatalogResult<Metadata?> =
         CatalogResult.Success(null)
 
+    /** Optional title enrichment for series whose provider detail contains names only. */
+    suspend fun seriesMetadata(title: String): CatalogResult<Metadata?> =
+        CatalogResult.Success(null)
+
     suspend fun seriesDetail(
         ref: ContentRef,
         seriesKey: String,

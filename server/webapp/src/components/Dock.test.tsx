@@ -72,6 +72,17 @@ describe('Dock playlist operations', () => {
     document.getElementById('toast-root')?.remove();
   });
 
+  it('keeps playlist actions inside the selected playlist card and groups global actions', () => {
+    const view = renderDock();
+    const actions = view.getByLabelText(t('playlists.actions'));
+
+    expect(actions.parentElement?.classList.contains('panel-row-group')).toBe(true);
+    expect(actions.parentElement?.classList.contains('selected')).toBe(true);
+    expect(view.getByText(t('nav.library'))).toBeTruthy();
+    expect(view.getByText(t('nav.server'))).toBeTruthy();
+    expect(view.getByText(t('nav.account'))).toBeTruthy();
+  });
+
   it('loads the server-owned edit form before opening the dialog', async () => {
     vi.spyOn(api, 'playlistCapabilities').mockResolvedValue({
       operations: [{

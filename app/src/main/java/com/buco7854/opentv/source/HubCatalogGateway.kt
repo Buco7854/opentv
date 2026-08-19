@@ -26,6 +26,8 @@ import com.buco7854.opentv.contract.SeriesHitDto
 import com.buco7854.opentv.contract.XtreamSeriesPageDto
 import com.buco7854.opentv.contract.XtreamSeriesDetailDto
 import com.buco7854.opentv.contract.PlaylistOperation as WirePlaylistOperation
+import com.buco7854.opentv.core.meta.decodeCast
+import com.buco7854.opentv.core.meta.encodeCast
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.model.Metadata
 import com.buco7854.opentv.hub.HubCredentials
@@ -357,7 +359,10 @@ class HubCatalogGateway internal constructor(
      * through its own channel row, which a server-owned film has no equivalent of.
      */
     override suspend fun movieMetadata(ref: ContentRef): CatalogResult<Metadata?> =
-        hubCall<Metadata?> { backend.vodInfo(ref.hubContentId()).toMetadata() }
+        hubCall<Metadata?> { backend.vodInfo(ref.hubContentId()).toMetadata(::image) }
+
+    override suspend fun seriesMetadata(title: String): CatalogResult<Metadata?> =
+        hubCall<Metadata?> { backend.metadata("series", title).toMetadata(::image) }
 
     override suspend fun seriesDetail(
         ref: ContentRef,
@@ -505,6 +510,7 @@ internal interface HubCatalogBackend {
     suspend fun resume(): List<ResumePointDto>
     suspend fun content(contentId: String): ChannelDto
     suspend fun vodInfo(contentId: String): MetadataDto
+    suspend fun metadata(type: String, title: String): MetadataDto
     suspend fun guide(contentId: String): List<GuideEntryDto>
 }
 
@@ -576,6 +582,7 @@ private class RegistryHubCatalogBackend(
     override suspend fun resume() = call { resume(it) }
     override suspend fun content(contentId: String) = call { content(it, contentId) }
     override suspend fun vodInfo(contentId: String) = call { contentVodInfo(it, contentId) }
+    override suspend fun metadata(type: String, title: String) = call { metadata(it, type, title) }
     override suspend fun guide(contentId: String) = call { contentGuide(it, contentId) }
 }
 
@@ -690,15 +697,19 @@ private fun ChannelDto.toCatalogItem(progress: Float?, imageUrl: String?) = Cata
  * id of the metadata provider it looks films up in. They are not the same identifier, so
  * it is dropped rather than coerced into a field that means something else.
  */
-private fun MetadataDto.toMetadata() = Metadata(
+private fun MetadataDto.toMetadata(image: (String?) -> String?) = Metadata(
     cacheKey = cacheKey,
     title = title,
     year = year,
     overview = overview,
     rating = rating,
     castNames = castNames,
-    castJson = castJson,
-    posterUrl = posterUrl,
+    castJson = castJson?.let { json ->
+        encodeCast(
+            decodeCast(json).map { member -> member.copy(photo = image(member.photo)) },
+        )
+    },
+    posterUrl = image(posterUrl),
     infoLine = infoLine,
     sourceId = null,
     fetchedAtMs = fetchedAtMs,

@@ -303,7 +303,13 @@ export function EpisodeDetailScreen() {
     if (ep.seriesKey?.startsWith('xs:')) {
       const detail = await api.xseries(ep.playlistId, ep.seriesKey.slice(3)).catch(() => null);
       seriesTitle = detail?.series.name ?? null;
-      seriesCast = castFromNames(detail?.series.castNames ?? null);
+      const seriesMeta = seriesTitle
+        ? await api.meta('series', seriesTitle).catch(() => null)
+        : null;
+      const enriched = decodeCast(seriesMeta?.castJson ?? null);
+      seriesCast = enriched.length > 0
+        ? enriched
+        : castFromNames(detail?.series.castNames ?? null);
     } else {
       seriesTitle = ep.seriesKey;
       if (seriesTitle) {

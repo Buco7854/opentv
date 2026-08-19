@@ -4,19 +4,24 @@ import android.app.Activity
 import android.app.PendingIntent
 import android.app.PictureInPictureParams
 import android.app.RemoteAction
+import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.graphics.drawable.Icon
+import android.os.Build
 import android.util.Rational
+import android.view.WindowManager
+import android.view.Window
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.content.ContextCompat
+import androidx.annotation.RequiresApi
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -166,15 +171,44 @@ internal fun PlayerSystemEffects(
         val activity = context as? Activity
         val window = activity?.window
         val insetsController = window?.let { WindowInsetsControllerCompat(it, view) }
+        val previousCutoutMode = if (window != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            replaceDisplayCutoutMode(window, playerDisplayCutoutMode(Build.VERSION.SDK_INT)!!)
+        } else null
         insetsController?.hide(WindowInsetsCompat.Type.systemBars())
         insetsController?.systemBarsBehavior =
             WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         window?.let { WindowCompat.setDecorFitsSystemWindows(it, false) }
         onDispose {
             insetsController?.show(WindowInsetsCompat.Type.systemBars())
+            if (window != null && previousCutoutMode != null &&
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+            ) {
+                replaceDisplayCutoutMode(window, previousCutoutMode)
+            }
             controller.resetOrientation()
         }
     }
+}
+
+/**
+ * Full-screen video owns the pixels around a display cutout as well as the ordinary canvas.
+ *
+ * Without this opt-in Android reserves the camera edge on some phones. The player then shows
+ * the Activity's dark-gray launch background beside an otherwise black video surface, which
+ * looks like an unexplained gray strip around the notch or punch hole.
+ */
+@SuppressLint("InlinedApi")
+internal fun playerDisplayCutoutMode(sdkInt: Int): Int? = when {
+    sdkInt >= Build.VERSION_CODES.R -> WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+    sdkInt >= Build.VERSION_CODES.P -> WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+    else -> null
+}
+
+@RequiresApi(Build.VERSION_CODES.P)
+private fun replaceDisplayCutoutMode(window: Window, mode: Int): Int {
+    val previous = window.attributes.layoutInDisplayCutoutMode
+    window.attributes = window.attributes.apply { layoutInDisplayCutoutMode = mode }
+    return previous
 }
 
 private fun playPauseAction(context: Context, playWhenReady: Boolean): RemoteAction {

@@ -320,6 +320,9 @@ class HubApi(
     suspend fun contentVodInfo(c: HubCredentials, contentId: String): MetadataDto =
         get(c, HubEndpoints.contentVodInfo(c.baseUrl, contentId), MetadataDto.serializer())
 
+    suspend fun metadata(c: HubCredentials, type: String, title: String): MetadataDto =
+        get(c, HubEndpoints.meta(c.baseUrl, type, title), MetadataDto.serializer())
+
     // ---- User-owned state (contentId-keyed, server-side) -------------------
 
     suspend fun favorites(c: HubCredentials, playlistId: Long): List<FavoriteDto> =

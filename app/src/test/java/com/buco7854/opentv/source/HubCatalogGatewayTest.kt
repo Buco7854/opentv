@@ -33,6 +33,9 @@ import com.buco7854.opentv.contract.SeriesHitDto
 import com.buco7854.opentv.contract.XtreamSeriesPageDto
 import com.buco7854.opentv.contract.XtreamSeriesDetailDto
 import com.buco7854.opentv.contract.XtreamSeriesDto
+import com.buco7854.opentv.core.meta.CastMember
+import com.buco7854.opentv.core.meta.decodeCast
+import com.buco7854.opentv.core.meta.encodeCast
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.model.HubSource
 import com.buco7854.opentv.core.net.HttpRequestSpec
@@ -636,7 +639,7 @@ class HubCatalogGatewayTest {
                 overview = "A plot",
                 rating = 7.5,
                 castNames = "Alice Isaaz, Kevin Bago",
-                castJson = null,
+                castJson = encodeCast(listOf(CastMember("Alice Isaaz", "cast-token"))),
                 posterUrl = "poster",
                 infoLine = "Drama · 98 min",
                 sourceId = "22",
@@ -651,10 +654,50 @@ class HubCatalogGatewayTest {
         assertEquals("Alice Isaaz, Kevin Bago", metadata?.castNames)
         assertEquals(7.5, metadata?.rating)
         assertEquals("Drama · 98 min", metadata?.infoLine)
+        assertEquals("https://hub.example/api/v1/img?u=poster", metadata?.posterUrl)
+        assertEquals(
+            "https://hub.example/api/v1/img?u=cast-token",
+            decodeCast(metadata?.castJson).single().photo,
+        )
         assertEquals(1, backend.vodInfoCalls)
         // The panel's own id is text and the local field means the metadata provider's
         // numeric id, so it is dropped rather than forced into a field of another meaning.
         assertNull(metadata?.sourceId)
+    }
+
+    @Test
+    fun seriesMetadataTurnsServerImageCapabilitiesIntoAndroidImageUrls() = runTest {
+        val backend = FakeHubBackend().apply {
+            metadata = MetadataDto(
+                cacheKey = "tv:The Show",
+                title = "The Show",
+                year = "2011",
+                overview = null,
+                rating = null,
+                castNames = "Cast: Alice Isaaz",
+                castJson = encodeCast(listOf(CastMember("Alice Isaaz", "person-token"))),
+                posterUrl = "series-poster-token",
+                infoLine = null,
+                sourceId = "55",
+                fetchedAtMs = 5,
+            )
+        }
+
+        val metadata = HubCatalogGateway(SourceId.Hub(3, 7), backend)
+            .seriesMetadata("The Show")
+            .successValue()
+
+        assertEquals(1, backend.metadataCalls)
+        assertEquals("series", backend.metadataType)
+        assertEquals("The Show", backend.metadataTitle)
+        assertEquals(
+            "https://hub.example/api/v1/img?u=person-token",
+            decodeCast(metadata?.castJson).single().photo,
+        )
+        assertEquals(
+            "https://hub.example/api/v1/img?u=series-poster-token",
+            metadata?.posterUrl,
+        )
     }
 
     @Test
@@ -743,6 +786,10 @@ private class FakeHubBackend : HubCatalogBackend {
     var contentCalls = 0
     var vodInfoCalls = 0
     var vodInfo: MetadataDto? = null
+    var metadataCalls = 0
+    var metadataType: String? = null
+    var metadataTitle: String? = null
+    var metadata: MetadataDto? = null
     var clearProgressCalls = 0
     var deleteCalls = 0
     var refreshStatusCalls = 0
@@ -892,6 +939,13 @@ private class FakeHubBackend : HubCatalogBackend {
     override suspend fun vodInfo(contentId: String): MetadataDto {
         vodInfoCalls++
         return vodInfo ?: throw IllegalStateException("no vod info configured")
+    }
+
+    override suspend fun metadata(type: String, title: String): MetadataDto {
+        metadataCalls++
+        metadataType = type
+        metadataTitle = title
+        return metadata ?: throw IllegalStateException("no metadata configured")
     }
     override suspend fun guide(contentId: String): List<GuideEntryDto> = emptyList()
 }

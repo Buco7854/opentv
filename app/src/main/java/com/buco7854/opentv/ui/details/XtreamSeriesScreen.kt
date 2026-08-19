@@ -43,6 +43,7 @@ import com.buco7854.opentv.R
 import com.buco7854.opentv.core.model.DownloadStatus
 import com.buco7854.opentv.download.downloadIdentityKey
 import com.buco7854.opentv.core.meta.castFromNames
+import com.buco7854.opentv.core.meta.decodeCast
 import com.buco7854.opentv.source.CatalogItem
 import com.buco7854.opentv.source.CatalogLoadError
 import com.buco7854.opentv.source.ContentRef
@@ -178,7 +179,12 @@ fun XtreamSeriesScreen(
                     Spacer(Modifier.height(12.dp))
                     ExpandableText(it)
                 }
-                val cast = castFromNames(detail?.cast)
+                // Xtream itself normally supplies names only. Prefer the existing cached
+                // TVMaze enrichment when it found photos, then retain initials as the
+                // honest fallback when no image source exists.
+                val cast = decodeCast(state.metadata?.castJson).ifEmpty {
+                    castFromNames(detail?.cast)
+                }
                 if (cast.isNotEmpty()) {
                     Spacer(Modifier.height(14.dp))
                     Text(

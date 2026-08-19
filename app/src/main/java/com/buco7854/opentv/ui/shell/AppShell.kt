@@ -138,8 +138,6 @@ fun OpenTvDock(
                     )
                 }
             }
-            // Symmetry spacer matching the burger button.
-            Spacer(Modifier.width(48.dp))
         }
     }
 }

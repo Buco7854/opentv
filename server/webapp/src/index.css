@@ -204,18 +204,22 @@
     font: var(--type-body-large);
     -webkit-font-smoothing: antialiased;
   }
-  /* Slim, token-colored scrollbars everywhere (overlay panels included). */
-  * { scrollbar-width: thin; scrollbar-color: var(--c-scrollbar) transparent; }
-  ::-webkit-scrollbar { width: 10px; height: 10px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-corner { background: transparent; }
-  ::-webkit-scrollbar-thumb {
-    background: var(--c-scrollbar);
-    background-clip: padding-box;
-    border: 3px solid transparent;
-    border-radius: 999px;
+  /* Desktop pointers benefit from a stable narrow scrollbar. Touch browsers already
+     provide an overlay indicator while the user moves a list; styling it globally makes
+     horizontal selectors display a permanent bar on phones. */
+  @media (hover: hover) and (pointer: fine) {
+    * { scrollbar-width: thin; scrollbar-color: var(--c-scrollbar) transparent; }
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-corner { background: transparent; }
+    ::-webkit-scrollbar-thumb {
+      background: var(--c-scrollbar);
+      background-clip: padding-box;
+      border: 3px solid transparent;
+      border-radius: 999px;
+    }
+    ::-webkit-scrollbar-thumb:hover { background-color: var(--c-scrollbar-hover); background-clip: padding-box; }
   }
-  ::-webkit-scrollbar-thumb:hover { background-color: var(--c-scrollbar-hover); background-clip: padding-box; }
   /* `tabindex="-1"` marks a programmatic focus target - the screen region focused after a
      route change, a modal container - not something the user tabbed to. Ringing those
      paints a border around the whole screen after every navigation. */
@@ -266,7 +270,9 @@
     background: color-mix(in srgb, var(--c-bg) 88%, transparent);
     border-top: 1px solid var(--c-hairline);
   }
-  .dock .apps { @apply mx-auto flex items-center justify-center gap-1; }
+  /* The menu owns the left slot. Content actions center in the space that remains,
+     instead of reserving an empty fake-menu slot on the right. */
+  .dock .apps { @apply min-w-0 flex flex-1 items-center justify-center gap-1; }
   .dock-btn {
     @apply relative inline-flex h-12 min-w-12 flex-none items-center justify-center
            rounded-[10px] px-3 text-on-surface-variant transition-colors duration-100;
@@ -331,10 +337,19 @@
   .panel-row .actions, .row .actions { @apply flex flex-none items-center; }
   .panel-row .actions .icon-btn { @apply size-9; }
   .panel-row .actions .icon-btn .icon { @apply size-[18px]; }
-  .panel-row-group { @apply flex items-center gap-1; }
+  .panel-row-group {
+    @apply flex items-center gap-1 rounded-[10px] transition-colors duration-100;
+  }
+  .panel-row-group.selected { background: var(--c-listsel); }
+  .panel-row-group.selected > .panel-row { background: transparent; }
   .panel-row-group > .panel-row { @apply min-w-0 flex-1; }
   .panel-row-group > .icon-btn { @apply size-9 flex-none; }
   .panel-row-group > .icon-btn .icon { @apply size-[18px]; }
+  .panel-section-label {
+    @apply px-3 pt-3 pb-1 text-on-surface-variant uppercase;
+    font: var(--type-label-small);
+    letter-spacing: 0.5px;
+  }
 
   /* ================================================================ */
   /* 3. PRIMITIVES                                                     */

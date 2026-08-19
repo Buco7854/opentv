@@ -124,8 +124,6 @@ export function Dock() {
                       active={pathname.startsWith('/search/')}
                       onClick={() => navigate(`/search/${active}`)} />
         </div>
-        {/* Symmetry spacer opposite the burger. */}
-        <div className="w-12 flex-none" />
       </nav>
 
       {panelOpen && (
@@ -200,10 +198,10 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
                 })
               : t('playlists.metaNever', { count: p.channelCount });
             return (
-              <div key={p.id} className="panel-row-group">
+              <div key={p.id} className={`panel-row-group${p.id === activeId ? ' selected' : ''}`}>
                 <button
                   type="button"
-                  className={`panel-row${p.id === activeId ? ' selected' : ''}`}
+                  className="panel-row"
                   aria-current={p.id === activeId ? 'true' : undefined}
                   onClick={() => open(p)}
                 >
@@ -230,6 +228,7 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
           })}
           <div className="panel-aux">
             <div className="divider mx-1 my-2" />
+            <div className="panel-section-label">{t('nav.library')}</div>
             <button className="panel-row" onClick={() => { onClose(); navigate('/downloads'); }}>
               <Icon name="download" />
               <div className="body">
@@ -238,6 +237,7 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
             </button>
             {admin && (
               <>
+                <div className="panel-section-label">{t('nav.server')}</div>
                 <button className="panel-row" onClick={() => { onClose(); navigate('/sessions'); }}>
                   <Icon name="activity" />
                   <div className="body"><div className="name">{t('nav.activity')}</div></div>
@@ -248,6 +248,7 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
                 </button>
               </>
             )}
+            <div className="panel-section-label">{t('nav.account')}</div>
             <button className="panel-row" onClick={() => { onClose(); navigate('/settings'); }}>
               <Icon name="settings" />
               <div className="body"><div className="name">{t('nav.settings')}</div></div>

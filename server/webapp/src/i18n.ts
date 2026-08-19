@@ -59,6 +59,9 @@ const en = {
   'nav.playlists': 'Playlists',
   'nav.activity': 'Now watching',
   'nav.logout': 'Sign out',
+  'nav.library': 'Library',
+  'nav.server': 'Server',
+  'nav.account': 'Account',
 
   'pager.page': 'Page {page} of {pages}',
   'pager.prev': 'Previous page',
@@ -442,6 +445,9 @@ const fr: Catalog = {
   'nav.playlists': 'Playlists',
   'nav.activity': 'En lecture',
   'nav.logout': 'Se déconnecter',
+  'nav.library': 'Bibliothèque',
+  'nav.server': 'Serveur',
+  'nav.account': 'Compte',
 
   'pager.page': 'Page {page} sur {pages}',
   'pager.prev': 'Page précédente',

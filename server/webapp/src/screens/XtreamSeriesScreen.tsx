@@ -2,7 +2,7 @@
 
 import { useNavigate, useParams } from 'react-router';
 import { api, ChannelKind } from '../api';
-import { castFromNames, CastRow } from '../components/CastRow';
+import { castFromNames, CastRow, decodeCast } from '../components/CastRow';
 import { asyncFallback, FavoriteIcon, Pill } from '../components/Common';
 import { ScreenHeader } from '../components/Primitives';
 import { useAsync, useFavorites } from '../hooks';
@@ -15,7 +15,11 @@ export function XtreamSeriesScreen() {
   const playlistId = Number(pid);
   const seriesId = sid ?? '';
   const navigate = useNavigate();
-  const request = useAsync(() => api.xseries(playlistId, seriesId), [playlistId, seriesId]);
+  const request = useAsync(async () => {
+    const detail = await api.xseries(playlistId, seriesId);
+    const metadata = await api.meta('series', detail.series.name).catch(() => null);
+    return { ...detail, metadata };
+  }, [playlistId, seriesId]);
   const { favoriteContentIds, toggleFavorite } = useFavorites(playlistId);
 
   const pending = asyncFallback(request);
@@ -28,8 +32,9 @@ export function XtreamSeriesScreen() {
     );
   }
 
-  const { series, episodes, error } = request.data!;
-  const cast = castFromNames(series.castNames);
+  const { series, episodes, error, metadata } = request.data!;
+  const enrichedCast = decodeCast(metadata?.castJson ?? null);
+  const cast = enrichedCast.length > 0 ? enrichedCast : castFromNames(series.castNames);
 
   return (
     <>

@@ -138,6 +138,7 @@ fun HubSettingsScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             if (hub == null) return@Column
+            val signedOut = hub.userId == null
 
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
@@ -161,6 +162,32 @@ fun HubSettingsScreen(
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodyMedium,
                 )
+            }
+
+            // Session/removal actions belong to the server identity above, not below every
+            // browser handoff and download preference. Keeping them here makes them visible
+            // without discovering that the page continues below the fold.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (!signedOut) {
+                    OtvTextButton(
+                        // The sign-out must outlive this composition: leaving would otherwise
+                        // cancel it before the local session is forgotten.
+                        onClick = {
+                            graph.applicationScope.launch { accounts.signOut(hubId) }
+                            onBack()
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) { Text(stringResource(R.string.hub_sign_out)) }
+                }
+                OtvTextButton(
+                    onClick = { confirmRemove = true },
+                    enabled = !removing,
+                    danger = true,
+                    modifier = Modifier.weight(1f),
+                ) { Text(stringResource(R.string.hub_remove)) }
             }
 
             Card(modifier = Modifier.fillMaxWidth()) {
@@ -196,7 +223,6 @@ fun HubSettingsScreen(
 
             // Every entry below needs a session. Signed out, they would open the server's
             // login page instead of the page they name, so offer signing in and nothing else.
-            val signedOut = hub.userId == null
             if (signedOut) {
                 OtvButton(onClick = onSignIn, modifier = Modifier.fillMaxWidth()) {
                     Text(stringResource(R.string.hub_sign_in_again))
@@ -229,25 +255,6 @@ fun HubSettingsScreen(
                     }
                 }
             }
-
-            HorizontalDivider()
-            if (!signedOut) {
-                OtvTextButton(
-                    // The sign-out must outlive this composition: leaving would otherwise
-                    // cancel it before the local session is forgotten.
-                    onClick = {
-                        graph.applicationScope.launch { accounts.signOut(hubId) }
-                        onBack()
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text(stringResource(R.string.hub_sign_out)) }
-            }
-            OtvTextButton(
-                onClick = { confirmRemove = true },
-                enabled = !removing,
-                danger = true,
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text(stringResource(R.string.hub_remove)) }
         }
     }
 
