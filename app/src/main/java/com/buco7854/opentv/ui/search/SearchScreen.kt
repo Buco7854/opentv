@@ -47,9 +47,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
@@ -357,6 +361,7 @@ fun SearchScreen(
     val guideIds by viewModel.guideIds.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val focusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
     val resources = LocalResources.current
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -409,6 +414,10 @@ fun SearchScreen(
                     }
                 },
                 singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(
+                    onSearch = { keyboardController?.hide() },
+                ),
                 shape = RoundedCornerShape(16.dp),
                 modifier = Modifier
                     .fillMaxWidth()

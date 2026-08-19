@@ -117,6 +117,46 @@ class ContentIdentityServiceTest {
     }
 
     @Test
+    fun browsingRebindsAnEpisodeAfterItsCacheRowIsReplaced() =
+        withServices { service, storage, playlistId, _ ->
+            val seriesKey = "xs:42"
+            val episodeUrl = "https://provider.example/series/u/p/9001.mp4"
+            val episode = channel(playlistId, 0, 9001).copy(
+                name = "Episode One",
+                url = episodeUrl,
+                kind = ChannelKind.SERIES,
+                seriesKey = seriesKey,
+                season = 1,
+                episode = 1,
+                xtreamStreamId = null,
+            )
+            // Keep a later row alive so SQLite cannot reuse the deleted episode's id; the test
+            // must prove a refresh-generation pointer actually changed.
+            storage.channels.insertAll(listOf(episode, channel(playlistId, 0, 9999)))
+            val before = requireNotNull(storage.channels.getByUrl(playlistId, episodeUrl))
+            val identity = service.channel(before)
+
+            storage.channels.deleteEpisodes(playlistId, seriesKey)
+            storage.channels.insertAll(listOf(episode.copy(name = "Episode One (updated)")))
+            val after = requireNotNull(storage.channels.getByUrl(playlistId, episodeUrl))
+            assertTrue(after.id != before.id)
+
+            val rebound = service.channel(after)
+
+            assertEquals(identity.contentId, rebound.contentId)
+            assertEquals(after.id, rebound.currentChannelId)
+            assertEquals(
+                after.id,
+                service.requireChannel(identity.contentId).second.id,
+                "playback and download admission must resolve the replacement episode row",
+            )
+            assertEquals(
+                "Episode One (updated)",
+                service.titlesByContentId(listOf(identity.contentId))[identity.contentId],
+            )
+        }
+
+    @Test
     fun titles_are_resolved_with_one_channel_batch_and_missing_channels_are_absent() = runTest {
         val dir = Files.createTempDirectory("content-title-resolution")
         val persistence = createOpenTvServerStorage(dir.resolve("opentv.db").toString())

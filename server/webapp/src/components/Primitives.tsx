@@ -331,7 +331,11 @@ export function SearchField({ placeholder, value, onChange, autoFocus }: {
   return (
     <div className="search-wrap">
       <div className="field round">
-        <input type="search" value={value} placeholder={placeholder} aria-label={placeholder}
+        {/* type=search adds a browser-owned cancel button in Chromium/WebKit. We already own
+            the accessible clear action below, so use search input semantics without asking
+            the browser to paint a second X. */}
+        <input type="text" role="searchbox" inputMode="search" enterKeyHint="search"
+               value={value} placeholder={placeholder} aria-label={placeholder}
                autoFocus={autoFocus} onChange={(e) => onChange(e.target.value)} />
         <Icon name="search" />
         {value && <IconBtn className="muted clear" name="close" label={t('common.clear')} onClick={() => onChange('')} />}

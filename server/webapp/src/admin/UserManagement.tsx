@@ -209,21 +209,30 @@ function ProfileSection({
 }) {
   const [username, setUsername] = useState(user.username);
   const [displayName, setDisplayName] = useState(user.displayName);
-  const [role, setRole] = useState(user.manualRole);
+  // An identity-provider mapping may elevate a manually managed USER to ADMIN. The account
+  // list shows the effective role, so opening that account must not make the selector appear
+  // to demote it. Keep an externally managed role read-only: sending ADMIN merely because the
+  // form was saved would silently turn that temporary mapping into a permanent manual role.
+  const [role, setRole] = useState(user.effectiveRole);
   const [status, setStatus] = useState(user.status);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setUsername(user.username);
     setDisplayName(user.displayName);
-    setRole(user.manualRole);
+    setRole(user.effectiveRole);
     setStatus(user.status);
-  }, [user.id, user.username, user.displayName, user.manualRole, user.status]);
+  }, [user.id, user.username, user.displayName, user.effectiveRole, user.status]);
 
   const save = async () => {
     setSaving(true);
     try {
-      onChanged(await adminApi.updateUser(user.id, { username, displayName, role, status }));
+      onChanged(await adminApi.updateUser(user.id, {
+        username,
+        displayName,
+        status,
+        ...(role === user.effectiveRole ? {} : { role }),
+      }));
       reportSuccess(c('userSaved'));
     } catch (error) {
       reportAdminError(error);
@@ -235,9 +244,10 @@ function ProfileSection({
   // An administrator cannot demote, disable or delete their own account - the server
   // refuses all three. Offering them and then explaining the refusal is worse than not
   // offering them: another administrator remains the way out.
-  const ownAdminAccount = self && user.manualRole === 'ADMIN';
-  const roleOptions: [AdminUser['manualRole'], string][] = ownAdminAccount
-    ? [['ADMIN', c('administrator')]]
+  const externallyManagedRole = user.manualRole !== user.effectiveRole;
+  const ownAdminAccount = self && user.effectiveRole === 'ADMIN';
+  const roleOptions: [AdminUser['manualRole'], string][] = ownAdminAccount || externallyManagedRole
+    ? [[user.effectiveRole, roleLabel(user.effectiveRole)]]
     : [['USER', c('user')], ['ADMIN', c('administrator')]];
   const statusOptions = user.settableStatuses.filter((value) => !(self && value === 'DISABLED'));
 
@@ -249,7 +259,7 @@ function ProfileSection({
           <TextField label={c('username')} value={username} onChange={setUsername} />
           <TextField label={c('displayName')} value={displayName} onChange={setDisplayName} />
           <SelectField
-            label={c('manualRole')}
+            label={c('role')}
             options={roleOptions}
             selected={role}
             onSelect={setRole}

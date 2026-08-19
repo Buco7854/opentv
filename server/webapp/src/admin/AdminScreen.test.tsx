@@ -81,7 +81,7 @@ describe('AdminScreen', () => {
     await settled();
 
     fireEvent.click(screen.getByText('Root'));
-    fireEvent.click(screen.getByRole('button', { name: 'Manual role' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Role' }));
     expect(screen.queryByRole('option', { name: 'User' })).toBeNull();
     fireEvent.keyDown(document, { key: 'Escape' });
 
@@ -90,6 +90,35 @@ describe('AdminScreen', () => {
     fireEvent.keyDown(document, { key: 'Escape' });
 
     expect(screen.queryByRole('button', { name: 'Delete user' })).toBeNull();
+  });
+
+  it('shows an identity-provider administrator as administrator without persisting the mapping', async () => {
+    const mappedAdmin: AdminUser = {
+      ...signedInAccount,
+      id: 'mapped-1',
+      username: 'mapped',
+      displayName: 'Mapped Admin',
+      manualRole: 'USER',
+      effectiveRole: 'ADMIN',
+    };
+    vi.mocked(adminApi.users).mockResolvedValue([signedInAccount, mappedAdmin]);
+    vi.mocked(adminApi.updateUser).mockResolvedValue(mappedAdmin);
+    render(<AdminScreen />);
+    await settled();
+
+    fireEvent.click(screen.getByText('Mapped Admin'));
+    const role = screen.getByRole('button', { name: 'Role' });
+    expect(role.textContent).toContain('Administrator');
+    fireEvent.click(role);
+    expect(screen.queryByRole('option', { name: 'User' })).toBeNull();
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await settled();
+    expect(adminApi.updateUser).toHaveBeenCalledWith(
+      'mapped-1',
+      expect.not.objectContaining({ role: expect.anything() }),
+    );
   });
 
   it('explains disabled local provisioning and hides actions the server will refuse', async () => {

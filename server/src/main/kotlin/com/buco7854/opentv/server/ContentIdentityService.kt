@@ -387,15 +387,35 @@ class ContentIdentityService(
         if (wanted.isEmpty()) return@withStablePlaylist emptyMap()
         val known = lookup(playlistId, wanted)
         val missing = wanted.filterNot { it in known }
-        if (missing.isEmpty()) return@withStablePlaylist known
-        val now = clock()
-        val created = reconciliation.withLock {
-            db.content().insertAll(
-                missing.map { newIdentity(playlistId, it, channelIdFor(it), now) },
-            )
-            lookup(playlistId, missing)
+        val stale = known.any { (key, row) ->
+            channelIdFor(key)?.let { row.currentChannelId != it || row.retired } == true
         }
-        known + created
+        if (missing.isEmpty() && !stale) return@withStablePlaylist known
+        val now = clock()
+        reconciliation.withLock {
+            // A browse can follow a partial catalog rewrite such as Xtream episode refresh:
+            // the provider identity is stable, but Room assigned the returned item a new row
+            // id. Reusing the content id without rebinding that pointer makes a present item
+            // look retired everywhere that resolves by contentId (progress, detail, playback).
+            val current = lookup(playlistId, wanted)
+            val stillMissing = wanted.filterNot { it in current }
+            db.content().insertAll(
+                stillMissing.map { newIdentity(playlistId, it, channelIdFor(it), now) },
+            )
+            val resolved = lookup(playlistId, wanted)
+            val rebound = resolved.mapNotNull { (key, row) ->
+                val channelId = channelIdFor(key) ?: return@mapNotNull null
+                row.takeIf { it.currentChannelId != channelId || it.retired }
+                    ?.reconciled(channelId, row.lastSeenAtMs, advanceGeneration = false)
+            }
+            db.writeContentIdentityReconciliation(
+                inserts = emptyList(),
+                updates = rebound,
+                playlistId = playlistId,
+                retireMissingBeforeMs = null,
+            )
+            lookup(playlistId, wanted)
+        }
     }
 
     private suspend fun readIdentities(

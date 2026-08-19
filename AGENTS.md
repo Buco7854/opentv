@@ -453,8 +453,9 @@ absent from the initial bundle.
   migration for local content must update all three together rather than piecemeal.
 - `ContentIdentityService` has two paths and they are not interchangeable.
   Reconciliation owns `lastSeenAtMs` and retirement and may scan a playlist;
-  browsing resolves by fingerprint in batches, creates only what is missing, and
-  never writes `lastSeenAtMs`. A read path that scans or touches it is a bug.
+  browsing resolves by fingerprint in batches, creates what is missing, rebinds a
+  stable identity when a partial catalog refresh gave its item a new channel row id,
+  and never writes `lastSeenAtMs`. A read path that scans is a bug.
 
 ## Build facts
 

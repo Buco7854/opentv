@@ -19,6 +19,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
@@ -57,9 +59,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -777,6 +781,7 @@ internal fun browseListLoading(
 /** Compact filter field for the browse content area. */
 @Composable
 private fun FilterField(value: String, onValueChange: (String) -> Unit, placeholder: String) {
+    val keyboardController = LocalSoftwareKeyboardController.current
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
@@ -790,6 +795,8 @@ private fun FilterField(value: String, onValueChange: (String) -> Unit, placehol
             }
         },
         singleLine = true,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        keyboardActions = KeyboardActions(onSearch = { keyboardController?.hide() }),
         shape = RoundedCornerShape(16.dp),
         modifier = Modifier
             .fillMaxWidth()
