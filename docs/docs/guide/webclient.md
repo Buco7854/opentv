@@ -45,16 +45,13 @@ most one of them, and many files play on the browser's own video element without
 so each is fetched only when a stream turns out to need it, alongside the calls that open
 that stream.
 
-For a solo live HLS channel, Chromium can sometimes decode the video but reject its
-audio track, leaving a moving but silent picture. The player checks the exact codec
-HLS.js parsed. AC-3, E-AC-3, DTS and other formats outside the browser baseline are
-normalized even when Chromium incorrectly reports that it supports them. The server
-player also watches Chromium's decoded-audio counter because provider manifests can omit or
-mislabel the codec. If the picture advances without a single decoded audio byte, the
-server keeps the video bit-for-bit and converts that audio track to AAC. This fallback
-does not run for a stream whose audio is already being decoded. It replaces the original
-provider read instead of opening another one, so it also works when the subscription allows
-only one simultaneous connection.
+Browsers can render the video of a live channel while silently dropping its audio. This happens
+in both Chromium and Firefox, and neither browser codec claims nor provider HLS metadata reliably
+predicts it. When ffmpeg is installed, every solo live browser stream therefore starts on the
+compatible server transport: the video is copied bit-for-bit while the first audio track is
+converted to 192-kbit stereo AAC. It replaces the original provider read instead of opening
+another one, so it also works when the subscription allows only one simultaneous connection.
+Without ffmpeg, the browser falls back to the original stream.
 
 Reloading a solo player replaces the previous lease from that browser tab before the
 new one starts. This releases the old provider connection immediately instead of making
