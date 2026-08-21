@@ -824,7 +824,7 @@ class StreamingPipelineReviewTest {
         assertFalse(processes.single().isAlive)
         val ffmpeg = commands.single()
         assertEquals("aac", ffmpeg[ffmpeg.indexOf("-c:a") + 1])
-        assertEquals("192k", ffmpeg[ffmpeg.indexOf("-b:a") + 1])
+        assertEquals("256k", ffmpeg[ffmpeg.indexOf("-b:a") + 1])
         assertTrue(commands.none { it.first() == "ffprobe" })
     }
 
@@ -896,6 +896,7 @@ class StreamingPipelineReviewTest {
             }
             val ffmpeg = commands.first { it.first() == "ffmpeg" }
             assertEquals("aac", ffmpeg[ffmpeg.indexOf("-c:a") + 1])
+            assertEquals("256k", ffmpeg[ffmpeg.indexOf("-b:a") + 1])
             assertTrue(
                 ffmpeg.windowed(2).contains(listOf("-map", "0:a:0?")),
                 "the relay probed a:0 but allowed ffmpeg to auto-select a different audio track",

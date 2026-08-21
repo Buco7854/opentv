@@ -16,10 +16,9 @@ import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
 
 /**
- * Browser-audio rescue: copies video and remuxes to MPEG-TS while always encoding audio
- * as AAC. The caller reaches this path only after the ordinary engine could not produce
- * sound, so probing and then trusting that same browser capability again would preserve
- * the failure and add latency. One process per viewer.
+ * Browser-live compatibility path: copies video and remuxes to MPEG-TS while always
+ * encoding audio as AAC. Solo web playback selects this path up front when ffmpeg is
+ * available, avoiding browser and manifest capability guesses. One process per viewer.
  */
 class AudioTranscoder(
     private val http: ServerHttp,
@@ -59,7 +58,7 @@ class AudioTranscoder(
                 "-map", "0:v:0?", "-map", "0:a:0?",
                 "-c:v", "copy",
                 "-c:a", "aac",
-                "-ac", "2", "-b:a", "192k",
+                "-ac", "2", "-b:a", LIVE_AAC_BITRATE,
             )
             command += listOf("-f", "mpegts", "-")
 

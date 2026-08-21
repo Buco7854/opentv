@@ -192,7 +192,7 @@ absent from the initial bundle.
   on the lease-scoped `/transcode` transport on every browser and for every live source kind.
   Browser codec claims, HLS manifest metadata, and Chromium's decoded-audio counter all proved
   insufficient: affected sources can render a silent picture in both Chromium and Firefox.
-  ffmpeg always copies video bit-for-bit and encodes the first audio track as 192-kbit stereo AAC;
+  ffmpeg always copies video bit-for-bit and encodes the first audio track as 256-kbit stereo AAC;
   no ffmpeg installation falls back to the original transport. This is a one-way
   transport replacement for that lease: the server marks rescue active, closes the old proxy
   body, releases its provider-budget seat, and only then admits ffmpeg under the rescue key.

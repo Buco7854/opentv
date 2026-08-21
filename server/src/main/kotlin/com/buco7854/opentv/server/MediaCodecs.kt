@@ -3,6 +3,9 @@ package com.buco7854.opentv.server
 import com.buco7854.opentv.contract.*
 import java.security.MessageDigest
 
+/** Quality target for browser-compatible live audio; VOD keeps its own remux policy. */
+internal const val LIVE_AAC_BITRATE = "256k"
+
 /** The codecs a playback lease says it can decode without server-side normalization. */
 internal data class MediaCapabilities(
     val video: Set<String>,

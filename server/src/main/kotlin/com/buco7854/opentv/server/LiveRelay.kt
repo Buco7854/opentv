@@ -203,7 +203,7 @@ class LiveRelay(
                     "-map", "0:v:0?", "-map", "0:a:0?",
                     "-c:v", "copy", "-c:a", audio,
                 )
-                if (audio == "aac") cmd += listOf("-b:a", "192k")
+                if (audio == "aac") cmd += listOf("-b:a", LIVE_AAC_BITRATE)
                 cmd += listOf("-f", "mpegts", "-mpegts_flags", "+resend_headers", "-flush_packets", "1", "pipe:1")
                 val process = synchronized(lifecycle) {
                     if (dead) throw CancellationException("Relay was retired")
