@@ -49,10 +49,12 @@ For a solo live HLS channel, Chromium can sometimes decode the video but reject 
 audio track, leaving a moving but silent picture. The player checks the exact codec
 HLS.js parsed. AC-3, E-AC-3, DTS and other formats outside the browser baseline are
 normalized even when Chromium incorrectly reports that it supports them. The server
-also watches Chromium's decoded-audio counter because provider manifests can omit or
+player also watches Chromium's decoded-audio counter because provider manifests can omit or
 mislabel the codec. If the picture advances without a single decoded audio byte, the
 server keeps the video bit-for-bit and converts that audio track to AAC. This fallback
-does not run for a stream whose audio is already being decoded.
+does not run for a stream whose audio is already being decoded. It replaces the original
+provider read instead of opening another one, so it also works when the subscription allows
+only one simultaneous connection.
 
 Reloading a solo player replaces the previous lease from that browser tab before the
 new one starts. This releases the old provider connection immediately instead of making
