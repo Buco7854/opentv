@@ -430,7 +430,12 @@ export function usePlaybackEngine(opts: {
           setError(t('player.failedDetail', { detail: data.details || data.type }));
         }
       });
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      hls.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
+        const advertisedAudio = data.audioTracks[0]?.audioCodec
+          ?? data.levels[data.firstLevel]?.audioCodec;
+        if (advertisedAudio && rescueUnsupportedAudio({
+          container: 'audio/mp4', codec: advertisedAudio,
+        })) return;
         readHlsTracks(hls);
         markPlaying();
       });

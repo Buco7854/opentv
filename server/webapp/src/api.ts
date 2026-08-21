@@ -349,6 +349,7 @@ export interface Download {
 export interface PlaybackCreateRequest {
   contentId: string;
   mode?: 'play' | 'catchup' | 'download';
+  clientInstanceId?: string;
   catchupStartMs?: number;
   catchupDurationMs?: number;
   downloadId?: string;

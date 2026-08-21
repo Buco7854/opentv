@@ -57,6 +57,8 @@ data class ClientCapabilitiesDto(
 data class PlaybackCreateRequest(
     val contentId: String,
     val mode: String = "play",
+    /** Stable for one browser tab across reloads; null for clients that close leases reliably. */
+    val clientInstanceId: String? = null,
     val catchupStartMs: Long? = null,
     val catchupDurationMs: Long? = null,
     val downloadId: String? = null,

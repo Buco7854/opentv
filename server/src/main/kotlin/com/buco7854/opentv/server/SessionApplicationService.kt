@@ -75,6 +75,13 @@ class SessionApplicationService(
             "Invalid download id"
         }
         require(request.mode in setOf("play", "catchup", "download")) { "Unknown playback mode" }
+        val clientInstanceId = request.clientInstanceId
+        require(
+            clientInstanceId == null ||
+                clientInstanceId.length in 16..64 && clientInstanceId.all {
+                    it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it == '-' || it == '_'
+                },
+        ) { "Invalid playback client instance" }
         val (identity, resolvedChannel) = content.resolve(request.contentId)
         val channel = resolvedChannel ?: if (request.mode == "download") null
             else throw ResourceNotFound("content", "Content is unavailable")
@@ -108,6 +115,7 @@ class SessionApplicationService(
             actor, identity.playlistId, identity.contentId, sourceUrl, client.ip, client.userAgent,
             MediaCapabilities.from(request.capabilities),
             liveSource = request.mode == "play" && channel?.kind == ChannelKind.LIVE,
+            clientInstanceId = clientInstanceId,
         )
         val grant = mediaGrants.issue(actor, lease.id)
         val remote = sourceUrl.startsWith("http://") || sourceUrl.startsWith("https://")

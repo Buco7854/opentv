@@ -188,11 +188,12 @@ absent from the initial bundle.
   panel; `AccountRepository` locks per playlist and answers with stale data rather than
   queueing behind an in-flight request. The same rule applies to the panel EPG in
   `XtreamRepository.guideFor`, which falls back to stored XMLTV.
-- A solo browser live-HLS player listens for HLS.js's parsed audio SourceBuffer codec.
-  When Chromium's Media Source API rejects that exact container/codec pair, it changes
-  to the lease-scoped `/transcode` transport: ffmpeg copies video and normalizes only
-  the unsupported audio to AAC. Missing codec metadata does not trigger work, and a
-  shared-HLS room never opens a private rescue connection for one member.
+- A solo browser live-HLS player listens for HLS.js's parsed audio codec. An actual codec
+  outside the browser baseline (AC-3/E-AC-3/DTS, for example) changes to the lease-scoped
+  `/transcode` transport even when Chromium's Media Source API incorrectly claims support;
+  exact MSE support remains the fallback decision for baseline codecs. Ffmpeg copies video
+  and normalizes only unsupported audio to AAC. Missing codec metadata does not trigger work,
+  and a shared-HLS room never opens a private rescue connection for one member.
 - `MediaProbe.inspect` is single-flighted: a remote probe costs a provider connection on the
   path to playback, so two viewers of one title share the result. It probes with bounded
   `-analyzeduration`/`-probesize` first and re-probes unbounded only when that looks short.
@@ -220,10 +221,12 @@ absent from the initial bundle.
   commands, which orders WebSocket delivery against a delayed HTTP-heartbeat fallback without
   turning the queue into a reliable-delivery protocol.
 - Two leases carrying the same auth-session id are the same authenticated client for
-  watch-together discovery and duplicate-content admission. A browser reload may leave its old
-  lease alive until the best-effort unload or the reaper runs; it must not offer that page as a
-  peer or force the replacement page to co-watch with itself. A different auth session remains
-  another device even when it belongs to the same account.
+  watch-together discovery and duplicate-content admission. Each browser tab also sends a
+  non-secret, sessionStorage-backed client-instance id: creating its replacement solo lease
+  synchronously retires the previous solo lease and releases its provider seat before returning.
+  Room leases survive reload so the replacement page can explicitly rejoin the room. A stale
+  lease must never appear as a self peer, while a different auth session remains another device
+  even when it belongs to the same account.
 - Each room reload barrier has its own positive, monotonically increasing `generation`.
   `room-audio` and `room-go` carry it, `/playback/{id}/ready` requires
   `ReadyBody(generation)`, and stale/missing generations are ignored by the barrier rather than

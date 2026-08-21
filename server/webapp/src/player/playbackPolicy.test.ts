@@ -56,6 +56,16 @@ describe('HLS audio capability', () => {
     )).toBe(true);
   });
 
+  it('does not trust an MSE false-positive for audio outside the browser baseline', () => {
+    const mediaSource = { isTypeSupported: vi.fn(() => true) };
+
+    expect(hlsAudioNeedsServerNormalization(
+      { container: 'audio/mp4', codec: 'ec-3' },
+      mediaSource,
+    )).toBe(true);
+    expect(mediaSource.isTypeSupported).not.toHaveBeenCalled();
+  });
+
   it('does not transcode merely because a provider omitted codec metadata', () => {
     const mediaSource = { isTypeSupported: vi.fn(() => false) };
 

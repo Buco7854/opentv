@@ -74,6 +74,10 @@ export function hlsAudioNeedsServerNormalization(
   const codec = track.codec?.trim() || track.levelCodec?.trim();
   if (!codec) return false;
   const container = track.container?.trim() || 'audio/mp4';
+  // Chromium has returned true here for AC-3/E-AC-3 on devices which then decode no audio at
+  // all. The lease's browser capability baseline does not advertise those formats, so an
+  // actually parsed codec outside that baseline must be normalized even when MSE over-promises.
+  if (!/^(?:mp4a(?:\.|$)|aac$|mp3$|opus$|flac$|vorbis$)/i.test(codec)) return true;
   return !mediaSource.isTypeSupported(`${container}; codecs="${codec}"`);
 }
 

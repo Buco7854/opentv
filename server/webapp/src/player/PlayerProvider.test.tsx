@@ -63,6 +63,7 @@ describe('playback lease ownership', () => {
     await waitFor(() => expect(api.createPlayback).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(api.playbackHeartbeat).toHaveBeenCalled());
     expect(api.createPlayback).toHaveBeenLastCalledWith(expect.objectContaining({
+      clientInstanceId: expect.stringMatching(/^[A-Za-z0-9_-]{16,64}$/),
       capabilities: {
         videoCodecs: ['h264'],
         audioCodecs: ['aac', 'mp3', 'opus', 'flac', 'vorbis'],

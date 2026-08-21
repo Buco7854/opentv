@@ -126,8 +126,53 @@ class PlaybackSessionRegistryTest {
             reloadedPage.id,
             grants.validate(reloadedPage.id, grants.issue(browser, reloadedPage.id).token).id,
         )
-        // The best-effort page-unload request may still arrive and owns removal of its old lease.
+        // Clients without tab correlation keep the old lease until page unload or the reaper.
         assertEquals(previousPage.id, sessions.owned(browser, previousPage.id).id)
+        sessions.close()
+    }
+
+    @Test
+    fun browserReloadReleasesItsSoloLeaseBeforeReturningTheReplacement() {
+        val terminated = mutableListOf<String>()
+        val cleanup = object : PlaybackLeaseCleanup {
+            override fun memberLeaving(leaseId: String) = Unit
+            override fun shareGroupUnused(group: String) = Unit
+            override fun leaseTerminated(leaseId: String, unusedShareGroup: String?) {
+                terminated += leaseId
+            }
+        }
+        val sessions = PlaybackSessionRegistry(cleanup = cleanup, reapInBackground = false)
+        val browser = device("viewer", "one-browser-session", "Chrome")
+        val previousPage = sessions.create(
+            browser, 1, "movie", "https://example.test/movie.mkv", "", "",
+            clientInstanceId = "tab-instance-1234",
+        )
+        val otherSession = device("viewer", "another-browser-session", "Chrome")
+        val otherSessionPage = sessions.create(
+            otherSession, 1, "movie", "https://example.test/movie.mkv", "", "",
+            clientInstanceId = "tab-instance-1234",
+        )
+
+        val reloadedPage = sessions.create(
+            browser, 1, "movie", "https://example.test/movie.mkv", "", "",
+            clientInstanceId = "tab-instance-1234",
+        )
+
+        assertFailsWith<PlaybackRevokedException> {
+            sessions.owned(browser, previousPage.id)
+        }
+        assertEquals(listOf(previousPage.id), terminated)
+        assertEquals(reloadedPage.id, sessions.owned(browser, reloadedPage.id).id)
+        // The tab identifier is correlation, not authority: even an exact collision cannot
+        // revoke a lease authenticated by a different session.
+        assertEquals(otherSessionPage.id, sessions.owned(otherSession, otherSessionPage.id).id)
+
+        val otherTab = sessions.create(
+            browser, 1, "movie", "https://example.test/movie.mkv", "", "",
+            clientInstanceId = "other-instance-1234",
+        )
+        assertEquals(reloadedPage.id, sessions.owned(browser, reloadedPage.id).id)
+        assertEquals(otherTab.id, sessions.owned(browser, otherTab.id).id)
         sessions.close()
     }
 

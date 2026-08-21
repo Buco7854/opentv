@@ -28,6 +28,7 @@ import { useRemuxSession } from './useRemuxSession';
 import { usePlaybackEngine } from './usePlaybackEngine';
 import { useMediaElement } from './useMediaElement';
 import { usePlayerShortcuts } from './usePlayerShortcuts';
+import { playbackClientInstanceId } from './playbackInstance';
 import {
   PlayerControls, PlayerMenu, PlayerOverlays, useChromeVisibility,
 } from './PlayerChrome';
@@ -40,6 +41,7 @@ const PENDING_SEEK_TIMEOUT_MS = 8000;
 const CLIENT_CAPABILITIES = playbackCapabilities(
   typeof MediaSource === 'undefined' ? undefined : MediaSource,
 );
+const CLIENT_INSTANCE_ID = playbackClientInstanceId();
 
 const withMediaGrant = (lease: PlaybackLease, issued: MediaGrant): PlaybackLease => ({
   ...lease,
@@ -127,6 +129,7 @@ export function PlayerSurface(props: {
     api.createPlayback({
       contentId: request.contentId,
       mode: request.mode ?? 'play',
+      clientInstanceId: CLIENT_INSTANCE_ID,
       catchupStartMs: request.catchupStartMs,
       catchupDurationMs: request.catchupDurationMs,
       downloadId: request.downloadId,

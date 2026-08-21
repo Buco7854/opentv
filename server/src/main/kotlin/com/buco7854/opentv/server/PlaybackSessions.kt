@@ -58,6 +58,8 @@ class PlaybackSessionRegistry(
         val username: String,
         val displayName: String,
         val clientKind: String,
+        /** Tab-scoped correlation only; never an authorization identity. */
+        internal val clientInstanceId: String?,
         val playlistId: Long,
         val contentId: String,
         internal val sourceUrl: String,
@@ -139,18 +141,36 @@ class PlaybackSessionRegistry(
         userAgent: String,
         capabilities: MediaCapabilities = MediaCapabilities.BROWSER,
         liveSource: Boolean = false,
+        clientInstanceId: String? = null,
     ): Live {
         val now = clock.nowMs()
         val id = UUID.randomUUID().toString()
         check(startedOrder < Long.MAX_VALUE) { "Playback lease order exhausted" }
         val order = ++startedOrder
         val heartbeat = SessionHeartbeatDto(id = id)
-        return Live(
+        val live = Live(
             id, actor.userId, actor.authSessionId, actor.username, actor.displayName,
-            actor.clientKind, playlistId, contentId, sourceUrl, liveSource,
+            actor.clientKind, clientInstanceId, playlistId, contentId, sourceUrl, liveSource,
             ip, userAgent, heartbeat, now, order, now,
             capabilities,
-        ).also { sessions[id] = it }
+        )
+        // A page reload can start before its keepalive DELETE arrives. One tab can own only one
+        // solo player, so synchronously retire its previous lease and release the provider seat
+        // before returning the replacement. Never tear a room member down here: a reloaded room
+        // participant must explicitly rejoin the surviving peers.
+        if (clientInstanceId != null) {
+            sessions.values
+                .filter {
+                    it.userId == actor.userId &&
+                        it.authSessionId == actor.authSessionId &&
+                        it.clientInstanceId == clientInstanceId &&
+                        roomFor(it.id) == null
+                }
+                .map(Live::id)
+                .forEach(::remove)
+        }
+        sessions[id] = live
+        return live
     }
 
     fun owned(actor: Actor, id: String): Live {

@@ -10,6 +10,9 @@ type ErrorData = { fatal: boolean; type: string; details?: string; response?: { 
 type HlsEventData = ErrorData | {
   audio?: { container?: string; codec?: string; levelCodec?: string };
   tracks?: { audio?: { container?: string; codec?: string; levelCodec?: string } };
+  levels?: { audioCodec?: string }[];
+  audioTracks?: { audioCodec?: string }[];
+  firstLevel?: number;
 };
 type Handler = (event: string, data: HlsEventData) => void;
 
@@ -60,6 +63,13 @@ const { FakeHls, FakeMpegtsPlayer, createMpegtsPlayer } = vi.hoisted(() => {
     emitBufferCodecs(data: Exclude<HlsEventData, ErrorData>) {
       this.handlers.get(FakeHls.Events.BUFFER_CODECS)
         ?.forEach((handler) => handler(FakeHls.Events.BUFFER_CODECS, data));
+    }
+
+    emitManifestParsed(audioCodec?: string) {
+      this.handlers.get(FakeHls.Events.MANIFEST_PARSED)?.forEach((handler) => handler(
+        FakeHls.Events.MANIFEST_PARSED,
+        { levels: [{ audioCodec }], audioTracks: [], firstLevel: 0 },
+      ));
     }
   }
   class FakeMpegtsPlayer {
@@ -280,7 +290,9 @@ describe('hls playback engine', () => {
   });
 
   it('copies video and normalizes unsupported HLS audio to AAC on Chromium', async () => {
-    const isTypeSupported = vi.fn(() => false);
+    // This is the failure seen on the device: Chromium claims support, mounts the HLS video,
+    // then produces no audio for E-AC-3.
+    const isTypeSupported = vi.fn(() => true);
     vi.stubGlobal('MediaSource', { isTypeSupported });
     const hlsLease = {
       ...lease,
@@ -289,10 +301,10 @@ describe('hls playback engine', () => {
     };
     const { hls, actions } = await mountEngine(null, hlsLease, false, true);
 
-    hls.emitBufferCodecs({ audio: { container: 'audio/mp4', codec: 'ec-3' } });
+    hls.emitManifestParsed('ec-3');
     await act(async () => { await Promise.resolve(); });
 
-    expect(isTypeSupported).toHaveBeenCalledWith('audio/mp4; codecs="ec-3"');
+    expect(isTypeSupported).not.toHaveBeenCalled();
     expect(hls.destroy).toHaveBeenCalledOnce();
     expect(createMpegtsPlayer).toHaveBeenCalledWith(expect.objectContaining({
       url: hlsLease.transcodeUrl,
