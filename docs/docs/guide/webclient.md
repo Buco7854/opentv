@@ -49,7 +49,7 @@ Browsers can render the video of a live channel while silently dropping its audi
 in both Chromium and Firefox, and neither browser codec claims nor provider HLS metadata reliably
 predicts it. When ffmpeg is installed, every solo live browser stream therefore starts on the
 compatible server transport: the video is copied bit-for-bit while the first audio track is
-converted to 192-kbit stereo AAC. It replaces the original provider read instead of opening
+converted to 256-kbit stereo AAC. It replaces the original provider read instead of opening
 another one, so it also works when the subscription allows only one simultaneous connection.
 Without ffmpeg, the browser falls back to the original stream.
 
