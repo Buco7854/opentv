@@ -109,6 +109,46 @@ class PlaybackSessionRegistryTest {
     }
 
     @Test
+    fun browserReloadDoesNotOfferThePreviousPageAsAWatchTogetherPeer() {
+        val sessions = PlaybackSessionRegistry(reapInBackground = false)
+        val browser = device("viewer", "one-browser-session", "Chrome")
+        val previousPage = sessions.create(
+            browser, 1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        val reloadedPage = sessions.create(
+            browser, 1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        val grants = PlaybackMediaGrants(sessions)
+
+        assertTrue(sessions.sameContentPeers(reloadedPage.id, "movie").isEmpty())
+        assertEquals(null, sessions.sameAccountConflict(reloadedPage.id))
+        assertEquals(
+            reloadedPage.id,
+            grants.validate(reloadedPage.id, grants.issue(browser, reloadedPage.id).token).id,
+        )
+        // The best-effort page-unload request may still arrive and owns removal of its old lease.
+        assertEquals(previousPage.id, sessions.owned(browser, previousPage.id).id)
+        sessions.close()
+    }
+
+    @Test
+    fun anotherAuthSessionStillRepresentsAnotherDevice() {
+        val sessions = PlaybackSessionRegistry(reapInBackground = false)
+        val first = sessions.create(
+            device("viewer", "phone-session", "Phone"),
+            1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+        val second = sessions.create(
+            device("viewer", "browser-session", "Browser"),
+            1, "movie", "https://example.test/movie.mkv", "", "",
+        )
+
+        assertEquals(listOf(first.id), sessions.sameContentPeers(second.id, "movie").map { it.id })
+        assertEquals(first.id, sessions.sameAccountConflict(second.id)?.id)
+        sessions.close()
+    }
+
+    @Test
     fun thirdOwnDeviceJoinCollapsesEveryDuplicateLeaseIntoOneAdmittedRoom() {
         val sessions = PlaybackSessionRegistry(reapInBackground = false)
         val phoneActor = device("viewer", "phone-auth", "Phone")

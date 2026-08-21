@@ -245,6 +245,10 @@ class PlaybackSessionRegistry(
         return active().filter {
             it.id != selfId &&
                 it.id !in terminating &&
+                // Browser reloads create a replacement lease under the same auth session while
+                // the unload DELETE for the previous page is best-effort. That stale copy is the
+                // same browser, not somebody the viewer can watch together with.
+                it.authSessionId != self.authSessionId &&
                 it.playbackIdentity == self.playbackIdentity
         }
     }
@@ -263,6 +267,7 @@ class PlaybackSessionRegistry(
             other.startedOrder < self.startedOrder &&
                 other.id !in terminating &&
                 other.userId == self.userId &&
+                other.authSessionId != self.authSessionId &&
                 other.playbackIdentity == self.playbackIdentity &&
                 (selfRoom == null || memberRoom[other.id] != selfRoom) &&
                 other.authSessionId !in (selfRoomExclusions ?: emptySet())
@@ -404,6 +409,7 @@ class PlaybackSessionRegistry(
             other.startedOrder < requester.startedOrder &&
                 other.id !in terminating &&
                 other.userId == requester.userId &&
+                other.authSessionId != requester.authSessionId &&
                 other.playbackIdentity == requester.playbackIdentity &&
                 (roomId == null || memberRoom[other.id] != roomId) &&
                 other.authSessionId !in (

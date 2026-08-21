@@ -6,10 +6,12 @@ import com.buco7854.opentv.core.storage.HubSourceStore
 import com.buco7854.opentv.core.util.nowMs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -42,6 +44,7 @@ class HubClient(
     private val lifecycleLock = Any()
     private var healthOperation = 0L
     private var credentialGeneration = 0L
+    private var unauthorizedNotifiedGeneration: Long? = null
 
     val baseUrl: String get() = source.baseUrl
     val isSignedIn: Boolean get() = vault.token(id) != null
@@ -54,6 +57,7 @@ class HubClient(
         synchronized(lifecycleLock) {
             healthOperation++
             credentialGeneration++
+            unauthorizedNotifiedGeneration = null
             vault.store(id, token)
             healthState.value = HubHealth.REACHABLE
         }
@@ -63,6 +67,7 @@ class HubClient(
         synchronized(lifecycleLock) {
             healthOperation++
             credentialGeneration++
+            unauthorizedNotifiedGeneration = null
             vault.clear(id)
             healthState.value = HubHealth.SIGNED_OUT
         }
@@ -165,6 +170,8 @@ class HubClient(
 
     private fun clearIdentityIfCredentialsCurrent(generation: Long): Boolean = synchronized(lifecycleLock) {
         if (credentialGeneration != generation) return@synchronized false
+        if (unauthorizedNotifiedGeneration == generation) return@synchronized false
+        unauthorizedNotifiedGeneration = generation
         source = source.copy(
             userId = null,
             username = null,
@@ -193,6 +200,16 @@ class HubRegistry(
 ) {
     private val clients = mutableMapOf<Long, HubClient>()
     private val mutationMutex = Mutex()
+    private val reauthenticationChannel = Channel<Long>(Channel.BUFFERED)
+
+    /**
+     * A current session was rejected and needs an interactive sign-in.
+     *
+     * This carries only the local hub row id, never a bearer. A buffered channel preserves a
+     * cold-start 401 until the shell collector exists, and [HubClient]'s credential-generation
+     * guard emits at most once for one expired credential even when several screens fail together.
+     */
+    val reauthenticationRequests: Flow<Long> = reauthenticationChannel.receiveAsFlow()
 
     fun observeAll(): Flow<List<HubSource>> = store.observeAll()
 
@@ -214,16 +231,14 @@ class HubRegistry(
             clients.remove(hubId)
             null
         } else {
-            clients.getOrPut(hubId) {
-                HubClient(hubId, source, api, vault) { client, generation ->
-                    mutationMutex.withLock {
-                        if (client.isCurrentCredentialGeneration(generation)) store.clearIdentity(hubId)
-                    }
-                }
-            }
+            clients.getOrPut(hubId) { newClient(hubId, source) }
                 .also { it.source = source }
         }
     }
+
+    /** Discards a buffered 401 signal if reauthentication already replaced that credential. */
+    suspend fun needsReauthentication(hubId: Long): Boolean =
+        clientFor(hubId)?.health?.value == HubHealth.SIGNED_OUT
 
     /** Adds a connection and vaults the token from a completed sign-in. */
     suspend fun add(name: String, baseUrl: String, token: String): HubClient {
@@ -262,13 +277,7 @@ class HubRegistry(
         mutationMutex.withLock {
             val source = store.get(hubId)
                 ?: throw NoSuchElementException("hub $hubId no longer exists")
-            val client = clients.getOrPut(hubId) {
-                HubClient(hubId, source, api, vault) { client, generation ->
-                    mutationMutex.withLock {
-                        if (client.isCurrentCredentialGeneration(generation)) store.clearIdentity(hubId)
-                    }
-                }
-            }
+            val client = clients.getOrPut(hubId) { newClient(hubId, source) }
             val previousToken = vault.token(hubId)
             try {
                 client.storeToken(token)
@@ -366,6 +375,22 @@ class HubRegistry(
 
     /** The unauthenticated API, for probing a URL before any hub row exists. */
     val discovery: HubApi get() = api
+
+    private fun newClient(hubId: Long, source: HubSource) =
+        HubClient(hubId, source, api, vault) { client, generation ->
+            mutationMutex.withLock {
+                if (client.isCurrentCredentialGeneration(generation)) {
+                    try {
+                        store.clearIdentity(hubId)
+                    } finally {
+                        // Navigation is more important than this offline identity cache: even if
+                        // its write fails, an ended server session must not strand the UI in an
+                        // authenticated route that can only render 401s.
+                        reauthenticationChannel.trySend(hubId)
+                    }
+                }
+            }
+        }
 
     private companion object {
         const val REMOVE_REMOTE_BUDGET_MS = 2_000L

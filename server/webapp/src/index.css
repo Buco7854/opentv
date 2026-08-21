@@ -161,7 +161,9 @@
  * runs: right for a phone at arm's length, small on a car or television screen,
  * which is wide but watched from across a cabin or a room. Scaling the whole
  * interface keeps every proportion the design intends, where enlarging only the
- * type would grow words inside controls, paddings and icons that stayed put.
+ * type would grow words inside controls, paddings and icons that stayed put. A wide
+ * desktop monitor is still viewed at desk distance, however, so width alone is not
+ * a reason to enlarge it: require a large landscape primary touch pointer as well.
  *
  * `zoom` scales layout rather than painting a bitmap larger, so boxes keep their
  * relationships and text stays crisp. It follows the viewport, so resizing a
@@ -171,11 +173,15 @@
  * it, the cause is the same one question: whether zoom on the root element also
  * scales the block that vh and vw resolve against. Change the numbers here.
  */
-@media (min-width: 1280px) {
+@media
+  (min-width: 1500px) and (min-height: 800px) and (orientation: landscape) and
+  (hover: none) and (pointer: coarse) {
   :root { zoom: 1.15; }
 }
 
-@media (min-width: 1700px) {
+@media
+  (min-width: 1800px) and (min-height: 900px) and (orientation: landscape) and
+  (hover: none) and (pointer: coarse) {
   :root { zoom: 1.3; }
 }
 

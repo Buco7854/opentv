@@ -188,6 +188,11 @@ absent from the initial bundle.
   panel; `AccountRepository` locks per playlist and answers with stale data rather than
   queueing behind an in-flight request. The same rule applies to the panel EPG in
   `XtreamRepository.guideFor`, which falls back to stored XMLTV.
+- A solo browser live-HLS player listens for HLS.js's parsed audio SourceBuffer codec.
+  When Chromium's Media Source API rejects that exact container/codec pair, it changes
+  to the lease-scoped `/transcode` transport: ffmpeg copies video and normalizes only
+  the unsupported audio to AAC. Missing codec metadata does not trigger work, and a
+  shared-HLS room never opens a private rescue connection for one member.
 - `MediaProbe.inspect` is single-flighted: a remote probe costs a provider connection on the
   path to playback, so two viewers of one title share the result. It probes with bounded
   `-analyzeduration`/`-probesize` first and re-probes unbounded only when that looks short.
@@ -214,6 +219,11 @@ absent from the initial bundle.
   Browser and Android clients keep a high-water mark and ignore missing, duplicate, or older
   commands, which orders WebSocket delivery against a delayed HTTP-heartbeat fallback without
   turning the queue into a reliable-delivery protocol.
+- Two leases carrying the same auth-session id are the same authenticated client for
+  watch-together discovery and duplicate-content admission. A browser reload may leave its old
+  lease alive until the best-effort unload or the reaper runs; it must not offer that page as a
+  peer or force the replacement page to co-watch with itself. A different auth session remains
+  another device even when it belongs to the same account.
 - Each room reload barrier has its own positive, monotonically increasing `generation`.
   `room-audio` and `room-go` carry it, `/playback/{id}/ready` requires
   `ReadyBody(generation)`, and stale/missing generations are ignored by the barrier rather than
@@ -333,6 +343,12 @@ absent from the initial bundle.
   the old session, and refreshes `/auth/me`. Signing into a different account on the same hub is
   allowed and replaces the cached identity; if the row was removed before the flow starts, the
   screen falls back to the ordinary add flow.
+- A current-generation 401 emits one buffered, hub-id-only reauthentication request from
+  `HubRegistry`; `AppShell` navigates directly to that hub's sign-in route. Concurrent failures
+  on the same expired credential cannot create duplicate navigation, while replacing the token
+  starts a new generation which may request sign-in again. The shell checks current health before
+  consuming a buffered event, so an already completed reauthentication cannot reopen login.
+  Playlist discovery must not relabel this state as an unreachable server.
 - Android keeps `allowBackup=false` plus matching `backup_rules.xml` exclusions for
   pre-31 devices and uses `data_extraction_rules.xml` on Android 12+: cloud backup and
   device transfer exclude `opentv.db` plus its journal/WAL sidecars,

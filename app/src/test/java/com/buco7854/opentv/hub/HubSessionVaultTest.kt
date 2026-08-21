@@ -11,10 +11,12 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -433,6 +435,50 @@ class HubSessionVaultTest {
         assertNull(client.source.username)
         assertNull(client.source.role)
         assertNull(client.source.lastSeenMs)
+    }
+
+    @Test
+    fun expiredCredentialRequestsOneRedirectUntilReauthenticationReplacesIt() = runTest {
+        val store = RecordingHubStore()
+        val id = store.upsert(
+            HubSource(
+                name = "Home",
+                baseUrl = "https://hub.example",
+                userId = "user-1",
+                username = "alice",
+                role = "USER",
+                addedMs = 1,
+            ),
+        )
+        vault.store(id, "expired-session")
+        val registry = HubRegistry(
+            store,
+            HubApi(HttpTransport { error("the call block supplies the failure") }),
+            vault,
+        )
+        val client = checkNotNull(registry.clientFor(id))
+        val firstRedirect = async { registry.reauthenticationRequests.first() }
+        runCurrent()
+
+        repeat(2) {
+            try {
+                client.call<Unit> { throw HubUnauthorizedException("unauthorized", "signed out") }
+            } catch (_: HubUnauthorizedException) { }
+        }
+
+        assertEquals(id, firstRedirect.await())
+        assertTrue(registry.needsReauthentication(id))
+        assertNull(withTimeoutOrNull(1) { registry.reauthenticationRequests.first() })
+
+        client.storeToken("replacement-session")
+        assertFalse(registry.needsReauthentication(id))
+        val secondRedirect = async { registry.reauthenticationRequests.first() }
+        runCurrent()
+        try {
+            client.call<Unit> { throw HubUnauthorizedException("unauthorized", "signed out") }
+        } catch (_: HubUnauthorizedException) { }
+
+        assertEquals(id, secondRedirect.await())
     }
 
     @Test

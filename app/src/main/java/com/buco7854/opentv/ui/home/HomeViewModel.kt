@@ -10,6 +10,7 @@ import com.buco7854.opentv.R
 import com.buco7854.opentv.core.model.Playlist
 import com.buco7854.opentv.data.prefs.PlayerSettings
 import com.buco7854.opentv.diag.ErrorLog
+import com.buco7854.opentv.hub.HubUnauthorizedException
 import com.buco7854.opentv.source.SourceId
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -91,6 +92,11 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     val playlists = try {
                         client.call { playlists(it) }
+                    } catch (_: HubUnauthorizedException) {
+                        // HubRegistry owns the one redirect to reauthentication. Do not also
+                        // present an expired credential as an unreachable server while that
+                        // navigation event is being delivered.
+                        emptyList()
                     } catch (error: Exception) {
                         error.rethrowCancellation()
                         ErrorLog.log("Hub playlists", error)

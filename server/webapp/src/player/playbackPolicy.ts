@@ -56,6 +56,27 @@ export function playbackCapabilities(
   };
 }
 
+/**
+ * Whether an HLS audio track needs the server's AAC rescue on this browser.
+ *
+ * HLS.js demuxes provider transport streams into an MSE SourceBuffer. A browser can therefore
+ * render the video while silently dropping an AC-3/E-AC-3 track: successful video playback is
+ * not proof that the complete stream is supported. Prefer the codec hls.js actually parsed over
+ * the manifest hint, and ask MSE about the exact container/codec pair it is about to mount.
+ * Missing metadata stays on the ordinary HLS path; a provider omission must not itself create
+ * an expensive transcode.
+ */
+export function hlsAudioNeedsServerNormalization(
+  track: { container?: string; codec?: string; levelCodec?: string } | null | undefined,
+  mediaSource: Pick<typeof MediaSource, 'isTypeSupported'> | undefined,
+): boolean {
+  if (!track || !mediaSource) return false;
+  const codec = track.codec?.trim() || track.levelCodec?.trim();
+  if (!codec) return false;
+  const container = track.container?.trim() || 'audio/mp4';
+  return !mediaSource.isTypeSupported(`${container}; codecs="${codec}"`);
+}
+
 export function formatPlaybackTime(seconds: number): string {
   if (!isFinite(seconds)) return '–:––';
   const whole = Math.max(0, Math.floor(seconds));

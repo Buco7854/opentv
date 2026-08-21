@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { playbackCapabilities, reportedEngine, supportsHevc } from './playbackPolicy';
+import {
+  hlsAudioNeedsServerNormalization,
+  playbackCapabilities,
+  reportedEngine,
+  supportsHevc,
+} from './playbackPolicy';
 
 describe('playback capability report', () => {
   it('reports the exact browser baseline when HEVC is unavailable', () => {
@@ -26,5 +31,36 @@ describe('playback capability report', () => {
     expect(reportedEngine('livets', true, false)).toBe('mpegts');
     expect(reportedEngine('ts', true, false)).toBe('mpegts');
     expect(reportedEngine('hls', true, true)).toBe('remux');
+  });
+});
+
+describe('HLS audio capability', () => {
+  it('keeps an audio track whose exact MSE codec is supported', () => {
+    const mediaSource = { isTypeSupported: vi.fn(() => true) };
+
+    expect(hlsAudioNeedsServerNormalization(
+      { container: 'audio/mp4', codec: 'mp4a.40.2', levelCodec: 'ec-3' },
+      mediaSource,
+    )).toBe(false);
+    expect(mediaSource.isTypeSupported).toHaveBeenCalledWith(
+      'audio/mp4; codecs="mp4a.40.2"',
+    );
+  });
+
+  it('asks for AAC normalization when MSE rejects the parsed audio codec', () => {
+    const mediaSource = { isTypeSupported: vi.fn(() => false) };
+
+    expect(hlsAudioNeedsServerNormalization(
+      { container: 'audio/mp4', codec: 'ec-3' },
+      mediaSource,
+    )).toBe(true);
+  });
+
+  it('does not transcode merely because a provider omitted codec metadata', () => {
+    const mediaSource = { isTypeSupported: vi.fn(() => false) };
+
+    expect(hlsAudioNeedsServerNormalization({ container: 'audio/mp4' }, mediaSource)).toBe(false);
+    expect(hlsAudioNeedsServerNormalization(null, mediaSource)).toBe(false);
+    expect(mediaSource.isTypeSupported).not.toHaveBeenCalled();
   });
 });

@@ -19,7 +19,7 @@ import {
 import {
   hlsVariantOf, resolveSource, sourceKind, Transport, TransportContext,
 } from './mediaSource';
-import { streamKind } from './playbackPolicy';
+import { hlsAudioNeedsServerNormalization, streamKind } from './playbackPolicy';
 import { PlaybackStatusActions } from './playbackStatus';
 import { RemuxController } from './useRemuxSession';
 
@@ -355,6 +355,26 @@ export function usePlaybackEngine(opts: {
       let mediaRecoveries = 0;
       let netRetries = 0;
       let lastMediaError = 0;
+      let audioRescueStarted = false;
+      const rescueUnsupportedAudio = (track: {
+        container?: string;
+        codec?: string;
+        levelCodec?: string;
+      } | null | undefined) => {
+        // A remux already selected/normalized its one audio track. A shared HLS room must keep
+        // its one server-owned upstream rather than opening a private provider connection for
+        // one member. The solo live path has a lease-scoped /transcode URL which copies video
+        // bit-for-bit and converts only audio that the browser did not advertise.
+        if (audioRescueStarted || !live || roomLive || remuxRef.current) return false;
+        const mediaSource = typeof MediaSource === 'undefined' ? undefined : MediaSource;
+        if (!hlsAudioNeedsServerNormalization(track, mediaSource)) return false;
+        if (!resolveSource(transportContext(), 'transcode')) return false;
+        audioRescueStarted = true;
+        hls.destroy();
+        if (hlsRef.current === hls) hlsRef.current = null;
+        void playMpegts('transcode');
+        return true;
+      };
       // A media error every now and then (e.g. resuming after the tab was backgrounded and the
       // decoder was suspended) shouldn't burn the recovery budget forever: once fragments flow
       // again for a few seconds, restore it so each incident gets a fresh attempt.
@@ -413,6 +433,12 @@ export function usePlaybackEngine(opts: {
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         readHlsTracks(hls);
         markPlaying();
+      });
+      hls.on(Hls.Events.BUFFER_CODECS, (_event, data) => {
+        // The parsed track is more trustworthy than CODECS on the provider manifest. In
+        // particular, Chromium can accept the video SourceBuffer while rejecting AC-3/E-AC-3,
+        // producing a perfectly moving but completely silent channel.
+        rescueUnsupportedAudio(data.audio ?? data.tracks?.audio);
       });
       // Track lists exist only once these fire; setting the pick here pre-empts
       // hls.js's default selection, so picks survive seek re-anchors.

@@ -231,6 +231,16 @@ fun AppShell(
         launchSingleTop = true
     }
 
+    LaunchedEffect(nav) {
+        OpenTvApp.graph.hubs.reauthenticationRequests.collect { hubId ->
+            if (!OpenTvApp.graph.hubs.needsReauthentication(hubId)) return@collect
+            panelOpen = false
+            nav.navigate(Routes.hubSignIn(hubId)) {
+                launchSingleTop = true
+            }
+        }
+    }
+
     LaunchedEffect(routeSource, sourceAvailability) {
         val availability = sourceAvailability ?: return@LaunchedEffect
         routeSource

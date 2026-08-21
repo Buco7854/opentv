@@ -7,7 +7,11 @@ import { RemuxController, RemuxSession } from './useRemuxSession';
 import { watchProgressStore } from '../watchProgress';
 
 type ErrorData = { fatal: boolean; type: string; details?: string; response?: { code: number } };
-type Handler = (event: string, data: ErrorData) => void;
+type HlsEventData = ErrorData | {
+  audio?: { container?: string; codec?: string; levelCodec?: string };
+  tracks?: { audio?: { container?: string; codec?: string; levelCodec?: string } };
+};
+type Handler = (event: string, data: HlsEventData) => void;
 
 const { FakeHls, FakeMpegtsPlayer, createMpegtsPlayer } = vi.hoisted(() => {
   class FakeHls {
@@ -20,6 +24,7 @@ const { FakeHls, FakeMpegtsPlayer, createMpegtsPlayer } = vi.hoisted(() => {
       SUBTITLE_TRACKS_UPDATED: 'hlsSubtitleTracksUpdated',
       AUDIO_TRACK_SWITCHED: 'hlsAudioTrackSwitched',
       SUBTITLE_TRACK_SWITCH: 'hlsSubtitleTrackSwitch',
+      BUFFER_CODECS: 'hlsBufferCodecs',
     };
     static ErrorTypes = { NETWORK_ERROR: 'networkError', MEDIA_ERROR: 'mediaError' };
     static last: FakeHls | null = null;
@@ -36,7 +41,7 @@ const { FakeHls, FakeMpegtsPlayer, createMpegtsPlayer } = vi.hoisted(() => {
     recoverMediaError = vi.fn();
     swapAudioCodec = vi.fn();
     destroy = vi.fn();
-    private handlers = new Map<string, ((event: string, data: ErrorData) => void)[]>();
+    private handlers = new Map<string, Handler[]>();
 
     constructor() { FakeHls.last = this; }
 
@@ -50,6 +55,11 @@ const { FakeHls, FakeMpegtsPlayer, createMpegtsPlayer } = vi.hoisted(() => {
 
     emitError(data: ErrorData) {
       this.handlers.get(FakeHls.Events.ERROR)?.forEach((handler) => handler(FakeHls.Events.ERROR, data));
+    }
+
+    emitBufferCodecs(data: Exclude<HlsEventData, ErrorData>) {
+      this.handlers.get(FakeHls.Events.BUFFER_CODECS)
+        ?.forEach((handler) => handler(FakeHls.Events.BUFFER_CODECS, data));
     }
   }
   class FakeMpegtsPlayer {
@@ -111,6 +121,7 @@ async function mountEngine(
   remuxed: RemuxSession | null = session,
   engineLease: PlaybackLease = lease,
   roomLive = false,
+  live = roomLive,
 ) {
   const video = document.createElement('video');
   const start = vi.fn();
@@ -139,7 +150,7 @@ async function mountEngine(
   const opts = {
     lease: engineLease,
     leaseRef: { current: engineLease },
-    live: roomLive,
+    live,
     catchup: false,
     roomLive,
     hold: false,
@@ -179,6 +190,7 @@ describe('hls playback engine', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     vi.useRealTimers();
   });
 
@@ -264,6 +276,44 @@ describe('hls playback engine', () => {
     const { hls } = await mountEngine(null, hlsLease, true);
 
     expect(hls.loadSource).toHaveBeenCalledWith(hlsLease.sharedHlsUrl);
+    expect(createMpegtsPlayer).not.toHaveBeenCalled();
+  });
+
+  it('copies video and normalizes unsupported HLS audio to AAC on Chromium', async () => {
+    const isTypeSupported = vi.fn(() => false);
+    vi.stubGlobal('MediaSource', { isTypeSupported });
+    const hlsLease = {
+      ...lease,
+      streamUrl: '/api/v1/stream?u=h.token&sid=lease-1&g=grant-1',
+      transcodeUrl: '/api/v1/transcode?u=h.token&sid=lease-1&g=grant-1',
+    };
+    const { hls, actions } = await mountEngine(null, hlsLease, false, true);
+
+    hls.emitBufferCodecs({ audio: { container: 'audio/mp4', codec: 'ec-3' } });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(isTypeSupported).toHaveBeenCalledWith('audio/mp4; codecs="ec-3"');
+    expect(hls.destroy).toHaveBeenCalledOnce();
+    expect(createMpegtsPlayer).toHaveBeenCalledWith(expect.objectContaining({
+      url: hlsLease.transcodeUrl,
+    }));
+    expect(actions.setAudioTranscoded).toHaveBeenLastCalledWith(true);
+  });
+
+  it('does not open a private audio rescue for a shared HLS room', async () => {
+    vi.stubGlobal('MediaSource', { isTypeSupported: vi.fn(() => false) });
+    const hlsLease = {
+      ...lease,
+      streamUrl: '/api/v1/stream?u=h.token&sid=lease-1&g=grant-1',
+      sharedHlsUrl: '/api/v1/shared-hls?u=h.token&sid=lease-1&g=grant-1',
+      transcodeUrl: '/api/v1/transcode?u=h.token&sid=lease-1&g=grant-1',
+    };
+    const { hls } = await mountEngine(null, hlsLease, true);
+
+    hls.emitBufferCodecs({ audio: { container: 'audio/mp4', codec: 'ec-3' } });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(hls.destroy).not.toHaveBeenCalled();
     expect(createMpegtsPlayer).not.toHaveBeenCalled();
   });
 
