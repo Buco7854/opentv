@@ -573,6 +573,70 @@ class PlaybackSessionRegistryTest {
     }
 
     @Test
+    fun soloAudioRescueOwnsTheLeaseTransportAndLateHlsCannotTakeItBack() {
+        val sessions = PlaybackSessionRegistry(reapInBackground = false)
+        val browser = device("viewer", "browser-auth", "Chrome")
+        val target = "https://example.test/live/channel.m3u8"
+        val lease = sessions.create(
+            browser, 1, "channel", target, "", "", liveSource = true,
+        )
+        val grants = PlaybackMediaGrants(sessions)
+        val grant = grants.issue(browser, lease.id)
+        val capability = StreamCapability(target, lease.id)
+
+        grants.validateCapability(
+            lease.id,
+            grant.token,
+            capability,
+            PlaybackMediaTransport.AUDIO_TRANSCODE,
+        )
+        sessions.activateAudioRescue(lease.id)
+        grants.validateCapability(
+            lease.id,
+            grant.token,
+            capability,
+            PlaybackMediaTransport.AUDIO_TRANSCODE,
+        )
+        assertFailsWith<SameContentAlreadyPlayingException> {
+            grants.validateCapability(
+                lease.id,
+                grant.token,
+                capability,
+                PlaybackMediaTransport.SOLO,
+            )
+        }
+        sessions.close()
+    }
+
+    @Test
+    fun aRoomMemberCannotReplaceTheSharedReadWithPrivateAudioRescue() {
+        val sessions = PlaybackSessionRegistry(reapInBackground = false)
+        val phoneActor = device("viewer", "phone-auth", "Phone")
+        val televisionActor = device("viewer", "tv-auth", "Television")
+        val target = "https://example.test/live/channel.m3u8"
+        val phone = sessions.create(phoneActor, 1, "channel", target, "", "", liveSource = true)
+        val television = sessions.create(
+            televisionActor, 1, "channel", target, "", "", liveSource = true,
+        )
+        val grants = PlaybackMediaGrants(sessions)
+        val grant = grants.issue(televisionActor, television.id)
+        assertNotNull(sessions.requestJoin(phone.id, television.id, "Television", "channel"))
+
+        assertFailsWith<SameContentAlreadyPlayingException> {
+            grants.validateCapability(
+                television.id,
+                grant.token,
+                StreamCapability(target, television.id, hlsResource = true),
+                PlaybackMediaTransport.AUDIO_TRANSCODE,
+            )
+        }
+        assertFailsWith<SameContentAlreadyPlayingException> {
+            sessions.activateAudioRescue(television.id)
+        }
+        sessions.close()
+    }
+
+    @Test
     fun liveRoomAcceptsOnlyTheSingleSourceAppropriateSharedTransport() {
         val sessions = PlaybackSessionRegistry(reapInBackground = false)
         val phoneActor = device("viewer", "phone-auth", "Phone")

@@ -77,10 +77,20 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
 
     get("/transcode") {
         if (!requireFfmpeg(media, call)) return@get
-        val (capability, _, guard) = authorizedStream(media, call)
+        val (capability, _, guard) = authorizedStream(
+            media,
+            call,
+            PlaybackMediaTransport.AUDIO_TRANSCODE,
+        )
         val sessionId = capability.leaseId
         val gateId = transcodeGateId(sessionId)
         val url = capability.url
+        // This is a transport replacement, not a second viewer. Close every old proxy body and
+        // transfer its provider-budget seat before admitting ffmpeg. Marking the lease first also
+        // makes a late HLS segment fail its recurring grant guard instead of reopening the seat.
+        media.sessions.activateAudioRescue(sessionId)
+        media.proxy.drop(sessionId)
+        media.streamGate.release(sessionId)
         if (!media.streamGate.admit(gateId, providerKeyOf(url), media.connectionLimit(url))) {
             call.respond(
                 HttpStatusCode.TooManyRequests,

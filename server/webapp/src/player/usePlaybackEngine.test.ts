@@ -377,6 +377,25 @@ describe('hls playback engine', () => {
     expect(actions.setError).toHaveBeenLastCalledWith(expect.stringContaining('Playback failed'));
   });
 
+  it('does not hide provider refusal behind the frame left by the previous engine', async () => {
+    const tsLease = {
+      ...lease,
+      streamUrl: '/api/v1/stream?u=t.token&sid=lease-1&g=grant-1',
+      transcodeUrl: '/api/v1/transcode?u=t.token&sid=lease-1&g=grant-1',
+    };
+    const { video, actions } = await mountEngine(null, tsLease, false, true);
+    Object.defineProperties(video, {
+      videoWidth: { configurable: true, value: 1920 },
+      readyState: { configurable: true, value: 3 },
+    });
+    const player = createMpegtsPlayer.mock.results[0]?.value as InstanceType<typeof FakeMpegtsPlayer>;
+
+    player.emitError('NetworkError', { status: 429 });
+
+    expect(actions.setError).toHaveBeenLastCalledWith(expect.stringContaining('connection limit'));
+    expect(player.unload).not.toHaveBeenCalled();
+  });
+
   it('never seeks a torn-down source to a resume point that arrived late', async () => {
     let resolveResume: (points: ResumePoint[]) => void = () => {};
     vi.spyOn(api, 'resumeAll').mockReturnValue(new Promise((resolve) => { resolveResume = resolve; }));

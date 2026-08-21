@@ -284,13 +284,13 @@ export function usePlaybackEngine(opts: {
         const response = info as { code?: number; status?: number; statusCode?: number } | null;
         const status = Number(response?.code ?? response?.status ?? response?.statusCode);
         if (type === mpegts.ErrorTypes.NETWORK_ERROR) {
-          if (hasPicture()) return; // a frozen frame recovers via the watchdog
           const refused = admissionError(status);
           if (refused) {
             stopEngines();
             setError(refused);
             return;
           }
+          if (hasPicture()) return; // a frozen frame recovers via the watchdog
           if (status === 410) {
             void recoverMediaGrant();
             return;

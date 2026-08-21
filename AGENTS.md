@@ -194,7 +194,11 @@ absent from the initial bundle.
   exact MSE support remains the fallback decision for baseline codecs. Because manifests can
   omit or mislabel audio, Chromium's decoded-audio byte counter is also watched once a picture
   advances: zero decoded audio triggers the same rescue. That rescue never probes and re-trusts
-  the failed capability; ffmpeg always copies video and encodes audio as AAC. A shared-HLS room
+  the failed capability; ffmpeg always copies video and encodes audio as AAC. It is a one-way
+  transport replacement for that lease: the server marks rescue active, closes the old proxy
+  body, releases its provider-budget seat, and only then admits ffmpeg under the rescue key.
+  Late HLS fragment requests are rejected, so a one-connection provider does not see rescue as
+  a second viewer and cannot have the old path steal the seat back. A shared-HLS room
   never opens a private rescue connection for one member.
 - `MediaProbe.inspect` is single-flighted: a remote probe costs a provider connection on the
   path to playback, so two viewers of one title share the result. It probes with bounded

@@ -181,4 +181,120 @@ class RawLiveRoomTransitionTest {
                 root.toFile().deleteRecursively()
             }
         }
+
+    @Test
+    fun `audio rescue transfers the solo provider seat before ffmpeg admission`() =
+        testApplication {
+            val root = Files.createTempDirectory("audio-rescue-transition")
+            val listener = ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"))
+            val executor = Executors.newSingleThreadExecutor()
+            val firstAccepted = CountDownLatch(1)
+            val firstDisconnected = CountDownLatch(1)
+            val firstConnection = executor.submit {
+                listener.accept().use { connection ->
+                    val reader = connection.getInputStream().bufferedReader(Charsets.ISO_8859_1)
+                    while (true) {
+                        val line = reader.readLine() ?: break
+                        if (line.isEmpty()) break
+                    }
+                    firstAccepted.countDown()
+                    connection.soTimeout = 2_000
+                    try {
+                        if (reader.read() == -1) firstDisconnected.countDown()
+                    } catch (_: SocketTimeoutException) {
+                        // The assertion below reports a proxy body left open during transfer.
+                    }
+                }
+            }
+
+            val connections = ProviderConnections()
+            val gate = StreamGate(connections)
+            val cipher = StreamCipher(
+                Base64.getEncoder().encodeToString(ByteArray(32) { (it + 1).toByte() }),
+            )
+            val http = ServerHttp()
+            val proxy = StreamProxy(http, cipher, gate) { 1 }
+            val sessions = PlaybackSessionRegistry(reapInBackground = false)
+            val grants = PlaybackMediaGrants(sessions)
+            val relay = LiveRelay(http, connections, { false })
+            val database = createOpenTvServerDatabase(root.resolve("opentv.db").toString())
+            val downloads = DownloadManager(
+                database,
+                http,
+                ServerSettings(root, pageSize = 50),
+                root,
+                connections,
+                { 1 },
+            )
+            val runner = MediaProcessRunner {
+                ProcessBuilder("sh", "-c", "head -c 1 /dev/zero").start()
+            }
+            val remux = RemuxService(http, connections, processRunner = runner)
+            val transcoder = AudioTranscoder(http, runner)
+            val target = "http://127.0.0.1:${listener.localPort}/live/channel.ts"
+            val viewer = actor("browser-auth")
+            val lease = sessions.create(
+                viewer, 1, "channel", target, "", "", liveSource = true,
+            )
+            val grant = grants.issue(viewer, lease.id)
+            val stream = cipher.encryptStream(target, lease.id)
+            val media = MediaRouteDependencies(
+                proxy = proxy,
+                cipher = cipher,
+                downloads = downloads,
+                sessions = sessions,
+                streamGate = gate,
+                liveRelay = relay,
+                transcoder = transcoder,
+                remux = remux,
+                mediaGrants = grants,
+                connectionLimit = { 1 },
+            )
+            application {
+                install(ContentNegotiation) { json() }
+                installOpenTvErrorResponses()
+                routing { mediaRoutes(media) }
+            }
+
+            try {
+                coroutineScope {
+                    val solo = async(Dispatchers.Default) {
+                        runCatching {
+                            client.get(
+                                "/stream?u=${urlEncode(stream)}&sid=${urlEncode(lease.id)}" +
+                                    "&g=${urlEncode(grant.token)}",
+                            ).bodyAsBytes()
+                        }
+                    }
+                    assertTrue(firstAccepted.await(2, TimeUnit.SECONDS))
+
+                    val rescued = client.get(
+                        "/transcode?u=${urlEncode(stream)}&sid=${urlEncode(lease.id)}" +
+                            "&g=${urlEncode(grant.token)}",
+                    )
+                    assertEquals(HttpStatusCode.OK, rescued.status)
+                    assertTrue(
+                        firstDisconnected.await(2, TimeUnit.SECONDS),
+                        "audio rescue was admitted before the old provider read closed",
+                    )
+                    assertTrue(connections.isOpen(transcodeGateId(lease.id)))
+                    assertTrue(!connections.isOpen(lease.id))
+                    solo.await()
+                }
+            } finally {
+                transcoder.drop(lease.id)
+                relay.close()
+                sessions.close()
+                remux.close()
+                downloads.close()
+                proxy.close()
+                gate.close()
+                connections.closeAll()
+                database.close()
+                listener.close()
+                firstConnection.cancel(true)
+                executor.shutdownNow()
+                root.toFile().deleteRecursively()
+            }
+        }
 }

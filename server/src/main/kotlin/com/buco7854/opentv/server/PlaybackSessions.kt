@@ -75,6 +75,7 @@ class PlaybackSessionRegistry(
     ) {
         internal val playbackIdentity = PlaybackIdentity(contentId, sourceUrl)
         internal var commandSequence: Long = 0
+        @Volatile internal var audioRescueActive: Boolean = false
     }
 
     /** A watch-together room. The host owns it and can grant playback control to guests;
@@ -180,6 +181,18 @@ class PlaybackSessionRegistry(
         }
         return live
     }
+
+    /** Permanently transfer this solo live lease from its proxy to its AAC rescue transport. */
+    @Synchronized
+    fun activateAudioRescue(id: String) {
+        val live = sessions[id] ?: throw PlaybackRevokedException()
+        if (!live.liveSource || memberRoom.containsKey(id)) {
+            throw SameContentAlreadyPlayingException()
+        }
+        live.audioRescueActive = true
+    }
+
+    fun requiresAudioRescue(id: String): Boolean = sessions[id]?.audioRescueActive == true
 
     fun lease(id: String): Live =
         sessions[id] ?: throw PlaybackRevokedException()

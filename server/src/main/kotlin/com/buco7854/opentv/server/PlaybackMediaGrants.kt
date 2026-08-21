@@ -9,6 +9,7 @@ data class IssuedMediaGrant(val token: String, val expiresAtMs: Long)
 
 internal enum class PlaybackMediaTransport {
     SOLO,
+    AUDIO_TRANSCODE,
     SHARED_HLS,
     RELAY,
     REMUX,
@@ -79,6 +80,13 @@ class PlaybackMediaGrants(
                 PlaybackMediaTransport.RELAY
             }
             if (transport != required) throw SameContentAlreadyPlayingException()
+        } else if (
+            sessions.requiresAudioRescue(lease.id) &&
+            transport != PlaybackMediaTransport.AUDIO_TRANSCODE
+        ) {
+            // Once the solo player transfers its provider seat to AAC rescue, a late HLS
+            // segment must not reopen the old physical read and steal that seat back.
+            throw SameContentAlreadyPlayingException()
         }
     }
 

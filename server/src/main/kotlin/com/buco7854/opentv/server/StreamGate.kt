@@ -9,7 +9,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 
-/** A per-viewer audio transcode is a second physical provider read, not the lease's solo proxy. */
+/** Separate runtime key for the same lease after its solo proxy seat transfers to AAC rescue. */
 internal fun transcodeGateId(leaseId: String): String = "transcode:$leaseId"
 
 /**
