@@ -796,14 +796,9 @@ class StreamingPipelineReviewTest {
         val commands = CopyOnWriteArrayList<List<String>>()
         val runner = MediaProcessRunner { request ->
             commands += request.command
-            if (request.command.first() == "ffprobe") {
-                request.stdoutFile?.let { Files.writeString(it, "aac\n") }
-                MemoryProcess("aac\n".toByteArray())
-            } else {
-                ProcessBuilder("sh", "-c", "head -c 262144 /dev/zero")
-                    .start()
-                    .also(processes::add)
-            }
+            ProcessBuilder("sh", "-c", "head -c 262144 /dev/zero")
+                .start()
+                .also(processes::add)
         }
         val transcoder = AudioTranscoder(ServerHttp(), runner)
         var validations = 0
@@ -814,7 +809,6 @@ class StreamingPipelineReviewTest {
                         "https://provider.example/live.ts",
                         call,
                         "lease",
-                        MediaCapabilities.BROWSER,
                     ) { validations++ }
                 }
             }
@@ -828,18 +822,18 @@ class StreamingPipelineReviewTest {
         )
         assertTrue(validations > 2, "only the two pre-response checks ran")
         assertFalse(processes.single().isAlive)
-        val ffmpeg = commands.single { it.first() == "ffmpeg" }
-        assertEquals("copy", ffmpeg[ffmpeg.indexOf("-c:a") + 1])
+        val ffmpeg = commands.single()
+        assertEquals("aac", ffmpeg[ffmpeg.indexOf("-c:a") + 1])
+        assertTrue(commands.none { it.first() == "ffprobe" })
     }
 
     @Test
-    fun `dropping an audio transcode during its probe kills the probe and prevents ffmpeg launch`() =
+    fun `audio rescue starts AAC directly instead of trusting another capability probe`() =
         testApplication {
-            val probe = LatchingProcess()
             val commands = CopyOnWriteArrayList<List<String>>()
             val runner = MediaProcessRunner { request ->
                 commands += request.command
-                if (request.command.first() == "ffprobe") probe else MemoryProcess()
+                MemoryProcess(byteArrayOf(1))
             }
             val transcoder = AudioTranscoder(ServerHttp(), runner)
             application {
@@ -849,24 +843,15 @@ class StreamingPipelineReviewTest {
                             "https://provider.example/live.ts",
                             call,
                             "lease",
-                            MediaCapabilities.BROWSER,
                         ) {}
                     }
                 }
             }
 
-            coroutineScope {
-                val response = async { client.get("/").bodyAsBytes() }
-                try {
-                    withTimeout(1_000) { while (commands.isEmpty()) delay(10) }
-                    transcoder.drop("lease")
-                    withTimeout(1_000) { while (!probe.destroyed) delay(10) }
-                    assertTrue(commands.none { it.first() == "ffmpeg" })
-                } finally {
-                    probe.destroyForcibly()
-                    response.await()
-                }
-            }
+            client.get("/").bodyAsBytes()
+            val ffmpeg = commands.single()
+            assertEquals("ffmpeg", ffmpeg.first())
+            assertEquals("aac", ffmpeg[ffmpeg.indexOf("-c:a") + 1])
         }
 
     @Test

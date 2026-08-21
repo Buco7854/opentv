@@ -191,9 +191,11 @@ absent from the initial bundle.
 - A solo browser live-HLS player listens for HLS.js's parsed audio codec. An actual codec
   outside the browser baseline (AC-3/E-AC-3/DTS, for example) changes to the lease-scoped
   `/transcode` transport even when Chromium's Media Source API incorrectly claims support;
-  exact MSE support remains the fallback decision for baseline codecs. Ffmpeg copies video
-  and normalizes only unsupported audio to AAC. Missing codec metadata does not trigger work,
-  and a shared-HLS room never opens a private rescue connection for one member.
+  exact MSE support remains the fallback decision for baseline codecs. Because manifests can
+  omit or mislabel audio, Chromium's decoded-audio byte counter is also watched once a picture
+  advances: zero decoded audio triggers the same rescue. That rescue never probes and re-trusts
+  the failed capability; ffmpeg always copies video and encodes audio as AAC. A shared-HLS room
+  never opens a private rescue connection for one member.
 - `MediaProbe.inspect` is single-flighted: a remote probe costs a provider connection on the
   path to playback, so two viewers of one title share the result. It probes with bounded
   `-analyzeduration`/`-probesize` first and re-probes unbounded only when that looks short.

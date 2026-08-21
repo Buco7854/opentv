@@ -13,12 +13,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.nio.file.Files
 import java.util.concurrent.TimeUnit
 
 /**
- * Copies video and remuxes to MPEG-TS, re-encoding audio to AAC only when the
- * lease's effective capabilities cannot decode it. One process per viewer.
+ * Browser-audio rescue: copies video and remuxes to MPEG-TS while always encoding audio
+ * as AAC. The caller reaches this path only after the ordinary engine could not produce
+ * sound, so probing and then trusting that same browser capability again would preserve
+ * the failure and add latency. One process per viewer.
  */
 class AudioTranscoder(
     private val http: ServerHttp,
@@ -33,7 +34,6 @@ class AudioTranscoder(
         url: String,
         call: ApplicationCall,
         sid: String,
-        capabilities: MediaCapabilities,
         leaseGuard: () -> Unit,
     ) = coroutineScope {
         val token = Any()
@@ -46,9 +46,6 @@ class AudioTranscoder(
         leaseGuard()
         var process: Process? = null
         try {
-            val audioCodec = probeAudioCodec(url, capabilities, sid, token)
-            ensureCurrent(sid, token)
-            leaseGuard()
             val command = mutableListOf("ffmpeg", "-nostdin", "-loglevel", "error")
             // Providers drop long-lived transfers; reconnect in place like the remux.
             if (url.startsWith("http")) {
@@ -61,9 +58,9 @@ class AudioTranscoder(
                 "-i", url,
                 "-map", "0:v:0?", "-map", "0:a:0?",
                 "-c:v", "copy",
-                "-c:a", audioCodec,
+                "-c:a", "aac",
+                "-ac", "2", "-b:a", "128k",
             )
-            if (audioCodec == "aac") command += listOf("-ac", "2", "-b:a", "128k")
             command += listOf("-f", "mpegts", "-")
 
             // Capture the child in the outer finally before returning to the cancellable caller.
@@ -131,54 +128,6 @@ class AudioTranscoder(
         synchronized(lifecycle) { active.remove(sid)?.process }?.let(::terminate)
     }
 
-    private fun probeAudioCodec(
-        url: String,
-        capabilities: MediaCapabilities,
-        sid: String,
-        token: Any,
-    ): String {
-        val output = Files.createTempFile("opentv-audio-probe", ".txt")
-        val command = mutableListOf("ffprobe", "-v", "error")
-        if (url.startsWith("http")) command += listOf("-user_agent", http.userAgent)
-        command += listOf(
-            "-select_streams", "a:0",
-            "-show_entries", "stream=codec_name",
-            "-of", "default=nokey=1:noprint_wrappers=1",
-            url,
-        )
-        var process: Process? = null
-        return try {
-            val started = processRunner.start(
-                MediaProcessRequest(command, stdoutFile = output, discardStderr = true)
-            )
-            process = started
-            if (!register(sid, token, started)) {
-                terminate(started)
-                throw CancellationException("Transcode was superseded")
-            }
-            if (!started.waitFor(PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-                terminate(started)
-                "aac"
-            } else if (started.exitValue() != 0) {
-                "aac"
-            } else {
-                val codec = Files.readString(output).trim()
-                if (codec.isNotEmpty() && capabilities.audioDecodable(codec)) "copy" else "aac"
-            }
-        } catch (error: InterruptedException) {
-            Thread.currentThread().interrupt()
-            throw error
-        } catch (error: CancellationException) {
-            throw error
-        } catch (_: Exception) {
-            "aac"
-        } finally {
-            process?.takeIf(Process::isAlive)?.let(::terminate)
-            process?.let { clearProcess(sid, token, it) }
-            Files.deleteIfExists(output)
-        }
-    }
-
     private fun register(sid: String, token: Any, process: Process): Boolean =
         synchronized(lifecycle) {
             val current = active[sid]
@@ -189,15 +138,6 @@ class AudioTranscoder(
                 true
             }
         }
-
-    private fun clearProcess(sid: String, token: Any, process: Process) {
-        synchronized(lifecycle) {
-            val current = active[sid]
-            if (current?.token === token && current.process === process) {
-                active[sid] = Active(token, null)
-            }
-        }
-    }
 
     private fun ensureCurrent(sid: String, token: Any) {
         if (synchronized(lifecycle) { active[sid]?.token !== token }) {
@@ -224,7 +164,6 @@ class AudioTranscoder(
     private companion object {
         const val STREAM_COPY_BUFFER_BYTES = 64 * 1024
         const val STREAM_GUARD_INTERVAL_MS = 4_000L
-        const val PROBE_TIMEOUT_SECONDS = 15L
         const val PROCESS_EXIT_WAIT_SECONDS = 3L
     }
 }

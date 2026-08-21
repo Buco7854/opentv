@@ -92,7 +92,6 @@ internal fun Route.mediaRoutes(media: MediaRouteDependencies) {
             url,
             call,
             sessionId,
-            media.sessions.roomCapabilities(sessionId),
             {
                 guard()
                 media.streamGate.touch(gateId)

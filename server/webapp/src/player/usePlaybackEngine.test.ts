@@ -9,7 +9,11 @@ import { watchProgressStore } from '../watchProgress';
 type ErrorData = { fatal: boolean; type: string; details?: string; response?: { code: number } };
 type HlsEventData = ErrorData | {
   audio?: { container?: string; codec?: string; levelCodec?: string };
-  tracks?: { audio?: { container?: string; codec?: string; levelCodec?: string } };
+  audiovideo?: { container?: string; codec?: string; levelCodec?: string };
+  tracks?: {
+    audio?: { container?: string; codec?: string; levelCodec?: string };
+    audiovideo?: { container?: string; codec?: string; levelCodec?: string };
+  };
   levels?: { audioCodec?: string }[];
   audioTracks?: { audioCodec?: string }[];
   firstLevel?: number;
@@ -305,6 +309,33 @@ describe('hls playback engine', () => {
     await act(async () => { await Promise.resolve(); });
 
     expect(isTypeSupported).not.toHaveBeenCalled();
+    expect(hls.destroy).toHaveBeenCalledOnce();
+    expect(createMpegtsPlayer).toHaveBeenCalledWith(expect.objectContaining({
+      url: hlsLease.transcodeUrl,
+    }));
+    expect(actions.setAudioTranscoded).toHaveBeenLastCalledWith(true);
+  });
+
+  it('rescues a moving Chromium picture when no audio bytes are decoded', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.stubGlobal('MediaSource', { isTypeSupported: vi.fn(() => true) });
+    const hlsLease = {
+      ...lease,
+      streamUrl: '/api/v1/stream?u=h.token&sid=lease-1&g=grant-1',
+      transcodeUrl: '/api/v1/transcode?u=h.token&sid=lease-1&g=grant-1',
+    };
+    const { hls, video, actions } = await mountEngine(null, hlsLease, false, true);
+    Object.defineProperties(video, {
+      paused: { configurable: true, value: false },
+      webkitAudioDecodedByteCount: { configurable: true, value: 0, writable: true },
+    });
+
+    // The manifest claims ordinary AAC and MSE accepts it, but Chromium's own counter proves
+    // that the moving picture produced no decoded audio at all.
+    hls.emitBufferCodecs({ audio: { container: 'audio/mp4', codec: 'mp4a.40.2' } });
+    video.currentTime = 2;
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_500); });
+
     expect(hls.destroy).toHaveBeenCalledOnce();
     expect(createMpegtsPlayer).toHaveBeenCalledWith(expect.objectContaining({
       url: hlsLease.transcodeUrl,
