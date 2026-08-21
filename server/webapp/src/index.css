@@ -344,7 +344,9 @@
   .panel-row .actions .icon-btn { @apply size-9; }
   .panel-row .actions .icon-btn .icon { @apply size-[18px]; }
   .panel-row-group {
-    @apply flex items-center gap-1 rounded-[10px] transition-colors duration-100;
+    /* Keep a selected row's trailing action inside the shared pill instead of
+       letting its hover/press background touch the pill's outer edge. */
+    @apply flex items-center gap-1 rounded-[10px] pr-1 transition-colors duration-100;
   }
   .panel-row-group.selected { background: var(--c-listsel); }
   .panel-row-group.selected > .panel-row { background: transparent; }
@@ -546,9 +548,10 @@
     animation: panel-in 0.16s ease-out;
   }
 
-  .field.round > input { @apply pt-0 pl-[46px] pr-11; height: 52px; }
+  .field.round > input { @apply pt-0 pl-[46px] pr-12; height: 52px; }
   .field.round > .icon { @apply pointer-events-none absolute top-1/2 left-3.5 -translate-y-1/2 text-on-surface-variant; }
-  .field.round > .clear { @apply absolute top-1/2 right-1 -translate-y-1/2; }
+  /* The compact control leaves an 8px gutter on every side of the 52px field. */
+  .field.round > .clear { @apply absolute top-1/2 right-2 size-9 -translate-y-1/2; }
   .search-wrap { @apply mx-4 mt-2 mb-1; }
 
   /* Segmented control: selected segment = solid white pill */
