@@ -175,13 +175,13 @@ only when no other user refers to it.
   You see this on the home screen too when a connected server will not list its
   playlists. It is deliberately not the same as the welcome screen: an empty
   home means you have nothing connected, never that we failed to ask.
-- **"Signed out"**: your session ended or was revoked. Sign in again from the
-  server's entry in the sources panel. A stored session the device can no longer
-  decrypt reads the same way, so the server stays where it is and offers you a
-  sign-in rather than quietly disappearing. A session the server ends while you
-  are watching says the same thing rather than reporting a server it cannot
-  reach, which is a distinction worth having: only one of the two is fixed by
-  signing in, and retrying the other forever looks the same from the outside.
+- **"Signed out"**: your session ended or was revoked. The first authenticated
+  request the server rejects takes you directly to that server's sign-in screen;
+  concurrent playlist, detail, player, and download failures do not create several
+  redirects. A stored session the device can no longer decrypt still leaves the
+  server visible and offers sign-in rather than quietly deleting the connection.
+  An ended session is not reported as an unreachable server: only one of those two
+  conditions is fixed by signing in.
 - **A series that opens with no episodes**: the series page says so and offers a
   retry, rather than showing a poster above an empty space. The server has no
   episodes for it at that moment, which is what a favorite looks like while the

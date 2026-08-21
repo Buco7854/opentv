@@ -45,12 +45,17 @@ most one of them, and many files play on the browser's own video element without
 so each is fetched only when a stream turns out to need it, alongside the calls that open
 that stream.
 
-On a large screen the whole interface is drawn larger, in two steps, from 1280
-and 1700 pixels wide. A car or television screen is wide but watched from across
-a cabin or a room, and the layout is sized for a phone held at arm's length, so
-it would otherwise read small. Everything scales together rather than only the
-text, which keeps the proportions the design intends, and it follows the window,
-so resizing or turning a tablet lands on the right step.
+For a solo live HLS channel, Chromium can sometimes decode the video but reject its
+audio track, leaving a moving but silent picture. The player checks the exact codec
+HLS.js parsed. If the browser's Media Source API refuses it, the server keeps the
+video bit-for-bit and converts only that audio track to AAC.
+
+On a large landscape **touch** screen the whole interface is drawn larger, in two
+steps from 1500 × 800 and 1800 × 900 CSS pixels. This targets car-style screens,
+which are watched from across a cabin. Width alone does not activate it: a regular
+desktop monitor, including a 27-inch display, keeps the ordinary desktop scale.
+Everything scales together rather than only the text, which keeps the proportions
+the design intends.
 
 The server supports local password accounts with TOTP or WebAuthn MFA, OIDC
 SSO, administrator/user roles, playlist assignments, and revocable playback
