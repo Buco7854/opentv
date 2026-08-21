@@ -85,6 +85,27 @@ function useModalFocus(onEscape?: () => void) {
   return ref;
 }
 
+/**
+ * A scrim click is intentional only when the same pointer starts and ends on
+ * the scrim. Releasing a selection or drag outside a dialog must not close it.
+ */
+function useScrimDismiss(onDismiss: () => void, enabled = true) {
+  const outsidePointer = useRef<number | null>(null);
+  const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    outsidePointer.current = enabled && event.target === event.currentTarget
+      ? event.pointerId
+      : null;
+  };
+  const onPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+    const shouldDismiss = outsidePointer.current === event.pointerId
+      && event.target === event.currentTarget;
+    outsidePointer.current = null;
+    if (shouldDismiss) onDismiss();
+  };
+  const onPointerCancel = () => { outsidePointer.current = null; };
+  return { onPointerDown, onPointerUp, onPointerCancel };
+}
+
 export function Dialog({ title, onDismiss, children, buttons, className = '', dismissible = true }: {
   title: ReactNode;
   onDismiss: () => void;
@@ -95,11 +116,9 @@ export function Dialog({ title, onDismiss, children, buttons, className = '', di
 }) {
   const titleId = useId();
   const ref = useModalFocus(dismissible ? onDismiss : undefined);
+  const scrimDismiss = useScrimDismiss(onDismiss, dismissible);
   return createPortal(
-    <div
-      className="scrim"
-      onClick={(e) => { if (dismissible && e.target === e.currentTarget) onDismiss(); }}
-    >
+    <div className="scrim" {...scrimDismiss}>
       <div
         ref={ref}
         className={`dialog ${className}`.trim()}
@@ -154,6 +173,7 @@ export function Sheet({ onDismiss, header, children, container }: {
   const sheetRef = useModalFocus(onDismiss);
   const titleId = useId();
   const drag = useRef<{ startY: number; dy: number } | null>(null);
+  const scrimDismiss = useScrimDismiss(onDismiss);
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (!window.matchMedia('(max-width: 719px)').matches) return;
@@ -184,7 +204,7 @@ export function Sheet({ onDismiss, header, children, container }: {
 
   return createPortal(
     <>
-      <div className="sheet-scrim" onClick={onDismiss} />
+      <div className="sheet-scrim" {...scrimDismiss} />
       <div
         ref={sheetRef}
         className="sheet"

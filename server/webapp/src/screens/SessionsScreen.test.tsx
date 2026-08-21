@@ -99,4 +99,27 @@ describe('SessionsScreen polling', () => {
     view.unmount();
     vi.useRealTimers();
   });
+
+  it('describes live AAC normalization without also claiming untouched audio', async () => {
+    vi.mocked(api.adminPlayback).mockResolvedValue([{
+      ...activeSession,
+      live: true,
+      kind: 'live',
+      stream: {
+        ...activeSession.stream,
+        engine: 'hls',
+        audioTranscoded: true,
+      },
+    }]);
+    const view = render(<SessionsScreen />);
+    await act(async () => {});
+
+    fireEvent.click(view.getByRole('button', { name: 'Stream details' }));
+
+    expect(view.getByText("The viewer's browser can't decode the original audio, so it is transcoded to AAC on the fly.")).toBeTruthy();
+    expect(view.getByText('The video is copied unchanged; only the audio is converted.')).toBeTruthy();
+    expect(view.queryByText(/passes the video and audio through as-is/)).toBeNull();
+    view.unmount();
+    vi.useRealTimers();
+  });
 });

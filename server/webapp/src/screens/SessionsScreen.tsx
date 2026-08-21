@@ -66,7 +66,7 @@ function explain(stream: Session['stream']): string[] {
     lines.push(t('sessions.whyContainer'));
     return lines;
   }
-  if (stream.audioTranscoded) return [t('sessions.whyAudioLive'), t('sessions.whyRelay')];
+  if (stream.audioTranscoded) return [t('sessions.whyAudioLive'), t('sessions.whyLiveVideoCopy')];
   if (stream.direct) return [t('sessions.whyDirect')];
   return [t('sessions.whyRelay')];
 }
