@@ -56,29 +56,13 @@ export function playbackCapabilities(
   };
 }
 
-/**
- * Whether an HLS audio track needs the server's AAC rescue on this browser.
- *
- * HLS.js demuxes provider transport streams into an MSE SourceBuffer. A browser can therefore
- * render the video while silently dropping an AC-3/E-AC-3 track: successful video playback is
- * not proof that the complete stream is supported. Prefer the codec hls.js actually parsed over
- * the manifest hint, and ask MSE about the exact container/codec pair it is about to mount.
- * Missing metadata stays on the ordinary HLS path; a provider omission must not itself create
- * an expensive transcode.
- */
-export function hlsAudioNeedsServerNormalization(
-  track: { container?: string; codec?: string; levelCodec?: string } | null | undefined,
-  mediaSource: Pick<typeof MediaSource, 'isTypeSupported'> | undefined,
+/** A solo live player must not mount pass-through media while ffmpeg capability is unknown. */
+export function liveAudioTransportPending(
+  live: boolean,
+  roomLive: boolean,
+  ffmpegAvailable: boolean | null,
 ): boolean {
-  if (!track || !mediaSource) return false;
-  const codec = track.codec?.trim() || track.levelCodec?.trim();
-  if (!codec) return false;
-  const container = track.container?.trim() || 'audio/mp4';
-  // Chromium has returned true here for AC-3/E-AC-3 on devices which then decode no audio at
-  // all. The lease's browser capability baseline does not advertise those formats, so an
-  // actually parsed codec outside that baseline must be normalized even when MSE over-promises.
-  if (!/^(?:mp4a(?:\.|$)|aac$|mp3$|opus$|flac$|vorbis$)/i.test(codec)) return true;
-  return !mediaSource.isTypeSupported(`${container}; codecs="${codec}"`);
+  return live && !roomLive && ffmpegAvailable == null;
 }
 
 export function formatPlaybackTime(seconds: number): string {

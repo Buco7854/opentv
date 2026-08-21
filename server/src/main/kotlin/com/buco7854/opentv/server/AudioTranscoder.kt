@@ -59,7 +59,7 @@ class AudioTranscoder(
                 "-map", "0:v:0?", "-map", "0:a:0?",
                 "-c:v", "copy",
                 "-c:a", "aac",
-                "-ac", "2", "-b:a", "128k",
+                "-ac", "2", "-b:a", "192k",
             )
             command += listOf("-f", "mpegts", "-")
 

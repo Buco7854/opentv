@@ -136,15 +136,16 @@ async function mountEngine(
   engineLease: PlaybackLease = lease,
   roomLive = false,
   live = roomLive,
+  ffmpegAvailable = true,
 ) {
   const video = document.createElement('video');
   const start = vi.fn();
   const remux: RemuxController = {
     session: remuxed,
     state: 'idle',
-    available: true,
+    available: ffmpegAvailable,
     ref: { current: remuxed },
-    availableRef: { current: true },
+    availableRef: { current: ffmpegAvailable },
     start,
     markPlaying: vi.fn(),
     markDied: vi.fn(),
@@ -293,70 +294,34 @@ describe('hls playback engine', () => {
     expect(createMpegtsPlayer).not.toHaveBeenCalled();
   });
 
-  it('copies video and normalizes unsupported HLS audio to AAC on Chromium', async () => {
-    // This is the failure seen on the device: Chromium claims support, mounts the HLS video,
-    // then produces no audio for E-AC-3.
-    const isTypeSupported = vi.fn(() => true);
-    vi.stubGlobal('MediaSource', { isTypeSupported });
+  it.each([
+    ['provider HLS', 'h'],
+    ['panel HLS variant', 'l'],
+    ['raw transport stream', 't'],
+  ])('normalizes every solo live %s through AAC before mounting it', async (_label, tag) => {
     const hlsLease = {
       ...lease,
-      streamUrl: '/api/v1/stream?u=h.token&sid=lease-1&g=grant-1',
-      transcodeUrl: '/api/v1/transcode?u=h.token&sid=lease-1&g=grant-1',
+      streamUrl: `/api/v1/stream?u=${tag}.token&sid=lease-1&g=grant-1`,
+      transcodeUrl: `/api/v1/transcode?u=${tag}.token&sid=lease-1&g=grant-1`,
     };
-    const { hls, actions } = await mountEngine(null, hlsLease, false, true);
+    const { actions } = await mountEngine(null, hlsLease, false, true);
 
-    hls.emitManifestParsed('ec-3');
-    await act(async () => { await Promise.resolve(); });
-
-    expect(isTypeSupported).not.toHaveBeenCalled();
-    expect(hls.destroy).toHaveBeenCalledOnce();
+    expect(FakeHls.last).toBeNull();
     expect(createMpegtsPlayer).toHaveBeenCalledWith(expect.objectContaining({
       url: hlsLease.transcodeUrl,
     }));
     expect(actions.setAudioTranscoded).toHaveBeenLastCalledWith(true);
   });
 
-  it('rescues a moving Chromium picture when no audio bytes are decoded', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    vi.stubGlobal('MediaSource', { isTypeSupported: vi.fn(() => true) });
+  it('keeps direct HLS as the no-ffmpeg fallback', async () => {
     const hlsLease = {
       ...lease,
       streamUrl: '/api/v1/stream?u=h.token&sid=lease-1&g=grant-1',
       transcodeUrl: '/api/v1/transcode?u=h.token&sid=lease-1&g=grant-1',
     };
-    const { hls, video, actions } = await mountEngine(null, hlsLease, false, true);
-    Object.defineProperties(video, {
-      paused: { configurable: true, value: false },
-      webkitAudioDecodedByteCount: { configurable: true, value: 0, writable: true },
-    });
+    const { hls } = await mountEngine(null, hlsLease, false, true, false);
 
-    // The manifest claims ordinary AAC and MSE accepts it, but Chromium's own counter proves
-    // that the moving picture produced no decoded audio at all.
-    hls.emitBufferCodecs({ audio: { container: 'audio/mp4', codec: 'mp4a.40.2' } });
-    video.currentTime = 2;
-    await act(async () => { await vi.advanceTimersByTimeAsync(3_500); });
-
-    expect(hls.destroy).toHaveBeenCalledOnce();
-    expect(createMpegtsPlayer).toHaveBeenCalledWith(expect.objectContaining({
-      url: hlsLease.transcodeUrl,
-    }));
-    expect(actions.setAudioTranscoded).toHaveBeenLastCalledWith(true);
-  });
-
-  it('does not open a private audio rescue for a shared HLS room', async () => {
-    vi.stubGlobal('MediaSource', { isTypeSupported: vi.fn(() => false) });
-    const hlsLease = {
-      ...lease,
-      streamUrl: '/api/v1/stream?u=h.token&sid=lease-1&g=grant-1',
-      sharedHlsUrl: '/api/v1/shared-hls?u=h.token&sid=lease-1&g=grant-1',
-      transcodeUrl: '/api/v1/transcode?u=h.token&sid=lease-1&g=grant-1',
-    };
-    const { hls } = await mountEngine(null, hlsLease, true);
-
-    hls.emitBufferCodecs({ audio: { container: 'audio/mp4', codec: 'ec-3' } });
-    await act(async () => { await Promise.resolve(); });
-
-    expect(hls.destroy).not.toHaveBeenCalled();
+    expect(hls.loadSource).toHaveBeenCalledWith(hlsLease.streamUrl);
     expect(createMpegtsPlayer).not.toHaveBeenCalled();
   });
 

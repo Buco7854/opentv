@@ -20,7 +20,9 @@ import { useWatchTogether, WatchTogetherSheet } from './WatchTogether';
 import { t } from '../i18n';
 import { prefs } from '../preferences';
 import { MenuSheet, SubtitleStyle, SubtitleStyleSheet } from './PlaybackSheets';
-import { playbackCapabilities, reportedEngine } from './playbackPolicy';
+import {
+  liveAudioTransportPending, playbackCapabilities, reportedEngine,
+} from './playbackPolicy';
 import { playbackSource, sourceKind } from './mediaSource';
 import { isTerminalPlaybackStatus, mediaSourceIdentity, replaceMediaGrant } from './mediaGrant';
 import { usePlaybackStatus } from './playbackStatus';
@@ -366,9 +368,14 @@ function LeasedPlayerSurface({
   // provider only blocks provider-backed streams.
   const holdForChoice = wt.checking || wt.choosing;
   const holdForConnection = holdForChoice || (providerBacked && wt.blocked);
+  // Live browser playback chooses between the compatible AAC transport and the original source
+  // from the same ffmpeg availability result as remux. Do not race the probe and accidentally
+  // mount pass-through HLS for the lifetime of the page.
+  const holdForLiveAudioChoice = liveAudioTransportPending(live, roomLive, remux.available);
   const holdEngine = wt.refusal != null || wt.transitioning || holdForConnection || (remuxEligible && !remux.session &&
     (remux.available == null ||
-      (remux.available && (remux.state === 'idle' || remux.state === 'loading'))));
+      (remux.available && (remux.state === 'idle' || remux.state === 'loading')))) ||
+    holdForLiveAudioChoice;
   useEffect(() => {
     // Don't surface the limit error while the viewer is still choosing alone vs together - only
     // once they've picked alone and the provider really is full.
@@ -550,7 +557,9 @@ function LeasedPlayerSurface({
 
   // Report playback to the activity dashboard. Engine mirrors the wiring module's choice;
   // remux takes precedence since it re-serves the source as HLS.
-  const reportEngine = reportedEngine(liveKind, roomLive, remux.session != null);
+  const reportEngine = status.audioTranscoded
+    ? 'mpegts'
+    : reportedEngine(liveKind, roomLive, remux.session != null);
   useSessionReporter(lease.id, {
     title,
     kind: request.kind ?? (catchup ? 'catchup' : live ? 'live' : 'movie'),

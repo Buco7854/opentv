@@ -188,18 +188,17 @@ absent from the initial bundle.
   panel; `AccountRepository` locks per playlist and answers with stale data rather than
   queueing behind an in-flight request. The same rule applies to the panel EPG in
   `XtreamRepository.guideFor`, which falls back to stored XMLTV.
-- A solo browser live-HLS player listens for HLS.js's parsed audio codec. An actual codec
-  outside the browser baseline (AC-3/E-AC-3/DTS, for example) changes to the lease-scoped
-  `/transcode` transport even when Chromium's Media Source API incorrectly claims support;
-  exact MSE support remains the fallback decision for baseline codecs. Because manifests can
-  omit or mislabel audio, Chromium's decoded-audio byte counter is also watched once a picture
-  advances: zero decoded audio triggers the same rescue. That rescue never probes and re-trusts
-  the failed capability; ffmpeg always copies video and encodes audio as AAC. It is a one-way
+- A solo browser live player waits for the ffmpeg availability result and, when available, starts
+  on the lease-scoped `/transcode` transport on every browser and for every live source kind.
+  Browser codec claims, HLS manifest metadata, and Chromium's decoded-audio counter all proved
+  insufficient: affected sources can render a silent picture in both Chromium and Firefox.
+  ffmpeg always copies video bit-for-bit and encodes the first audio track as 192-kbit stereo AAC;
+  no ffmpeg installation falls back to the original transport. This is a one-way
   transport replacement for that lease: the server marks rescue active, closes the old proxy
   body, releases its provider-budget seat, and only then admits ffmpeg under the rescue key.
   Late HLS fragment requests are rejected, so a one-connection provider does not see rescue as
-  a second viewer and cannot have the old path steal the seat back. A shared-HLS room
-  never opens a private rescue connection for one member.
+  a second viewer and cannot have the old path steal the seat back. A shared-HLS room remains on
+  its one room-owned transport and never opens a private normalization connection for one member.
 - `MediaProbe.inspect` is single-flighted: a remote probe costs a provider connection on the
   path to playback, so two viewers of one title share the result. It probes with bounded
   `-analyzeduration`/`-probesize` first and re-probes unbounded only when that looks short.

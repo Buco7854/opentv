@@ -824,6 +824,7 @@ class StreamingPipelineReviewTest {
         assertFalse(processes.single().isAlive)
         val ffmpeg = commands.single()
         assertEquals("aac", ffmpeg[ffmpeg.indexOf("-c:a") + 1])
+        assertEquals("192k", ffmpeg[ffmpeg.indexOf("-b:a") + 1])
         assertTrue(commands.none { it.first() == "ffprobe" })
     }
 

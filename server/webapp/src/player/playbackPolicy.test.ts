@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  hlsAudioNeedsServerNormalization,
+  liveAudioTransportPending,
   playbackCapabilities,
   reportedEngine,
   supportsHevc,
@@ -32,45 +32,12 @@ describe('playback capability report', () => {
     expect(reportedEngine('ts', true, false)).toBe('mpegts');
     expect(reportedEngine('hls', true, true)).toBe('remux');
   });
-});
 
-describe('HLS audio capability', () => {
-  it('keeps an audio track whose exact MSE codec is supported', () => {
-    const mediaSource = { isTypeSupported: vi.fn(() => true) };
-
-    expect(hlsAudioNeedsServerNormalization(
-      { container: 'audio/mp4', codec: 'mp4a.40.2', levelCodec: 'ec-3' },
-      mediaSource,
-    )).toBe(false);
-    expect(mediaSource.isTypeSupported).toHaveBeenCalledWith(
-      'audio/mp4; codecs="mp4a.40.2"',
-    );
-  });
-
-  it('asks for AAC normalization when MSE rejects the parsed audio codec', () => {
-    const mediaSource = { isTypeSupported: vi.fn(() => false) };
-
-    expect(hlsAudioNeedsServerNormalization(
-      { container: 'audio/mp4', codec: 'ec-3' },
-      mediaSource,
-    )).toBe(true);
-  });
-
-  it('does not trust an MSE false-positive for audio outside the browser baseline', () => {
-    const mediaSource = { isTypeSupported: vi.fn(() => true) };
-
-    expect(hlsAudioNeedsServerNormalization(
-      { container: 'audio/mp4', codec: 'ec-3' },
-      mediaSource,
-    )).toBe(true);
-    expect(mediaSource.isTypeSupported).not.toHaveBeenCalled();
-  });
-
-  it('does not transcode merely because a provider omitted codec metadata', () => {
-    const mediaSource = { isTypeSupported: vi.fn(() => false) };
-
-    expect(hlsAudioNeedsServerNormalization({ container: 'audio/mp4' }, mediaSource)).toBe(false);
-    expect(hlsAudioNeedsServerNormalization(null, mediaSource)).toBe(false);
-    expect(mediaSource.isTypeSupported).not.toHaveBeenCalled();
+  it('waits for the compatible live transport only for a solo live player', () => {
+    expect(liveAudioTransportPending(true, false, null)).toBe(true);
+    expect(liveAudioTransportPending(true, false, true)).toBe(false);
+    expect(liveAudioTransportPending(true, false, false)).toBe(false);
+    expect(liveAudioTransportPending(true, true, null)).toBe(false);
+    expect(liveAudioTransportPending(false, false, null)).toBe(false);
   });
 });

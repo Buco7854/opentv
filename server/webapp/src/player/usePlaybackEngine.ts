@@ -19,7 +19,7 @@ import {
 import {
   hlsVariantOf, resolveSource, sourceKind, Transport, TransportContext,
 } from './mediaSource';
-import { hlsAudioNeedsServerNormalization, streamKind } from './playbackPolicy';
+import { streamKind } from './playbackPolicy';
 import { PlaybackStatusActions } from './playbackStatus';
 import { RemuxController } from './useRemuxSession';
 
@@ -187,13 +187,8 @@ export function usePlaybackEngine(opts: {
     }
 
     const kind = remuxRef.current ? streamKind(activeUrl) : sourceKind(leaseRef.current.streamUrl);
-    let removeAudioDecodeWatch: (() => void) | undefined;
-    let audioDecodeWatchActive = false;
-
     const stopEngines = () => {
       cancelScheduled();
-      removeAudioDecodeWatch?.(); removeAudioDecodeWatch = undefined;
-      audioDecodeWatchActive = false;
       hlsRef.current?.destroy(); hlsRef.current = null;
       mpegtsRef.current?.destroy(); mpegtsRef.current = null;
     };
@@ -359,67 +354,6 @@ export function usePlaybackEngine(opts: {
       let mediaRecoveries = 0;
       let netRetries = 0;
       let lastMediaError = 0;
-      let audioRescueStarted = false;
-      const decodedAudioBytes = () => {
-        const value = (video as HTMLVideoElement & {
-          webkitAudioDecodedByteCount?: number;
-        }).webkitAudioDecodedByteCount;
-        return typeof value === 'number' && Number.isFinite(value) ? value : null;
-      };
-      const switchToAudioRescue = () => {
-        if (audioRescueStarted || !live || roomLive || remuxRef.current) return false;
-        if (!resolveSource(transportContext(), 'transcode')) return false;
-        audioRescueStarted = true;
-        removeAudioDecodeWatch?.();
-        audioDecodeWatchActive = false;
-        hls.destroy();
-        if (hlsRef.current === hls) hlsRef.current = null;
-        void playMpegts('transcode');
-        return true;
-      };
-      const rescueUnsupportedAudio = (track: {
-        container?: string;
-        codec?: string;
-        levelCodec?: string;
-      } | null | undefined) => {
-        // A remux already selected/normalized its one audio track. A shared HLS room must keep
-        // its one server-owned upstream rather than opening a private provider connection for
-        // one member. The solo live path has a lease-scoped /transcode URL which copies video
-        // bit-for-bit and converts audio only after the ordinary path proved it could not play it.
-        const mediaSource = typeof MediaSource === 'undefined' ? undefined : MediaSource;
-        if (!hlsAudioNeedsServerNormalization(track, mediaSource)) return false;
-        return switchToAudioRescue();
-      };
-      const watchDecodedAudio = () => {
-        if (audioRescueStarted || audioDecodeWatchActive) return;
-        const firstCount = decodedAudioBytes();
-        // Chromium exposes this counter even when it accepted a SourceBuffer it cannot
-        // actually decode. Other engines keep using codec-based detection above.
-        if (firstCount == null) return;
-        audioDecodeWatchActive = true;
-        const begin = () => {
-          removeAudioDecodeWatch = undefined;
-          const startTime = video.currentTime;
-          const startCount = decodedAudioBytes() ?? firstCount;
-          schedule(() => {
-            audioDecodeWatchActive = false;
-            const endCount = decodedAudioBytes();
-            const pictureAdvanced = video.currentTime - startTime >= 1;
-            if (!video.paused && pictureAdvanced && endCount != null && endCount <= startCount) {
-              switchToAudioRescue();
-            }
-          }, 3_500);
-        };
-        if (video.paused) {
-          video.addEventListener('playing', begin, { once: true });
-          removeAudioDecodeWatch = () => {
-            video.removeEventListener('playing', begin);
-            audioDecodeWatchActive = false;
-          };
-        } else {
-          begin();
-        }
-      };
       // A media error every now and then (e.g. resuming after the tab was backgrounded and the
       // decoder was suspended) shouldn't burn the recovery budget forever: once fragments flow
       // again for a few seconds, restore it so each incident gets a fresh attempt.
@@ -475,32 +409,15 @@ export function usePlaybackEngine(opts: {
           setError(t('player.failedDetail', { detail: data.details || data.type }));
         }
       });
-      hls.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
-        const advertisedAudio = data.audioTracks[0]?.audioCodec
-          ?? data.levels[data.firstLevel]?.audioCodec;
-        if (advertisedAudio && rescueUnsupportedAudio({
-          container: 'audio/mp4', codec: advertisedAudio,
-        })) return;
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
         readHlsTracks(hls);
         markPlaying();
-      });
-      hls.on(Hls.Events.BUFFER_CODECS, (_event, data) => {
-        // The parsed track is more trustworthy than CODECS on the provider manifest. In
-        // particular, Chromium can accept the video SourceBuffer while rejecting AC-3/E-AC-3,
-        // producing a perfectly moving but completely silent channel.
-        const audio = data.audio ?? data.tracks?.audio;
-        const muxedAudioVideo = data.audiovideo ?? data.tracks?.audiovideo;
-        rescueUnsupportedAudio(audio ?? muxedAudioVideo);
-        if (audio || muxedAudioVideo) watchDecodedAudio();
       });
       // Track lists exist only once these fire; setting the pick here pre-empts
       // hls.js's default selection, so picks survive seek re-anchors.
       hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => {
         const chosen = chosenTracks.current;
         if (chosen.audio >= 0 && chosen.audio < hls.audioTracks.length) hls.audioTrack = chosen.audio;
-        const current = hls.audioTracks[hls.audioTrack] ?? hls.audioTracks[0];
-        rescueUnsupportedAudio(current && { codec: current.audioCodec });
-        if (hls.audioTracks.length > 0) watchDecodedAudio();
         readHlsTracks(hls);
       });
       hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, () => {
@@ -517,7 +434,15 @@ export function usePlaybackEngine(opts: {
     const sharedHls = roomLive && kind === 'hls'
       ? resolveSource(transportContext(), 'shared-hls')
       : null;
-    if (roomLive && kind !== 'hls') playMpegts('relay');
+    // Browser codec claims and manifest metadata both proved insufficient in the field:
+    // Chromium and Firefox can render a live picture while dropping its audio. When ffmpeg is
+    // available, start every solo live browser stream on the lease's compatible transport.
+    // The server copies video bit-for-bit and normalizes only audio to AAC.
+    const compatibleSoloLive = live && !roomLive && remux.available === true
+      ? resolveSource(transportContext(), 'transcode')
+      : null;
+    if (compatibleSoloLive) playMpegts('transcode');
+    else if (roomLive && kind !== 'hls') playMpegts('relay');
     else if (sharedHls) playHls(sharedHls.url);
     else if (kind === 'hls') playHls(activeUrl);
     else if (kind === 'livets') playHls(activeUrl, true);
@@ -604,7 +529,7 @@ export function usePlaybackEngine(opts: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     sourceKey, activeSourceKey, live, catchup, hold, roomLive, contentId,
-    remux.session?.id, remux.session?.startAt, remuxRef, remuxAvailableRef,
+    remux.session?.id, remux.session?.startAt, remux.available, remuxRef, remuxAvailableRef,
     leaseRef, videoRef, chosenTracks, transportContext, startRemux, markPlaying,
     recoverMediaGrant, onTerminate,
     setError, setBuffering, setBufferedEnd, setAudioTranscoded, setTracks,

@@ -16,7 +16,7 @@ export interface PlaybackStatus {
   paused: boolean;
   buffering: boolean;
   bufferedEnd: number;
-  /** Live audio the browser couldn't decode, rescued via the server's AAC transcode. */
+  /** Solo live browser audio normalized by the server's compatible AAC transport. */
   audioTranscoded: boolean;
   time: { position: number; duration: number };
   tracks: TrackMenus;
