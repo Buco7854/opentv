@@ -47,8 +47,13 @@ that stream.
 
 For a solo live HLS channel, Chromium can sometimes decode the video but reject its
 audio track, leaving a moving but silent picture. The player checks the exact codec
-HLS.js parsed. If the browser's Media Source API refuses it, the server keeps the
-video bit-for-bit and converts only that audio track to AAC.
+HLS.js parsed. AC-3, E-AC-3, DTS and other formats outside the browser baseline are
+normalized even when Chromium incorrectly reports that it supports them. The server
+keeps the video bit-for-bit and converts only that audio track to AAC.
+
+Reloading a solo player replaces the previous lease from that browser tab before the
+new one starts. This releases the old provider connection immediately instead of making
+the reloaded page wait for the stale player to expire and then report a connection limit.
 
 On a large landscape **touch** screen the whole interface is drawn larger, in two
 steps from 1500 × 800 and 1800 × 900 CSS pixels. This targets car-style screens,
