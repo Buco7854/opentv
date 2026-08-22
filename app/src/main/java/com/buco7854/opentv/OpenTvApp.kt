@@ -89,7 +89,7 @@ class AppGraph(app: Application) : AutoCloseable {
         executionLocks = downloadExecutionLocks,
     )
     val favorites = FavoriteRepository(storage.favorites)
-    val metadata = MetadataRepository(storage.metadata, Http.fetcher, coreLog)
+    val metadata = MetadataRepository(storage.metadata, Http.metadataFetcher, coreLog)
     val resume = ResumeRepository(storage.resume, applicationScope)
     val catalogProgressUpdates = CatalogProgressUpdates()
     private val catalogGateways = LinkedHashMap<SourceId, CatalogGateway>(16, 0.75f, true)

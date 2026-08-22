@@ -132,8 +132,10 @@ internal class MovieDetailViewModel(
                     mutableState.value = mutableState.value.copy(detail = detail)
                     val channel = localChannel(ref)
                     val metadata: Metadata? = if (channel != null) {
-                        channel.xtreamStreamId?.let { graph.xtream.vodMetadata(channel) }
-                            ?: graph.metadata.forTitle(isSeries = false, rawName = channel.name)
+                        graph.metadata.movieForTitle(
+                            rawName = channel.name,
+                            provider = channel.xtreamStreamId?.let { graph.xtream.vodMetadata(channel) },
+                        )
                     } else {
                         // No local channel row means the source owns this film, so its cast
                         // and rating have to be asked for. Losing them is not worth failing

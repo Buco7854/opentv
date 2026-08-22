@@ -4,6 +4,7 @@ import com.buco7854.opentv.core.epg.TextSource
 import com.buco7854.opentv.core.net.ConditionalFetch
 import com.buco7854.opentv.core.net.ConditionalFetcher
 import com.buco7854.opentv.core.net.HttpFetcher
+import com.buco7854.opentv.core.net.OPENTV_METADATA_USER_AGENT
 import com.buco7854.opentv.core.net.TextBody
 import java.io.BufferedReader
 import java.io.ByteArrayInputStream
@@ -68,15 +69,27 @@ class ServerHttp {
         .connectTimeout(Duration.ofSeconds(20))
         .build()
 
-    private fun request(url: String): HttpRequest.Builder =
+    private fun request(url: String, agent: String = userAgent): HttpRequest.Builder =
         HttpRequest.newBuilder(URI.create(url))
             .timeout(Duration.ofSeconds(60))
-            .header("User-Agent", userAgent)
+            .header("User-Agent", agent)
 
     /** :core's plain-GET port (Xtream API, metadata lookups). */
     val fetcher: HttpFetcher = HttpFetcher { url ->
         withContext(Dispatchers.IO) {
             val response = client.send(request(url).build(), HttpResponse.BodyHandlers.ofString())
+            if (response.statusCode() !in 200..299) throw IOException("HTTP ${response.statusCode()}")
+            response.body()
+        }
+    }
+
+    /** Public metadata services require an identifiable application UA, not the provider UA. */
+    val metadataFetcher: HttpFetcher = HttpFetcher { url ->
+        withContext(Dispatchers.IO) {
+            val response = client.send(
+                request(url, OPENTV_METADATA_USER_AGENT).build(),
+                HttpResponse.BodyHandlers.ofString(),
+            )
             if (response.statusCode() !in 200..299) throw IOException("HTTP ${response.statusCode()}")
             response.body()
         }

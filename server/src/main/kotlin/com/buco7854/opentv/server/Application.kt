@@ -136,7 +136,7 @@ object ServerBootstrap {
         cleanup.bind(sessions, downloads)
         playbackCleanup.bind(mediaGrants, proxy, liveRelay, transcoder, streamGate, remux)
         val xtream = XtreamRepository(storage, xtreamApi, epg, account, coreLog)
-        val metadata = MetadataRepository(storage.metadata, http.fetcher, coreLog)
+        val metadata = MetadataRepository(storage.metadata, http.metadataFetcher, coreLog)
         val apiServices = ApiServices(
             playlists = PlaylistApplicationService(
                 storage,

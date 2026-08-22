@@ -43,8 +43,8 @@ class LibraryApplicationService(
         vodInfoFor(actor, channelModel(actor, id))
 
     private suspend fun vodInfoFor(actor: Actor, channel: Channel): MetadataDto {
-        val result = channel.xtreamStreamId?.let { xtream.vodMetadata(channel) }
-            ?: metadata.forTitle(isSeries = false, rawName = channel.name)
+        val panel = channel.xtreamStreamId?.let { xtream.vodMetadata(channel) }
+        val result = metadata.movieForTitle(channel.name, panel)
         return result.toDto(cipher, actor.userId, channel.playlistId)
     }
 

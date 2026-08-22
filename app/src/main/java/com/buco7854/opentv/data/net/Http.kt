@@ -5,6 +5,7 @@ import com.buco7854.opentv.core.epg.TextSource
 import com.buco7854.opentv.core.net.ConditionalFetch
 import com.buco7854.opentv.core.net.ConditionalFetcher
 import com.buco7854.opentv.core.net.HttpFetcher
+import com.buco7854.opentv.core.net.OPENTV_METADATA_USER_AGENT
 import com.buco7854.opentv.core.net.TextBody
 import java.io.BufferedReader
 import java.io.ByteArrayInputStream
@@ -69,6 +70,18 @@ object Http {
         val request = Request.Builder()
             .url(url)
             .header("User-Agent", userAgent)
+            .build()
+        ok.newCall(request).executeCancellable { response ->
+            if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
+            response.body.string()
+        }
+    }
+
+    /** Public metadata services require an identifiable application UA, not the provider UA. */
+    val metadataFetcher: HttpFetcher = HttpFetcher { url ->
+        val request = Request.Builder()
+            .url(url)
+            .header("User-Agent", OPENTV_METADATA_USER_AGENT)
             .build()
         ok.newCall(request).executeCancellable { response ->
             if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
