@@ -104,7 +104,7 @@ interface CatalogGateway {
      * loses its cast while every series keeps one. Null means this source has nothing
      * to add, which is the honest answer for a plain M3U entry.
      */
-    suspend fun movieMetadata(ref: ContentRef): CatalogResult<Metadata?> =
+    suspend fun movieMetadata(ref: ContentRef, enrich: Boolean = true): CatalogResult<Metadata?> =
         CatalogResult.Success(null)
 
     /** Optional title enrichment for series whose provider detail contains names only. */

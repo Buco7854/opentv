@@ -113,7 +113,8 @@ object HubEndpoints {
     // Content (stable identity; never the numeric channel id)
     fun content(base: String, contentId: String) = api(base, "/content/${Urls.encodePathSegment(contentId)}")
     fun contentGuide(base: String, contentId: String) = "${content(base, contentId)}/guide"
-    fun contentVodInfo(base: String, contentId: String) = "${content(base, contentId)}/vod-info"
+    fun contentVodInfo(base: String, contentId: String, enrich: Boolean = true) =
+        "${content(base, contentId)}/vod-info?enrich=$enrich"
 
     fun meta(base: String, type: String, title: String) =
         api(base, "/meta?type=$type&title=${Urls.percentEncode(title)}")

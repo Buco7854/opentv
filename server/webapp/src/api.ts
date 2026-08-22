@@ -648,7 +648,8 @@ export const api = {
     j<XtreamSeriesDetail>(`/playlists/${id}/xseries/${encodeURIComponent(seriesId)}`),
   channel: (ref: ContentRef) => j<Channel>(contentPath(ref)),
   guide: (ref: ContentRef) => j<GuideEntry[]>(`${contentPath(ref)}/guide`),
-  vodInfo: (ref: ContentRef) => j<Metadata>(`${contentPath(ref)}/vod-info`),
+  vodInfo: (ref: ContentRef, enrich = true) =>
+    j<Metadata>(`${contentPath(ref)}/vod-info?enrich=${enrich}`),
   meta: (type: 'movie' | 'series', title: string) =>
     j<Metadata>(`/meta?type=${type}&title=${encodeURIComponent(title)}`),
   metaEpisode: (series: string, season: number, episode: number) =>

@@ -647,8 +647,10 @@ class HubCatalogGatewayTest {
             )
         }
 
-        val metadata = HubCatalogGateway(SourceId.Hub(3, 7), backend)
-            .movieMetadata(ContentRef.HubContent("film-content"))
+        val gateway = HubCatalogGateway(SourceId.Hub(3, 7), backend)
+        gateway.movieMetadata(ContentRef.HubContent("film-content"), enrich = false).successValue()
+        val metadata = gateway
+            .movieMetadata(ContentRef.HubContent("film-content"), enrich = true)
             .successValue()
 
         assertEquals("Alice Isaaz, Kevin Bago", metadata?.castNames)
@@ -659,7 +661,8 @@ class HubCatalogGatewayTest {
             "https://hub.example/api/v1/img?u=cast-token",
             decodeCast(metadata?.castJson).single().photo,
         )
-        assertEquals(1, backend.vodInfoCalls)
+        assertEquals(2, backend.vodInfoCalls)
+        assertEquals(listOf(false, true), backend.vodInfoEnrichments)
         // The panel's own id is text and the local field means the metadata provider's
         // numeric id, so it is dropped rather than forced into a field of another meaning.
         assertNull(metadata?.sourceId)
@@ -785,6 +788,7 @@ private class FakeHubBackend : HubCatalogBackend {
     var resolvedFavoriteCalls = 0
     var contentCalls = 0
     var vodInfoCalls = 0
+    val vodInfoEnrichments = mutableListOf<Boolean>()
     var vodInfo: MetadataDto? = null
     var metadataCalls = 0
     var metadataType: String? = null
@@ -936,8 +940,9 @@ private class FakeHubBackend : HubCatalogBackend {
 
     override suspend fun content(contentId: String) =
         channel(contentId, "Detail").also { contentCalls++ }
-    override suspend fun vodInfo(contentId: String): MetadataDto {
+    override suspend fun vodInfo(contentId: String, enrich: Boolean): MetadataDto {
         vodInfoCalls++
+        vodInfoEnrichments += enrich
         return vodInfo ?: throw IllegalStateException("no vod info configured")
     }
 

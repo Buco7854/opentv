@@ -131,17 +131,26 @@ internal class MovieDetailViewModel(
                     }
                     mutableState.value = mutableState.value.copy(detail = detail)
                     val channel = localChannel(ref)
-                    val metadata: Metadata? = if (channel != null) {
-                        graph.metadata.movieForTitle(
-                            rawName = channel.name,
-                            provider = channel.xtreamStreamId?.let { graph.xtream.vodMetadata(channel) },
-                        )
+                    val immediateMetadata: Metadata? = if (channel != null) {
+                        channel.xtreamStreamId?.let { graph.xtream.vodMetadata(channel) }
                     } else {
-                        // No local channel row means the source owns this film, so its cast
-                        // and rating have to be asked for. Losing them is not worth failing
-                        // a page that has already loaded, so a refusal leaves them absent.
-                        gateway.movieMetadata(ref).valueOrNull()
+                        when (val fast = safeCall { gateway.movieMetadata(ref, enrich = false) }) {
+                            is CatalogResult.Success -> fast.value
+                            CatalogResult.SignedOut -> {
+                                fail(CatalogLoadError.SignedOut)
+                                return@launch
+                            }
+                            CatalogResult.Unreachable -> {
+                                fail(CatalogLoadError.Unreachable)
+                                return@launch
+                            }
+                            is CatalogResult.Failed -> null
+                        }
                     }
+                    // Panel data (including names-only cast) is useful by itself. Publish it
+                    // before keyless portrait enrichment starts; an external metadata service
+                    // must never leave an otherwise loaded movie detail looking empty.
+                    mutableState.value = mutableState.value.copy(metadata = immediateMetadata)
                     val favorite = when (
                         val favoriteResult = safeCall { gateway.isFavorite(ref) }
                     ) {
@@ -157,6 +166,25 @@ internal class MovieDetailViewModel(
                         is CatalogResult.Failed -> {
                             fail(CatalogLoadError.Failed(favoriteResult.cause))
                             return@launch
+                        }
+                    }
+                    mutableState.value = mutableState.value.copy(isFavorite = favorite)
+                    val metadata: Metadata? = if (channel != null) {
+                        graph.metadata.movieForTitle(
+                            rawName = channel.name,
+                            provider = immediateMetadata,
+                        )
+                    } else {
+                        when (val enriched = safeCall { gateway.movieMetadata(ref, enrich = true) }) {
+                            is CatalogResult.Success -> enriched.value ?: immediateMetadata
+                            CatalogResult.SignedOut -> {
+                                fail(CatalogLoadError.SignedOut)
+                                return@launch
+                            }
+                            // The page and its provider metadata already loaded. Losing optional
+                            // decoration later is not a page-level connectivity failure.
+                            CatalogResult.Unreachable,
+                            is CatalogResult.Failed -> immediateMetadata
                         }
                     }
                     mutableState.value = MovieDetailState(

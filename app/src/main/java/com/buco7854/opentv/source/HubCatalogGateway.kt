@@ -358,8 +358,12 @@ class HubCatalogGateway internal constructor(
      * and only hands them over when asked. A local playlist reaches the same information
      * through its own channel row, which a server-owned film has no equivalent of.
      */
-    override suspend fun movieMetadata(ref: ContentRef): CatalogResult<Metadata?> =
-        hubCall<Metadata?> { backend.vodInfo(ref.hubContentId()).toMetadata(::image) }
+    override suspend fun movieMetadata(
+        ref: ContentRef,
+        enrich: Boolean,
+    ): CatalogResult<Metadata?> = hubCall<Metadata?> {
+        backend.vodInfo(ref.hubContentId(), enrich).toMetadata(::image)
+    }
 
     override suspend fun seriesMetadata(title: String): CatalogResult<Metadata?> =
         hubCall<Metadata?> { backend.metadata("series", title).toMetadata(::image) }
@@ -509,7 +513,7 @@ internal interface HubCatalogBackend {
     suspend fun removeFavorite(contentId: String)
     suspend fun resume(): List<ResumePointDto>
     suspend fun content(contentId: String): ChannelDto
-    suspend fun vodInfo(contentId: String): MetadataDto
+    suspend fun vodInfo(contentId: String, enrich: Boolean = true): MetadataDto
     suspend fun metadata(type: String, title: String): MetadataDto
     suspend fun guide(contentId: String): List<GuideEntryDto>
 }
@@ -581,7 +585,8 @@ private class RegistryHubCatalogBackend(
         call { removeFavorite(it, source.playlistId, contentId) }
     override suspend fun resume() = call { resume(it) }
     override suspend fun content(contentId: String) = call { content(it, contentId) }
-    override suspend fun vodInfo(contentId: String) = call { contentVodInfo(it, contentId) }
+    override suspend fun vodInfo(contentId: String, enrich: Boolean) =
+        call { contentVodInfo(it, contentId, enrich) }
     override suspend fun metadata(type: String, title: String) = call { metadata(it, type, title) }
     override suspend fun guide(contentId: String) = call { contentGuide(it, contentId) }
 }

@@ -317,8 +317,15 @@ class HubApi(
         getList(c, HubEndpoints.contentGuide(c.baseUrl, contentId), GuideEntryDto.serializer())
 
     /** Cast, rating and overview for a film, which its channel row does not carry. */
-    suspend fun contentVodInfo(c: HubCredentials, contentId: String): MetadataDto =
-        get(c, HubEndpoints.contentVodInfo(c.baseUrl, contentId), MetadataDto.serializer())
+    suspend fun contentVodInfo(
+        c: HubCredentials,
+        contentId: String,
+        enrich: Boolean = true,
+    ): MetadataDto = get(
+        c,
+        HubEndpoints.contentVodInfo(c.baseUrl, contentId, enrich),
+        MetadataDto.serializer(),
+    )
 
     suspend fun metadata(c: HubCredentials, type: String, title: String): MetadataDto =
         get(c, HubEndpoints.meta(c.baseUrl, type, title), MetadataDto.serializer())

@@ -45,6 +45,10 @@ class HubEndpointsTest {
             "https://tv.example/api/v1/content/ab%2Fcd/guide",
             HubEndpoints.contentGuide("https://tv.example", "ab/cd"),
         )
+        assertEquals(
+            "https://tv.example/api/v1/content/ab%2Fcd/vod-info?enrich=false",
+            HubEndpoints.contentVodInfo("https://tv.example", "ab/cd", enrich = false),
+        )
     }
 
     @Test

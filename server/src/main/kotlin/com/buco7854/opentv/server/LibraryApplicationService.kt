@@ -33,18 +33,18 @@ class LibraryApplicationService(
     suspend fun guideByContent(actor: Actor, contentId: String): List<GuideEntryDto> =
         xtream.guideFor(channelByContentModel(actor, contentId)).map { it.toDto() }
 
-    suspend fun vodInfoByContent(actor: Actor, contentId: String): MetadataDto =
-        vodInfoFor(actor, channelByContentModel(actor, contentId))
+    suspend fun vodInfoByContent(actor: Actor, contentId: String, enrich: Boolean = true): MetadataDto =
+        vodInfoFor(actor, channelByContentModel(actor, contentId), enrich)
 
     suspend fun guide(actor: Actor, id: Long): List<GuideEntryDto> =
         xtream.guideFor(channelModel(actor, id)).map { it.toDto() }
 
-    suspend fun vodInfo(actor: Actor, id: Long): MetadataDto =
-        vodInfoFor(actor, channelModel(actor, id))
+    suspend fun vodInfo(actor: Actor, id: Long, enrich: Boolean = true): MetadataDto =
+        vodInfoFor(actor, channelModel(actor, id), enrich)
 
-    private suspend fun vodInfoFor(actor: Actor, channel: Channel): MetadataDto {
+    private suspend fun vodInfoFor(actor: Actor, channel: Channel, enrich: Boolean): MetadataDto {
         val panel = channel.xtreamStreamId?.let { xtream.vodMetadata(channel) }
-        val result = metadata.movieForTitle(channel.name, panel)
+        val result = if (enrich) metadata.movieForTitle(channel.name, panel) else panel
         return result.toDto(cipher, actor.userId, channel.playlistId)
     }
 

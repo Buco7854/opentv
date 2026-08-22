@@ -14,7 +14,9 @@ internal fun Route.libraryRoutes(service: LibraryApplicationService) {
     route("/channels/{id}") {
         get { call.respond(service.channel(call.actor, call.id())) }
         get("/guide") { call.respond(service.guide(call.actor, call.id())) }
-        get("/vod-info") { call.respond(service.vodInfo(call.actor, call.id())) }
+        get("/vod-info") {
+            call.respond(service.vodInfo(call.actor, call.id(), call.enrichMetadata()))
+        }
     }
 
     // The same three resources addressed by stable content id. A catalog refresh reassigns
@@ -26,7 +28,13 @@ internal fun Route.libraryRoutes(service: LibraryApplicationService) {
             call.respond(service.guideByContent(call.actor, call.requiredParameter("contentId")))
         }
         get("/vod-info") {
-            call.respond(service.vodInfoByContent(call.actor, call.requiredParameter("contentId")))
+            call.respond(
+                service.vodInfoByContent(
+                    call.actor,
+                    call.requiredParameter("contentId"),
+                    call.enrichMetadata(),
+                )
+            )
         }
     }
 
@@ -71,3 +79,7 @@ internal fun Route.libraryRoutes(service: LibraryApplicationService) {
         }
     }
 }
+
+/** Missing stays rich for callers predating staged detail loading. */
+private fun io.ktor.server.application.ApplicationCall.enrichMetadata(): Boolean =
+    request.queryParameters["enrich"]?.toBooleanStrictOrNull() ?: true

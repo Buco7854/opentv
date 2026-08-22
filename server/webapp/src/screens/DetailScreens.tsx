@@ -111,10 +111,15 @@ export function MovieDetailScreen() {
   const navigate = useNavigate();
   const { playChannel } = usePlayer();
   const { data: movie, error } = useAsync(() => api.channel(channelId), [channelId]);
-  const { data: meta } = useAsync(
-    async () => (movie ? api.vodInfo(channelId) : null),
+  const { data: panelMeta } = useAsync(
+    async () => (movie ? api.vodInfo(channelId, false) : null),
     [channelId, movie != null],
   );
+  const { data: enrichedMeta } = useAsync(
+    async () => (panelMeta ? api.vodInfo(channelId, true) : null),
+    [channelId, panelMeta != null],
+  );
+  const meta = enrichedMeta ?? panelMeta;
   const progress = useWatchProgress();
   const { favoriteContentIds, toggleFavorite } = useFavorites(movie?.playlistId ?? null);
 
