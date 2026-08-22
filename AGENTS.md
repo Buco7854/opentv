@@ -299,6 +299,11 @@ absent from the initial bundle.
   the fixed Wikimedia Commons origin. Results, including unambiguous misses,
   share the existing 30-day metadata cache; a transport failure remains
   retryable instead of becoming a cached negative result.
+- Movie metadata is staged on both clients. They request `/vod-info?enrich=false`
+  first and render the source/panel synopsis and names immediately; only after
+  that response do they request `enrich=true` and replace it with the cached or
+  keyless-enriched result. The two calls stay sequential so a first Xtream panel
+  lookup is cached before enrichment and cannot consume two provider requests.
 - Provider URLs and credentials held by the server never appear in response contracts.
 - Browser playlist credentials are write-only. There is no credential-read
   endpoint. Blank secret fields on update preserve existing values.

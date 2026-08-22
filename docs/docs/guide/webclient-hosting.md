@@ -134,7 +134,9 @@ kept as `settings.properties.bak`; the stream-token key is preserved.
   positions** stored server-side, shared by every browser you use.
 - **Details**: movie/series/episode pages with panel metadata (Xtream) or
   keyless TVMaze/iTunes/Wikidata enrichment, Wikimedia Commons cast portraits,
-  cast rows and ratings, identical logic to the app.
+  cast rows and ratings, identical logic to the app. A movie's panel details
+  render first; slower public enrichment decorates that visible page instead of
+  delaying it.
 - **Player**: HLS (hls.js), MPEG-TS (mpegts.js) and direct MP4/WebM through the
   built-in stream proxy, with track selection, speed, scaling, picture-in-picture
   and fullscreen.
