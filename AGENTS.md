@@ -414,6 +414,10 @@ absent from the initial bundle.
   hub HTTP calls remain behind its registry-backed adapter.
 - Android composables consume ViewModel state; direct graph access is confined
   to composition/ViewModel-factory boundaries.
+- Android detail payloads never join the source's resume collection. The detail renders as
+  soon as its content row arrives, while `DetailProgressTracker` refreshes source-owned
+  progress independently on every lifecycle resume. A completed player write still wins over
+  an older in-flight refresh through the process-local revision guard.
 - `PlayerSession` owns ExoPlayer, listeners, polling, progress persistence, and
   cleanup.
 - Hub direct playback uses ExoPlayer's in-band track picker. A hub remux exposes the server's

@@ -347,9 +347,11 @@ class HubCatalogGateway internal constructor(
 
     override suspend fun detail(ref: ContentRef): CatalogResult<CatalogDetail?> = hubCall {
         val contentId = ref.hubContentId()
-        val progress = progress()
         val channel = backend.content(contentId)
-        val item = channel.toCatalogItem(progress[contentId], image(channel.logo))
+        // Keep the detail payload on the path to first paint. Resume points are a
+        // separate, potentially large user collection and DetailProgressTracker owns
+        // refreshing them without blocking the title, poster, or actions.
+        val item = channel.toCatalogItem(progress = null, image(channel.logo))
         CatalogDetail(item, description = channel.description)
     }
 

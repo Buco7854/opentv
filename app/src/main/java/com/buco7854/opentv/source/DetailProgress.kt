@@ -66,9 +66,9 @@ internal data class DetailProgressOverride(
 /**
  * Owns source-authoritative detail progress without polling.
  *
- * A hub's first resume uses the progress already joined into its initial detail response.
- * Local detail rows carry no joined progress, so their first resume reads Room. Every later
- * resume (returning from the player, or foregrounding the app) refreshes from the source.
+ * Detail payloads never wait for the source's resume collection. Every resume, including the
+ * first, refreshes progress independently so title, artwork, metadata, and actions can render
+ * while that source-owned state catches up.
  */
 internal class DetailProgressTracker(
     private val source: SourceId,
@@ -79,7 +79,6 @@ internal class DetailProgressTracker(
     private val mutableState = MutableStateFlow(DetailProgressState())
     val state: StateFlow<DetailProgressState> = mutableState.asStateFlow()
 
-    private var hasResumed = false
     private var refreshJob: Job? = null
     private var updateRevision = 0L
 
@@ -102,15 +101,6 @@ internal class DetailProgressTracker(
     }
 
     fun onResumed() {
-        if (!hasResumed) {
-            hasResumed = true
-            // Hub detail responses already join the current user's resume point. Local
-            // channel/detail rows do not: those screens historically paired the item with
-            // Room's resume flow. Preserve that first-visit behavior without making a hub
-            // pay for a duplicate network request.
-            if (source is SourceId.LocalPlaylist) refresh()
-            return
-        }
         refresh()
     }
 

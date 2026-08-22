@@ -429,7 +429,7 @@ class HubCatalogGatewayTest {
     }
 
     @Test
-    fun detailJoinsServerOwnedResumeProgress() = runTest {
+    fun detailDoesNotWaitForTheResumeCollection() = runTest {
         val backend = FakeHubBackend().apply {
             resumeRows = listOf(ResumePointDto("movie-1", 30, 60, 4))
         }
@@ -438,7 +438,9 @@ class HubCatalogGatewayTest {
         val detail = gateway.detail(ContentRef.HubContent("movie-1")).successValue()
 
         assertEquals(ContentRef.HubContent("movie-1"), detail?.item?.ref)
-        assertEquals(.5f, detail?.item?.progress)
+        assertNull(detail?.item?.progress)
+        assertEquals(0, backend.resumeCalls)
+        assertEquals(1, backend.contentCalls)
     }
 
     @Test

@@ -43,19 +43,20 @@ class DetailProgressTest {
             backgroundScope,
             CatalogProgressUpdates(),
         )
-        val item = item(ref, progress = .1f)
+        val item = item(ref, progress = null)
 
         runCurrent()
-        tracker.onResumed() // Initial detail response already owns the current snapshot.
+        tracker.onResumed()
         runCurrent()
-        assertEquals(0, gateway.resumeRequests)
-        assertEquals(.1f, tracker.state.value.progressFor(item))
+        assertEquals(1, gateway.resumeRequests)
+        assertEquals(.6f, tracker.state.value.progressFor(item))
 
+        gateway.resumeResult = CatalogResult.Success(listOf(point(ref, 80_000, 100_000)))
         tracker.onResumed() // Same ViewModel becomes visible after the player is popped.
         runCurrent()
 
-        assertEquals(1, gateway.resumeRequests)
-        assertEquals(.6f, tracker.state.value.progressFor(item))
+        assertEquals(2, gateway.resumeRequests)
+        assertEquals(.8f, tracker.state.value.progressFor(item))
     }
 
     @Test
@@ -70,7 +71,6 @@ class DetailProgressTest {
             CatalogProgressUpdates(),
         )
 
-        tracker.onResumed()
         tracker.onResumed()
         runCurrent()
 
@@ -93,7 +93,6 @@ class DetailProgressTest {
         )
 
         tracker.onResumed()
-        tracker.onResumed()
         runCurrent()
 
         assertEquals(.25f, tracker.state.value.progressFor(item(detailRef, progress = null)))
@@ -115,7 +114,6 @@ class DetailProgressTest {
         val tracker = DetailProgressTracker(source, gateway, backgroundScope, updates)
 
         runCurrent()
-        tracker.onResumed()
         tracker.onResumed()
         refreshStarted.await()
 
