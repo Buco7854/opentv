@@ -90,7 +90,8 @@ genuinely good while doing it.
   progress, watch together, and pipelined downloads stored on the device.
 - **Browsing**: list or poster-grid views with 4K/FHD/HDR badges, a filter bar,
   global search, favorites keyed by stable identity, and rich movie, series and
-  episode pages with cast photos (keyless via TVMaze and iTunes).
+  episode pages with cast photos (keyless via TVMaze, iTunes and
+  Wikidata/Wikimedia Commons).
 - **Watching**: Media3/ExoPlayer (HLS, TS, MP4, MKV) with embedded audio and
   subtitle track selection and styling, skip and scale gestures,
   Picture-in-Picture (including auto-PiP), continuous resume, EPG now/next with a

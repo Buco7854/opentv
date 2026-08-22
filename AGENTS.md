@@ -292,6 +292,13 @@ absent from the initial bundle.
   ingestion; invalid optional TVMaze `sourceId` is stored as null while the
   remaining metadata is kept. The Xtream-series route rejects the same invalid
   forms with a typed 400 instead of normalizing them into another identity.
+- Movie cast portraits need no configured API token. Metadata lookup uses the
+  indexed Wikidata Action API with an identifiable fixed User-Agent, searches
+  French and English, requires one exact title/year match carrying P161 cast
+  statements, then builds bounded portrait URLs only from P18 file names under
+  the fixed Wikimedia Commons origin. Results, including unambiguous misses,
+  share the existing 30-day metadata cache; a transport failure remains
+  retryable instead of becoming a cached negative result.
 - Provider URLs and credentials held by the server never appear in response contracts.
 - Browser playlist credentials are write-only. There is no credential-read
   endpoint. Blank secret fields on update preserve existing values.

@@ -17,7 +17,10 @@ With standalone sources, your provider credentials and viewing state stay on
 your device. The app talks to:
 
 - your provider, to fetch playlists, the guide and streams, and
-- optional keyless metadata sources, to show posters, synopsis and cast.
+- optional keyless metadata sources: TVMaze for series, iTunes for movie
+  details, and Wikidata/Wikimedia Commons for movie cast portraits. OpenTV
+  sends a cleaned title and, when known, its year; it never sends provider
+  credentials or viewing history to those services.
 
 If you add your own OpenTV server as a source, the app also talks to that
 server. The server holds the account, granted playlists, favorites, progress,
