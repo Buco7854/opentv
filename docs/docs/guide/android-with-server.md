@@ -90,6 +90,10 @@ entry does not carry them, whereas a series detail does. They fill in a moment
 after the page appears, and a film the provider knows nothing about simply shows
 none, the same as one from a local playlist.
 
+Watch progress is independent too. Opening the page never waits for the server's
+whole progress list: the title, poster and controls appear first, then the progress
+bar catches up when that source answers.
+
 ## Watch together
 
 If someone else is watching the same thing, the player offers to watch together.
