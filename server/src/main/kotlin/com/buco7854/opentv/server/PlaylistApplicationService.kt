@@ -56,6 +56,7 @@ class PlaylistApplicationService(
     private val refreshScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val refreshJobsMutex = Mutex()
     private val refreshJobs = LinkedHashMap<String, RefreshJob>()
+    private val groupsCache = GroupsCache(refreshScope, load = ::loadGroups)
 
     suspend fun list(actor: Actor): List<PlaylistDto> {
         val access = auth.playlistAccess(actor)
@@ -157,6 +158,7 @@ class PlaylistApplicationService(
     suspend fun refresh(actor: Actor, id: Long, force: Boolean): PlaylistRefreshResultDto {
         requireAdmin(actor)
         val catalogChanged = content.refreshPlaylist(id) { playlists.refresh(id, force) }
+        if (catalogChanged) groupsCache.invalidate(id)
         val refreshed = playlist(id)
         val epgStatus = if (refreshed.epgUrl == null) {
             PlaylistEpgRefreshStatus.NOT_CONFIGURED
@@ -254,9 +256,13 @@ class PlaylistApplicationService(
 
     suspend fun groups(actor: Actor, id: Long, kind: Int): List<GroupCountDto> {
         requireAccess(actor, id)
-        val groups = if (kind == ChannelKind.SERIES && playlist(id).isXtreamNative) {
-            storage.xtreamSeries.observeCategories(id).first()
-        } else storage.channels.observeGroups(id, kind).first()
+        return groupsCache.get(id, kind)
+    }
+
+    private suspend fun loadGroups(playlistId: Long, kind: Int): List<GroupCountDto> {
+        val groups = if (kind == ChannelKind.SERIES && playlist(playlistId).isXtreamNative) {
+            storage.xtreamSeries.observeCategories(playlistId).first()
+        } else storage.channels.observeGroups(playlistId, kind).first()
         return groups.map { it.toDto() }
     }
 
@@ -455,6 +461,7 @@ class PlaylistApplicationService(
         content.mutatePlaylist(id) {
             playlists.setGroupOverride(id, request.groupTitle, request.kind)
         }
+        groupsCache.invalidate(id)
     }
 
     suspend fun favorites(actor: Actor, id: Long): List<FavoriteDto> =
@@ -634,6 +641,7 @@ class PlaylistApplicationService(
         storage.playlists.get(id) ?: throw ResourceNotFound("playlist")
 
     private suspend fun completePlaylistDeletion(id: Long) {
+        groupsCache.invalidate(id)
         cleanup.playlistDeleting(id)
         content.deletePlaylist(id) {
             // Blob records cascade through content identities when the playlist disappears, so
