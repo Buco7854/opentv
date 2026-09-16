@@ -188,6 +188,7 @@ sealed interface HubSignInState {
     ) : HubSignInState
 
     data class DeviceLink(
+        val baseUrl: String,
         val verificationUri: String,
         val expiresAtMs: Long,
         val phase: DeviceLinkPhase,
@@ -200,6 +201,12 @@ sealed interface HubSignInState {
          * sign this device silently into a stranger's account.
          */
         val scannedBy: String? = null,
+        /**
+         * True when this link was picked back up from a persisted poll token
+         * rather than just started: the screen must not treat it as a brand
+         * new session and reopen the browser on top of one already in flight.
+         */
+        val resumed: Boolean = false,
     ) : HubSignInState
 
     data class DeviceLinkDenied(
@@ -228,6 +235,7 @@ class HubSignInViewModel(
     private val coroutineScope: CoroutineScope? = null,
     private val nowMs: () -> Long = System::currentTimeMillis,
     private val deviceName: String = Build.MODEL?.takeIf(String::isNotBlank) ?: "Android device",
+    private val pendingLinkStore: PendingDeviceLinkStore? = null,
     reauthenticateHubId: Long? = null,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow<HubSignInState>(
@@ -382,6 +390,17 @@ class HubSignInViewModel(
                     )
                     return@launch
                 }
+                pendingLinkStore?.save(
+                    PendingDeviceLink(
+                        hubId = targetHubId,
+                        baseUrl = baseUrl,
+                        pollToken = link.pollToken,
+                        verificationUri = link.verificationUriComplete,
+                        intervalMs = link.intervalMs,
+                        expiresAtMs = link.expiresAtMs,
+                        mode = mode,
+                    ),
+                )
                 mutableState.value = link.toState(DeviceLinkPhase.PENDING, mode)
                 pollLink(link, mode)
             } catch (error: Throwable) {
@@ -413,7 +432,10 @@ class HubSignInViewModel(
             is HubSignInState.Password -> methodChooser()
             is HubSignInState.MfaChallenge -> HubSignInState.Password(username)
             is HubSignInState.TotpEnrollment -> HubSignInState.Password(username)
-            is HubSignInState.DeviceLink -> methodChooser()
+            is HubSignInState.DeviceLink -> {
+                pendingLinkStore?.clear()
+                methodChooser()
+            }
             is HubSignInState.DeviceLinkDenied -> methodChooser()
             is HubSignInState.DeviceLinkExpired -> methodChooser()
             HubSignInState.PendingApproval -> HubSignInState.Password(username)
@@ -425,6 +447,7 @@ class HubSignInViewModel(
     fun cancel() {
         activeJob?.cancel()
         activeJob = null
+        pendingLinkStore?.clear()
         mutableState.value = HubSignInState.UrlEntry(baseUrl)
     }
 
@@ -460,6 +483,15 @@ class HubSignInViewModel(
             }
             val offered = gateway.authCapabilities(normalized)
             capabilities = offered
+            val pending = pendingLinkStore?.load()
+            if (pending != null &&
+                pending.expiresAtMs > nowMs() &&
+                pending.baseUrl == normalized &&
+                pending.hubId == targetHubId
+            ) {
+                resumePendingLink(pending)
+                return
+            }
             mutableState.value = HubSignInState.MethodChooser(normalized, offered)
         } catch (error: Throwable) {
             error.rethrowCancellation()
@@ -540,7 +572,20 @@ class HubSignInViewModel(
         } catch (error: Throwable) {
             error.rethrowCancellation()
         }
+        pendingLinkStore?.clear()
         mutableState.value = HubSignInState.Done(id)
+    }
+
+    private suspend fun resumePendingLink(pending: PendingDeviceLink) {
+        val start = DeviceLinkStartDto(
+            pollToken = pending.pollToken,
+            linkToken = "",
+            verificationUriComplete = pending.verificationUri,
+            expiresAtMs = pending.expiresAtMs,
+            intervalMs = pending.intervalMs,
+        )
+        mutableState.value = start.toState(DeviceLinkPhase.PENDING, pending.mode, resumed = true)
+        pollLink(start, pending.mode)
     }
 
     private suspend fun pollLink(start: DeviceLinkStartDto, mode: DeviceLinkMode) {
@@ -549,6 +594,7 @@ class HubSignInViewModel(
         while (true) {
             val remainingMs = expiresAtMs - nowMs()
             if (remainingMs <= 0) {
+                pendingLinkStore?.clear()
                 mutableState.value = HubSignInState.DeviceLinkExpired(mode)
                 return
             }
@@ -564,6 +610,7 @@ class HubSignInViewModel(
                 delay(waitMs)
             }
             if (nowMs() >= expiresAtMs) {
+                pendingLinkStore?.clear()
                 mutableState.value = HubSignInState.DeviceLinkExpired(mode)
                 return
             }
@@ -610,6 +657,7 @@ class HubSignInViewModel(
                             expiresAtMs,
                         )
                     } else {
+                        pendingLinkStore?.clear()
                         handleAuthFlow(
                             flow,
                             fallback = { message ->
@@ -626,11 +674,13 @@ class HubSignInViewModel(
                 }
 
                 STATUS_DENIED -> {
+                    pendingLinkStore?.clear()
                     mutableState.value = HubSignInState.DeviceLinkDenied(mode)
                     return
                 }
 
                 STATUS_EXPIRED -> {
+                    pendingLinkStore?.clear()
                     mutableState.value = HubSignInState.DeviceLinkExpired(mode)
                     return
                 }
@@ -651,13 +701,16 @@ class HubSignInViewModel(
         error: HubSignInFailure? = null,
         expiresAtMs: Long = this.expiresAtMs,
         scannedBy: String? = null,
+        resumed: Boolean = false,
     ) = HubSignInState.DeviceLink(
+        baseUrl = baseUrl,
         verificationUri = verificationUriComplete,
         expiresAtMs = expiresAtMs,
         phase = phase,
         mode = mode,
         error = error,
         scannedBy = scannedBy,
+        resumed = resumed,
     )
 
     private fun methodChooser(): HubSignInState =

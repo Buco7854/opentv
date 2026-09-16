@@ -83,6 +83,7 @@ fun HubSignInScreen(hubId: Long?, onDone: (Long) -> Unit, onBack: () -> Unit) {
                 HubSignInViewModel(
                     gateway = ApiHubAuthGateway(graph.hubApi),
                     sink = RegistryHubSignInSink(graph.hubs),
+                    pendingLinkStore = graph.pendingDeviceLink,
                     reauthenticateHubId = hubId,
                 )
             }
@@ -91,11 +92,7 @@ fun HubSignInScreen(hubId: Long?, onDone: (Long) -> Unit, onBack: () -> Unit) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val backFocusRequester = remember { FocusRequester() }
 
-    // The origin the user actually chose. Kept here because later steps render
-    // server-supplied links, which must be checked against it before opening.
-    var hubBaseUrl by rememberSaveable { mutableStateOf("") }
     LaunchedEffect(state) {
-        (state as? HubSignInState.MethodChooser)?.let { hubBaseUrl = it.baseUrl }
         (state as? HubSignInState.Done)?.let { onDone(it.hubId) }
     }
     RequestInitialFocusOnTv(backFocusRequester, state::class)
@@ -162,7 +159,7 @@ fun HubSignInScreen(hubId: Long?, onDone: (Long) -> Unit, onBack: () -> Unit) {
                     is HubSignInState.Password -> PasswordStep(current, viewModel::submitPassword)
                     is HubSignInState.MfaChallenge -> MfaStep(current, viewModel)
                     is HubSignInState.TotpEnrollment -> EnrollmentStep(current, viewModel::completeTotpEnrollment)
-                    is HubSignInState.DeviceLink -> DeviceLinkStep(current, hubBaseUrl)
+                    is HubSignInState.DeviceLink -> DeviceLinkStep(current)
                     is HubSignInState.DeviceLinkDenied -> RestartStep(
                         stringResource(R.string.hub_link_denied),
                         viewModel::restartDeviceLink,
@@ -389,7 +386,8 @@ private fun ColumnScope.EnrollmentStep(state: HubSignInState.TotpEnrollment, onS
 }
 
 @Composable
-private fun ColumnScope.DeviceLinkStep(state: HubSignInState.DeviceLink, hubBaseUrl: String) {
+private fun ColumnScope.DeviceLinkStep(state: HubSignInState.DeviceLink) {
+    val hubBaseUrl = state.baseUrl
     val context = LocalContext.current
     val handoff = remember(context) { HubBrowserHandoff(context) }
     var rejected by remember { mutableStateOf(false) }
@@ -410,7 +408,9 @@ private fun ColumnScope.DeviceLinkStep(state: HubSignInState.DeviceLink, hubBase
     // fails or makes no sense — a television, or a device with no browser at all.
     val browserMode = state.mode == DeviceLinkMode.BROWSER_SIGN_IN
     var showQr by remember(state.verificationUri) { mutableStateOf(!browserMode) }
-    var opened by remember(state.verificationUri) { mutableStateOf(false) }
+    // A resumed link was already opened in a previous process; reopening it here would
+    // bounce the user straight back out to the browser on top of the one already pending.
+    var opened by remember(state.verificationUri) { mutableStateOf(state.resumed) }
     LaunchedEffect(state.verificationUri) {
         if (!browserMode || opened) return@LaunchedEffect
         opened = true

@@ -17,6 +17,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -359,6 +360,61 @@ class HubSignInViewModelTest {
     }
 
     @Test
+    fun `a still-valid pending device link resumes polling instead of restarting`() = runTest {
+        val store = PendingDeviceLinkStore(FakePendingLinkPrefs())
+        store.save(
+            PendingDeviceLink(
+                hubId = null,
+                baseUrl = BASE_URL,
+                pollToken = "resumed-poll-token",
+                verificationUri = "$BASE_URL/link#t=resumed&mode=sign-in",
+                intervalMs = 1_000,
+                expiresAtMs = 60_000,
+                mode = DeviceLinkMode.BROWSER_SIGN_IN,
+            ),
+        )
+        val gateway = FakeGateway().apply {
+            pollResults += { linkStatus("APPROVED", flow = authenticated()) }
+        }
+        val viewModel = newViewModel(gateway, FakeSink(), pendingLinkStore = store)
+
+        viewModel.probe("$BASE_URL/api/v1/")
+        runCurrent()
+
+        assertTrue(viewModel.state.value is HubSignInState.DeviceLink)
+        assertTrue((viewModel.state.value as HubSignInState.DeviceLink).resumed)
+        assertEquals(0, gateway.linkStartCalls)
+
+        advanceUntilIdle()
+        assertEquals(HubSignInState.Done(HUB_ID), viewModel.state.value)
+        assertEquals(0, gateway.linkStartCalls)
+        assertNull(store.load())
+    }
+
+    @Test
+    fun `an expired pending device link is ignored and the method chooser starts fresh`() = runTest {
+        val store = PendingDeviceLinkStore(FakePendingLinkPrefs())
+        store.save(
+            PendingDeviceLink(
+                hubId = null,
+                baseUrl = BASE_URL,
+                pollToken = "stale-poll-token",
+                verificationUri = "$BASE_URL/link#t=stale&mode=sign-in",
+                intervalMs = 1_000,
+                expiresAtMs = 500,
+                mode = DeviceLinkMode.BROWSER_SIGN_IN,
+            ),
+        )
+        val viewModel = newViewModel(FakeGateway(), FakeSink(), pendingLinkStore = store)
+
+        advanceTimeBy(1_000)
+        viewModel.probe("$BASE_URL/api/v1/")
+        advanceUntilIdle()
+
+        assertTrue(viewModel.state.value is HubSignInState.MethodChooser)
+    }
+
+    @Test
     fun `cancel stops the device-link poller`() = runTest {
         val gateway = FakeGateway().apply {
             link = linkStart(intervalMs = 1_000)
@@ -449,12 +505,14 @@ class HubSignInViewModelTest {
         gateway: FakeGateway,
         sink: FakeSink,
         reauthenticateHubId: Long? = null,
+        pendingLinkStore: PendingDeviceLinkStore? = null,
     ) = HubSignInViewModel(
         gateway = gateway,
         sink = sink,
         coroutineScope = this,
         nowMs = { testScheduler.currentTime },
         deviceName = "Test device",
+        pendingLinkStore = pendingLinkStore,
         reauthenticateHubId = reauthenticateHubId,
     )
 
@@ -477,6 +535,7 @@ class HubSignInViewModelTest {
         val recoverySubmissions = mutableListOf<Pair<String, String>>()
         val enrollmentSubmissions = mutableListOf<Pair<String, String>>()
         var pollCalls = 0
+        var linkStartCalls = 0
         val cancelledPollTokens = mutableListOf<String>()
         var onPoll: () -> Unit = {}
 
@@ -512,7 +571,10 @@ class HubSignInViewModelTest {
             baseUrl: String,
             deviceName: String,
             browserSignIn: Boolean,
-        ) = link
+        ): DeviceLinkStartDto {
+            linkStartCalls++
+            return link
+        }
 
         override suspend fun linkPoll(baseUrl: String, pollToken: String): DeviceLinkStatusDto {
             pollCalls++
@@ -560,6 +622,44 @@ class HubSignInViewModelTest {
             refreshFailure?.let { throw it }
             return USER
         }
+    }
+
+    /** In-memory SharedPreferences covering only what [PendingDeviceLinkStore] touches. */
+    private class FakePendingLinkPrefs : android.content.SharedPreferences {
+        private val strings = mutableMapOf<String, String?>()
+        private val longs = mutableMapOf<String, Long>()
+
+        override fun getString(key: String, defValue: String?): String? = strings[key] ?: defValue
+        override fun getLong(key: String, defValue: Long): Long = longs[key] ?: defValue
+
+        override fun edit(): android.content.SharedPreferences.Editor =
+            object : android.content.SharedPreferences.Editor {
+                override fun putString(key: String, value: String?) = apply { strings[key] = value }
+                override fun putLong(key: String, value: Long) = apply { longs[key] = value }
+                override fun remove(key: String) = apply { strings.remove(key); longs.remove(key) }
+                override fun apply() = Unit
+                override fun commit() = true
+                override fun clear() = apply { strings.clear(); longs.clear() }
+                override fun putStringSet(key: String, v: MutableSet<String>?) =
+                    throw UnsupportedOperationException()
+                override fun putInt(key: String, v: Int) = throw UnsupportedOperationException()
+                override fun putFloat(key: String, v: Float) = throw UnsupportedOperationException()
+                override fun putBoolean(key: String, v: Boolean) = throw UnsupportedOperationException()
+            }
+
+        override fun getAll(): MutableMap<String, *> = (strings + longs).toMutableMap()
+        override fun getStringSet(key: String, defValues: MutableSet<String>?) =
+            throw UnsupportedOperationException()
+        override fun getInt(key: String, defValue: Int) = throw UnsupportedOperationException()
+        override fun getFloat(key: String, defValue: Float) = throw UnsupportedOperationException()
+        override fun getBoolean(key: String, defValue: Boolean) = throw UnsupportedOperationException()
+        override fun contains(key: String) = strings.containsKey(key) || longs.containsKey(key)
+        override fun registerOnSharedPreferenceChangeListener(
+            l: android.content.SharedPreferences.OnSharedPreferenceChangeListener?,
+        ) = Unit
+        override fun unregisterOnSharedPreferenceChangeListener(
+            l: android.content.SharedPreferences.OnSharedPreferenceChangeListener?,
+        ) = Unit
     }
 
     private companion object {
