@@ -23,6 +23,7 @@ import {
   useAsync, useDownloads, useFavorites, useGuideIds, usePaged, useServerPaged,
 } from '../hooks';
 import { t } from '../i18n';
+import { cachedGroups, cacheGroups, cachedListingPage, cacheListingPage } from '../lib/catalogCache';
 import { starRating } from '../lib/format';
 import { prefs } from '../preferences';
 import { usePlayer } from '../player/PlayerNavigation';
@@ -68,11 +69,20 @@ export function BrowseScreen() {
     setFilter('');
   }, [setSearch]);
 
+  const groupsCacheKey = `${playlistId}:${tab}`;
   const groupsRequest = useAsync(
     async () => ({ tab, items: await api.groups(playlistId, tab) }),
     [playlistId, tab],
+    () => {
+      const cached = cachedGroups(groupsCacheKey);
+      return cached ? { tab, items: cached } : null;
+    },
   );
   const groups = groupsRequest.data?.tab === tab ? groupsRequest.data.items : null;
+  useEffect(() => {
+    if (groups) cacheGroups(groupsCacheKey, groups);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groups, groupsCacheKey]);
 
   // Single group: skip the category level.
   const singleGroup = groups?.length === 1;
@@ -91,7 +101,17 @@ export function BrowseScreen() {
       return api.channels(playlistId, tab, group, offset, limit, listingFilter);
     },
     `channels:${listingKey}`,
+    (offset, limit) => cachedListingPage(`channels:${listingKey}:${offset}:${limit}`),
   );
+  useEffect(() => {
+    if (pagedChannels.data) {
+      cacheListingPage(
+        `channels:${listingKey}:${pagedChannels.data.offset}:${pagedChannels.data.limit}`,
+        pagedChannels.data,
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pagedChannels.data]);
   const decorationTvgIds = useMemo(
     () => tab === ChannelKind.LIVE
       ? [...new Set(pagedChannels.pageItems.map((channel) => channel.tvgId)
@@ -108,6 +128,7 @@ export function BrowseScreen() {
     api.refreshPlaylist(playlistId, false).then(reloadGuideIds, (cause: unknown) =>
       reportErrorAs((message) => t('browse.refreshFailed', { message }), cause));
   }, [canRefreshInApp, playlistId, reloadGuideIds]);
+  const seriesListingKey = `series:${listingKey}:${isXtreamNative}`;
   const pagedSeries = useServerPaged(
     async (offset, limit) => {
       if (group == null || tab !== ChannelKind.SERIES || isXtreamNative) {
@@ -115,8 +136,19 @@ export function BrowseScreen() {
       }
       return api.seriesGroups(playlistId, group, offset, limit, listingFilter);
     },
-    `series:${listingKey}:${isXtreamNative}`,
+    seriesListingKey,
+    (offset, limit) => cachedListingPage(`${seriesListingKey}:${offset}:${limit}`),
   );
+  useEffect(() => {
+    if (pagedSeries.data) {
+      cacheListingPage(
+        `${seriesListingKey}:${pagedSeries.data.offset}:${pagedSeries.data.limit}`,
+        pagedSeries.data,
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pagedSeries.data]);
+  const xtreamListingKey = `xtream:${listingKey}:${isXtreamNative}`;
   const pagedXtream = useServerPaged(
     async (offset, limit) => {
       if (group == null || tab !== ChannelKind.SERIES || !isXtreamNative) {
@@ -124,8 +156,18 @@ export function BrowseScreen() {
       }
       return api.xtreamSeries(playlistId, group, offset, limit, listingFilter);
     },
-    `xtream:${listingKey}:${isXtreamNative}`,
+    xtreamListingKey,
+    (offset, limit) => cachedListingPage(`${xtreamListingKey}:${offset}:${limit}`),
   );
+  useEffect(() => {
+    if (pagedXtream.data) {
+      cacheListingPage(
+        `${xtreamListingKey}:${pagedXtream.data.offset}:${pagedXtream.data.limit}`,
+        pagedXtream.data,
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pagedXtream.data]);
 
   // Keep "now airing" rows fresh during long sessions.
   useEffect(() => {
@@ -153,17 +195,21 @@ export function BrowseScreen() {
   const pagedGroups = usePaged((groups ?? []).filter((g) => matches(g.groupTitle)), listingKey);
 
   const groupsPending = asyncFallback({ ...groupsRequest, data: groups });
+  // A seeded page shows provisional data while `loading` is still true (the
+  // authoritative fetch is in flight), so gate on `data` -- present as soon as a seed
+  // or a real page has loaded -- rather than on `loading`, which would otherwise hide
+  // a valid seed and force a spinner over data we already have.
   const channelsPending = asyncFallback({
     ...pagedChannels,
-    data: pagedChannels.loading ? null : pagedChannels.pageItems,
+    data: pagedChannels.data ? pagedChannels.pageItems : null,
   });
   const seriesPending = asyncFallback({
     ...pagedSeries,
-    data: pagedSeries.loading ? null : pagedSeries.pageItems,
+    data: pagedSeries.data ? pagedSeries.pageItems : null,
   });
   const xtreamPending = asyncFallback({
     ...pagedXtream,
-    data: pagedXtream.loading ? null : pagedXtream.pageItems,
+    data: pagedXtream.data ? pagedXtream.pageItems : null,
   });
 
   const counts = detail
