@@ -5,7 +5,6 @@ import {
   AccountInfo, api, ChannelKind, GroupCount, PlaylistDetail, PlaylistOperation,
 } from '../api';
 import { t } from '../i18n';
-import { clearCatalogCache } from '../lib/catalogCache';
 import { BrowseScreen } from './BrowseScreen';
 
 vi.mock('../auth/AuthProvider', () => ({ useAuth: () => ({ user: { role: 'ADMIN' } }) }));
@@ -66,9 +65,6 @@ function LocationMarker() {
 describe('BrowseScreen', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    // Every test reuses playlistId 1; without this, a category cached by an earlier
-    // test would seed this one and mask what its own mocks are supposed to exercise.
-    clearCatalogCache();
     vi.spyOn(api, 'playlistDetail').mockResolvedValue(detail);
     vi.spyOn(api, 'playlistCapabilities').mockResolvedValue({ operations: [] });
     vi.spyOn(api, 'groups').mockImplementation(async (_id, kind) =>
@@ -78,10 +74,15 @@ describe('BrowseScreen', () => {
     vi.spyOn(api, 'xtreamSeries').mockResolvedValue([]);
     vi.spyOn(api, 'nowAiring').mockResolvedValue({});
     vi.spyOn(api, 'guideIds').mockResolvedValue([]);
-    vi.spyOn(api, 'refreshPlaylist').mockResolvedValue({
-      playlist: detail.playlist,
-      catalogChanged: false,
-      epgStatus: 'NOT_CONFIGURED',
+    vi.spyOn(api, 'startRefreshJob').mockResolvedValue({
+      id: 'job-1',
+      status: 'SUCCEEDED',
+      result: { playlist: detail.playlist, catalogChanged: false, epgStatus: 'NOT_CONFIGURED' },
+    });
+    vi.spyOn(api, 'refreshJobStatus').mockResolvedValue({
+      id: 'job-1',
+      status: 'SUCCEEDED',
+      result: { playlist: detail.playlist, catalogChanged: false, epgStatus: 'NOT_CONFIGURED' },
     });
     vi.spyOn(api, 'favorites').mockResolvedValue([]);
     vi.spyOn(api, 'downloads').mockResolvedValue([]);
@@ -170,37 +171,6 @@ describe('BrowseScreen', () => {
     view.unmount();
   });
 
-  it('shows a previously loaded category list immediately on remount instead of a spinner', async () => {
-    const first = renderBrowse();
-    fireEvent.click(first.getByText('movies tab'));
-    await first.findByText('Action');
-    first.unmount();
-
-    let resolveGroups: (groups: GroupCount[]) => void = () => {};
-    vi.mocked(api.groups).mockImplementation((_id, kind) => (
-      kind === ChannelKind.MOVIE
-        ? new Promise<GroupCount[]>((resolve) => { resolveGroups = resolve; })
-        : Promise.resolve(liveGroups)
-    ));
-
-    const second = render(
-      <MemoryRouter initialEntries={['/browse/1?t=1']}>
-        <Routes>
-          <Route path="/browse/:playlistId" element={<Harness />} />
-          <Route path="*" element={<LocationMarker />} />
-        </Routes>
-      </MemoryRouter>,
-    );
-
-    // The cached list from the first mount renders before the (still-pending) refetch
-    // resolves, so a returning user never sees a blank loading state for data already seen.
-    expect(second.getByText('Action')).toBeTruthy();
-    expect(second.container.querySelector('.spinner')).toBeNull();
-
-    await act(async () => { resolveGroups(movieGroups); });
-    second.unmount();
-  });
-
   it('offers category correction when the server capability permits it', async () => {
     vi.mocked(api.playlistCapabilities).mockResolvedValue({
       operations: [{
@@ -283,7 +253,7 @@ describe('BrowseScreen', () => {
     fireEvent.click(await view.findByRole('button', { name: t('playlists.account') }));
 
     await expectPath(view, '/manage/provider');
-    expect(api.refreshPlaylist).not.toHaveBeenCalled();
+    expect(api.startRefreshJob).not.toHaveBeenCalled();
     expect(account).not.toHaveBeenCalled();
     view.unmount();
   });

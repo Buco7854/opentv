@@ -43,9 +43,27 @@ class PlaylistRepository(
         const val FORCED_MIN_INTERVAL_MS = 30_000L
     }
 
-    private val refreshMutex = Mutex()
-
+    // Refreshing playlist A must not make playlist B wait: each playlist gets its own lock
+    // scoped by this map, guarded only long enough to look it up or create it. The same
+    // lock also protects `lastAttemptMs`, since without it two playlists refreshing at
+    // once could corrupt that shared, plain HashMap.
+    private val locksMutex = Mutex()
+    private val playlistLocks = HashMap<Long, Mutex>()
     private val lastAttemptMs = HashMap<Long, Long>()
+
+    private suspend fun playlistLock(playlistId: Long): Mutex =
+        locksMutex.withLock { playlistLocks.getOrPut(playlistId) { Mutex() } }
+
+    private suspend fun lastAttemptAt(playlistId: Long): Long =
+        locksMutex.withLock { lastAttemptMs[playlistId] ?: 0L }
+
+    private suspend fun markAttempt(playlistId: Long, atMs: Long) {
+        locksMutex.withLock { lastAttemptMs[playlistId] = atMs }
+    }
+
+    private suspend fun clearAttempt(playlistId: Long) {
+        locksMutex.withLock { lastAttemptMs.remove(playlistId) }
+    }
 
     val playlists = storage.playlists.observeAll()
 
@@ -109,7 +127,7 @@ class PlaylistRepository(
             )
         )
         if (credsChanged) {
-            refreshMutex.withLock { lastAttemptMs.remove(id) }
+            clearAttempt(id)
             account?.invalidate(id)
             refresh(id, force = true)
         }
@@ -139,7 +157,7 @@ class PlaylistRepository(
             )
         )
         if (urlChanged) {
-            refreshMutex.withLock { lastAttemptMs.remove(id) }
+            clearAttempt(id)
             refresh(id, force = true)
         }
     }
@@ -202,12 +220,12 @@ class PlaylistRepository(
         )
     }
 
-    /** Refresh a remote playlist: throttled, single-flight, conditional GET. */
+    /** Refresh a remote playlist: throttled, single-flight per playlist, conditional GET. */
     suspend fun refresh(playlistId: Long, force: Boolean = false): Boolean =
-        refreshMutex.withLock {
+        playlistLock(playlistId).withLock {
             val playlist = storage.playlists.get(playlistId) ?: return false
             val now = nowMs()
-            val lastAttempt = lastAttemptMs[playlistId] ?: 0L
+            val lastAttempt = lastAttemptAt(playlistId)
             if (force) {
                 if (now - lastAttempt < FORCED_MIN_INTERVAL_MS) return false
             } else {
@@ -219,11 +237,11 @@ class PlaylistRepository(
             if (url == null) {
                 // Xtream playlists refresh via the panel API; file imports have nothing to refresh.
                 if (playlist.xtreamBase == null) return false
-                lastAttemptMs[playlistId] = now
+                markAttempt(playlistId, now)
                 refreshXtream(playlist, now)
                 return true
             }
-            lastAttemptMs[playlistId] = now
+            markAttempt(playlistId, now)
 
             when (val result = fetcher.conditionalGet(url, playlist.etag, playlist.lastModified)) {
                 is ConditionalFetch.NotModified -> {

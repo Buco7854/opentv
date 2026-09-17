@@ -6,7 +6,7 @@ import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import {
   api, canShowGuide, Channel, ChannelKind, ChannelListItem, GroupCount, hasCatchup,
-  PlaylistOperation, PlaylistOperationExecution, Programme,
+  PlaylistOperation, PlaylistOperationExecution, PlaylistRefreshJobStatus, Programme,
 } from '../api';
 import { mediaTags } from '../components/Badges';
 import { asyncFallback, EmptyState } from '../components/Common';
@@ -23,7 +23,6 @@ import {
   useAsync, useDownloads, useFavorites, useGuideIds, usePaged, useServerPaged,
 } from '../hooks';
 import { t } from '../i18n';
-import { cachedGroups, cacheGroups, cachedListingPage, cacheListingPage } from '../lib/catalogCache';
 import { starRating } from '../lib/format';
 import { prefs } from '../preferences';
 import { usePlayer } from '../player/PlayerNavigation';
@@ -69,20 +68,11 @@ export function BrowseScreen() {
     setFilter('');
   }, [setSearch]);
 
-  const groupsCacheKey = `${playlistId}:${tab}`;
   const groupsRequest = useAsync(
     async () => ({ tab, items: await api.groups(playlistId, tab) }),
     [playlistId, tab],
-    () => {
-      const cached = cachedGroups(groupsCacheKey);
-      return cached ? { tab, items: cached } : null;
-    },
   );
   const groups = groupsRequest.data?.tab === tab ? groupsRequest.data.items : null;
-  useEffect(() => {
-    if (groups) cacheGroups(groupsCacheKey, groups);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groups, groupsCacheKey]);
 
   // Single group: skip the category level.
   const singleGroup = groups?.length === 1;
@@ -101,17 +91,7 @@ export function BrowseScreen() {
       return api.channels(playlistId, tab, group, offset, limit, listingFilter);
     },
     `channels:${listingKey}`,
-    (offset, limit) => cachedListingPage(`channels:${listingKey}:${offset}:${limit}`),
   );
-  useEffect(() => {
-    if (pagedChannels.data) {
-      cacheListingPage(
-        `channels:${listingKey}:${pagedChannels.data.offset}:${pagedChannels.data.limit}`,
-        pagedChannels.data,
-      );
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pagedChannels.data]);
   const decorationTvgIds = useMemo(
     () => tab === ChannelKind.LIVE
       ? [...new Set(pagedChannels.pageItems.map((channel) => channel.tvgId)
@@ -122,13 +102,33 @@ export function BrowseScreen() {
   const decorationScopeKey = JSON.stringify(decorationTvgIds);
   const { guideIds, reload: reloadGuideIds } = useGuideIds(playlistId, decorationTvgIds);
 
-  // Background refresh (throttled server-side).
+  // Background refresh (throttled server-side). Queued as a job and polled rather than
+  // awaited directly: a direct request would hold a connection open for as long as the
+  // upstream provider takes, which is especially slow the first time a playlist is
+  // opened after being idle long enough to clear the server's throttle window.
   useEffect(() => {
     if (!canRefreshInApp) return;
-    api.refreshPlaylist(playlistId, false).then(reloadGuideIds, (cause: unknown) =>
-      reportErrorAs((message) => t('browse.refreshFailed', { message }), cause));
+    let cancelled = false;
+    const pollUntilDone = async (refreshId: string) => {
+      while (!cancelled) {
+        const job = await api.refreshJobStatus(playlistId, refreshId);
+        if (
+          job.status === PlaylistRefreshJobStatus.QUEUED ||
+          job.status === PlaylistRefreshJobStatus.RUNNING
+        ) {
+          await new Promise((resolve) => { setTimeout(resolve, 500); });
+          continue;
+        }
+        if (job.status === PlaylistRefreshJobStatus.SUCCEEDED) reloadGuideIds();
+        return;
+      }
+    };
+    api.startRefreshJob(playlistId, false)
+      .then((job) => pollUntilDone(job.id))
+      .catch((cause: unknown) =>
+        reportErrorAs((message) => t('browse.refreshFailed', { message }), cause));
+    return () => { cancelled = true; };
   }, [canRefreshInApp, playlistId, reloadGuideIds]);
-  const seriesListingKey = `series:${listingKey}:${isXtreamNative}`;
   const pagedSeries = useServerPaged(
     async (offset, limit) => {
       if (group == null || tab !== ChannelKind.SERIES || isXtreamNative) {
@@ -136,19 +136,8 @@ export function BrowseScreen() {
       }
       return api.seriesGroups(playlistId, group, offset, limit, listingFilter);
     },
-    seriesListingKey,
-    (offset, limit) => cachedListingPage(`${seriesListingKey}:${offset}:${limit}`),
+    `series:${listingKey}:${isXtreamNative}`,
   );
-  useEffect(() => {
-    if (pagedSeries.data) {
-      cacheListingPage(
-        `${seriesListingKey}:${pagedSeries.data.offset}:${pagedSeries.data.limit}`,
-        pagedSeries.data,
-      );
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pagedSeries.data]);
-  const xtreamListingKey = `xtream:${listingKey}:${isXtreamNative}`;
   const pagedXtream = useServerPaged(
     async (offset, limit) => {
       if (group == null || tab !== ChannelKind.SERIES || !isXtreamNative) {
@@ -156,18 +145,8 @@ export function BrowseScreen() {
       }
       return api.xtreamSeries(playlistId, group, offset, limit, listingFilter);
     },
-    xtreamListingKey,
-    (offset, limit) => cachedListingPage(`${xtreamListingKey}:${offset}:${limit}`),
+    `xtream:${listingKey}:${isXtreamNative}`,
   );
-  useEffect(() => {
-    if (pagedXtream.data) {
-      cacheListingPage(
-        `${xtreamListingKey}:${pagedXtream.data.offset}:${pagedXtream.data.limit}`,
-        pagedXtream.data,
-      );
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pagedXtream.data]);
 
   // Keep "now airing" rows fresh during long sessions.
   useEffect(() => {
@@ -195,21 +174,17 @@ export function BrowseScreen() {
   const pagedGroups = usePaged((groups ?? []).filter((g) => matches(g.groupTitle)), listingKey);
 
   const groupsPending = asyncFallback({ ...groupsRequest, data: groups });
-  // A seeded page shows provisional data while `loading` is still true (the
-  // authoritative fetch is in flight), so gate on `data` -- present as soon as a seed
-  // or a real page has loaded -- rather than on `loading`, which would otherwise hide
-  // a valid seed and force a spinner over data we already have.
   const channelsPending = asyncFallback({
     ...pagedChannels,
-    data: pagedChannels.data ? pagedChannels.pageItems : null,
+    data: pagedChannels.loading ? null : pagedChannels.pageItems,
   });
   const seriesPending = asyncFallback({
     ...pagedSeries,
-    data: pagedSeries.data ? pagedSeries.pageItems : null,
+    data: pagedSeries.loading ? null : pagedSeries.pageItems,
   });
   const xtreamPending = asyncFallback({
     ...pagedXtream,
-    data: pagedXtream.data ? pagedXtream.pageItems : null,
+    data: pagedXtream.loading ? null : pagedXtream.pageItems,
   });
 
   const counts = detail

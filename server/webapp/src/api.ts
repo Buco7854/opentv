@@ -610,6 +610,12 @@ export const api = {
       { method: 'POST' },
       provider,
     ),
+  // Queues the refresh and returns immediately instead of holding the request open for
+  // however long the upstream provider takes; poll refreshJobStatus for the outcome.
+  startRefreshJob: (id: number, force: boolean) =>
+    j<PlaylistRefreshJob>(`/playlists/${id}/refresh-jobs?force=${force}`, { method: 'POST' }),
+  refreshJobStatus: (id: number, refreshId: string) =>
+    j<PlaylistRefreshJob>(`/playlists/${id}/refresh-jobs/${encodeURIComponent(refreshId)}`),
   clearProgress: (id: number) => j<null>(`/playlists/${id}/clear-progress`, { method: 'POST' }),
   playlistDetail: (id: number) => j<PlaylistDetail>(`/playlists/${id}`),
   groups: (id: number, kind: number) => j<GroupCount[]>(`/playlists/${id}/groups?kind=${kind}`),

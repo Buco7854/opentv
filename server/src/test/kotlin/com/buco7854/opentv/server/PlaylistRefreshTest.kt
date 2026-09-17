@@ -23,7 +23,10 @@ import com.buco7854.opentv.serverdata.db.DefaultPlaylistRow
 import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
 import com.buco7854.opentv.serverdata.db.UserPlaylistGrantRow
 import com.buco7854.opentv.serverdata.db.UserRow
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
@@ -129,6 +132,38 @@ class PlaylistRefreshTest {
     }
 
     @Test
+    fun `refreshing one playlist does not wait on another playlist's in-flight refresh`() =
+        withService { fixture ->
+            // Room's suspending calls run on real threads regardless of the test dispatcher,
+            // so this section needs real time (like the job-polling test above) rather than
+            // the virtual clock `runTest` otherwise uses.
+            withContext(Dispatchers.IO) {
+                val slowUrl = "https://provider.example/slow.m3u"
+                val fastUrl = "https://provider.example/fast.m3u"
+                val slowId = fixture.storage.playlists.insert(Playlist(name = "Slow", url = slowUrl))
+                val fastId = fixture.storage.playlists.insert(Playlist(name = "Fast", url = fastUrl))
+
+                fixture.gateUrl = slowUrl
+                fixture.gate = CompletableDeferred()
+
+                val slowRefresh = async { fixture.playlists.refresh(slowId) }
+                // Wait for the slow refresh to actually enter its (now blocked) fetch.
+                withTimeout(5_000) {
+                    while (fixture.fetches == 0) delay(10)
+                }
+
+                // A single global lock would make this wait behind the slow playlist above.
+                val fastResult = withTimeout(5_000) { fixture.playlists.refresh(fastId) }
+
+                assertTrue(fastResult)
+                assertFalse(slowRefresh.isCompleted)
+
+                fixture.gate?.complete(Unit)
+                assertTrue(withTimeout(5_000) { slowRefresh.await() })
+            }
+        }
+
+    @Test
     fun `deleting a playlist cascades its authorization and identity state`() =
         withService { fixture ->
             val playlistId = fixture.storage.playlists.insert(
@@ -182,6 +217,10 @@ class PlaylistRefreshTest {
         var now = 1_000L
         var fetches = 0
         var body: List<String>? = null
+
+        /** Lets a test block one URL's fetch mid-flight while another proceeds. */
+        var gateUrl: String? = null
+        var gate: CompletableDeferred<Unit>? = null
     }
 
     private fun withService(block: suspend (Fixture) -> Unit) = runTest {
@@ -205,8 +244,9 @@ class PlaylistRefreshTest {
                 ),
             )
             lateinit var fixture: Fixture
-            val fetcher = ConditionalFetcher { _, _, _ ->
+            val fetcher = ConditionalFetcher { url, _, _ ->
                 fixture.fetches++
+                if (url == fixture.gateUrl) fixture.gate?.await()
                 val lines = fixture.body ?: return@ConditionalFetcher ConditionalFetch.NotModified
                 ConditionalFetch.Success(LineBody(lines), etag = null, lastModified = null)
             }
