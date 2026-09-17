@@ -392,20 +392,12 @@ class BrowseViewModel private constructor(
 
     private fun loadGroups(kind: Int) {
         val requestGeneration = ++groupsGeneration
-        val hubSource = sourceId as? SourceId.Hub
-        val hubCache = graph?.hubCatalogCache
-        val cachedGroups = hubSource?.let { hubCache?.groups(it, kind) }
         viewModelScope.launch {
-            mutableCatalog.value = mutableCatalog.value.copy(
-                groups = cachedGroups ?: mutableCatalog.value.groups,
-                loading = true,
-                error = null,
-            )
+            mutableCatalog.value = mutableCatalog.value.copy(loading = true, error = null)
             when (val result = safeCall { gateway.groups(kind) }) {
                 is CatalogResult.Success -> {
                     if (requestGeneration != groupsGeneration) return@launch
                     setCount(kind, result.value.sumOf(CatalogGroup::count))
-                    if (hubSource != null) hubCache?.putGroups(hubSource, kind, result.value)
                     val listingSelected = group.value != null
                     mutableCatalog.value = mutableCatalog.value.copy(
                         groups = result.value,
@@ -434,13 +426,7 @@ class BrowseViewModel private constructor(
         val requestGeneration = listingGeneration
         mutableNowAiring.value = emptyMap()
         mutableGuideIds.value = emptySet()
-        val hubSource = sourceId as? SourceId.Hub
-        val hubCache = graph?.hubCatalogCache
-        val cachedItems = hubSource?.let { hubCache?.items(it, kind, selected) }
-        val seed = cachedItems
-            ?.let { ServerPageSnapshot(items = it, total = it.size) }
-            ?: ServerPageSnapshot()
-        val next = ServerPagedState(viewModelScope, keyOf = { it.ref }, seed = seed) { offset, limit ->
+        val next = ServerPagedState(viewModelScope, keyOf = { it.ref }) { offset, limit ->
             when {
                 kind == ChannelKind.SERIES && traits.hasXtreamSeries ->
                     gateway.xtreamSeries(selected, offset, limit, filter.value.trim())
@@ -459,12 +445,9 @@ class BrowseViewModel private constructor(
                     loading = snapshot.loading,
                     error = snapshot.error,
                 )
-                if (!snapshot.loading && snapshot.error == null) {
-                    if (hubSource != null) hubCache?.putItems(hubSource, kind, selected, snapshot.items)
-                    if (kind == ChannelKind.LIVE) {
-                        reloadNowAiring()
-                        reloadGuideIds()
-                    }
+                if (!snapshot.loading && snapshot.error == null && kind == ChannelKind.LIVE) {
+                    reloadNowAiring()
+                    reloadGuideIds()
                 }
             }
         }

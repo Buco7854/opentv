@@ -157,26 +157,6 @@ class ServerPagedStateTest {
     }
 
     @Test
-    fun seedIsVisibleWhileLoadingThenReplacedByTheAuthoritativeFirstPage() = runTest {
-        val first = CompletableDeferred<CatalogResult<Page<String>>>()
-        val pager = ServerPagedState(
-            scope = this,
-            keyOf = { it },
-            seed = ServerPageSnapshot(items = listOf("cached-a", "cached-b"), total = 2),
-        ) { _, _ -> withContext(NonCancellable) { first.await() } }
-        runCurrent()
-
-        assertEquals(listOf("cached-a", "cached-b"), pager.state.value.items)
-        assertTrue(pager.state.value.loading)
-
-        first.complete(CatalogResult.Success(Page(listOf("fresh"), 1)))
-        advanceUntilIdle()
-
-        assertEquals(listOf("fresh"), pager.state.value.items)
-        assertFalse(pager.state.value.loading)
-    }
-
-    @Test
     fun shrinkingCatalogRestartsFromZeroInsteadOfSkippingABoundaryItem() = runTest {
         val offsets = mutableListOf<Int>()
         var firstGeneration = true

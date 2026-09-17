@@ -28,14 +28,13 @@ class ServerPagedState<T>(
     private val scope: CoroutineScope,
     private val pageSize: Int = DEFAULT_CATALOG_PAGE_SIZE,
     private val keyOf: ((T) -> Any)? = null,
-    seed: ServerPageSnapshot<T> = ServerPageSnapshot(),
     private val loader: suspend (offset: Int, limit: Int) -> CatalogResult<Page<T>>,
 ) {
     init {
         require(pageSize > 0) { "pageSize must be positive" }
     }
 
-    private val mutableState = MutableStateFlow(seed)
+    private val mutableState = MutableStateFlow(ServerPageSnapshot<T>())
     val state: StateFlow<ServerPageSnapshot<T>> = mutableState.asStateFlow()
 
     private var generation = 0L
@@ -45,14 +44,7 @@ class ServerPagedState<T>(
     private var nextOffset = 0
 
     init {
-        // A seed is provisional (cached) data shown while the authoritative first page
-        // loads, so that fetch replaces it wholesale rather than merging into it -- merging
-        // would leave stale rows stuck ahead of the real first page's order.
-        if (seed.items.isNotEmpty()) {
-            request(offset = 0, replace = true)
-        } else {
-            loadMore()
-        }
+        loadMore()
     }
 
     fun loadMore() {

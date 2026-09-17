@@ -4,7 +4,6 @@ import {
 import { api, Download, DownloadStatus, ListingPage } from './api';
 import { GENERIC, errorMessage, reportError } from './errors';
 import { t } from './i18n';
-import { clearCatalogCache } from './lib/catalogCache';
 import { watchProgressStore } from './watchProgress';
 
 const DEFAULT_PAGE_SIZE = 50;
@@ -83,7 +82,6 @@ export function usePaged<T>(items: T[], resetKey: unknown): {
 export function useServerPaged<T>(
   loader: (offset: number, limit: number) => Promise<ListingPage<T>>,
   resetKey: unknown,
-  seed?: (offset: number, limit: number) => ListingPage<T> | null,
 ): {
   pageItems: T[];
   data: ListingPage<T> | null;
@@ -106,7 +104,6 @@ export function useServerPaged<T>(
   const request = useAsync(
     () => loader(page * pageSize, pageSize),
     [resetKey, page, pageSize],
-    seed ? () => seed(page * pageSize, pageSize) : undefined,
   );
   const total = request.data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / pageSize));
@@ -133,25 +130,11 @@ export function useServerPaged<T>(
   };
 }
 
-/**
- * Load-once helper with a reload trigger.
- *
- * `seed` is an escape hatch for screens that keep their own short-lived cache (e.g. the
- * last catalog page fetched for a category): it renders provisional data instead of
- * blanking the screen while the authoritative fetch is in flight. Callers that pass it
- * are responsible for the cache's own correctness (freshness, invalidation on sign-out);
- * plain `useAsync` calls keep the default of never showing a previous route's data.
- */
-export function useAsync<T>(
-  fn: () => Promise<T>,
-  deps: unknown[],
-  seed?: () => T | null,
-): {
+/** Load-once helper with a reload trigger. */
+export function useAsync<T>(fn: () => Promise<T>, deps: unknown[]): {
   data: T | null; error: string | null; loading: boolean; reload: () => void;
 } {
-  const latestSeed = useRef(seed);
-  latestSeed.current = seed;
-  const [data, setData] = useState<T | null>(() => latestSeed.current?.() ?? null);
+  const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [tick, setTick] = useState(0);
@@ -159,10 +142,9 @@ export function useAsync<T>(
   latest.current = fn;
   useEffect(() => {
     let cancelled = false;
-    // Route parameters identify the result. Never render a previous route's data
-    // while its replacement is loading (especially for playback routes) -- unless
-    // the caller supplied a seed of its own for this exact set of parameters.
-    setData(latestSeed.current?.() ?? null);
+    // Route parameters identify the result. Never render a previous route's
+    // data while its replacement is loading (especially for playback routes).
+    setData(null);
     setLoading(true);
     setError(null);
     latest.current().then(
@@ -301,7 +283,6 @@ const downloadStore = new DownloadPollingStore();
 export const clearUserActivitySnapshots = () => {
   downloadStore.clear();
   watchProgressStore.clear();
-  clearCatalogCache();
 };
 
 /** Shared downloads snapshot. Pass enabled=false while a covered screen is inactive. */

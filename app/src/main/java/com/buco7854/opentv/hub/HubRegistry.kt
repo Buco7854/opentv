@@ -197,13 +197,6 @@ class HubRegistry(
     private val store: HubSourceStore,
     private val api: HubApi,
     private val vault: HubSessionVault,
-    /**
-     * Notified whenever a hub's identity is invalidated: sign-out, removal, or
-     * reauthenticating the same hub slot as a possibly different account. A cache keyed
-     * only by hub id (catalog groups/items, etc.) must not keep serving one account's
-     * data once another account has signed into the same slot.
-     */
-    private val onIdentityInvalidated: (Long) -> Unit = {},
 ) {
     private val clients = mutableMapOf<Long, HubClient>()
     private val mutationMutex = Mutex()
@@ -304,7 +297,7 @@ class HubRegistry(
                 lastSeenMs = null,
             )
             client
-        }.also { onIdentityInvalidated(hubId) }
+        }
 
     /** Refreshes the cached identity used to gate admin entry points offline. */
     suspend fun refreshIdentity(hubId: Long): CurrentUserDto? {
@@ -328,7 +321,6 @@ class HubRegistry(
                 lastSeenMs = null,
             )
         }
-        onIdentityInvalidated(hubId)
         // Best effort: local sign-out is immediate even if the hub cannot be reached.
         try {
             api.logout(credentials)
@@ -377,7 +369,6 @@ class HubRegistry(
                         clients.remove(hubId)
                     }
                 }
-                onIdentityInvalidated(hubId)
             }
         }
     }

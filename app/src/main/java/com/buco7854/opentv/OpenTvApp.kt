@@ -36,7 +36,6 @@ import com.buco7854.opentv.playback.PlaybackMonitor
 import com.buco7854.opentv.source.AggregatedFavorites
 import com.buco7854.opentv.source.CatalogGateway
 import com.buco7854.opentv.source.CatalogProgressUpdates
-import com.buco7854.opentv.source.HubCatalogCache
 import com.buco7854.opentv.source.HubCatalogGateway
 import com.buco7854.opentv.source.LocalCatalogGateway
 import com.buco7854.opentv.source.SourceId
@@ -59,15 +58,7 @@ class AppGraph(app: Application) : AutoCloseable {
     }
     private val hubTransport by lazy { OkHttpTransport() }
     val hubApi: HubApi by lazy { HubApi(hubTransport) }
-    val hubCatalogCache = HubCatalogCache()
-    val hubs: HubRegistry by lazy {
-        HubRegistry(
-            storage.hubSources,
-            hubApi,
-            hubVault,
-            onIdentityInvalidated = hubCatalogCache::clearHub,
-        )
-    }
+    val hubs: HubRegistry by lazy { HubRegistry(storage.hubSources, hubApi, hubVault) }
     val pendingDeviceLink: PendingDeviceLinkStore by lazy {
         PendingDeviceLinkStore(
             app.getSharedPreferences(PendingDeviceLinkStore.PREFS_NAME, Application.MODE_PRIVATE),
