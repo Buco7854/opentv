@@ -259,6 +259,7 @@ const server = http.createServer((req, res) => {
     product: 'opentv', apiVersion: 1, version: 'docs',
   });
 
+  if (p.includes('/refresh-jobs')) return send(res, { id: 'docs-refresh', status: 'SUCCEEDED', result: { playlist: playlists[0], catalogChanged: false, epgStatus: 'NOT_CONFIGURED' } });
   if (req.method !== 'GET') { res.writeHead(200, { 'Access-Control-Allow-Origin': '*' }); return res.end('{}'); }
 
   if (p === '/api/img') {
@@ -272,12 +273,16 @@ const server = http.createServer((req, res) => {
   if (p === '/api/settings') return send(res, { userAgent: '', downloadLimit: 1, pageSize: 50 });
   if (p === '/api/downloads') return send(res, downloads);
   if (p === '/api/admin/playback') return send(res, sessions);
+  if (p === '/api/favorites/resolved') return send(res, { live: [liveChannels[4]], movies: [movies[0], movies[2], movies[6]], series: xtreamSeries.slice(0, 4).map((item) => ({ contentId: item.contentId, seriesKey: item.name, count: 0, logo: item.cover, groupTitle: item.categoryName, xtreamSeriesId: item.seriesId })) });
   if (p === '/api/resume') return send(res, [{ contentId: 'content-movie-1001', positionMs: 2_640_000, durationMs: 9_960_000, updatedMs: now }]);
 
   if (seg[1] === 'playlists' && seg[2]) {
     const id = Number(seg[2]); const pl = playlists.find((x) => x.id === id) || playlists[0];
     const sub = seg[3];
     if (!sub) return send(res, { playlist: pl, isXtreamNative: pl.hasXtreamPanel, liveCount: 1240, movieCount: 3150, seriesCount: 430 });
+    if (sub === 'capabilities') return send(res, { operations: [
+      'REFRESH', 'EDIT', 'DELETE', 'CLEAR_WATCH_PROGRESS', 'VIEW_PROVIDER_ACCOUNT', 'CORRECT_CATEGORY_TYPE',
+    ].map((operation) => ({ operation, execution: 'IN_APP', browserPath: null })) });
     if (sub === 'account') return send(res, account);
     if (sub === 'groups') { const k = Number(q('kind')); const g = k === 0 ? liveGroups : k === 1 ? movieGroups : seriesCats; return send(res, g.map(([groupTitle, count]) => ({ groupTitle, count }))); }
     if (sub === 'channels') { const k = Number(q('kind')); return send(res, page((k === 1 ? movies : liveChannels).map(channelListing))); }
@@ -297,6 +302,12 @@ const server = http.createServer((req, res) => {
       return send(res, { ...page(all), seasons: [1], seriesContentId: xtreamSeries[0].contentId, groupTitle: 'Series' });
     }
     if (sub === 'xseries') { const sid = seg[4]; const s = xtreamSeries.find((x) => x.seriesId === sid) || xtreamSeries[0]; return send(res, { series: s, episodes: episodesFor(Number(sid), s.name, 8), error: null }); }
+  }
+
+  if (seg[1] === 'content' && seg[2]) {
+    const c = [...byId.values()].find((channel) => channel.contentId === seg[2]);
+    if (c) return send(res, seg[3] === 'vod-info' ? movieMeta(c) : seg[3] === 'guide' ? guideEntries() : c);
+    res.writeHead(404); return res.end('{}');
   }
 
   if (seg[1] === 'channels' && seg[2]) {

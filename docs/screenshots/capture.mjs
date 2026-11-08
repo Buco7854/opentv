@@ -22,6 +22,7 @@ const openDetails = async (p) => {
 
 // name, url, viewport, optional action(page)
 const shots = [
+  ['home', '/', DESKTOP],
   ['browse-live', `/browse/1?t=0&g=${G}`, DESKTOP],
   ['browse-movies', '/browse/1?t=1&g=Action', DESKTOP],
   ['browse-categories', '/browse/1?t=1', DESKTOP],
@@ -29,7 +30,7 @@ const shots = [
   ['movie-detail', '/movie/1001', DESKTOP],
   ['series-detail', '/xseries/1/5001', DESKTOP],
   ['search', '/search/1', DESKTOP, async (p) => { await p.fill('.search-wrap input', 'inter'); await p.waitForTimeout(700); }],
-  ['favorites', '/favorites/1', DESKTOP],
+  ['favorites', '/favorites', DESKTOP],
   ['downloads', '/downloads', DESKTOP],
   ['now-watching', '/sessions', DESKTOP],
   ['now-watching-details', '/sessions', DESKTOP, openDetails],
@@ -41,7 +42,7 @@ const shots = [
     await p.waitForTimeout(500);
   }],
   ['playlists-panel', `/browse/1?t=0&g=${G}`, DESKTOP, async (p) => {
-    await p.locator('button[aria-label="Playlists"]').first().click();
+    await p.locator('button[aria-label="More"]').first().click();
     await p.waitForSelector('.dock-panel', { timeout: 5000 }).catch(() => {});
     await p.waitForTimeout(400);
   }],

@@ -277,4 +277,27 @@ describe('BrowseScreen', () => {
     expect(setGroupKind).not.toHaveBeenCalled();
     view.unmount();
   });
+
+  it('restores the last content kind for this source when Browse is reopened', async () => {
+    localStorage.setItem('browseKind:1', '1');
+    const view = render(<MemoryRouter initialEntries={['/browse/1']}>
+      <Routes><Route path="/browse/:playlistId" element={<BrowseScreen />} /></Routes>
+    </MemoryRouter>);
+    expect(await view.findByText('Action')).toBeTruthy();
+    expect(api.groups).toHaveBeenCalledWith(1, ChannelKind.MOVIE);
+    localStorage.removeItem('browseKind:1');
+  });
+
+  it('changes sections in place and distinguishes filtered categories from an empty library', async () => {
+    const view = renderBrowse();
+    await view.findByText('Empty category');
+    fireEvent.click(view.getByRole('button', { name: 'Movies 3' }));
+    expect(await view.findByText('Action')).toBeTruthy();
+    fireEvent.change(view.getByRole('searchbox'), { target: { value: 'missing category' } });
+    expect(view.getByText('No matches')).toBeTruthy();
+    fireEvent.click(view.getByRole('button', { name: 'Clear filter' }));
+    expect(view.getByText('Action')).toBeTruthy();
+    expect(view.getByTestId('query').textContent).toBe('?t=1');
+  });
+
 });

@@ -1,5 +1,6 @@
 import { ReactNode } from 'react';
 import { Icon } from '../components/Icons';
+import { authText as tx } from './copy';
 import './auth.css';
 
 /**
@@ -16,11 +17,12 @@ export function AuthLayout({ eyebrow, title, subtitle, children, footer }: {
 }) {
   return (
     <main className="auth-page">
-      <div className="flex w-full max-w-[420px] flex-col">
+      <div className="auth-container">
         <div className="auth-brand">
           <span className="mark"><Icon name="liveTv" /></span>
           <span className="word">OpenTV</span>
         </div>
+        <div className="auth-server"><Icon name="liveTv" /><span>{tx('serverContext')}</span><strong>{window.location.host}</strong></div>
         <header className="auth-head">
           {eyebrow && <div className="eyebrow">{eyebrow}</div>}
           <h1>{title}</h1>

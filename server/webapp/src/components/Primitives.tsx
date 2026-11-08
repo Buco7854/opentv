@@ -17,7 +17,7 @@ export function ScreenHeader({ title, home, subtitle, onBack, actions }: {
     <div className="topbar">
       {onBack && <IconBtn name="back" label={t('common.back')} onClick={onBack} />}
       <div className="titles">
-        <h1 className={`truncate ${home ? 'type-headline-medium' : 'type-title-large'}`}>{title}</h1>
+        {title && <h1 className={`truncate ${home ? 'type-headline-medium' : 'type-title-large'}`}>{title}</h1>}
         {subtitle}
       </div>
       {actions}

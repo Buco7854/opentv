@@ -1,6 +1,9 @@
 import { getLocale } from '../i18n';
 
 const en = {
+  serverContext: 'OpenTV server',
+  showPassword: 'Show password',
+  hidePassword: 'Hide password',
   loginTitle: 'Sign in',
   loginSubtitle: 'Use your OpenTV account to continue.',
   browserLinkLoginSubtitle: 'Sign in to finish linking the OpenTV app on this device.',
@@ -174,6 +177,9 @@ const en = {
 type Key = keyof typeof en;
 
 const fr: Record<Key, string> = {
+  serverContext: 'Serveur OpenTV',
+  showPassword: 'Afficher le mot de passe',
+  hidePassword: 'Masquer le mot de passe',
   loginTitle: 'Connexion',
   loginSubtitle: 'Utilisez votre compte OpenTV pour continuer.',
   browserLinkLoginSubtitle: "Connectez-vous pour terminer l'association de l'application OpenTV sur cet appareil.",

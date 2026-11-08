@@ -45,6 +45,18 @@ describe('LoginScreen', () => {
 
   afterEach(cleanup);
 
+  it('lets the user inspect their password without submitting or losing it', () => {
+    renderLogin();
+    const input = screen.getByLabelText('Password') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'kept-on-this-screen' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Show password' }));
+    expect(input.type).toBe('text');
+    expect(input.value).toBe('kept-on-this-screen');
+    fireEvent.click(screen.getByRole('button', { name: 'Hide password' }));
+    expect(input.type).toBe('password');
+    expect(input.value).toBe('kept-on-this-screen');
+  });
+
   it('offers the passkey and other-device paths when the server and browser allow them', () => {
     renderLogin();
     expect(screen.getByRole('button', { name: 'Sign in with a passkey' })).toBeTruthy();

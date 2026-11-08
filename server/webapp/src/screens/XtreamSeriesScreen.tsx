@@ -45,7 +45,7 @@ export function XtreamSeriesScreen() {
       />
       <div className="detail">
         <Poster image={series.cover} kind={ChannelKind.SERIES} />
-        <h2>{series.name}</h2>
+        <h1 className="detail-title">{series.name}</h1>
         <div className="pills">
           {series.categoryName && <Pill>{series.categoryName}</Pill>}
           {series.rating != null && <Pill>{starRating(series.rating)}</Pill>}

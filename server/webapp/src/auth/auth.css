@@ -5,35 +5,37 @@
 @layer components {
   .auth-page {
     @apply flex min-h-dvh flex-col items-center justify-center px-5 py-12;
-    background:
-      radial-gradient(120% 60% at 50% -10%, color-mix(in srgb, var(--c-fg) 7%, transparent), transparent 60%),
-      var(--c-bg);
+    background: var(--c-bg);
   }
 
-  .auth-brand { @apply mb-9 flex items-center justify-center gap-2.5; }
+  .auth-container { @apply flex w-full max-w-[420px] flex-col; }
+  .auth-brand { @apply mb-8 flex items-center gap-2.5; }
   .auth-brand .mark {
     @apply grid size-10 place-items-center rounded-[12px] text-on-surface;
-    background: var(--c-input);
-    border: 1px solid var(--c-hairline);
+    color: var(--c-fg);
   }
   .auth-brand .mark .icon { @apply size-5; stroke-width: 1.8; }
   .auth-brand .word {
-    @apply uppercase;
-    font: var(--type-title-medium);
-    font-family: var(--font-display);
-    letter-spacing: 0.22em;
+    font: 600 20px/1 var(--font-sans);
+    letter-spacing: -0.5px;
   }
 
+  .auth-server { @apply mb-7 flex flex-wrap items-center gap-x-2 gap-y-1 text-on-surface-variant; font: var(--type-body-small); }
+  .auth-server .icon { @apply size-3.5; }
+  .auth-server strong { @apply min-w-0 break-all text-on-surface; font-weight: 500; }
+  .auth-password-toggle { @apply -mt-1 mb-1 min-h-11 self-end rounded-md px-2 text-on-surface-variant; font: var(--type-label-medium); }
+  .auth-password-toggle:hover { color: var(--c-fg); background: var(--c-press); }
   .auth-head { @apply mb-6 flex flex-col gap-1.5; }
   .auth-head .eyebrow {
-    @apply uppercase text-on-surface-variant;
+    @apply text-on-surface-variant;
     font: var(--type-label-small);
-    letter-spacing: 0.14em;
+
   }
   .auth-head h1 { font: var(--type-headline-medium); letter-spacing: -0.4px; }
   .auth-head p { @apply text-on-surface-variant; font: var(--type-body-medium); }
 
   .auth-step { @apply flex flex-col gap-3; }
+  .auth-step > .btn { min-height: 48px; border-radius: 8px; }
   .auth-choices { @apply flex flex-col gap-2; }
   .auth-choices .row .sub { @apply whitespace-normal; }
   .auth-choices .row .icon.chev { @apply size-[18px] flex-none text-on-surface-variant; }

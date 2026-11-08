@@ -3,6 +3,7 @@
 interface Glyph { svg: string; solid?: boolean }
 
 const glyphs = {
+  home: { svg: '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/>' },
   back: { svg: '<path d="m15 18-6-6 6-6"/>' },
   search: { svg: '<path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/>' },
   close: { svg: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>' },

@@ -136,4 +136,18 @@ describe('FavoritesScreen', () => {
 
     expect(view.getByTestId('location').textContent).toBe('/xseries/2/91');
   });
+
+  it('combines title and media filters and offers recovery when nothing matches', async () => {
+    const view = renderScreen();
+    await view.findByRole('button', { name: 'Playlist Two Movie' });
+    fireEvent.click(view.getByRole('button', { name: 'Movies' }));
+    expect(view.queryByRole('button', { name: 'Playlist One Live' })).toBeNull();
+    expect(view.getByRole('button', { name: 'Playlist Two Movie' })).toBeTruthy();
+    fireEvent.change(view.getByRole('searchbox'), { target: { value: 'unmatched title' } });
+    expect(view.getByText('No matches')).toBeTruthy();
+    fireEvent.click(view.getByRole('button', { name: 'Clear filter' }));
+    expect(view.getByRole('button', { name: 'Playlist One Live' })).toBeTruthy();
+    expect(view.getByRole('button', { name: 'The Show' })).toBeTruthy();
+  });
+
 });

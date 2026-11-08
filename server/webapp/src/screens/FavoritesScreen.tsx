@@ -10,13 +10,14 @@ import { DownloadStateIcon } from '../components/DownloadStateIcon';
 import { GuideSheet } from '../components/GuideSheet';
 import { MediaListRow } from '../components/MediaListRow';
 import {
-  ConfirmDialog, IconBtn, Pager, ScreenHeader, Segmented, toast,
+  ConfirmDialog, IconBtn, Pager, ScreenHeader, SearchField, Segmented, toast,
 } from '../components/Primitives';
 import { GENERIC, reportError } from '../errors';
 import { useAsync, useDownloads, usePaged } from '../hooks';
 import { t } from '../i18n';
 import { useLibrary } from '../library';
 import { usePlayer } from '../player/PlayerNavigation';
+import './library-screens.css';
 
 const ALL_PLAYLISTS = 'all' as const;
 type PlaylistFilter = typeof ALL_PLAYLISTS | number;
@@ -36,6 +37,8 @@ export function FavoritesScreen() {
   const { data: resolved, reload } = favorites;
   const downloads = useDownloads();
   const [filter, setFilter] = useState<PlaylistFilter>(ALL_PLAYLISTS);
+  const [kind, setKind] = useState<'all' | 'live' | 'movies' | 'series'>('all');
+  const [query, setQuery] = useState('');
   const [guideChannel, setGuideChannel] = useState<Channel | null>(null);
   const [guideIds, setGuideIds] = useState<Record<number, Set<string>>>({});
   const [nowAiring, setNowAiring] = useState<Record<number, Record<string, Programme>>>({});
@@ -65,14 +68,19 @@ export function FavoritesScreen() {
     if (filter !== ALL_PLAYLISTS && !playlistIds.has(filter)) setFilter(ALL_PLAYLISTS);
   }, [filter, playlistIds]);
 
-  const visible = useMemo(() => ({
-    live: (resolved?.live ?? []).filter((item) =>
-      filter === ALL_PLAYLISTS || item.playlistId === filter),
-    movies: (resolved?.movies ?? []).filter((item) =>
-      filter === ALL_PLAYLISTS || item.playlistId === filter),
-    series: (resolved?.series ?? []).filter((item) =>
-      filter === ALL_PLAYLISTS || item.playlistId === filter),
-  }), [filter, resolved]);
+  const visible = useMemo(() => {
+    const matches = (playlistId: number, name: string) =>
+      (filter === ALL_PLAYLISTS || playlistId === filter) &&
+      name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
+    return {
+      live: kind === 'all' || kind === 'live'
+        ? (resolved?.live ?? []).filter((item) => matches(item.playlistId, item.name)) : [],
+      movies: kind === 'all' || kind === 'movies'
+        ? (resolved?.movies ?? []).filter((item) => matches(item.playlistId, item.name)) : [],
+      series: kind === 'all' || kind === 'series'
+        ? (resolved?.series ?? []).filter((item) => matches(item.playlistId, item.seriesKey)) : [],
+    };
+  }, [filter, kind, query, resolved]);
 
   // Unfavorite through the playlist that owns this row. Undo uses that same identity.
   const remove = async (favorite: Fav) => {
@@ -98,9 +106,9 @@ export function FavoritesScreen() {
     });
   };
 
-  const pagedLive = usePaged(visible.live, `live:${filter}`);
-  const pagedMovies = usePaged(visible.movies, `movies:${filter}`);
-  const pagedSeries = usePaged(visible.series, `series:${filter}`);
+  const pagedLive = usePaged(visible.live, `live:${filter}:${kind}:${query}`);
+  const pagedMovies = usePaged(visible.movies, `movies:${filter}:${kind}:${query}`);
+  const pagedSeries = usePaged(visible.series, `series:${filter}:${kind}:${query}`);
   const liveDecorationScopes = useMemo(() => {
     const scopes = new Map<number, Set<string>>();
     pagedLive.pageItems.forEach((item) => {
@@ -226,12 +234,23 @@ export function FavoritesScreen() {
     <>
       <ScreenHeader
         title={selectMode ? t('favorites.selectedN', { count: selected.size }) : t('favorites.title')}
+        subtitle={selectMode ? undefined : <span className="subtitle">{t('favorites.subtitle')}</span>}
         actions={headerActions}
       />
       {asyncFallback(favorites)}
       {isEmpty && <EmptyState title={t('favorites.emptyTitle')} subtitle={t('favorites.emptySub')} />}
       {resolved && !isEmpty && (
         <>
+          {!selectMode && <>
+            <SearchField placeholder={t('favorites.filterPlaceholder')} value={query} onChange={setQuery} />
+            <div className="favorites-types" role="group" aria-label={t('favorites.kindAll')}>
+              {([['all', t('favorites.kindAll')], ['live', t('nav.live')],
+                ['movies', t('nav.movies')], ['series', t('nav.series')]] as const).map(([value, label]) => (
+                <button type="button" key={value} aria-pressed={kind === value}
+                  onClick={() => setKind(value)}>{label}</button>
+              ))}
+            </div>
+          </>}
           {filterPlaylists.length > 1 && !selectMode && (
             <div className="search-wrap">
               <Segmented<PlaylistFilter>
@@ -245,6 +264,10 @@ export function FavoritesScreen() {
               />
             </div>
           )}
+          {!visible.live.length && !visible.movies.length && !visible.series.length && <EmptyState
+            title={t('browse.noMatches')} subtitle={t('favorites.noMatchesSub')}
+            action={<button className="btn tonal" onClick={() => { setQuery(''); setKind('all'); setFilter(ALL_PLAYLISTS); }}>
+              {t('browse.clearFilter')}</button>} />}
           <div className="list">
             {visible.live.length > 0 &&
               <div className="section-header cursor-default">{t('nav.live')} · {visible.live.length}</div>}

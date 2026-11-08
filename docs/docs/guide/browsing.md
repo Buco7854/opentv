@@ -1,6 +1,6 @@
 # Browsing and search
 
-OpenTV organizes your content into Live, Movies and Series, using the categories your provider supplies.
+Web and Android share Home, Browse, Favorites, Search and More. Home lists your sources without opening one automatically. Choose a playlist, then use the Live, Movies and Series tabs inside Browse. More contains source management, downloads and settings.
 
 ## List and grid views
 

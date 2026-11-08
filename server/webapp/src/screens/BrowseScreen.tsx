@@ -26,12 +26,16 @@ import { t } from '../i18n';
 import { starRating } from '../lib/format';
 import { prefs } from '../preferences';
 import { usePlayer } from '../player/PlayerNavigation';
+import './library-screens.css';
 
 export function BrowseScreen() {
   const playlistId = Number(useParams().playlistId);
   const navigate = useNavigate();
   const [search, setSearch] = useSearchParams();
-  const tab = Number(search.get('t') ?? ChannelKind.LIVE);
+  const requestedTab = Number(search.get('t') ?? prefs.browseKind(playlistId));
+  const tab = (Object.values(ChannelKind) as number[]).includes(requestedTab)
+    ? requestedTab : ChannelKind.LIVE;
+  useEffect(() => { prefs.rememberBrowseKind(playlistId, tab); }, [playlistId, tab]);
   const group = search.get('g');
   const { playChannel, playCatchup } = usePlayer();
   const { data: detail, reload: reloadDetail } = useAsync(() => api.playlistDetail(playlistId), [playlistId]);
@@ -193,20 +197,27 @@ export function BrowseScreen() {
   const sectionNames = { [ChannelKind.LIVE]: t('nav.live'), [ChannelKind.MOVIE]: t('nav.movies'), [ChannelKind.SERIES]: t('nav.series') };
 
   const atRoot = group == null || singleGroup;
-  const title = (singleGroup ? null : group) ?? detail?.playlist.name ?? t('browse.title');
+  const title = (singleGroup ? null : group) ?? sectionNames[tab as 0 | 1 | 2] ?? t('browse.title');
 
   return (
     <>
       <ScreenHeader
         title={title}
         onBack={atRoot ? undefined : () => setTabGroup(tab, null)}
-        subtitle={detail?.playlist.hasXtreamPanel && account
-          ? account.execution === PlaylistOperationExecution.BROWSER && account.browserPath
-            ? <BrowserOperationLine path={account.browserPath} />
-            : account.execution === PlaylistOperationExecution.IN_APP
-              ? <ConnectionLine playlistId={playlistId} />
-              : null
-          : `${sectionNames[tab as 0 | 1 | 2] ?? ''} · ${counts[tab as 0 | 1 | 2] ?? 0}`}
+        subtitle={<div className="browse-meta">
+          <span>{t(tab === ChannelKind.LIVE ? 'browse.channelCount' : 'browse.categoryItems', {
+            count: group == null ? counts[tab as 0 | 1 | 2]
+              : tab !== ChannelKind.SERIES ? pagedChannels.total
+                : isXtreamNative ? pagedXtream.total : pagedSeries.total,
+          })}</span>
+          {detail?.playlist.hasXtreamPanel && account
+            ? account.execution === PlaylistOperationExecution.BROWSER && account.browserPath
+              ? <BrowserOperationLine path={account.browserPath} />
+              : account.execution === PlaylistOperationExecution.IN_APP
+                ? <ConnectionLine playlistId={playlistId} />
+                : null
+            : null}
+        </div>}
         actions={
           group != null && tab !== ChannelKind.LIVE ? (
             <IconBtn name={grid ? 'listView' : 'grid'}
@@ -216,16 +227,36 @@ export function BrowseScreen() {
         }
       />
 
+      <nav className="browse-sections" aria-label={t('browse.title')}>
+        {([ChannelKind.LIVE, ChannelKind.MOVIE, ChannelKind.SERIES] as const).map((kind) => (
+          <button type="button" key={kind} aria-current={tab === kind ? 'page' : undefined}
+            onClick={() => setTabGroup(kind, null)}>
+            {sectionNames[kind]}{' '}<span>{detail ? counts[kind] : '—'}</span>
+          </button>
+        ))}
+      </nav>
+      <div className="browse-toolbar">
       <SearchField
         placeholder={group == null ? t('browse.filterCategories') : t('browse.filterCategory')}
         value={filter}
         onChange={setFilter}
       />
+      <button type="button" className="icon-btn muted browse-global-search" aria-label={t('browse.searchAll')} title={t('browse.searchAll')}
+        onClick={() => navigate(`/search/${playlistId}`)}>
+        <Icon name="search" />
+      </button>
+      </div>
+      {group == null && groups && <div className="browse-list-heading">
+        <h2>{t('browse.categories')}</h2><span>{t('browse.categoryCount', { count: groups.filter((g) => matches(g.groupTitle)).length })}</span>
+      </div>}
+
 
       {group == null ? (
         groupsPending ?? (
           <>
             <GroupList
+              filter={filter}
+              onClear={() => setFilter('')}
               groups={pagedGroups.pageItems}
               onCorrect={isXtreamNative ? null
                 : canCorrectCategoryInApp ? setCorrectingGroup
@@ -237,7 +268,7 @@ export function BrowseScreen() {
           </>
         )
       ) : tab === ChannelKind.SERIES && isXtreamNative ? (
-        <CategoryItems pending={xtreamPending} count={pagedXtream.pageItems.length}>
+        <CategoryItems pending={xtreamPending} count={pagedXtream.pageItems.length} filtered={!!listingFilter} onClear={() => setFilter('')}>
           {grid ? (
             <PosterGrid
               kind={ChannelKind.SERIES}
@@ -264,7 +295,7 @@ export function BrowseScreen() {
           <Pager {...pagedXtream} onPage={pagedXtream.setPage} />
         </CategoryItems>
       ) : tab === ChannelKind.SERIES ? (
-        <CategoryItems pending={seriesPending} count={pagedSeries.pageItems.length}>
+        <CategoryItems pending={seriesPending} count={pagedSeries.pageItems.length} filtered={!!listingFilter} onClear={() => setFilter('')}>
           {grid ? (
             <PosterGrid
               kind={ChannelKind.SERIES}
@@ -291,7 +322,7 @@ export function BrowseScreen() {
           <Pager {...pagedSeries} onPage={pagedSeries.setPage} />
         </CategoryItems>
       ) : tab === ChannelKind.MOVIE && grid ? (
-        <CategoryItems pending={channelsPending} count={pagedChannels.pageItems.length}>
+        <CategoryItems pending={channelsPending} count={pagedChannels.pageItems.length} filtered={!!listingFilter} onClear={() => setFilter('')}>
           <PosterGrid
             kind={ChannelKind.MOVIE}
             items={pagedChannels.pageItems.map((c) => ({
@@ -302,7 +333,7 @@ export function BrowseScreen() {
           <Pager {...pagedChannels} onPage={pagedChannels.setPage} />
         </CategoryItems>
       ) : (
-        <CategoryItems pending={channelsPending} count={pagedChannels.pageItems.length}>
+        <CategoryItems pending={channelsPending} count={pagedChannels.pageItems.length} filtered={!!listingFilter} onClear={() => setFilter('')}>
           <ChannelList
             channels={pagedChannels.pageItems}
             nowAiring={tab === ChannelKind.LIVE ? nowAiring : {}}
@@ -372,28 +403,36 @@ function ConnectionLine({ playlistId }: { playlistId: number }) {
   );
 }
 
-function CategoryItems({ pending, count, children }: {
+function CategoryItems({ pending, count, children, filtered, onClear }: {
   pending: ReactNode | null;
+  filtered: boolean;
+  onClear: () => void;
   count: number;
   children: ReactNode;
 }) {
   if (pending) return pending;
   if (count === 0) {
-    return <EmptyState title={t('browse.emptyCategoryTitle')} subtitle={t('browse.emptyCategorySub')} />;
+    return <EmptyState title={t(filtered ? 'browse.noMatches' : 'browse.emptyCategoryTitle')}
+      subtitle={t(filtered ? 'browse.noMatchesSub' : 'browse.emptyCategorySub')}
+      action={filtered ? <button className="btn tonal" onClick={onClear}>{t('browse.clearFilter')}</button> : undefined} />;
   }
   return children;
 }
 
-function GroupList({ groups, onCorrect, onSelect }: {
+function GroupList({ groups, onCorrect, onSelect, filter, onClear }: {
+  filter: string;
+  onClear: () => void;
   groups: GroupCount[];
   onCorrect: ((group: string) => void) | null;
   onSelect: (group: string) => void;
 }) {
   if (!groups.length) {
-    return <EmptyState title={t('browse.emptyTitle')} subtitle={t('browse.emptySub')} />;
+    return <EmptyState title={t(filter ? 'browse.noMatches' : 'browse.emptyTitle')}
+      subtitle={t(filter ? 'browse.noMatchesSub' : 'browse.emptySub')}
+      action={filter ? <button className="btn tonal" onClick={onClear}>{t('browse.clearFilter')}</button> : undefined} />;
   }
   return (
-    <div className="list">
+    <div className="category-grid">
       {groups.map((g) => (
         <div key={g.groupTitle} className="card interactive-card">
           <div className="group-row">

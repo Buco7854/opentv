@@ -60,7 +60,15 @@ export const prefs = {
     return value === 'light' || value === 'dark' ? value : 'system';
   },
   set theme(value: Theme) { storage.write('theme', value); },
-  /** Playlist the dock's Live/Movies/Series/Search actions target; Favorites is account-wide. */
+  /** Last chosen Browse tab is a presentation preference scoped to its source. */
+  browseKind(playlistId: number): number {
+    const value = Number(storage.read(`browseKind:${playlistId}`));
+    return [0, 1, 2].includes(value) ? value : 0;
+  },
+  rememberBrowseKind(playlistId: number, kind: number) {
+    if (playlistId > 0 && [0, 1, 2].includes(kind)) storage.write(`browseKind:${playlistId}`, String(kind));
+  },
+  /** Playlist targeted by Browse and Search; Favorites is account-wide. */
   get activePlaylist(): number | null {
     const value = Number(storage.read('activePlaylist'));
     return Number.isFinite(value) && value > 0 ? value : null;

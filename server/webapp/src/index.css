@@ -1,9 +1,8 @@
 /*
  * OpenTV web design system (Tailwind v4 source).
  *
- * Cockpit-style UI: content on a clean canvas, a persistent bottom dock,
- * floating panels, thin line iconography, segmented pills (selected = solid
- * white). Touch-first, with comfortable targets
+ * Shared Android/web library: clear destinations, neutral surfaces,
+ * artwork-led browsing and calm controls. Touch-first, with comfortable targets
  * for large landscape touchscreens (including in-car browsers), responsive
  * down to phones.
  *
@@ -15,10 +14,8 @@
 
 @import "tailwindcss";
 
-/* UI typeface + display typeface for titles and large numerals. */
+/* Inter is shared with the Android client. */
 @import "@fontsource-variable/inter";
-@import "@fontsource/barlow/500.css";
-@import "@fontsource/barlow/600.css";
 
 /* ------------------------------------------------------------------ */
 /* 1. RUNTIME THEME TOKENS                                             */
@@ -29,12 +26,12 @@
 :root {
   color-scheme: dark;
   --c-bg: #161616;
-  --c-fg: #FFFFFF;
-  --c-fg2: #9B9B9B;                       /* secondary text/icons */
+  --c-fg: #F5F5F5;
+  --c-fg2: #A8A8A8;                       /* secondary text/icons */
   --c-panel: #1F1F1F;                     /* in-flow cards */
   --c-panel-hi: #262626;                  /* hover / raised cards */
   --c-panel-top: #323232;                 /* inputs' raised parts, tracks */
-  --c-float: rgba(38, 38, 38, 0.94);      /* floating panels/popovers */
+  --c-float: #222222;      /* floating panels/popovers */
   --c-float-solid: #262626;
   --c-input: rgba(255, 255, 255, 0.09);   /* ~#2D2D2D over the canvas */
   --c-hairline: rgba(255, 255, 255, 0.09);
@@ -43,8 +40,8 @@
   --c-on-seg: #161616;
   --c-listsel: rgba(255, 255, 255, 0.16); /* selected list item pill */
   --c-focus: #8FA8FF;                     /* keyboard focus ring */
-  --c-accent: #3E6AE1;
-  --c-on-accent: #FFFFFF;
+  --c-accent: #8FA8FF;
+  --c-on-accent: #141E3A;
   --c-good: #34C759;
   --c-bad: #F1544B;
   --c-scrim: rgba(0, 0, 0, 0.6);
@@ -62,7 +59,7 @@
   --c-panel: #F4F4F4;
   --c-panel-hi: #ECECEC;
   --c-panel-top: #DDDDDD;
-  --c-float: rgba(246, 246, 246, 0.96);
+  --c-float: #F6F6F6;
   --c-float-solid: #F6F6F6;
   --c-input: rgba(0, 0, 0, 0.05);
   --c-hairline: rgba(0, 0, 0, 0.10);
@@ -71,7 +68,7 @@
   --c-on-seg: #171A20;
   --c-listsel: rgba(0, 0, 0, 0.08);
   --c-focus: #2A4BB8;
-  --c-accent: #3E6AE1;
+  --c-accent: #2A4BB8;
   --c-on-accent: #FFFFFF;
   --c-good: #12823B;
   --c-bad: #CC3B33;
@@ -91,7 +88,7 @@
     --c-panel: #F4F4F4;
     --c-panel-hi: #ECECEC;
     --c-panel-top: #DDDDDD;
-    --c-float: rgba(246, 246, 246, 0.96);
+    --c-float: #F6F6F6;
   --c-float-solid: #F6F6F6;
     --c-input: rgba(0, 0, 0, 0.05);
     --c-hairline: rgba(0, 0, 0, 0.10);
@@ -100,7 +97,7 @@
     --c-on-seg: #171A20;
     --c-listsel: rgba(0, 0, 0, 0.08);
     --c-focus: #2A4BB8;
-    --c-accent: #3E6AE1;
+    --c-accent: #2A4BB8;
     --c-on-accent: #FFFFFF;
     --c-good: #12823B;
     --c-bad: #CC3B33;
@@ -114,7 +111,7 @@
 /* Map Tailwind color utilities onto the runtime tokens. */
 @theme inline {
   --font-sans: "Inter Variable", Inter, system-ui, -apple-system, sans-serif;
-  --font-display: Barlow, "Inter Variable", system-ui, sans-serif;
+  --font-display: "Inter Variable", Inter, system-ui, sans-serif;
 
   --color-background: var(--c-bg);
   --color-on-background: var(--c-fg);
@@ -144,11 +141,12 @@
   --type-body-small: 400 12.5px/17px var(--font-sans);
   --type-label-large: 500 14px/20px var(--font-sans);
   --type-label-medium: 500 12.5px/17px var(--font-sans);
-  --type-label-small: 500 11px/15px var(--font-sans);
-  /* Media-card titles: display face, spaced caps */
-  --type-media-title: 600 15px/20px var(--font-display);
+  --type-label-small: 500 12px/16px var(--font-sans);
+  /* Media titles share the Android Inter type system. */
+  --type-media-title: 500 14px/20px var(--font-sans);
 
-  --dock-h: 68px;
+  --dock-h: 72px;
+  --masthead-h: 64px;
   --type-display-small: var(--type-display); /* legacy alias */
 }
 
@@ -269,61 +267,46 @@
   /* ================================================================ */
   /* 2. DOCK                                                           */
   /* ================================================================ */
-  .dock {
-    @apply fixed inset-x-0 bottom-0 z-40 flex items-center gap-1 px-2
-           backdrop-blur-[16px];
-    height: var(--dock-h);
-    background: color-mix(in srgb, var(--c-bg) 88%, transparent);
-    border-top: 1px solid var(--c-hairline);
+  .library-masthead {
+    position: fixed; inset: 0 0 auto; z-index: 40; height: var(--masthead-h);
+    display: flex; align-items: center; gap: 32px;
+    padding: 0 max(24px, calc((100vw - 1132px) / 2));
+    background: var(--c-bg); border-bottom: 1px solid var(--c-hairline);
   }
-  /* The menu owns the left slot. Content actions center in the space that remains,
-     instead of reserving an empty fake-menu slot on the right. */
-  .dock .apps { @apply min-w-0 flex flex-1 items-center justify-center gap-1; }
-  .dock-btn {
-    @apply relative inline-flex h-12 min-w-12 flex-none items-center justify-center
-           rounded-[10px] px-3 text-on-surface-variant transition-colors duration-100;
-  }
-  /* NOTE: hover feedback throughout is wrapped in @media (hover: hover) -
-     on touch screens :hover matches the last tapped element and sticks. */
-  .dock-btn:active { background: var(--c-press); }
-  @media (hover: hover) { .dock-btn:hover { background: var(--c-press); } }
+  .library-brand { display: flex; flex: none; align-items: center; gap: 10px; min-height: 48px; }
+  .library-brand > .icon { width: 25px; height: 25px; stroke-width: 1.6; }
+  .library-brand > span { font: 600 20px/1 var(--font-sans); letter-spacing: -.6px; }
+  .library-switcher { display: flex; align-items: center; gap: 9px; min-width: 0; max-width: 220px; min-height: 44px; margin-left: auto; padding: 0 12px; border-radius: 8px; background: var(--c-panel); font: var(--type-label-large); color: var(--c-fg2); }
+  .library-switcher > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .library-switcher > .icon { width: 18px; height: 18px; }
+  .library-switcher > .icon:last-child { width: 14px; height: 14px; }
+  .dock { display: flex; align-items: center; gap: 4px; }
+  .dock-btn { position: relative; display: flex; align-items: center; justify-content: center; gap: 8px; min-width: 0; min-height: 44px; padding: 0 12px; border-radius: 8px; color: var(--c-fg2); }
+  .dock-label { font: var(--type-label-large); }
+  .dock-btn .icon { width: 18px; height: 18px; stroke-width: 1.6; }
   .dock-btn.active { color: var(--c-fg); background: var(--c-press); }
-  .dock-btn:disabled { opacity: 0.35; }
-  .dock-btn .icon { @apply size-[24px]; }
-  .dock-btn .dot {
-    @apply absolute top-2 right-2 size-2 rounded-full;
-    background: var(--c-accent);
-  }
-  .dock-btn .dot.good { background: var(--c-good); }
-  @media (max-width: 720px) {
-    /* The same gap between the burger and the apps row as between apps, so
-       adjacent pills never touch; smaller glyphs on phone screens. */
-    .dock { @apply gap-1.5 px-1; }
-    .dock-btn .icon { @apply size-[22px]; }
-    /* Buttons share the row evenly (with a gap so adjacent pills never
-       touch) and the last icon never clips offscreen. */
-    .dock .apps { @apply mx-0 min-w-0 flex-1 justify-evenly gap-1.5; }
-    .dock .apps .dock-btn { @apply min-w-0 max-w-13 flex-1 px-0; }
-  }
-
-  /* Floating panel anchored to the dock (playlists, etc.). Anchored by both
-     edges with a max width so it can never overflow past the right side. */
+  .dock-btn:disabled { opacity: .4; cursor: default; }
+  .dock-btn .dot { position: absolute; top: 6px; right: 6px; width: 5px; height: 5px; border-radius: 50%; background: var(--c-good); }
+  .library-panel-scrim { position: fixed; inset: 0; z-index: 44; background: var(--c-scrim); }
   .dock-panel {
-    @apply fixed z-45 flex flex-col overflow-hidden rounded-2xl backdrop-blur-[20px];
-    left: 12px;
-    right: 12px;
-    width: auto;
-    max-width: 440px;
-    bottom: calc(var(--dock-h) + 12px);
-    max-height: min(560px, calc(100vh - var(--dock-h) - 32px));
-    background: var(--c-float);
-    border: 1px solid var(--c-hairline);
-    box-shadow: var(--shadow-float);
-    animation: panel-in 0.16s ease-out;
+    position: fixed; z-index: 45; display: flex; flex-direction: column; overflow: hidden;
+    top: 72px; right: max(16px, calc((100vw - 1132px) / 2)); width: min(420px, calc(100vw - 32px));
+    max-height: calc(100dvh - 100px); border-radius: 12px; background: var(--c-float);
+    border: 1px solid var(--c-hairline); box-shadow: var(--shadow-float); animation: panel-in .16s ease-out;
   }
   .dock-panel .panel-body { @apply flex-1 overflow-y-auto p-3; }
-  .dock-panel .panel-head { @apply flex items-center gap-2 px-4 pt-3.5 pb-1; }
-  .dock-panel .panel-head h3 { @apply flex-1; font: var(--type-title-medium); letter-spacing: -0.1px; }
+  .dock-panel .panel-head { @apply flex items-center gap-2 px-4 pt-3 pb-2; border-bottom: 1px solid var(--c-hairline); }
+  .dock-panel .panel-head h3 { @apply flex-1; font: var(--type-title-medium); }
+  @media (hover: hover) { .dock-btn:hover, .library-switcher:hover { background: var(--c-press); color: var(--c-fg); } }
+  @media (max-width: 959px) {
+    .library-masthead { gap: 16px; padding: 0 20px; }
+    .dock { position: fixed; inset: auto 0 0; z-index: 40; gap: 0; height: calc(var(--dock-h) + env(safe-area-inset-bottom)); padding: 4px 8px calc(4px + env(safe-area-inset-bottom)); background: var(--c-bg); border-top: 1px solid var(--c-hairline); }
+    .dock-btn { flex: 1; flex-direction: column; gap: 5px; min-height: 56px; padding: 4px 2px; }
+    .dock-label { font: 500 11px/16px var(--font-sans); }
+    .dock-btn .icon { width: 22px; height: 22px; }
+    .library-switcher { max-width: min(52vw, 260px); }
+    .dock-panel { top: auto; bottom: calc(var(--dock-h) + env(safe-area-inset-bottom) + 12px); max-height: calc(100dvh - var(--dock-h) - 32px); }
+  }
 
   /* Rows inside panels: icon + label + trailing actions; selected = pill */
   .panel-row {
@@ -364,7 +347,8 @@
   /* ================================================================ */
 
   /* Screen header: slim, inside content, with air above the title row. */
-  .topbar { @apply sticky top-0 z-20 flex items-center gap-0 px-2 pt-3 pb-1 backdrop-blur-[14px]; min-height: 76px; background: color-mix(in srgb, var(--c-bg) 85%, transparent); }
+  .topbar { @apply sticky top-0 z-20 flex items-center gap-0 px-2 pt-3 pb-1; min-height: 76px; background: color-mix(in srgb, var(--c-bg) 85%, transparent); }
+  .topbar .titles > h1 { font: 600 24px/32px var(--font-sans); letter-spacing: -.3px; }
   .topbar .titles { @apply min-w-0 flex-1 pl-1.5; }
   .topbar .subtitle, .dialog .hint, .guide-head .sub {
     @apply text-on-surface-variant;
@@ -387,7 +371,8 @@
 
   .btn {
     @apply inline-flex h-11 w-full items-center justify-center gap-2 rounded-[10px]
-           bg-primary px-6 text-on-primary;
+           px-6;
+    background: var(--c-fg); color: var(--c-bg);
     font: var(--type-title-small);
   }
   .btn:active { filter: brightness(1.08); }
@@ -414,7 +399,7 @@
   .scrim { @apply fixed inset-0 z-50 flex items-center justify-center p-5; background: var(--c-scrim); }
   .dialog {
     @apply flex max-h-[86vh] w-full min-w-[280px] max-w-[440px] flex-col gap-4
-           overflow-y-auto rounded-2xl p-6 backdrop-blur-[20px];
+           overflow-y-auto rounded-2xl p-6;
     background: var(--c-float);
     border: 1px solid var(--c-hairline);
     box-shadow: var(--shadow-float);
@@ -426,7 +411,7 @@
   .sheet-scrim { @apply fixed inset-0 z-50; background: var(--c-scrim); }
   .sheet {
     @apply fixed inset-x-0 bottom-0 z-51 mx-auto flex w-full max-w-[720px] flex-col
-           overflow-hidden rounded-t-2xl backdrop-blur-[20px];
+           overflow-hidden rounded-t-2xl;
     max-height: min(62vh, 62dvh);
     background: var(--c-float);
     border: 1px solid var(--c-hairline);
@@ -474,7 +459,7 @@
   }
   .toast {
     @apply pointer-events-auto relative flex max-w-[min(560px,calc(100vw-40px))] items-center gap-3
-           overflow-hidden rounded-[10px] px-4 py-3 text-on-surface backdrop-blur-[14px];
+           overflow-hidden rounded-[10px] px-4 py-3 text-on-surface;
     background: var(--c-float);
     border: 1px solid var(--c-hairline);
     box-shadow: var(--shadow-float);
@@ -541,7 +526,7 @@
   .select-dropdown .select-menu { @apply inset-x-auto right-0 min-w-[9rem]; }
   .select-menu {
     @apply absolute inset-x-0 top-full z-30 mt-1.5 max-h-[320px] overflow-y-auto rounded-xl
-           p-1.5 backdrop-blur-[20px];
+           p-1.5;
     background: var(--c-float);
     border: 1px solid var(--c-hairline);
     box-shadow: var(--shadow-float);
@@ -660,7 +645,7 @@
   .pills { @apply flex flex-wrap items-center gap-2; }
 
   .badge {
-    @apply flex-none rounded-md px-1.5 py-0.5 text-[10px] font-semibold tracking-[0.4px];
+    @apply flex-none rounded-md px-1.5 py-0.5 text-[11px] font-semibold tracking-[0.4px];
     background: var(--c-input);
     color: var(--c-fg2);
   }
@@ -697,7 +682,8 @@
   .poster-card .img img, .episode-row .thumb img { @apply absolute inset-0 size-full object-cover; }
   .poster-card .img .badge { @apply absolute top-1.5 right-1.5; }
   .poster-card .meta { @apply min-h-10 px-0.5 py-2; }
-  .poster-card .meta .title { @apply line-clamp-2; font: var(--type-label-large); }
+  .poster-card .meta .title { @apply line-clamp-2; font: var(--type-media-title); text-align: left; }
+  .poster-card .meta .sub { text-align: left; }
 
   .group-row { @apply flex items-center gap-3.5 py-1.5 pr-1 pl-4; }
   .group-row .group-open { @apply flex min-w-0 flex-1 items-center gap-3.5 rounded-lg text-left; }
@@ -792,9 +778,9 @@
   .detail .poster .icon { @apply size-14; stroke-width: 1.2; }
   .detail .poster img { @apply absolute inset-0 size-full object-contain p-3; }
   .detail .poster img.cover { @apply object-cover p-0; }
-  .detail h2 { @apply mt-[18px]; font: var(--type-headline-medium); letter-spacing: -0.4px; }
+  .detail h2, .detail .detail-title { @apply mt-[18px]; font: var(--type-headline-medium); letter-spacing: -0.4px; }
   .detail .series-label { @apply mt-[18px] text-on-surface-variant; font: var(--type-label-large); }
-  .detail .series-label + h2 { @apply mt-0.5; }
+  .detail .series-label + .detail-title { @apply mt-0.5; }
   .detail .pills { @apply mt-3; }
   .detail .overview { @apply mt-3.5 text-on-surface-variant; font: var(--type-body-medium); }
   .detail .section-h { @apply mt-5 mb-2; font: var(--type-title-small); }
@@ -899,7 +885,7 @@
     --c-float: rgba(24, 24, 24, 0.92);
     --c-float-solid: #1C1C1C;
     --c-fg: #FFFFFF;
-    --c-fg2: #9B9B9B;
+    --c-fg2: #A8A8A8;
     --c-panel-top: rgba(255, 255, 255, 0.22);
     --c-hairline: rgba(255, 255, 255, 0.10);
     --c-press: rgba(255, 255, 255, 0.08);
@@ -1098,7 +1084,7 @@
 
   /* Anchored dropdown (Menu): floating panel next to its anchor button. */
   .menu-popover {
-    @apply invisible fixed z-70 min-w-[200px] rounded-xl p-1.5 backdrop-blur-[20px];
+    @apply invisible fixed z-70 min-w-[200px] rounded-xl p-1.5;
     background: var(--c-float);
     border: 1px solid var(--c-hairline);
     box-shadow: var(--shadow-float);
@@ -1114,3 +1100,43 @@
 @keyframes panel-in { from { transform: translateY(10px); opacity: 0; } }
 @keyframes sheet-in { from { transform: translateY(24px); opacity: 0.5; } }
 @keyframes dialog-in { from { opacity: 0; } }
+
+/* Shared content rhythm; navigation stays compact so artwork starts early. */
+@layer components {
+  .shell-content { padding-top: var(--masthead-h); padding-bottom: calc(var(--dock-h) + env(safe-area-inset-bottom) + 24px); }
+  .skip-link { position: fixed; top: 8px; left: 16px; z-index: 110; padding: 12px 20px; background: var(--c-seg); color: var(--c-on-seg); border-radius: 8px; transform: translateY(-180%); }
+  .skip-link:focus { transform: translateY(0); }
+  .topbar { top: var(--masthead-h); min-height: 80px; padding: 20px 20px 12px; gap: 4px; background: var(--c-bg); }
+  .list { gap: 4px; }
+  .list > .interactive-card { border-radius: 8px; background: transparent; border-bottom: 1px solid var(--c-hairline); }
+  .list > .interactive-card.selected { background: var(--c-listsel); }
+  @media (min-width: 960px) { .shell-content { padding-bottom: 40px; } }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; }
+  .dock-panel, .sheet, .toast, .menu-popover { animation: none; }
+  .card, .icon-btn, .dock-btn, .player-ui, .player-subs, .otp .cell { transition: none; }
+  .link-status .dot, .otp .caret { animation: none; }
+  .spinner, .player-spinner, .btn-spinner, .dl-ring.spin { animation-duration: 2s; }
+}
+
+
+@layer components {
+  .detail { max-width: 1000px; padding: 0 24px 32px; }
+  .detail-feature { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 32px; align-items: start; }
+  .detail-feature > .poster { height: auto; aspect-ratio: 2 / 3; background: var(--c-panel); border-radius: 12px; }
+  .detail-feature > .poster img { padding: 0; }
+  .detail-summary { min-width: 0; }
+  .detail-summary > .detail-title { margin-top: 0; font-size: 24px; line-height: 32px; }
+  .detail-summary .action-row { max-width: 380px; margin: 20px 0 24px; }
+  .detail-summary .action-row .btn { flex: 1; min-height: 48px; }
+  .detail-summary .overview { line-height: 1.65; }
+  @media (max-width: 640px) {
+    .detail { padding: 0 16px 28px; }
+    .detail-feature { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+    .detail-feature > .poster { width: 144px; margin: 0 auto; }
+    .detail-summary > .detail-title { font-size: 21px; line-height: 28px; }
+    .detail-summary .action-row { max-width: none; }
+  }
+}

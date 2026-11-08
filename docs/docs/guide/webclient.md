@@ -26,19 +26,18 @@ Every channel, movie and series shown is a placeholder, for illustration only.
     alt="Browsing a movies category as a poster grid"
     sources={{ light: useBaseUrl('/img/web/browse-movies-light.png'), dark: useBaseUrl('/img/web/browse-movies-dark.png') }}
   />
-  <figcaption>Movies as a poster grid, with quality badges and the bottom dock. Screenshots follow your theme.</figcaption>
+  <figcaption>Movies as a poster grid, with quality badges and labeled navigation. Screenshots follow your theme.</figcaption>
 </figure>
 
-The web UI is a touch-first cockpit: a bottom dock with Live / Movies / Series /
-Search for the active playlist plus account-wide Favorites, and a panel (the
-burger) that holds your playlists plus Now watching, downloads and settings.
-Favorites from every playlist granted to your account appear together, with a
-playlist filter when you want one source. Playback opens as a fullscreen player.
-It ships dark, light and system-following themes and works on big landscape
-touchscreens (including in-car browsers) down to phones, where the dock becomes
-a tab bar.
+Web and Android share the same five destinations: **Home**, **Browse**,
+**Favorites**, **Search** and **More**. Home keeps your playlists and recent
+viewing in one place. Browse contains the Live, Movies and Series tabs.
+More opens the source and account panel, including downloads and settings.
 
-Each screen is fetched the first time it is reached, and the ones the dock can reach are
+Navigation sits in a compact top bar on wide screens and a labeled bottom bar
+on phones. Both light and dark themes use the same typography and controls.
+
+Each screen is fetched the first time it is reached, and the main navigation destinations are
 fetched quietly while the browser is idle, so moving around costs nothing after the first
 load. The two playback engines are the exception: they are large, most sessions need at
 most one of them, and many files play on the browser's own video element without either,

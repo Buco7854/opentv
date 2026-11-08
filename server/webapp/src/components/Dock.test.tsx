@@ -83,6 +83,29 @@ describe('Dock playlist operations', () => {
     expect(view.getByText(t('nav.account'))).toBeTruthy();
   });
 
+  it('names the shared destinations and exposes the active browse route', () => {
+    const view = renderDock();
+    const nav = view.getByRole('navigation', { name: t('nav.navigation') });
+    expect(Array.from(nav.querySelectorAll('button')).map((button) => button.textContent))
+      .toEqual([t('nav.home'), t('nav.browse'), t('nav.favorites'), t('nav.search'), t('nav.more')]);
+    expect(view.getByRole('button', { name: t('nav.browse') }).getAttribute('aria-current')).toBe('page');
+    fireEvent.click(view.getByRole('button', { name: t('nav.home') }));
+    expect(view.getByTestId('path').textContent).toBe('/');
+  });
+
+  it('returns focus from a portaled action menu before Tab can leave the navigation dialog', async () => {
+    vi.spyOn(api, 'playlistCapabilities').mockResolvedValue({ operations: [{
+      operation: PlaylistOperation.DELETE, execution: 'IN_APP', browserPath: null,
+    }] });
+    const view = renderDock();
+    const anchor = view.getByLabelText(t('playlists.actions'));
+    fireEvent.click(anchor);
+    await view.findByRole('menu');
+    fireEvent.keyDown(document, { key: 'Tab' });
+    await waitFor(() => expect(view.queryByRole('menu')).toBeNull());
+    expect(document.activeElement).toBe(anchor);
+  });
+
   it('loads the server-owned edit form before opening the dialog', async () => {
     vi.spyOn(api, 'playlistCapabilities').mockResolvedValue({
       operations: [{

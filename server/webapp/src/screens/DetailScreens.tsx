@@ -93,14 +93,15 @@ function DownloadButton({ channel }: { channel: Channel }) {
   );
 }
 
-function DetailShell({ favorite, onBack, children }: {
+function DetailShell({ favorite, onBack, children, title = '' }: {
   favorite?: ReactNode;
+  title?: string;
   onBack: () => void;
   children: ReactNode;
 }) {
   return (
     <>
-      <ScreenHeader title="" onBack={onBack} actions={favorite} />
+      <ScreenHeader title={title} onBack={onBack} actions={favorite} />
       <div className="detail">{children}</div>
     </>
   );
@@ -135,18 +136,21 @@ export function MovieDetailScreen() {
                       onToggle={() => toggleFavorite(movie.contentId)} />
       }
     >
-      <Poster image={meta?.posterUrl ?? movie.logo} kind={ChannelKind.MOVIE} />
-      <h2>{movie.name}</h2>
-      <div className="pills">
-        {metaChips(movie, meta).map((c) => <Pill key={c}>{c}</Pill>)}
-        <BadgeRow tags={mediaTags(movie.name)} />
-      </div>
-      <MetadataBlock meta={meta} />
-      <WatchedBlock fraction={fraction} />
-      <div className="action-row">
-        <PlayButton resumed={fraction != null}
-                    onClick={() => playChannel(movie.id)} />
-        <DownloadButton channel={movie} />
+      <div className="detail-feature">
+        <Poster image={meta?.posterUrl ?? movie.logo} kind={ChannelKind.MOVIE} />
+        <div className="detail-summary">
+          <h1 className="detail-title">{movie.name}</h1>
+          <div className="pills">
+            {metaChips(movie, meta).map((c) => <Pill key={c}>{c}</Pill>)}
+            <BadgeRow tags={mediaTags(movie.name)} />
+          </div>
+          <WatchedBlock fraction={fraction} />
+          <div className="action-row">
+            <PlayButton resumed={fraction != null} onClick={() => playChannel(movie.contentId)} />
+            <DownloadButton channel={movie} />
+          </div>
+          <MetadataBlock meta={meta} />
+        </div>
       </div>
     </DetailShell>
   );
@@ -273,7 +277,7 @@ export function SeriesDetailScreen() {
         : undefined}
     >
       <Poster image={poster} kind={ChannelKind.SERIES} />
-      <h2>{key}</h2>
+      <h1 className="detail-title">{key}</h1>
       <div className="pills">
         {episodePage?.groupTitle && <Pill>{episodePage.groupTitle}</Pill>}
         <Pill>{t('browse.episodes', { count: episodes.total })}</Pill>
@@ -347,7 +351,7 @@ export function EpisodeDetailScreen() {
     <DetailShell onBack={() => navigate(-1)}>
       <Poster image={info?.posterUrl ?? ep.logo} kind={ChannelKind.SERIES} cover />
       {seriesTitle && <div className="series-label">{seriesTitle}</div>}
-      <h2>{info?.title ?? ep.name}</h2>
+      <h1 className="detail-title">{info?.title ?? ep.name}</h1>
       <div className="pills">{chips.map((c) => <Pill key={c}>{c}</Pill>)}</div>
       {plot && <p className="overview">{plot}</p>}
       {seriesCast.length > 0 && <><div className="section-h">{t('detail.cast')}</div><CastRow members={seriesCast} /></>}

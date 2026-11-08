@@ -1,7 +1,6 @@
-// Bottom dock: burger opens the playlists panel; center icons combine active-playlist
-// views with account-wide Favorites. Burger shows a green dot while downloads run.
+// Labeled library navigation: top bar on desktop, bottom bar on touch screens.
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import {
   api, DownloadStatus, Playlist, PlaylistCapabilities, PlaylistDeleteEffect,
@@ -60,10 +59,12 @@ function DockButton({ icon, label, active, disabled, dot, prefetch, onClick }: {
       aria-label={label}
       title={label}
       disabled={disabled}
+      aria-current={active ? 'page' : undefined}
       onPointerDown={prefetch ? () => prefetchScreen(prefetch) : undefined}
       onClick={onClick}
     >
       <Icon name={icon} />
+      <span className="dock-label">{label}</span>
       {dot && <span className={`dot${dot === 'good' ? ' good' : ''}`} />}
     </button>
   );
@@ -92,9 +93,8 @@ export function Dock() {
     if (playlists !== null && prefs.activePlaylist !== active) prefs.activePlaylist = active;
   }, [active, playlists]);
 
-  const tab = new URLSearchParams(search).get('t') ?? '0';
   const inBrowse = pathname.startsWith('/browse/');
-  const goBrowse = (target: number) => navigate(`/browse/${active}?t=${target}`);
+
   const managePlaylist = new URLSearchParams(search).get('manage') === 'playlist';
   useEffect(() => {
     if (!managePlaylist || active == null) return;
@@ -104,30 +104,40 @@ export function Dock() {
     navigate({ pathname, search: next.size ? `?${next}` : '' }, { replace: true });
   }, [active, managePlaylist, navigate, pathname, search, setPanelOpen]);
 
+  const closePanel = useCallback(() => setPanelOpen(false), [setPanelOpen]);
+
   return (
     <>
-      <nav className="dock">
-        <DockButton icon={panelOpen ? 'close' : 'more'} label={t('nav.playlists')}
-                    dot={downloading ? 'good' : undefined}
-                    active={panelOpen} onClick={() => setPanelOpen(!panelOpen)} />
-        <div className="apps">
-          <DockButton prefetch="browse" icon="liveTv" label={t('nav.live')} disabled={!active}
-                      active={inBrowse && tab === '0'} onClick={() => goBrowse(0)} />
-          <DockButton prefetch="browse" icon="movie" label={t('nav.movies')} disabled={!active}
-                      active={inBrowse && tab === '1'} onClick={() => goBrowse(1)} />
-          <DockButton prefetch="browse" icon="videoLib" label={t('nav.series')} disabled={!active}
-                      active={inBrowse && tab === '2'} onClick={() => goBrowse(2)} />
-          <DockButton prefetch="favorites" icon="favoriteBorder" label={t('nav.favorites')} disabled={!active}
-                      active={pathname === '/favorites'}
-                      onClick={() => navigate('/favorites')} />
+      <header className="library-masthead">
+        <button className="library-brand" aria-label={`OpenTV · ${t('nav.home')}`} onClick={() => navigate('/')}>
+          <Icon name="liveTv" /><span>OpenTV</span>
+        </button>
+        <nav className="dock" aria-label={t('nav.navigation')}>
+          <DockButton icon="home" label={t('nav.home')} active={pathname === '/'} onClick={() => navigate('/')} />
+          <DockButton prefetch="browse" icon="grid" label={t('nav.browse')} disabled={!active}
+                      active={inBrowse} onClick={() => navigate(`/browse/${active}`)} />
+          <DockButton prefetch="favorites" icon="favoriteBorder" label={t('nav.favorites')}
+                      active={pathname === '/favorites'} onClick={() => navigate('/favorites')} />
           <DockButton prefetch="search" icon="search" label={t('nav.search')} disabled={!active}
-                      active={pathname.startsWith('/search/')}
-                      onClick={() => navigate(`/search/${active}`)} />
-        </div>
-      </nav>
+                      active={pathname.startsWith('/search/')} onClick={() => navigate(`/search/${active}`)} />
+          <button className={`dock-btn library-menu${panelOpen ? ' active' : ''}`}
+                  aria-label={t('nav.more')} aria-haspopup="dialog" aria-expanded={panelOpen}
+                  aria-controls="library-panel" onClick={() => setPanelOpen(!panelOpen)}>
+            <Icon name={panelOpen ? 'close' : 'more'} />
+            <span className="dock-label">{t('nav.more')}</span>
+            {downloading && <span className="dot good" />}
+          </button>
+        </nav>
+        <button className="library-switcher" aria-haspopup="dialog" aria-expanded={panelOpen}
+                aria-controls="library-panel" onClick={() => setPanelOpen(!panelOpen)}>
+          <Icon name="playlist" />
+          <span>{playlists?.find((playlist) => playlist.id === active)?.name ?? t('nav.playlists')}</span>
+          <Icon name="expandMore" />
+        </button>
+      </header>
 
       {panelOpen && (
-        <PlaylistsPanel activeId={active} downloading={downloading} onClose={() => setPanelOpen(false)} />
+        <PlaylistsPanel activeId={active} downloading={downloading} onClose={closePanel} />
       )}
     </>
   );
@@ -155,12 +165,45 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
   } | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
-  // Escape closes.
+  // Menu content is portaled outside this dialog. Tab dismisses it back to its
+  // anchor before the dialog's own focus cycle continues.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    if (!actionsFor) return;
+    const onTab = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return;
+      event.preventDefault();
+      setActionsFor(null);
+      actionsFor.anchor.focus();
+    };
+    document.addEventListener('keydown', onTab);
+    return () => document.removeEventListener('keydown', onTab);
+  }, [actionsFor]);
+
+  // This is a navigation dialog. Keep focus inside it and return to its opener.
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    const panel = panelRef.current;
+    const controls = () => Array.from(panel?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href]') ?? []);
+    controls()[0]?.focus();
+    const trap = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab' || !panel?.contains(document.activeElement)) return;
+      const items = controls();
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    };
+    document.addEventListener('keydown', trap);
+    return () => { document.removeEventListener('keydown', trap); opener?.focus(); };
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !dialog && !pendingDelete && !pendingClearProgress && !actionsFor) onClose();
+    };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, dialog, pendingDelete, pendingClearProgress, actionsFor]);
 
   const open = (p: Playlist) => {
     prefs.activePlaylist = p.id;
@@ -170,10 +213,12 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
 
   return (
     <>
-      <div ref={panelRef} className="dock-panel">
+      <div className="library-panel-scrim" onClick={onClose} aria-hidden="true" />
+      <div ref={panelRef} id="library-panel" className="dock-panel" role="dialog" aria-modal="true" aria-labelledby="library-panel-title">
         <div className="panel-head">
-          <h3>{t('nav.playlists')}</h3>
+          <h3 id="library-panel-title">{t('nav.playlists')}</h3>
           {admin && <IconBtn name="add" label={t('playlists.add')} onClick={() => setDialog('add')} />}
+          <IconBtn name="close" label={t('common.close')} onClick={onClose} />
         </div>
         <div className="panel-body">
           {playlists === null && loading && <div className="spinner" />}

@@ -354,6 +354,11 @@ absent from the initial bundle.
 - `api/http.ts` installs one localStorage-backed bearer provider for every HTTP request;
   it sends no ambient credentials and has no CSRF seam.
 - Browser preferences and server settings are intentionally separate.
+- Web and Android share five destinations: Home, Browse, Favorites, Search and More.
+  Home is a stable source overview, never an automatic redirect. Live, Movies and
+  Series are Browse tabs; changing a kind clears its category and filter. Keep the
+  neutral dark/light surfaces, Inter typography, inverted actions and blue focus/
+  progress accents aligned across clients. Source management lives under More.
 - Android catalog gateways are cached in a thread-safe, access-order LRU capped at 64.
   Gateway lookup/construction never reads Room: `CatalogGateway.traits()` is suspending, and
   a local gateway resolves its playlist-backed traits only after the ViewModel has entered a

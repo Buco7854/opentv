@@ -15,6 +15,19 @@ series shown are placeholders, for illustration only.
 import ThemedImage from '@theme/ThemedImage';
 import useBaseUrl from '@docusaurus/useBaseUrl';
 
+## Home and navigation
+
+Home lists your playlists and unfinished viewing without starting a provider refresh.
+Both clients use Home, Browse, Favorites, Search and More; Browse contains the Live,
+Movies and Series tabs. The source switcher and More open playlist management.
+
+<figure className="doc-screen">
+  <ThemedImage
+    alt="Library home with continue watching and playlists"
+    sources={{ light: useBaseUrl('/img/web/home-light.png'), dark: useBaseUrl('/img/web/home-dark.png') }}
+  />
+</figure>
+
 ## Live TV
 
 Live channels are a list with the now-and-next line and a progress bar pulled
@@ -111,7 +124,7 @@ playlists remains two entries and survives refreshes.
 
 ## Playlists, downloads, account and settings
 
-The burger opens the playlists panel, where you switch, add, refresh and edit
+**More** opens the playlists panel, where you switch, add, refresh and edit
 playlists and reach Now watching, downloads and settings.
 
 <div className="screens-grid">
@@ -147,7 +160,7 @@ playlists and reach Now watching, downloads and settings.
 
 ## On a phone
 
-Everything scales down to a phone, where the dock becomes a tab bar.
+On a phone, the five navigation destinations move into a labeled bottom bar.
 
 <figure className="doc-screen doc-screen--phone">
   <ThemedImage

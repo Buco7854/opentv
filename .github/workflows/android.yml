@@ -8,8 +8,10 @@ on:
     tags: ["v*"]
     paths:
       - "app/**"
+      - "hub-client/**"
       - "core/**"
       - "data/**"
+      - "server-contract/**"
       - "build.gradle.kts"
       - "settings.gradle.kts"
       - "gradle.properties"
@@ -20,8 +22,10 @@ on:
     branches: [main]
     paths:
       - "app/**"
+      - "hub-client/**"
       - "core/**"
       - "data/**"
+      - "server-contract/**"
       - "build.gradle.kts"
       - "settings.gradle.kts"
       - "gradle.properties"
@@ -48,7 +52,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
 
       - name: Run unit tests
-        run: ./gradlew testDebugUnitTest :core:jvmTest :data:jvmTest
+        run: ./gradlew testDebugUnitTest :core:jvmTest :data:jvmTest :hub-client:jvmTest :server-contract:jvmTest
 
       # Decode the stable signing keystore from a repo secret when present, so
       # every CI APK is signed identically and installs as an update. Absent

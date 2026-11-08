@@ -2,7 +2,7 @@
 // Mirrors SearchScreen.kt.
 
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router';
+import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { api, canShowGuide, Channel, ChannelKind, hasCatchup, SearchResults } from '../api';
 import { mediaTags } from '../components/Badges';
 import { EmptyState, LoadFailed } from '../components/Common';
@@ -15,12 +15,16 @@ import { errorMessage } from '../errors';
 import { useDownloads, useFavorites, useGuideIds, usePaged } from '../hooks';
 import { t } from '../i18n';
 import { usePlayer } from '../player/PlayerNavigation';
+import './library-screens.css';
 
 export function SearchScreen() {
   const playlistId = Number(useParams().playlistId);
   const navigate = useNavigate();
   const { playChannel, playCatchup } = usePlayer();
-  const [query, setQuery] = useState('');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const query = searchParams.get('q') ?? '';
+  const setQuery = (value: string) => setSearchParams(value ? { q: value } : {}, { replace: true });
+  const [pending, setPending] = useState(false);
   const [results, setResults] = useState<SearchResults | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -31,15 +35,18 @@ export function SearchScreen() {
 
   useEffect(() => {
     setError(null);
-    if (query.trim().length < 2) { setResults(null); return; }
+    setResults(null);
+    if (query.trim().length < 2) { setPending(false); return; }
+    setPending(true);
     let current = true;
     const controller = new AbortController();
     const timer = setTimeout(() => {
       api.search(playlistId, query.trim(), controller.signal).then(
-        (next) => { if (current) setResults(next); },
+        (next) => { if (current) { setResults(next); setPending(false); } },
         (cause: unknown) => {
           if (!current) return;
           setResults(null);
+          setPending(false);
           setError(errorMessage(cause));
         },
       );
@@ -76,9 +83,14 @@ export function SearchScreen() {
 
   return (
     <>
-      <ScreenHeader title={t('search.title')} />
+      <ScreenHeader title={t('search.title')} subtitle={<span className="subtitle">{t('search.scope')}</span>} />
       <SearchField placeholder={t('search.placeholder')} value={query} onChange={setQuery} autoFocus />
 
+      <div className="search-status" role="status" aria-live="polite">
+        {pending ? t('search.pending') : results ? t('search.resultsCount', {
+          count: results.live.length + results.movies.length + results.series.length,
+        }) : query.trim().length < 2 ? t('search.minimum') : ''}
+      </div>
       {query.trim().length < 2 && (
         <EmptyState title={t('search.everythingTitle')} subtitle={t('search.everythingSub')} />
       )}
@@ -96,7 +108,7 @@ export function SearchScreen() {
               onToggleFavorite={() => toggleFavorite(c.contentId)}
               onGuide={canShowGuide(c, guideIds) ? () => setGuideChannel(c) : null}
               guideHighlight={hasCatchup(c)}
-              onClick={() => playChannel(c.id)}
+              onClick={() => playChannel(c.contentId)}
             />
           ))}
           {expanded.live && <Pager page={pagedLive.page} pages={pagedLive.pages} onPage={pagedLive.setPage} />}

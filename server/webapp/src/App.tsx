@@ -133,7 +133,8 @@ function AuthenticatedApp() {
   return (
     <LibraryProvider>
       <PlayerNavigationProvider>
-        <main className="shell-content" ref={mainRef} tabIndex={-1}>
+        <a className="skip-link" href="#main-content">{t('nav.openLibrary')}</a>
+        <main id="main-content" className="shell-content" ref={mainRef} tabIndex={-1}>
           <RouteErrorBoundary>
             <Suspense fallback={<RouteFallback />}>
               <Routes>

@@ -90,6 +90,7 @@ export function LoginScreen() {
   const [searchParams] = useSearchParams();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [passwordVisible, setPasswordVisible] = useState(false);
   const [error, setError] = useState<string | null>(
     searchParams.get('auth') === 'pending'
       ? tx('pending')
@@ -185,25 +186,28 @@ export function LoginScreen() {
             <div className="auth-sep">{tx('or')}</div>
           </>
         )}
-        {passkeyEnabled && (
-          <button className="btn" type="button" disabled={busy} onClick={() => void passkey()}>
-            <Icon name="key" />{busy ? tx('working') : tx('usePasskey')}
-          </button>
-        )}
-        {passkeyEnabled && (passwordEnabled || oidcEnabled) && <div className="auth-sep">{tx('or')}</div>}
         {passwordEnabled && (
           <>
             <TextField label={tx('username')} value={username} onChange={setUsername}
                        autoComplete="username" />
             <TextField label={tx('password')} value={password} onChange={setPassword}
-                       type="password" autoComplete="current-password" />
-            <button className={`btn${passkeyEnabled ? ' tonal' : ''}`}
+                       type={passwordVisible ? 'text' : 'password'} autoComplete="current-password" />
+            <button type="button" className="auth-password-toggle" aria-pressed={passwordVisible}
+                    onClick={() => setPasswordVisible((visible) => !visible)}>
+              {tx(passwordVisible ? 'hidePassword' : 'showPassword')}
+            </button>
+            <button className="btn"
                     disabled={busy || !username || !password}>
               {busy ? tx('working') : tx('signIn')}
             </button>
           </>
         )}
-        {passwordEnabled && oidcEnabled && <div className="auth-sep">{tx('or')}</div>}
+        {passwordEnabled && (passkeyEnabled || oidcEnabled) && <div className="auth-sep">{tx('or')}</div>}
+        {passkeyEnabled && (
+          <button className="btn tonal" type="button" disabled={busy} onClick={() => void passkey()}>
+            <Icon name="key" />{busy ? tx('working') : tx('usePasskey')}
+          </button>
+        )}
         {oidcEnabled && (
           <button className="btn tonal" type="button" onClick={startOidc}>
             <Icon name="link" />{tx('sso')}
