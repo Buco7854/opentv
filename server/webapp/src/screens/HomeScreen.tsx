@@ -31,14 +31,12 @@ export function HomeScreen() {
 
   return (
     <>
-      <ScreenHeader title={t('home.library')}
-        actions={user?.role === 'ADMIN' ? <button className="btn tonal library-add" onClick={() => setAdding(true)}>
-          <Icon name="add" />{t('playlists.add')}</button> : undefined} />
-      {playlists.length > 0 ? <LibraryHome playlists={playlists} /> : (
+      <ScreenHeader title={t('home.library')} />
+      {playlists.length > 0 ? <LibraryHome playlists={playlists} onAdd={user?.role === 'ADMIN' ? () => setAdding(true) : undefined} /> : (
         <EmptyState title={t('home.welcome')}
           subtitle={user?.role === 'ADMIN' ? t('home.welcomeSub') : t('playlists.assignmentRequired')}
           action={user?.role === 'ADMIN' ? <button className="btn" onClick={() => setAdding(true)}>
-            <Icon name="add" />{t('playlists.add')}</button> : undefined}>
+            {t('playlists.add')}</button> : undefined}>
           <div className="empty-home-art"><Icon name="playlist" /></div>
         </EmptyState>
       )}
@@ -54,7 +52,7 @@ export function HomeScreen() {
   );
 }
 
-function LibraryHome({ playlists }: { playlists: Playlist[] }) {
+function LibraryHome({ playlists, onAdd }: { playlists: Playlist[]; onAdd?: () => void }) {
   // Content reads resolve the local catalog only. Opening Home never refreshes a provider.
   const recent = useAsync(async () => {
     const points = (await api.resumeAll())
@@ -113,6 +111,9 @@ function LibraryHome({ playlists }: { playlists: Playlist[] }) {
               className="icon-btn muted library-source-search"><Icon name="search" /></Link>
           </div>
         ))}</div>
+        {onAdd && <div className="library-source-actions">
+          <button type="button" className="btn tonal library-add" onClick={onAdd}>{t('playlists.add')}</button>
+        </div>}
       </section>
     </div>
   );

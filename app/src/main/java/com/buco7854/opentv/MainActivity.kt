@@ -64,6 +64,7 @@ import com.buco7854.opentv.ui.shell.DockSection
 import com.buco7854.opentv.ui.shell.AppShellViewModel
 import com.buco7854.opentv.ui.shell.OpenTvDock
 import com.buco7854.opentv.ui.shell.PlaylistsPanel
+import com.buco7854.opentv.ui.shell.PlaylistPicker
 import com.buco7854.opentv.hub.BrowserSignInReturn
 import com.buco7854.opentv.ui.theme.OpenTvTheme
 import kotlinx.coroutines.Dispatchers
@@ -166,6 +167,13 @@ object Routes {
 /** Reauthentication resumes its caller; a new connection lands in the populated library. */
 internal fun destinationAfterHubSignIn(reauthenticatedHubId: Long?): String? = if (reauthenticatedHubId == null) Routes.HOME else null
 
+/** Re-selecting the current playlist closes the chooser without replacing its category or scroll. */
+internal fun playlistSelectionRoute(
+    current: SourceId?,
+    chosen: SourceId,
+    browseKinds: Map<String, Int>,
+): String? = if (chosen == current) null else Routes.browse(chosen, browseKinds[chosen.encode()])
+
 internal data class CatalogSourceAvailability(
     val localPlaylistIds: List<Long>,
     val signedInHubIds: Set<Long>,
@@ -217,6 +225,7 @@ fun AppShell(
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val activePlaylistId = settings?.activePlaylistId ?: -1L
     var panelOpen by remember { mutableStateOf(false) }
+    var playlistPickerOpen by remember { mutableStateOf(false) }
 
     val backStack by nav.currentBackStackEntryAsState()
     val route = backStack?.destination?.route
@@ -237,6 +246,7 @@ fun AppShell(
         OpenTvApp.graph.hubs.reauthenticationRequests.collect { hubId ->
             if (!OpenTvApp.graph.hubs.needsReauthentication(hubId)) return@collect
             panelOpen = false
+            playlistPickerOpen = false
             nav.navigate(Routes.hubSignIn(hubId)) {
                 launchSingleTop = true
             }
@@ -316,6 +326,7 @@ fun AppShell(
                 onActivePlaylist = viewModel::setActivePlaylist,
                 sourceAvailability = sourceAvailability,
                 browseKinds = browseKinds,
+                onChoosePlaylist = { playlistPickerOpen = true },
                 onBrowseKindChanged = { source, kind ->
                     browseKinds = HashMap(browseKinds).apply { put(source.encode(), kind) }
                 },
@@ -323,17 +334,24 @@ fun AppShell(
         }
     }
 
+    if (playlistPickerOpen) {
+        PlaylistPicker(
+            selectedSource = activeSource,
+            onDismiss = { playlistPickerOpen = false },
+            onChoose = { source ->
+                playlistPickerOpen = false
+                playlistSelectionRoute(activeSource, source, browseKinds)?.let { destination ->
+                    if (source is SourceId.LocalPlaylist) viewModel.setActivePlaylist(source.playlistId)
+                    navigateSection(destination)
+                }
+            },
+        )
+    }
+
     if (panelOpen) {
         PlaylistsPanel(
             activeSourceId = activeSource,
             onDismiss = { panelOpen = false },
-            onOpenSource = {
-                panelOpen = false
-                if (it is SourceId.LocalPlaylist) {
-                    viewModel.setActivePlaylist(it.playlistId)
-                }
-                navigateSection(browseRoute(it))
-            },
             onOpenAccount = { panelOpen = false; nav.navigate(Routes.account(it)) },
             onOpenDownloads = { panelOpen = false; nav.navigate(Routes.DOWNLOADS) },
             onOpenSettings = { panelOpen = false; nav.navigate(Routes.SETTINGS) },
@@ -365,6 +383,7 @@ internal fun AppNav(
     onActivePlaylist: (Long) -> Unit,
     sourceAvailability: CatalogSourceAvailability?,
     browseKinds: Map<String, Int>,
+    onChoosePlaylist: () -> Unit,
     onBrowseKindChanged: (SourceId, Int) -> Unit,
 ) {
     // Quick fades instead of the default slow cross-fade.
@@ -497,6 +516,7 @@ internal fun AppNav(
             }
             BrowseScreen(
                 sourceId = sourceId,
+                onChoosePlaylist = onChoosePlaylist,
                 initialTab = entry.arguments!!.getInt("t").takeIf { it >= 0 },
                 initialGroup = entry.arguments!!.getString("g").orEmpty().ifEmpty { null },
                 onContentKindChanged = { onBrowseKindChanged(sourceId, it) },

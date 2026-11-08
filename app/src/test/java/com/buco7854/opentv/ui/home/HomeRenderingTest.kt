@@ -32,6 +32,8 @@ import com.buco7854.opentv.ui.hub.PasswordStep
 import com.buco7854.opentv.source.SourceId
 import com.buco7854.opentv.ui.shell.DockSection
 import com.buco7854.opentv.ui.shell.OpenTvDock
+import com.buco7854.opentv.ui.shell.PlaylistPickerContent
+import com.buco7854.opentv.ui.shell.PlaylistSelector
 import com.buco7854.opentv.ui.theme.OpenTvDesign
 import java.io.File
 import java.time.Duration
@@ -99,6 +101,101 @@ class HomeRenderingTest {
             assertTrue(screen.hasText("Library"))
             assertFalse(screen.hasText("Connect a server"))
             assertFalse(screen.hasText("Add your first playlist"))
+        }
+    }
+
+    @Test
+    fun `adding a playlist is a separate labeled action from opening an existing source`() {
+        var opened: SourceId? = null
+        var added = false
+        render("home-create-actions", dark = true) {
+            Surface(Modifier.fillMaxSize()) {
+                HomeLibrary(
+                    listOf(CatalogSourceEntry(SourceId.LocalPlaylist(1), "Family library", itemCount = 240)),
+                    loading = false, unreachableHubs = 0, busy = false,
+                    onOpenSource = { opened = it }, onConnectHub = {}, onAddPlaylist = { added = true }, onRetry = {},
+                )
+            }
+        }.use { screen ->
+            val create = screen.nodes().single {
+                it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == "Add playlist" } == true &&
+                    it.config.contains(SemanticsActions.OnClick)
+            }
+            assertTrue(create.config[SemanticsActions.OnClick].action!!.invoke())
+            assertTrue(added)
+            assertNull(opened)
+        }
+    }
+
+    @Test
+    fun `playlist chooser identifies the current source and only selects existing sources`() {
+        var chosen: SourceId? = null
+        val current = SourceId.LocalPlaylist(1)
+        val remote = SourceId.Hub(2, 8)
+        render("playlist-picker-dark", dark = true) {
+            Surface(Modifier.fillMaxSize()) {
+                PlaylistPickerContent(
+                    sources = listOf(
+                        CatalogSourceEntry(current, "Family library", itemCount = 240),
+                        CatalogSourceEntry(remote, "Weekend cinema", "Home server", 1280),
+                    ),
+                    selectedSource = current, loading = false, unreachableHubs = 0,
+                    onChoose = { chosen = it }, onDismiss = {}, onRetry = {},
+                )
+            }
+        }.use { screen ->
+            val checked = screen.nodes().single { it.config.getOrNull(SemanticsProperties.Selected) == true }
+            assertTrue(checked.config[SemanticsProperties.Text].any { it.text == "Family library" })
+            assertNull(chosen)
+            assertFalse(screen.hasText("Add playlist"))
+            assertFalse(screen.hasText("Connect a server"))
+            assertFalse(screen.hasText("Settings"))
+            val remoteRow = screen.nodes().single {
+                it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == "Weekend cinema" } == true &&
+                    it.config.contains(SemanticsActions.OnClick)
+            }
+            assertTrue(remoteRow.config[SemanticsActions.OnClick].action!!.invoke())
+            assertEquals(remote, chosen)
+        }
+    }
+
+    @Test
+    fun `unreachable chooser offers retry without offering account creation`() {
+        var retried = false
+        render("playlist-picker-offline", dark = false) {
+            Surface(Modifier.fillMaxSize()) {
+                PlaylistPickerContent(emptyList(), selectedSource = null, loading = false, unreachableHubs = 1,
+                    onChoose = {}, onDismiss = {}, onRetry = { retried = true })
+            }
+        }.use { screen ->
+            assertFalse(screen.hasText("Add playlist"))
+            assertFalse(screen.hasText("Connect a server"))
+            val retry = screen.nodes().single {
+                it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == "Retry" } == true &&
+                    it.config.contains(SemanticsActions.OnClick)
+            }
+            assertTrue(retry.config[SemanticsActions.OnClick].action!!.invoke())
+            assertTrue(retried)
+        }
+    }
+
+    @Test
+    fun `playlist selector names the current playlist and opens only its chooser`() {
+        var opened = false
+        render("playlist-selector-light", dark = false) {
+            Surface(Modifier.fillMaxSize()) {
+                Column(Modifier.padding(24.dp)) {
+                    PlaylistSelector("Family library") { opened = true }
+                }
+            }
+        }.use { screen ->
+            val selector = screen.nodes().single {
+                it.config.getOrNull(SemanticsProperties.ContentDescription)?.any { name -> name.contains("Family library") && name.contains("Switch playlist") } == true &&
+                    it.config.contains(SemanticsActions.OnClick)
+            }
+            assertFalse(opened)
+            assertTrue(selector.config[SemanticsActions.OnClick].action!!.invoke())
+            assertTrue(opened)
         }
     }
 

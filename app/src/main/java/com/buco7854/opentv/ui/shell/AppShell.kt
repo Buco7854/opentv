@@ -24,7 +24,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Dns
@@ -253,7 +252,6 @@ private fun Modifier.pressablePill(
 fun PlaylistsPanel(
     activeSourceId: SourceId?,
     onDismiss: () -> Unit,
-    onOpenSource: (SourceId) -> Unit,
     onOpenAccount: (SourceId) -> Unit,
     onOpenDownloads: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -309,7 +307,6 @@ fun PlaylistsPanel(
                     playlist = playlist,
                     selected = SourceId.LocalPlaylist(playlist.id) == activeSourceId,
                     refreshEnabled = !busy,
-                    onClick = { onOpenSource(SourceId.LocalPlaylist(playlist.id)) },
                     onRefresh = { viewModel.refresh(playlist.id) },
                     onOpenAccount = { onOpenAccount(SourceId.LocalPlaylist(playlist.id)) },
                     onEdit = { editing = playlist },
@@ -322,12 +319,9 @@ fun PlaylistsPanel(
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
                     color = MaterialTheme.colorScheme.outlineVariant,
                 )
-                // Servers get the same header-plus-plus affordance as playlists. Adding one
-                // used to be a row carrying the very same icon as the servers listed above
-                // it, which read as another server rather than as the way to add one.
                 PanelSectionHeader(
                     title = stringResource(R.string.shell_servers),
-                    addDescription = stringResource(R.string.hub_add_title),
+                    addDescription = stringResource(R.string.home_server_title),
                     onAdd = onConnectHub,
                 )
             }
@@ -349,7 +343,6 @@ fun PlaylistsPanel(
                         source = source,
                         hubBaseUrl = hub.baseUrl,
                         selected = source.sourceId == activeSourceId,
-                        onClick = { onOpenSource(source.sourceId) },
                         onOpenAccount = { onOpenAccount(source.sourceId) },
                         onNotify = { message -> scope.launch { snackbar.showSnackbar(message) } },
                     )
@@ -446,7 +439,6 @@ private fun PanelPlaylistRow(
     playlist: Playlist,
     selected: Boolean,
     refreshEnabled: Boolean,
-    onClick: () -> Unit,
     onRefresh: () -> Unit,
     onOpenAccount: () -> Unit,
     onEdit: () -> Unit,
@@ -457,7 +449,10 @@ private fun PanelPlaylistRow(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 2.dp)
-            .pressablePill(active = selected, activeAlpha = 0.12f, onClick = onClick)
+            .background(
+                if (selected) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f) else androidx.compose.ui.graphics.Color.Transparent,
+                RoundedCornerShape(10.dp),
+            )
             .padding(start = 12.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -495,7 +490,7 @@ private fun PanelPlaylistRow(
         // One overflow menu instead of a row of icons, so the row stays readable.
         var menuOpen by remember { mutableStateOf(false) }
         Box {
-            IconButton(onClick = { menuOpen = true }) {
+            IconButton(onClick = { menuOpen = true }, modifier = Modifier.focusHighlight()) {
                 Icon(
                     Icons.Outlined.MoreVert,
                     contentDescription = stringResource(R.string.shell_playlist_actions),
@@ -550,7 +545,7 @@ private fun PanelPlaylistRow(
     }
 }
 
-/** "Playlists" and "Servers" both read as a title with a plus to add one of that thing. */
+/** Creation actions are labeled so they cannot be mistaken for source-selection controls. */
 @Composable
 private fun PanelSectionHeader(
     title: String,
@@ -567,14 +562,10 @@ private fun PanelSectionHeader(
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.weight(1f),
         )
-        IconButton(
+        OtvTextButton(
             onClick = onAdd,
-            modifier = Modifier
-                .then(addFocusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
-                .focusHighlight(),
-        ) {
-            Icon(Icons.Outlined.Add, contentDescription = addDescription)
-        }
+            modifier = Modifier.then(addFocusRequester?.let { Modifier.focusRequester(it) } ?: Modifier),
+        ) { Text(addDescription) }
     }
 }
 
@@ -631,7 +622,6 @@ private fun PanelHubPlaylistRow(
     source: CatalogSourceEntry,
     hubBaseUrl: String,
     selected: Boolean,
-    onClick: () -> Unit,
     onOpenAccount: () -> Unit,
     onNotify: (String) -> Unit,
 ) {
@@ -682,8 +672,10 @@ private fun PanelHubPlaylistRow(
         modifier = Modifier
             .fillMaxWidth()
             .padding(start = 12.dp, top = 2.dp, bottom = 2.dp)
-            .focusHighlight(RoundedCornerShape(10.dp))
-            .pressablePill(active = selected, activeAlpha = 0.12f, onClick = onClick)
+            .background(
+                if (selected) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f) else androidx.compose.ui.graphics.Color.Transparent,
+                RoundedCornerShape(10.dp),
+            )
             .padding(start = 12.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -702,7 +694,7 @@ private fun PanelHubPlaylistRow(
             modifier = Modifier.weight(1f),
         )
         Box {
-            IconButton(onClick = { menuOpen = true }) {
+            IconButton(onClick = { menuOpen = true }, modifier = Modifier.focusHighlight()) {
                 Icon(
                     Icons.Outlined.MoreVert,
                     contentDescription = stringResource(R.string.shell_playlist_actions),

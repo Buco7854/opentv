@@ -9,7 +9,7 @@ const DIR = path.dirname(fileURLToPath(import.meta.url));
 const RAW = path.join(DIR, 'raw');
 fs.mkdirSync(RAW, { recursive: true });
 
-const BASE = 'http://127.0.0.1:5173';
+const BASE = process.env.OPENTV_SCREENSHOT_URL || 'http://127.0.0.1:5173';
 const DESKTOP = { width: 1240, height: 800 };
 const PHONE = { width: 402, height: 860 };
 const G = encodeURIComponent('United Kingdom');
@@ -23,6 +23,10 @@ const openDetails = async (p) => {
 // name, url, viewport, optional action(page)
 const shots = [
   ['home', '/', DESKTOP],
+  ['playlist-chooser', '/browse/1?t=0', DESKTOP, async (p) => {
+    await p.getByRole('button', { name: 'Switch playlist', exact: true }).click();
+    await p.getByRole('dialog', { name: 'Switch playlist' }).waitFor();
+  }],
   ['browse-live', `/browse/1?t=0&g=${G}`, DESKTOP],
   ['browse-movies', '/browse/1?t=1&g=Action', DESKTOP],
   ['browse-categories', '/browse/1?t=1', DESKTOP],

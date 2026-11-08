@@ -278,6 +278,10 @@
   .library-brand > span { font: 600 20px/1 var(--font-sans); letter-spacing: -.6px; }
   .library-switcher { display: flex; align-items: center; gap: 9px; min-width: 0; max-width: 220px; min-height: 44px; margin-left: auto; padding: 0 12px; border-radius: 8px; background: var(--c-panel); font: var(--type-label-large); color: var(--c-fg2); }
   .library-switcher > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .library-switcher-label { display: flex; flex-direction: column; gap: 1px; text-align: left; }
+  .library-switcher-label small { font: var(--type-label-small); color: var(--c-fg2); }
+  .library-switcher-label strong { font: var(--type-label-large); color: var(--c-fg); overflow: hidden; text-overflow: ellipsis; }
+  .library-switcher:disabled { opacity: .5; cursor: default; }
   .library-switcher > .icon { width: 18px; height: 18px; }
   .library-switcher > .icon:last-child { width: 14px; height: 14px; }
   .dock { display: flex; align-items: center; gap: 4px; }
@@ -1138,5 +1142,23 @@
     .detail-feature > .poster { width: 144px; margin: 0 auto; }
     .detail-summary > .detail-title { font-size: 21px; line-height: 28px; }
     .detail-summary .action-row { max-width: none; }
+  }
+}
+
+@layer components {
+  .playlist-chooser-hint { color: var(--c-fg2); font: var(--type-body-medium); }
+  .playlist-choices { display: flex; flex-direction: column; gap: 6px; }
+  .playlist-choice { display: flex; align-items: center; gap: 12px; min-height: 72px; padding: 12px; border-radius: 8px; text-align: left; }
+  .playlist-choice[aria-current="true"] { background: var(--c-press); }
+  .playlist-choice > .icon { width: 20px; height: 20px; color: var(--c-fg2); }
+  .playlist-choice .body { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 4px; }
+  .playlist-choice strong { font: var(--type-label-large); overflow-wrap: anywhere; }
+  .playlist-choice small { font: var(--type-body-small); color: var(--c-fg2); }
+  .playlist-add-action { font: var(--type-label-large); flex: none; }
+  .playlist-identity { cursor: default; }
+  .playlist-identity:active { background: transparent; }
+  @media (hover: hover) {
+    .playlist-choice:hover { background: var(--c-press); }
+    .playlist-identity:hover { background: transparent; }
   }
 }

@@ -14,7 +14,7 @@ import { useLibrary } from '../library';
 import { prefs } from '../preferences';
 import { Icon, IconName } from './Icons';
 import { prefetchScreen, ScreenName } from '../prefetch';
-import { ConfirmDialog, IconBtn, Menu, MenuOption, toast } from './Primitives';
+import { ConfirmDialog, Dialog, IconBtn, Menu, MenuOption, toast } from './Primitives';
 import { PlaylistDialog } from './PlaylistDialog';
 import { useAuth } from '../auth/AuthProvider';
 
@@ -94,6 +94,8 @@ export function Dock() {
   }, [active, playlists]);
 
   const inBrowse = pathname.startsWith('/browse/');
+  const [choosingPlaylist, setChoosingPlaylist] = useState(false);
+  const closeChooser = useCallback(() => setChoosingPlaylist(false), []);
 
   const managePlaylist = new URLSearchParams(search).get('manage') === 'playlist';
   useEffect(() => {
@@ -122,25 +124,60 @@ export function Dock() {
                       active={pathname.startsWith('/search/')} onClick={() => navigate(`/search/${active}`)} />
           <button className={`dock-btn library-menu${panelOpen ? ' active' : ''}`}
                   aria-label={t('nav.more')} aria-haspopup="dialog" aria-expanded={panelOpen}
-                  aria-controls="library-panel" onClick={() => setPanelOpen(!panelOpen)}>
+                  aria-controls="library-panel" onClick={() => { setChoosingPlaylist(false); setPanelOpen(!panelOpen); }}>
             <Icon name={panelOpen ? 'close' : 'more'} />
             <span className="dock-label">{t('nav.more')}</span>
             {downloading && <span className="dot good" />}
           </button>
         </nav>
-        <button className="library-switcher" aria-haspopup="dialog" aria-expanded={panelOpen}
-                aria-controls="library-panel" onClick={() => setPanelOpen(!panelOpen)}>
+        <button className="library-switcher" aria-label={t('playlists.choose')}
+                aria-haspopup="dialog" aria-expanded={choosingPlaylist} disabled={!playlists?.length}
+                onClick={() => { setPanelOpen(false); setChoosingPlaylist((open) => !open); }}>
           <Icon name="playlist" />
-          <span>{playlists?.find((playlist) => playlist.id === active)?.name ?? t('nav.playlists')}</span>
+          <span className="library-switcher-label"><small>{t('nav.playlists')}</small>
+            <strong>{playlists?.find((playlist) => playlist.id === active)?.name ?? '—'}</strong></span>
           <Icon name="expandMore" />
         </button>
       </header>
 
+      {choosingPlaylist && <PlaylistChooser playlists={playlists} activeId={active}
+        onClose={closeChooser} onChoose={(id) => {
+          prefs.activePlaylist = id;
+          closeChooser();
+          if (id !== active || !inBrowse) navigate(`/browse/${id}`);
+        }} />}
       {panelOpen && (
         <PlaylistsPanel activeId={active} downloading={downloading} onClose={closePanel} />
       )}
     </>
   );
+}
+
+/** Choosing a source never starts creation, editing, or account management. */
+function PlaylistChooser({ playlists, activeId, onClose, onChoose }: {
+  playlists: Playlist[] | null;
+  activeId: number | null;
+  onClose: () => void;
+  onChoose: (id: number) => void;
+}) {
+  const { loading, error, reload } = useLibrary();
+  return <Dialog title={t('playlists.choose')} onDismiss={onClose} className="playlist-chooser"
+    buttons={<button className="btn text" onClick={onClose}>{t('common.close')}</button>}>
+    <p className="playlist-chooser-hint">{t('playlists.chooseHint')}</p>
+    <div className="playlist-choices">
+      {playlists?.map((playlist) => <button key={playlist.id} type="button"
+        className="playlist-choice" aria-current={playlist.id === activeId ? 'true' : undefined}
+        onClick={() => onChoose(playlist.id)}>
+        <Icon name="playlist" />
+        <span className="body"><strong>{playlist.name}</strong><small>{t('home.catalogCount', { count: playlist.channelCount })}</small></span>
+        {playlist.id === activeId && <Icon name="check" />}
+      </button>)}
+      {playlists?.length === 0 && <p className="playlist-chooser-hint">{t('playlists.none')}</p>}
+      {playlists === null && loading && <div className="spinner" role="status" aria-label={t('common.working')} />}
+      {playlists === null && error && <><p role="alert">{t('playlists.loadFailedTitle')}</p>
+        <button className="btn tonal" onClick={() => void reload()}>{t('common.retry')}</button></>}
+    </div>
+  </Dialog>;
 }
 
 function PlaylistsPanel({ activeId, downloading, onClose }: {
@@ -205,11 +242,6 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose, dialog, pendingDelete, pendingClearProgress, actionsFor]);
 
-  const open = (p: Playlist) => {
-    prefs.activePlaylist = p.id;
-    onClose();
-    navigate(`/browse/${p.id}`);
-  };
 
   return (
     <>
@@ -217,7 +249,7 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
       <div ref={panelRef} id="library-panel" className="dock-panel" role="dialog" aria-modal="true" aria-labelledby="library-panel-title">
         <div className="panel-head">
           <h3 id="library-panel-title">{t('nav.playlists')}</h3>
-          {admin && <IconBtn name="add" label={t('playlists.add')} onClick={() => setDialog('add')} />}
+          {admin && <button type="button" className="btn text playlist-add-action" onClick={() => setDialog('add')}>{t('playlists.add')}</button>}
           <IconBtn name="close" label={t('common.close')} onClick={onClose} />
         </div>
         <div className="panel-body">
@@ -244,18 +276,13 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
               : t('playlists.metaNever', { count: p.channelCount });
             return (
               <div key={p.id} className={`panel-row-group${p.id === activeId ? ' selected' : ''}`}>
-                <button
-                  type="button"
-                  className="panel-row"
-                  aria-current={p.id === activeId ? 'true' : undefined}
-                  onClick={() => open(p)}
-                >
+                <div className="panel-row playlist-identity">
                   <Icon name="playlist" />
                   <div className="body">
                     <div className="name">{p.name}</div>
                     <div className="sub">{meta}</div>
                   </div>
-                </button>
+                </div>
                 <IconBtn name="more" label={t('playlists.actions')} className="muted"
                          onClick={(e) => {
                            const anchor = e.currentTarget as HTMLElement;
@@ -385,7 +412,7 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
             setDialog(null);
             rememberPlaylist(saved);
             void reload();
-            if (dialog === 'add') open(saved);
+            if (dialog === 'add') { prefs.activePlaylist = saved.id; onClose(); navigate(`/browse/${saved.id}`); }
           }}
         />
       )}

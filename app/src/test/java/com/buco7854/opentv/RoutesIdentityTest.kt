@@ -22,6 +22,26 @@ import org.robolectric.annotation.Config
 @Config(sdk = [35], application = Application::class)
 class RoutesIdentityTest {
     @Test
+    fun choosingTheCurrentPlaylistDoesNotReplaceItsBrowseDestination() {
+        val source = SourceId.Hub(3, 7)
+        assertNull(playlistSelectionRoute(source, source, mapOf(source.encode() to ChannelKind.MOVIE)))
+    }
+
+    @Test
+    fun choosingAnotherPlaylistRestoresThatPlaylistsOwnContentKind() {
+        val current = SourceId.LocalPlaylist(1)
+        val chosen = SourceId.Hub(3, 7)
+        val route = playlistSelectionRoute(
+            current,
+            chosen,
+            mapOf(current.encode() to ChannelKind.LIVE, chosen.encode() to ChannelKind.SERIES),
+        )!!
+        val parsed = Uri.parse("https://navigation.test/$route")
+        assertEquals(chosen, SourceId.decode(parsed.pathSegments[1]))
+        assertEquals(ChannelKind.SERIES.toString(), parsed.getQueryParameter("t"))
+    }
+
+    @Test
     fun hubReauthenticationRouteCarriesTheExistingRowId() {
         val route = Uri.parse("https://navigation.test/${Routes.hubSignIn(42)}")
 

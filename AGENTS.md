@@ -359,6 +359,8 @@ absent from the initial bundle.
   Series are Browse tabs; changing a kind clears its category and filter. Keep the
   neutral dark/light surfaces, Inter typography, inverted actions and blue focus/
   progress accents aligned across clients. Source management lives under More.
+  The playlist selector only switches existing sources; creation uses labeled
+  Add playlist/Connect server actions, and More keeps management separate.
 - Android catalog gateways are cached in a thread-safe, access-order LRU capped at 64.
   Gateway lookup/construction never reads Room: `CatalogGateway.traits()` is suspending, and
   a local gateway resolves its playlist-backed traits only after the ViewModel has entered a

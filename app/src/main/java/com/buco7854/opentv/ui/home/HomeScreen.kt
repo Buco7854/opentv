@@ -17,11 +17,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -131,11 +129,7 @@ internal fun HomeLibrary(
                         style = MaterialTheme.typography.titleLarge,
                         modifier = Modifier.weight(1f).semantics { heading() },
                     )
-                    if (sources.isNotEmpty()) {
-                        IconButton(onClick = onAddPlaylist, enabled = !busy, modifier = Modifier.focusHighlight()) {
-                            Icon(Icons.Outlined.Add, contentDescription = stringResource(R.string.home_local_title))
-                        }
-                    }
+
                 }
                 if (sources.isEmpty()) {
                     Text(
@@ -207,6 +201,9 @@ internal fun HomeLibrary(
                         Text(stringResource(R.string.home_local_title))
                     }
                 } else {
+                    OtvTonalButton(onClick = onAddPlaylist, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                        Text(stringResource(R.string.home_local_title))
+                    }
                     OtvTextButton(onClick = onConnectHub, enabled = !busy) {
                         Text(stringResource(R.string.home_server_title))
                     }

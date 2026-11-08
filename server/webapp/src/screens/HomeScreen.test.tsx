@@ -1,4 +1,4 @@
-import { render, waitFor } from '@testing-library/react';
+import { fireEvent, render, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, Channel, ChannelKind } from '../api';
@@ -6,7 +6,8 @@ import { ApiError } from '../api/http';
 import { LibraryProvider } from '../library';
 import { HomeScreen } from './HomeScreen';
 
-vi.mock('../auth/AuthProvider', () => ({ useAuth: () => ({ user: { role: 'USER' } }) }));
+const auth = vi.hoisted(() => ({ role: 'USER' }));
+vi.mock('../auth/AuthProvider', () => ({ useAuth: () => ({ user: auth }) }));
 
 const playlist = { id: 1, name: 'Evening library', mode: 'url' as const,
   hasXtreamPanel: false, lastRefreshedMs: 0, channelCount: 100 };
@@ -21,10 +22,20 @@ const renderHome = () => render(<MemoryRouter><LibraryProvider><HomeScreen /></L
 describe('HomeScreen library', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    auth.role = 'USER';
     vi.spyOn(api, 'playlists').mockResolvedValue([playlist]);
     vi.spyOn(api, 'resumeAll').mockResolvedValue([]);
     vi.spyOn(api, 'channel').mockImplementation(async (contentId) => channel(String(contentId)));
     vi.spyOn(api, 'startRefreshJob').mockResolvedValue({ id: 'unused', status: 'SUCCEEDED', result: null });
+  });
+
+  it('opens creation directly from the labeled Add playlist action, separate from existing sources', async () => {
+    auth.role = 'ADMIN';
+    const view = renderHome();
+    expect(await view.findByRole('link', { name: /^Evening library/ })).toBeTruthy();
+    fireEvent.click(view.getByRole('button', { name: 'Add playlist' }));
+    expect(view.getByRole('dialog', { name: 'Add playlist' })).toBeTruthy();
+    expect(view.queryByRole('dialog', { name: 'Switch playlist' })).toBeNull();
   });
 
   it('offers browsing and search for each library without triggering provider refresh', async () => {

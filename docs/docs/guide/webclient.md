@@ -32,7 +32,9 @@ Every channel, movie and series shown is a placeholder, for illustration only.
 Web and Android share the same five destinations: **Home**, **Browse**,
 **Favorites**, **Search** and **More**. Home keeps your playlists and recent
 viewing in one place. Browse contains the Live, Movies and Series tabs.
-More opens the source and account panel, including downloads and settings.
+The playlist selector switches between existing playlists. Add playlist is a
+separate labeled action below the library list. More contains playlist management,
+downloads and account settings.
 
 Navigation sits in a compact top bar on wide screens and a labeled bottom bar
 on phones. Both light and dark themes use the same typography and controls.

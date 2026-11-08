@@ -437,7 +437,7 @@
     <string name="hub_link_scanned_by">Scanned by %1$s. Approve on that device only if this is your account.</string>
     <string name="home_server_title">Connect a server</string>
     <string name="home_server_description">Use your server’s library and keep favorites and watch progress with you.</string>
-    <string name="home_local_title">Add a playlist</string>
+    <string name="home_local_title">Add playlist</string>
     <string name="home_local_description">Use an Xtream login, an M3U link or a playlist file on this device.</string>
     <string name="home_source_hint">Manage playlists, servers and settings from More.</string>
     <string name="shell_library">Library</string>
@@ -456,10 +456,15 @@
     <string name="common_home">Home</string>
     <string name="common_browse">Browse</string>
     <string name="common_more">More</string>
-    <string name="home_library_subtitle">Choose a playlist to browse your live TV, movies and series.</string>
+    <string name="home_library_subtitle">Switch playlist to browse your live TV, movies and series.</string>
     <string name="home_on_device">On this device</string>
     <string name="home_item_count">%1$d items</string>
     <string name="home_some_servers_unreachable">Some servers could not be reached. Retry to load their playlists.</string>
     <string name="home_library_title">Library</string>
     <string name="home_your_playlists">Your playlists</string>
+    <string name="playlist_picker_label">Playlist</string>
+    <string name="playlist_picker_title">Switch playlist</string>
+    <string name="playlist_picker_current">Playlist: %1$s. Switch playlist.</string>
+    <string name="playlist_picker_empty">No playlists are available.</string>
+    <string name="playlist_picker_manage_hint">Add or manage playlists in More.</string>
 </resources>

@@ -1,5 +1,6 @@
 /* Shared library rhythm; poster grids keep their own responsive column count. */
-.library-add { width: auto; flex-shrink: 0; }
+.library-add { width: auto; flex-shrink: 0; min-height: 44px; }
+.library-source-actions { display: flex; align-items: center; margin-top: 16px; }
 .library-home { display: grid; gap: 32px; padding: 4px 24px 32px; }
 .library-section { min-width: 0; }
 .library-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 32px; margin-bottom: 12px; }
@@ -56,8 +57,6 @@
   .continue-grid, .category-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 640px) {
-  .library-add { font-size: 0; width: 44px; padding: 0; }
-  .library-add .icon { width: 22px; }
   .library-home { padding: 0 16px 24px; gap: 24px; }
   .continue-grid { grid-template-columns: minmax(0, 1fr); gap: 10px; }
   .continue-card > .logo-box { flex-basis: 76px; height: 108px; }

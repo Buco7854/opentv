@@ -1,4 +1,4 @@
-import { act, fireEvent, render, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -8,6 +8,7 @@ import { languageSetting, t } from '../i18n';
 import { Dock, playlistDeleteWarning, playlistRefreshNotice } from './Dock';
 
 const library = vi.hoisted(() => ({
+  playlistPanelOpen: true,
   reload: vi.fn().mockResolvedValue(undefined),
   rememberPlaylist: vi.fn(),
   forgetPlaylist: vi.fn(),
@@ -26,7 +27,6 @@ vi.mock('../library', () => ({
     }],
     loading: false,
     error: null,
-    playlistPanelOpen: true,
     ...library,
   }),
 }));
@@ -60,6 +60,7 @@ async function openAction(view: ReturnType<typeof render>, label: string) {
 describe('Dock playlist operations', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    library.playlistPanelOpen = true;
     library.reload.mockClear();
     library.rememberPlaylist.mockClear();
     library.forgetPlaylist.mockClear();
@@ -70,6 +71,31 @@ describe('Dock playlist operations', () => {
   afterEach(() => {
     languageSetting.set('auto');
     document.getElementById('toast-root')?.remove();
+  });
+
+  it('opens an existing-playlist chooser without creation or management actions', async () => {
+    library.playlistPanelOpen = false;
+    const capabilities = vi.spyOn(api, 'playlistCapabilities');
+    const create = vi.spyOn(api, 'addPlaylist');
+    const view = renderDock();
+    const switcher = view.getByRole('button', { name: 'Switch playlist' });
+    fireEvent.click(switcher);
+    const dialog = view.getByRole('dialog', { name: 'Switch playlist' });
+    expect(within(dialog).getByRole('button', { name: /Provider/ }).getAttribute('aria-current')).toBe('true');
+    expect(within(dialog).queryByRole('button', { name: 'Add playlist' })).toBeNull();
+    expect(within(dialog).queryByText(t('nav.settings'))).toBeNull();
+    fireEvent.click(within(dialog).getByRole('button', { name: /Provider/ }));
+    await waitFor(() => expect(view.queryByRole('dialog', { name: 'Switch playlist' })).toBeNull());
+    expect(view.getByTestId('path').textContent).toBe('/browse/7');
+    expect(capabilities).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('uses a labeled creation button in management without turning source names into switching controls', () => {
+    const view = renderDock();
+    const dialog = view.getByRole('dialog', { name: t('nav.playlists') });
+    expect(within(dialog).getByRole('button', { name: 'Add playlist' }).textContent).toBe('Add playlist');
+    expect(within(dialog).queryByRole('button', { name: /Provider/ })).toBeNull();
   });
 
   it('keeps playlist actions inside the selected playlist card and groups global actions', () => {

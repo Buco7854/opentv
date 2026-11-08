@@ -462,4 +462,9 @@
     <string name="home_some_servers_unreachable">Certains serveurs sont injoignables. Réessayez pour charger leurs playlists.</string>
     <string name="home_library_title">Bibliothèque</string>
     <string name="home_your_playlists">Vos playlists</string>
+    <string name="playlist_picker_label">Playlist</string>
+    <string name="playlist_picker_title">Changer de playlist</string>
+    <string name="playlist_picker_current">Playlist : %1$s. Changer de playlist.</string>
+    <string name="playlist_picker_empty">Aucune playlist disponible.</string>
+    <string name="playlist_picker_manage_hint">Ajoutez ou gérez les playlists depuis Plus.</string>
 </resources>

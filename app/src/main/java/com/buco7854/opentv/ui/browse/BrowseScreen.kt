@@ -105,6 +105,7 @@ import com.buco7854.opentv.ui.components.SourceLoadFailed
 import com.buco7854.opentv.ui.components.SourceSignedOut
 import com.buco7854.opentv.ui.components.SourceUnreachable
 import com.buco7854.opentv.ui.components.sourceViewModel
+import com.buco7854.opentv.ui.shell.PlaylistSelector
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -115,6 +116,7 @@ import java.util.Locale
 @Composable
 fun BrowseScreen(
     sourceId: SourceId,
+    onChoosePlaylist: () -> Unit,
     initialTab: Int? = null,
     initialGroup: String? = null,
     onContentKindChanged: (Int) -> Unit = {},
@@ -216,44 +218,10 @@ fun BrowseScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
-                        Text(
-                            (if (singleGroup) null else group) ?: playlist?.name
-                                ?: stringResource(R.string.browse_fallback_title),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        if (account == null) {
-                            Text(
-                                when (tab) {
-                                    ChannelKind.MOVIE -> stringResource(R.string.browse_movies_count, movieCount)
-                                    ChannelKind.SERIES -> stringResource(R.string.browse_series_count, seriesCount)
-                                    else -> stringResource(R.string.browse_live_count, liveCount)
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        account?.let { info ->
-                            val warn = info.maxConnections in 1..info.activeConnections
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Icon(
-                                    Icons.Outlined.Person,
-                                    contentDescription = null,
-                                    tint = if (warn) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(14.dp),
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Text(
-                                    stringResource(R.string.browse_connections, info.activeConnections, info.maxConnections),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (warn) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
+                    PlaylistSelector(
+                        title = playlist?.name ?: traits?.title ?: stringResource(R.string.browse_fallback_title),
+                        onChoose = onChoosePlaylist,
+                    )
                 },
                 navigationIcon = {
                     if (group != null && !singleGroup) {
@@ -305,6 +273,31 @@ fun BrowseScreen(
                 }
             }
 
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    (if (singleGroup) null else group) ?: when (tab) {
+                        ChannelKind.MOVIE -> stringResource(R.string.browse_movies_count, movieCount)
+                        ChannelKind.SERIES -> stringResource(R.string.browse_series_count, seriesCount)
+                        else -> stringResource(R.string.browse_live_count, liveCount)
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                account?.let { info ->
+                    Text(
+                        stringResource(R.string.browse_connections, info.activeConnections, info.maxConnections),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (info.maxConnections in 1..info.activeConnections) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             val hasContent = groups.isNotEmpty() || items.isNotEmpty()
             if (hasContent) {
                 FilterField(

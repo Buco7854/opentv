@@ -19,13 +19,22 @@ import useBaseUrl from '@docusaurus/useBaseUrl';
 
 Home lists your playlists and unfinished viewing without starting a provider refresh.
 Both clients use Home, Browse, Favorites, Search and More; Browse contains the Live,
-Movies and Series tabs. The source switcher and More open playlist management.
+Movies and Series tabs. The source switcher chooses an existing playlist; More
+contains management actions. Add playlist is a separate labeled library action.
 
 <figure className="doc-screen">
   <ThemedImage
     alt="Library home with continue watching and playlists"
     sources={{ light: useBaseUrl('/img/web/home-light.png'), dark: useBaseUrl('/img/web/home-dark.png') }}
   />
+</figure>
+
+<figure className="doc-screen">
+  <ThemedImage
+    alt="Playlist chooser containing only existing playlists"
+    sources={{ light: useBaseUrl('/img/web/playlist-chooser-light.png'), dark: useBaseUrl('/img/web/playlist-chooser-dark.png') }}
+  />
+  <figcaption>Switch an existing playlist here; adding and editing have separate actions.</figcaption>
 </figure>
 
 ## Live TV
@@ -124,8 +133,9 @@ playlists remains two entries and survives refreshes.
 
 ## Playlists, downloads, account and settings
 
-**More** opens the playlists panel, where you switch, add, refresh and edit
-playlists and reach Now watching, downloads and settings.
+**More** opens playlist management, where you add, refresh and edit playlists
+and reach Now watching, downloads and settings. Use the playlist selector to
+switch between existing playlists.
 
 <div className="screens-grid">
   <figure className="doc-screen">
