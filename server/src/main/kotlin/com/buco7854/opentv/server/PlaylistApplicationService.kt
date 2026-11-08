@@ -156,7 +156,10 @@ class PlaylistApplicationService(
 
     suspend fun refresh(actor: Actor, id: Long, force: Boolean): PlaylistRefreshResultDto {
         requireAdmin(actor)
-        val catalogChanged = content.refreshPlaylist(id) { playlists.refresh(id, force) }
+        val prepared = playlists.prepareRefresh(id, force)
+        val catalogChanged = prepared?.let {
+            content.refreshPlaylist(id) { playlists.applyRefresh(it) }
+        } ?: false
         val refreshed = playlist(id)
         val epgStatus = if (refreshed.epgUrl == null) {
             PlaylistEpgRefreshStatus.NOT_CONFIGURED

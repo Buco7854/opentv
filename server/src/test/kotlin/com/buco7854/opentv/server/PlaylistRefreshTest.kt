@@ -5,6 +5,9 @@ import com.buco7854.opentv.contract.PlaylistRefreshJobStatus
 import com.buco7854.opentv.core.epg.TextSource
 import com.buco7854.opentv.core.log.CoreLog
 import com.buco7854.opentv.core.model.Playlist
+import com.buco7854.opentv.core.model.Channel
+import com.buco7854.opentv.core.model.ChannelKind
+import com.buco7854.opentv.core.model.GroupOverride
 import com.buco7854.opentv.core.net.ConditionalFetch
 import com.buco7854.opentv.core.net.ConditionalFetcher
 import com.buco7854.opentv.core.net.TextBody
@@ -31,6 +34,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import java.io.IOException
 import java.net.URI
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -110,6 +114,30 @@ class PlaylistRefreshTest {
         }
 
     @Test
+    fun `provider failure fails the job without holding catalog access`() = withService { fixture ->
+        val id = fixture.storage.playlists.insert(
+            Playlist(name = "Provider", url = "https://provider.example/failing.m3u"),
+        )
+        fixture.fetchFailure = true
+        val started = fixture.service.startRefresh(admin, id, force = true)
+        val finished = withContext(Dispatchers.IO) {
+            withTimeout(5_000) {
+                var current: PlaylistRefreshJobDto
+                do {
+                    delay(10)
+                    current = fixture.service.refreshStatus(admin, id, started.id)
+                } while (current.status == PlaylistRefreshJobStatus.QUEUED ||
+                    current.status == PlaylistRefreshJobStatus.RUNNING)
+                current
+            }
+        }
+        assertEquals(PlaylistRefreshJobStatus.FAILED, finished.status)
+        withContext(Dispatchers.IO) {
+            withTimeout(5_000) { fixture.content.withStablePlaylist(id) { fixture.storage.playlists.get(id) } }
+        }
+    }
+
+    @Test
     fun `the repository reports whether it rewrote the catalog`() = withService { fixture ->
         val ingested = fixture.storage.playlists.insert(
             Playlist(name = "Provider", url = "https://provider.example/playlist.m3u"),
@@ -164,6 +192,111 @@ class PlaylistRefreshTest {
         }
 
     @Test
+    fun `readers stay available while a same-playlist provider fetch is blocked`() = withService { fixture ->
+        withContext(Dispatchers.IO) {
+            val url = "https://provider.example/slow.m3u"
+            val id = fixture.storage.playlists.insert(Playlist(name = "Slow", url = url))
+            seedChannels(fixture.storage, id)
+            fixture.gateUrl = url
+            fixture.gate = CompletableDeferred()
+            val refresh = async { fixture.service.refresh(admin, id, force = false) }
+            withTimeout(5_000) { while (fixture.fetches < 1) delay(10) }
+
+            val rows = withTimeout(5_000) {
+                fixture.content.withStablePlaylist(id) {
+                    fixture.storage.channels.pageInGroup(id, 0, "Live", "", 50, 0)
+                }
+            }
+            assertEquals(2, rows.total)
+            assertFalse(refresh.isCompleted)
+            fixture.gate!!.complete(Unit)
+            assertTrue(withTimeout(5_000) { refresh.await().catalogChanged })
+        }
+    }
+
+    @Test
+    fun `url update and blocked background refresh do not deadlock or apply stale rows`() = withService { fixture ->
+        withContext(Dispatchers.IO) {
+            val oldUrl = "https://provider.example/old.m3u"
+            val newUrl = "https://provider.example/new.m3u"
+            val id = fixture.storage.playlists.insert(Playlist(name = "Provider", url = oldUrl))
+            fixture.bodies[oldUrl] = playlistLines
+            fixture.bodies[newUrl] = listOf("#EXTM3U", "#EXTINF:-1 group-title=\"Live\",New Channel", "https://provider.example/new.ts")
+            fixture.gateUrl = oldUrl
+            fixture.gate = CompletableDeferred()
+            val background = async { fixture.service.refresh(admin, id, force = false) }
+            withTimeout(5_000) { while (fixture.fetches == 0) delay(10) }
+            val updateEnteredGate = CompletableDeferred<Unit>()
+            val update = async {
+                fixture.content.updatePlaylist(id) {
+                    updateEnteredGate.complete(Unit)
+                    fixture.playlists.updateUrl(id, "Provider", newUrl, null)
+                }
+            }
+            withTimeout(5_000) { updateEnteredGate.await() }
+            fixture.gate!!.complete(Unit)
+            withTimeout(10_000) {
+                update.await()
+                assertFalse(background.await().catalogChanged)
+            }
+            assertEquals(newUrl, fixture.storage.playlists.get(id)?.url)
+            assertEquals("New Channel", fixture.storage.channels.pageInGroup(id, 0, "Live", "", 50, 0).items.single().name)
+        }
+    }
+
+    @Test
+    fun `prepared M3U keeps old catalog and validators until successful swap`() = withService { fixture ->
+        val url = "https://provider.example/playlist.m3u"
+        val id = fixture.storage.playlists.insert(Playlist(name = "Provider", url = url, etag = "old"))
+        seedChannels(fixture.storage, id)
+        fixture.bodies[url] = listOf("#EXTM3U", "#EXTINF:-1 group-title=\"Live\",Replacement", "https://provider.example/replacement.ts")
+        fixture.responseEtag = "new"
+        val prepared = fixture.playlists.prepareRefresh(id)!!
+        assertEquals(2, fixture.storage.channels.pageInGroup(id, 0, "Live", "", 50, 0).total)
+        assertEquals("old", fixture.storage.playlists.get(id)?.etag)
+        assertEquals(0, fixture.storage.playlists.get(id)?.lastRefreshedMs)
+        assertTrue(fixture.playlists.applyRefresh(prepared))
+        assertEquals("new", fixture.storage.playlists.get(id)?.etag)
+        assertEquals("Replacement", fixture.storage.channels.pageInGroup(id, 0, "Live", "", 50, 0).items.single().name)
+    }
+
+    @Test
+    fun `apply rejects a changed source without publishing validators or channels`() = withService { fixture ->
+        val id = fixture.storage.playlists.insert(
+            Playlist(name = "Provider", url = "https://provider.example/old.m3u", etag = "old"),
+        )
+        seedChannels(fixture.storage, id)
+        fixture.responseEtag = "new"
+        val prepared = fixture.playlists.prepareRefresh(id)!!
+        fixture.storage.playlists.update(
+            fixture.storage.playlists.get(id)!!.copy(url = "https://provider.example/new.m3u"),
+        )
+        assertFalse(fixture.playlists.applyRefresh(prepared))
+        assertEquals("old", fixture.storage.playlists.get(id)?.etag)
+        assertEquals(0, fixture.storage.playlists.get(id)?.lastRefreshedMs)
+        assertEquals(2, fixture.storage.channels.pageInGroup(id, ChannelKind.LIVE, "Live", "", 50, 0).total)
+    }
+
+    @Test
+    fun `M3U apply reads category corrections made after preparation`() = withService { fixture ->
+        val id = fixture.storage.playlists.insert(
+            Playlist(name = "Provider", url = "https://provider.example/playlist.m3u"),
+        )
+        val prepared = fixture.playlists.prepareRefresh(id)!!
+        fixture.storage.groupOverrides.upsert(GroupOverride(id, "Live", ChannelKind.MOVIE))
+        assertTrue(fixture.playlists.applyRefresh(prepared))
+        assertEquals(2, fixture.storage.channels.pageInGroup(id, ChannelKind.MOVIE, "Live", "", 50, 0).total)
+    }
+
+    private suspend fun seedChannels(storage: Storage, playlistId: Long) {
+        storage.channels.replaceKinds(playlistId, listOf(ChannelKind.LIVE), listOf("One", "Two").mapIndexed { index, name ->
+            Channel(playlistId = playlistId, name = name, url = "https://provider.example/$index.ts",
+                logo = null, groupTitle = "Live", tvgId = null, kind = ChannelKind.LIVE,
+                seriesKey = null, season = null, episode = null, position = index)
+        })
+    }
+
+    @Test
     fun `deleting a playlist cascades its authorization and identity state`() =
         withService { fixture ->
             val playlistId = fixture.storage.playlists.insert(
@@ -212,11 +345,15 @@ class PlaylistRefreshTest {
         val userDatabase: OpenTvServerDatabase,
         val playlists: PlaylistRepository,
         val service: PlaylistApplicationService,
+        val content: ContentIdentityService,
         val auth: AuthService,
     ) {
         var now = 1_000L
         var fetches = 0
         var body: List<String>? = null
+        val bodies = mutableMapOf<String, List<String>>()
+        var responseEtag: String? = null
+        var fetchFailure = false
 
         /** Lets a test block one URL's fetch mid-flight while another proceeds. */
         var gateUrl: String? = null
@@ -246,9 +383,10 @@ class PlaylistRefreshTest {
             lateinit var fixture: Fixture
             val fetcher = ConditionalFetcher { url, _, _ ->
                 fixture.fetches++
+                if (fixture.fetchFailure) throw IOException("provider fetch failed")
                 if (url == fixture.gateUrl) fixture.gate?.await()
-                val lines = fixture.body ?: return@ConditionalFetcher ConditionalFetch.NotModified
-                ConditionalFetch.Success(LineBody(lines), etag = null, lastModified = null)
+                val lines = fixture.bodies[url] ?: fixture.body ?: return@ConditionalFetcher ConditionalFetch.NotModified
+                ConditionalFetch.Success(LineBody(lines), etag = fixture.responseEtag, lastModified = null)
             }
             val log = CoreLog { _, _ -> }
             val xtreamApi = XtreamApi { _ -> error("no panel in this test") }
@@ -282,7 +420,7 @@ class PlaylistRefreshTest {
                 downloads,
             )
             persistence.closeBeforeDatabase(createdService::close)
-            fixture = Fixture(storage, userDatabase, playlists, createdService, auth)
+            fixture = Fixture(storage, userDatabase, playlists, createdService, content, auth)
             fixture.body = playlistLines
             block(fixture)
         } finally {

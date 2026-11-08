@@ -48,8 +48,8 @@ class ContentIdentityService(
 
     /**
      * Runs a catalog refresh and identity reconciliation as one application-level operation.
-     * SQLite still commits the streaming catalog batches independently, but readers of this
-     * service wait until their stable identities have been rebound.
+     * The caller prepares provider data before this gate; readers wait only for the catalog
+     * swap and identity rebind, whose chunked commits remain hidden by this gate.
      */
     suspend fun refreshPlaylist(
         playlistId: Long,

@@ -127,6 +127,10 @@ absent from the initial bundle.
   metadata with no authorization meaning. Device-link sessions remain
   `LINKED_DEVICE`.
 - Error responses are mapped in one place: `installOpenTvErrorResponses`.
+- Request authentication reads current session/user authority on every call, but session
+  activity renewal runs once per session in a server-owned background scope so an idle
+  viewer never queues catalog reads behind SQLite's writer. A queued renewal rechecks
+  persistent expiry and revocation after taking the writer; shutdown cancels the scope.
 - `OPENTV_PUBLIC_URL` is optional. `PublicOrigin` answers the four questions that need an
   absolute address - OIDC callback, device-link QR, WebAuthn relying party, OIDC
   transaction-cookie `Secure`/HSTS - from the configuration when it is pinned (`AuthConfig.publicUrlPinned`,
@@ -392,6 +396,11 @@ absent from the initial bundle.
   missing, and failed-library states out of feature-screen loading spinners.
 - `PlaylistRepository.refresh` reports whether it actually rewrote the catalog;
   reconciliation runs only when it did. Android ignores the result.
+- Server refresh prepares network responses and parsed rows before taking `CatalogGate`;
+  only the bulk catalog swap and identity reconciliation hold its write side.
+  The per-playlist refresh lock ends after prepare, so update's gate-then-lock
+  path cannot deadlock with refresh. Apply rechecks source identity and current
+  overrides/section counts. M3U uses the set-wise FTS-safe channel replace.
 - The playback lease has exactly one owner (`PlayerProvider`). The session
   reporter never ends it, or a StrictMode remount deletes the lease it is about
   to heartbeat against.

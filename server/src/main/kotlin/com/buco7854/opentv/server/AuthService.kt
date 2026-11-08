@@ -72,7 +72,7 @@ class AuthService(
     private val playlistExists: suspend (Long) -> Boolean = { true },
     private val cleanup: UserStateCleanupCoordinator = NoopUserStateCleanupCoordinator,
     private val resumeTitles: suspend (Collection<String>) -> Map<String, String> = { emptyMap() },
-) {
+) : AutoCloseable {
     private val limiter = AuthRateLimiter(clock)
     private val mutation = Mutex()
     private val bootstrapFile = dataDir.resolve("bootstrap.token")
@@ -566,7 +566,9 @@ class AuthService(
         sessionService.authenticate(rawToken)
 
     internal suspend fun authenticateSession(sessionId: String): Actor? =
-        sessionService.authenticateSession(sessionId)?.first
+        requestAuthenticator.authenticateSession(sessionId)
+
+    override fun close() = requestAuthenticator.close()
 
     suspend fun current(actor: Actor): CurrentUserDto {
         val user = db.users().get(actor.userId) ?: throw UnauthenticatedApiException()

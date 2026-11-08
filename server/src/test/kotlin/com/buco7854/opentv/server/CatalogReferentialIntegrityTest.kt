@@ -28,12 +28,11 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
@@ -80,14 +79,14 @@ class CatalogReferentialIntegrityTest {
     }
 
     @Test
-    fun content_resolution_does_not_observe_the_refresh_set_null_window() = runBlocking {
+    fun content_resolution_reads_the_old_catalog_during_provider_fetch() = runBlocking {
         withFixture { fixture ->
             val seeded = fixture.seedContent()
             fixture.db.users().insert(fixture.adminRow())
             fixture.db.activity().addFavorite(
                 UserFavoriteRow(fixture.admin.userId, seeded.contentId, 1_000L),
             )
-            val enteredCatalogGap = CountDownLatch(1)
+            val enteredFetch = CountDownLatch(1)
             val finishRefresh = CountDownLatch(1)
             fixture.body = BlockingBody(
                 listOf(
@@ -95,15 +94,15 @@ class CatalogReferentialIntegrityTest {
                     "#EXTINF:-1 group-title=\"Live\",Channel One",
                     CONTENT_URL,
                 ),
-                enteredCatalogGap,
+                enteredFetch,
                 finishRefresh,
             )
 
             val refresh = async(Dispatchers.IO) {
                 fixture.service.refresh(fixture.admin, seeded.playlistId, force = true)
             }
-            assertTrue(enteredCatalogGap.await(COORDINATION_TIMEOUT_S, TimeUnit.SECONDS))
-            assertEquals(null, fixture.db.content().get(seeded.contentId)?.currentChannelId)
+            assertTrue(enteredFetch.await(COORDINATION_TIMEOUT_S, TimeUnit.SECONDS))
+            assertEquals(seeded.channelId, fixture.db.content().get(seeded.contentId)?.currentChannelId)
 
             val resolution = async(Dispatchers.IO) {
                 runCatching { fixture.content.requireChannel(seeded.contentId) }
@@ -112,46 +111,43 @@ class CatalogReferentialIntegrityTest {
                 fixture.service.resolvedFavorites(fixture.admin, seeded.playlistId)
             }
             try {
-                delay(200)
-                assertFalse(
-                    resolution.isCompleted,
-                    "content resolution must wait until refresh reconciliation closes the FK gap",
-                )
-                assertFalse(
-                    favoriteResolution.isCompleted,
-                    "favorites must not transiently resolve as empty during the FK gap",
+                val (_, old) = withTimeout(5_000) { resolution.await().getOrThrow() }
+                assertEquals(seeded.channelId, old.id)
+                assertEquals(
+                    listOf(seeded.contentId),
+                    withTimeout(5_000) { favoriteResolution.await() }.live.map { it.contentId },
                 )
             } finally {
                 finishRefresh.countDown()
             }
 
             refresh.await()
-            val (_, rebound) = resolution.await().getOrThrow()
+            val (_, rebound) = fixture.content.requireChannel(seeded.contentId)
             assertNotEquals(seeded.channelId, rebound.id)
             assertEquals(CONTENT_URL, rebound.url)
             assertEquals(
                 listOf(seeded.contentId),
-                favoriteResolution.await().live.map { it.contentId },
+                fixture.service.resolvedFavorites(fixture.admin, seeded.playlistId).live.map { it.contentId },
             )
         }
     }
 
     @Test
-    fun failed_refresh_repairs_surviving_bindings_without_deleting_favorites() = runBlocking {
+    fun failed_provider_read_preserves_catalog_bindings_and_favorites() = runBlocking {
         withFixture { fixture ->
             val seeded = fixture.seedContent()
             fixture.db.users().insert(fixture.adminRow())
             fixture.db.activity().addFavorite(
                 UserFavoriteRow(fixture.admin.userId, seeded.contentId, 1_000L),
             )
-            fixture.body = FailingAfterBatchBody()
+            fixture.body = FailingDuringParseBody()
 
             assertFailsWith<IOException> {
                 fixture.service.refresh(fixture.admin, seeded.playlistId, force = true)
             }
 
             val (_, rebound) = fixture.content.requireChannel(seeded.contentId)
-            assertNotEquals(seeded.channelId, rebound.id)
+            assertEquals(seeded.channelId, rebound.id)
             assertEquals(CONTENT_URL, rebound.url)
             assertEquals(
                 listOf(seeded.contentId),
@@ -194,11 +190,11 @@ class CatalogReferentialIntegrityTest {
     }
 
     @Test
-    fun playlist_deletion_waits_for_an_in_flight_refresh_before_cascading() = runBlocking {
+    fun playlist_deletion_during_provider_fetch_prevents_the_prepared_swap() = runBlocking {
         withFixture { fixture ->
             val seeded = fixture.seedContent()
             fixture.db.users().insert(fixture.adminRow())
-            val enteredCatalogGap = CountDownLatch(1)
+            val enteredFetch = CountDownLatch(1)
             val finishRefresh = CountDownLatch(1)
             fixture.body = BlockingBody(
                 listOf(
@@ -206,29 +202,25 @@ class CatalogReferentialIntegrityTest {
                     "#EXTINF:-1 group-title=\"Live\",Channel One",
                     CONTENT_URL,
                 ),
-                enteredCatalogGap,
+                enteredFetch,
                 finishRefresh,
             )
             val refresh = async(Dispatchers.IO) {
-                fixture.service.refresh(fixture.admin, seeded.playlistId, force = true)
+                runCatching { fixture.service.refresh(fixture.admin, seeded.playlistId, force = true) }
             }
-            assertTrue(enteredCatalogGap.await(COORDINATION_TIMEOUT_S, TimeUnit.SECONDS))
+            assertTrue(enteredFetch.await(COORDINATION_TIMEOUT_S, TimeUnit.SECONDS))
 
             val deletion = async(Dispatchers.IO) {
                 runCatching { fixture.service.delete(fixture.admin, seeded.playlistId) }
             }
             try {
-                delay(200)
-                assertFalse(
-                    deletion.isCompleted,
-                    "deletion must not cascade the playlist while refresh can still insert rows",
-                )
+                withTimeout(5_000) { deletion.await().getOrThrow() }
+                assertEquals(null, fixture.storage.playlists.get(seeded.playlistId))
             } finally {
                 finishRefresh.countDown()
             }
 
-            refresh.await()
-            deletion.await().getOrThrow()
+            assertTrue(refresh.await().isFailure)
             assertEquals(null, fixture.storage.playlists.get(seeded.playlistId))
             assertEquals(
                 0,
@@ -362,20 +354,20 @@ class CatalogReferentialIntegrityTest {
 
     private class BlockingBody(
         private val lines: List<String>,
-        private val enteredCatalogGap: CountDownLatch,
+        private val enteredFetch: CountDownLatch,
         private val finishRefresh: CountDownLatch,
     ) : LinesBody(emptyList()) {
         override suspend fun <T> readLines(block: suspend (Sequence<String>) -> T): T =
             block(
                 sequence {
-                    enteredCatalogGap.countDown()
+                    enteredFetch.countDown()
                     check(finishRefresh.await(COORDINATION_TIMEOUT_S, TimeUnit.SECONDS))
                     yieldAll(lines)
                 },
             )
     }
 
-    private class FailingAfterBatchBody : LinesBody(emptyList()) {
+    private class FailingDuringParseBody : LinesBody(emptyList()) {
         override suspend fun <T> readLines(block: suspend (Sequence<String>) -> T): T =
             block(
                 sequence {
@@ -387,7 +379,7 @@ class CatalogReferentialIntegrityTest {
                             else "https://provider.example/live/${index + 1}.ts",
                         )
                     }
-                    throw IOException("provider body failed after the first committed batch")
+                    throw IOException("provider body failed during parsing")
                 },
             )
     }
@@ -409,9 +401,7 @@ class CatalogReferentialIntegrityTest {
     private companion object {
         /**
          * Generous on purpose. These latches only elapse when the coordination under
-         * test is genuinely stuck, so a long budget costs nothing when it works -- and
-         * the catalog and the accounts now share one SQLite writer, so a refresh can
-         * legitimately take seconds to reach the gap on a loaded machine.
+         * test is genuinely stuck, so a long budget costs nothing when it works.
          */
         const val COORDINATION_TIMEOUT_S = 60L
         const val CONTENT_URL = "https://provider.example/live/1.ts"

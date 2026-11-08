@@ -69,6 +69,7 @@ class ServerRuntime(
         graph.remux.close()
         graph.proxy.close()
         graph.streamGate.close()
+        graph.auth.close()
         connections.closeAll()
         storage.close()
     }

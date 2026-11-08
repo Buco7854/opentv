@@ -3,11 +3,13 @@ package com.buco7854.opentv.core.repo
 import com.buco7854.opentv.core.log.CoreLog
 import com.buco7854.opentv.core.log.rethrowCancellation
 import com.buco7854.opentv.core.m3u.ContentClassifier
+import com.buco7854.opentv.core.m3u.M3uEntry
 import com.buco7854.opentv.core.m3u.M3uParser
 import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.model.GroupOverride
 import com.buco7854.opentv.core.model.Playlist
+import com.buco7854.opentv.core.model.XtreamSeries
 import com.buco7854.opentv.core.net.ConditionalFetch
 import com.buco7854.opentv.core.net.ConditionalFetcher
 import com.buco7854.opentv.core.storage.Storage
@@ -34,6 +36,29 @@ class PlaylistRepository(
     private val log: CoreLog,
     private val account: AccountRepository? = null,
 ) {
+    class PreparedRefresh internal constructor(
+        internal val source: Playlist,
+        internal val atMs: Long,
+        internal val payload: Payload,
+    )
+
+    internal sealed interface Payload {
+        data class M3u(
+            val channels: List<Channel>,
+            val epgUrl: String?,
+            val etag: String?,
+            val lastModified: String?,
+        ) : Payload
+
+        data class Xtream(
+            val channels: List<Channel>,
+            val series: List<XtreamSeries>,
+            val liveCount: Int,
+            val vodCount: Int,
+            val seriesCount: Int,
+        ) : Payload
+    }
+
     companion object {
         /** Auto-refresh throttle (unless forced). */
         const val MIN_REFRESH_INTERVAL_MS = 6L * 60 * 60 * 1000
@@ -220,65 +245,92 @@ class PlaylistRepository(
         )
     }
 
-    /** Refresh a remote playlist: throttled, single-flight per playlist, conditional GET. */
-    suspend fun refresh(playlistId: Long, force: Boolean = false): Boolean =
+    /** Network and parsing phase. Never holds the server's catalog gate while fetching. */
+    suspend fun prepareRefresh(playlistId: Long, force: Boolean = false): PreparedRefresh? =
         playlistLock(playlistId).withLock {
-            val playlist = storage.playlists.get(playlistId) ?: return false
+            val playlist = storage.playlists.get(playlistId) ?: return null
             val now = nowMs()
             val lastAttempt = lastAttemptAt(playlistId)
             if (force) {
-                if (now - lastAttempt < FORCED_MIN_INTERVAL_MS) return false
+                if (now - lastAttempt < FORCED_MIN_INTERVAL_MS) return null
             } else {
-                if (now - playlist.lastRefreshedMs < MIN_REFRESH_INTERVAL_MS) return false
-                if (now - lastAttempt < FAILURE_RETRY_INTERVAL_MS) return false
+                if (now - playlist.lastRefreshedMs < MIN_REFRESH_INTERVAL_MS) return null
+                if (now - lastAttempt < FAILURE_RETRY_INTERVAL_MS) return null
             }
 
             val url = playlist.url
             if (url == null) {
                 // Xtream playlists refresh via the panel API; file imports have nothing to refresh.
-                if (playlist.xtreamBase == null) return false
+                if (playlist.xtreamBase == null) return null
                 markAttempt(playlistId, now)
-                refreshXtream(playlist, now)
-                return true
+                return PreparedRefresh(playlist, now, prepareXtream(playlist))
             }
             markAttempt(playlistId, now)
 
             when (val result = fetcher.conditionalGet(url, playlist.etag, playlist.lastModified)) {
                 is ConditionalFetch.NotModified -> {
-                    storage.playlists.update(playlist.copy(lastRefreshedMs = now))
-                    false
+                    val current = storage.playlists.get(playlistId)
+                    if (current != null && current.sameSourceAs(playlist)) {
+                        storage.playlists.update(current.copy(lastRefreshedMs = now))
+                    }
+                    null
                 }
                 is ConditionalFetch.Success -> try {
                     result.body.readLines { lines ->
                         var epgFromFile: String? = null
-                        val overrides = storage.groupOverrides.forPlaylist(playlistId)
-                            .associate { it.groupTitle to it.kind }
-                        // Drop validators before wiping, else a mid-stream failure leaves a 304 over empty channels.
-                        storage.playlists.update(playlist.copy(etag = null, lastModified = null))
-                        storage.channels.deleteForPlaylist(playlistId)
-                        val count = ingest(playlistId, lines, overrides) { epgFromFile = it }
-                        storage.playlists.update(
-                            playlist.copy(
-                                etag = result.etag,
-                                lastModified = result.lastModified,
-                                lastRefreshedMs = now,
-                                channelCount = count,
-                                epgUrl = playlist.epgUrl ?: epgFromFile,
-                            )
+                        val rows = parseChannels(playlistId, lines) { epgFromFile = it }
+                        PreparedRefresh(
+                            playlist, now,
+                            Payload.M3u(rows, epgFromFile, result.etag, result.lastModified),
                         )
                     }
-                    true
                 } finally {
                     result.body.close()
                 }
             }
         }
 
+    /** Apply only the prepared catalog mutation; callers may hold a catalog gate here. */
+    suspend fun applyRefresh(prepared: PreparedRefresh): Boolean {
+        val playlist = storage.playlists.get(prepared.source.id) ?: return false
+        if (!playlist.sameSourceAs(prepared.source)) return false
+        when (val payload = prepared.payload) {
+            is Payload.M3u -> {
+                val overrides = storage.groupOverrides.forPlaylist(playlist.id)
+                    .associate { it.groupTitle to it.kind }
+                val rows = payload.channels.map { applyOverride(it, overrides) }
+                storage.channels.replaceKinds(
+                    playlist.id,
+                    listOf(ChannelKind.LIVE, ChannelKind.MOVIE, ChannelKind.SERIES),
+                    rows,
+                )
+                storage.playlists.update(
+                    playlist.copy(
+                        etag = payload.etag,
+                        lastModified = payload.lastModified,
+                        lastRefreshedMs = prepared.atMs,
+                        channelCount = rows.size,
+                        epgUrl = playlist.epgUrl ?: payload.epgUrl,
+                    )
+                )
+            }
+            is Payload.Xtream -> applyXtream(playlist, prepared.atMs, payload)
+        }
+        return true
+    }
+
+    suspend fun refresh(playlistId: Long, force: Boolean = false): Boolean =
+        prepareRefresh(playlistId, force)?.let { applyRefresh(it) } ?: false
+
+    private fun Playlist.sameSourceAs(other: Playlist): Boolean =
+        url == other.url && xtreamBase == other.xtreamBase &&
+            xtreamUser == other.xtreamUser && xtreamPass == other.xtreamPass
+
     /**
      * Full refresh via the panel API: six requests (three category + three stream lists).
      * Series episodes load lazily per-series (XtreamRepository) to avoid one request per show.
      */
-    private suspend fun refreshXtream(playlist: Playlist, now: Long) {
+    private suspend fun prepareXtream(playlist: Playlist): Payload.Xtream {
         val creds = playlist.credentials()!!
 
         val liveCategories = runCatching { xtreamApi.fetchCategories(creds, "get_live_categories") }
@@ -295,26 +347,7 @@ class PlaylistRepository(
         val seriesList = runCatching { xtreamApi.fetchSeriesList(creds) }
             .getOrElse { it.rethrowCancellation(); log.log("Xtream series list", it); emptyList() }
 
-        // Panels transiently return empty lists (rate limiting / account block); keep
-        // existing content for any section that had entries but came back empty.
-        val oldLive = storage.channels.count(playlist.id, ChannelKind.LIVE)
-        val oldVod = storage.channels.count(playlist.id, ChannelKind.MOVIE)
-        val oldSeries = storage.xtreamSeries.count(playlist.id)
-        val keepLive = live.isEmpty() && oldLive > 0
-        val keepVod = vod.isEmpty() && oldVod > 0
-        val keepSeries = seriesList.isEmpty() && oldSeries > 0
-        if (keepLive || keepVod || keepSeries) {
-            val kept = listOfNotNull(
-                "live".takeIf { keepLive }, "VOD".takeIf { keepVod }, "series".takeIf { keepSeries },
-            )
-            log.log(
-                "Xtream refresh",
-                XtreamApiException("Panel returned empty ${kept.joinToString("/")} list(s); keeping existing content"),
-            )
-        }
-
-        // Build the new rows in memory, then swap each table in a single transaction, so
-        // browse observers never see the playlist momentarily empty during a refresh.
+        // Build rows without consulting the current catalog or category corrections.
         var position = 0
         val channelRows = ArrayList<Channel>(live.size + vod.size)
         for (stream in live) {
@@ -354,6 +387,43 @@ class PlaylistRepository(
                 )
             )
         }
+        val seriesRows = seriesList.map { item ->
+            XtreamSeries(
+                playlistId = playlist.id,
+                seriesId = item.seriesId,
+                name = item.name,
+                categoryName = seriesCategories[item.categoryId] ?: "Series",
+                cover = item.cover,
+                plot = item.plot,
+                castNames = item.cast,
+                genre = item.genre,
+                rating = item.rating,
+            )
+        }
+        return Payload.Xtream(channelRows, seriesRows, live.size, vod.size, seriesList.size)
+    }
+
+    private suspend fun applyXtream(playlist: Playlist, now: Long, prepared: Payload.Xtream) {
+        // Panels transiently return empty lists (rate limiting / account block); keep
+        // existing content for any section that had entries but came back empty.
+        val oldLive = storage.channels.count(playlist.id, ChannelKind.LIVE)
+        val oldVod = storage.channels.count(playlist.id, ChannelKind.MOVIE)
+        val oldSeries = storage.xtreamSeries.count(playlist.id)
+        val keepLive = prepared.liveCount == 0 && oldLive > 0
+        val keepVod = prepared.vodCount == 0 && oldVod > 0
+        val keepSeries = prepared.seriesCount == 0 && oldSeries > 0
+        if (keepLive || keepVod || keepSeries) {
+            val kept = listOfNotNull(
+                "live".takeIf { keepLive }, "VOD".takeIf { keepVod }, "series".takeIf { keepSeries },
+            )
+            log.log(
+                "Xtream refresh",
+                XtreamApiException("Panel returned empty ${kept.joinToString("/")} list(s); keeping existing content"),
+            )
+        }
+
+        // The prepared rows replace each table atomically, so browse observers never see
+        // the playlist momentarily empty during a refresh.
         // A kept kind's source list is empty (that is what "keep" means), so it is neither
         // deleted nor re-inserted. Cached episodes (kind=SERIES) drop with the catalog.
         val replaceKinds = buildList {
@@ -363,7 +433,7 @@ class PlaylistRepository(
         }
         val overrides = storage.groupOverrides.forPlaylist(playlist.id)
             .associate { it.groupTitle to it.kind }
-        val corrected = if (overrides.isEmpty()) channelRows else channelRows.map { row ->
+        val corrected = if (overrides.isEmpty()) prepared.channels else prepared.channels.map { row ->
             when (val forced = overrides[row.groupTitle]) {
                 null -> row
                 row.kind -> row
@@ -373,31 +443,16 @@ class PlaylistRepository(
         storage.channels.replaceKinds(playlist.id, replaceKinds, corrected)
 
         if (!keepSeries) {
-            storage.xtreamSeries.replaceAll(
-                playlist.id,
-                seriesList.map { item ->
-                    com.buco7854.opentv.core.model.XtreamSeries(
-                        playlistId = playlist.id,
-                        seriesId = item.seriesId,
-                        name = item.name,
-                        categoryName = seriesCategories[item.categoryId] ?: "Series",
-                        cover = item.cover,
-                        plot = item.plot,
-                        castNames = item.cast,
-                        genre = item.genre,
-                        rating = item.rating,
-                    )
-                },
-            )
+            storage.xtreamSeries.replaceAll(playlist.id, prepared.series)
         }
 
         storage.playlists.update(
             playlist.copy(
                 lastRefreshedMs = now,
-                channelCount = (if (keepLive) oldLive else live.size) +
-                    (if (keepVod) oldVod else vod.size) +
-                    (if (keepSeries) oldSeries else seriesList.size),
-                epgUrl = playlist.epgUrl ?: Xtream.xmltvUrl(creds),
+                channelCount = (if (keepLive) oldLive else prepared.liveCount) +
+                    (if (keepVod) oldVod else prepared.vodCount) +
+                    (if (keepSeries) oldSeries else prepared.seriesCount),
+                epgUrl = playlist.epgUrl ?: Xtream.xmltvUrl(playlist.credentials()!!),
             )
         )
     }
@@ -412,44 +467,7 @@ class PlaylistRepository(
         val batch = ArrayList<Channel>(500)
         var position = 0
         M3uParser.parse(lines, onHeader = { onEpgUrl(it.epgUrl) }) { entry ->
-            // User category overrides beat the heuristics.
-            var kind = entry.kind
-            var seriesKey = entry.seriesKey
-            var season = entry.season
-            var episode = entry.episode
-            when (val forced = overrides[entry.groupTitle]) {
-                null, kind -> {}
-                ChannelKind.SERIES -> {
-                    val c = ContentClassifier.asSeries(entry.name)
-                    kind = ChannelKind.SERIES
-                    seriesKey = c.seriesKey
-                    season = c.season
-                    episode = c.episode
-                }
-                else -> {
-                    kind = forced
-                    seriesKey = null
-                    season = null
-                    episode = null
-                }
-            }
-            batch.add(
-                Channel(
-                    playlistId = playlistId,
-                    name = entry.name,
-                    url = entry.url,
-                    logo = entry.logo,
-                    groupTitle = entry.groupTitle,
-                    tvgId = entry.tvgId,
-                    kind = kind,
-                    seriesKey = seriesKey,
-                    season = season,
-                    episode = episode,
-                    position = position++,
-                    catchupDays = if (kind == ChannelKind.LIVE) entry.catchupDays else 0,
-                    catchupSource = if (kind == ChannelKind.LIVE) entry.catchupSource else null,
-                )
-            )
+            batch.add(applyOverride(entry.toChannel(playlistId, position++), overrides))
             if (batch.size >= 500) {
                 storage.channels.insertAll(ArrayList(batch))
                 batch.clear()
@@ -458,6 +476,62 @@ class PlaylistRepository(
         if (batch.isNotEmpty()) storage.channels.insertAll(batch)
         return position
     }
+
+    private suspend fun parseChannels(
+        playlistId: Long,
+        lines: Sequence<String>,
+        onEpgUrl: (String?) -> Unit,
+    ): List<Channel> {
+        val rows = ArrayList<Channel>()
+        M3uParser.parse(lines, onHeader = { onEpgUrl(it.epgUrl) }) { entry ->
+            rows.add(entry.toChannel(playlistId, rows.size))
+        }
+        return rows
+    }
+
+    private fun M3uEntry.toChannel(playlistId: Long, position: Int) =
+        Channel(
+            playlistId = playlistId,
+            name = name,
+            url = url,
+            logo = logo,
+            groupTitle = groupTitle,
+            tvgId = tvgId,
+            kind = kind,
+            seriesKey = seriesKey,
+            season = season,
+            episode = episode,
+            position = position,
+            catchupDays = catchupDays,
+            catchupSource = catchupSource,
+        )
+
+    private fun applyOverride(row: Channel, overrides: Map<String, Int>): Channel =
+        when (val forced = overrides[row.groupTitle]) {
+            null, row.kind -> row.copy(
+                catchupDays = if (row.kind == ChannelKind.LIVE) row.catchupDays else 0,
+                catchupSource = if (row.kind == ChannelKind.LIVE) row.catchupSource else null,
+            )
+            ChannelKind.SERIES -> {
+                val classified = ContentClassifier.asSeries(row.name)
+                row.copy(
+                    kind = ChannelKind.SERIES,
+                    seriesKey = classified.seriesKey,
+                    season = classified.season,
+                    episode = classified.episode,
+                    catchupDays = 0,
+                    catchupSource = null,
+                )
+            }
+            else -> row.copy(
+                kind = forced,
+                seriesKey = null,
+                season = null,
+                episode = null,
+                catchupDays = if (forced == ChannelKind.LIVE) row.catchupDays else 0,
+                catchupSource = if (forced == ChannelKind.LIVE) row.catchupSource else null,
+            )
+        }
 
     /**
      * Record a category override and retag existing rows now. Series regrouping
