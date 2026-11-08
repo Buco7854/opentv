@@ -53,8 +53,8 @@
     <string name="shell_updated">mise à jour %1$s</string>
 
     <!-- Home -->
-    <string name="home_welcome_title">Bienvenue sur OpenTV</string>
-    <string name="home_welcome_subtitle">Ajoutez un compte Xtream, une URL de playlist M3U de votre fournisseur,\nou importez un fichier de playlist local.</string>
+    <string name="home_welcome_title">Ajoutez votre première playlist</string>
+    <string name="home_welcome_subtitle">Connectez un serveur OpenTV ou ajoutez la playlist de votre fournisseur.</string>
 
     <!-- Playlists -->
     <string name="playlist_added">Playlist ajoutée</string>
@@ -332,13 +332,13 @@
     <string name="hub_not_opentv">Cette adresse ne semble pas être un serveur OpenTV.</string>
     <string name="hub_unreachable">Serveur injoignable. Vérifiez l\'adresse et votre réseau.</string>
     <string name="hub_app_too_old">Ce serveur nécessite une version plus récente de l\'application.</string>
-    <string name="hub_choose_method">Comment souhaitez-vous vous connecter ?</string>
+    <string name="hub_choose_method">Accéder à votre compte</string>
     <string name="hub_method_password">Nom d\'utilisateur et mot de passe</string>
     <string name="hub_method_link">Associer cet appareil</string>
-    <string name="hub_link_browser_waiting">Terminez la connexion dans votre navigateur, puis revenez ici.</string>
+    <string name="hub_link_browser_waiting">Terminez la connexion dans votre navigateur, puis revenez dans OpenTV.</string>
     <string name="hub_method_link_description">Approuvez depuis un appareil déjà connecté.</string>
     <string name="hub_method_browser">Se connecter avec un navigateur</string>
-    <string name="hub_method_browser_description">Connectez-vous sur la page de votre serveur, comme il le demande.</string>
+    <string name="hub_method_browser_description">Utilisez une clé d’accès, la connexion unique ou votre mot de passe sur la page du serveur.</string>
     <string name="hub_sign_in">Se connecter</string>
     <string name="hub_signing_in">Connexion\u2026</string>
     <string name="hub_bad_credentials">Nom d\'utilisateur ou mot de passe incorrect.</string>
@@ -435,4 +435,31 @@
     <string name="watch_together_syncing">Synchronisation de la salle\u2026</string>
     <string name="watch_together_someone">Quelqu\'un</string>
     <string name="hub_link_scanned_by">Scanné par %1$s. Approuvez sur cet appareil uniquement s\'il s\'agit de votre compte.</string>
+    <string name="home_server_title">Connecter un serveur</string>
+    <string name="home_server_description">Retrouvez la bibliothèque de votre serveur, vos favoris et votre progression.</string>
+    <string name="home_local_title">Ajouter une playlist</string>
+    <string name="home_local_description">Utilisez vos identifiants Xtream, un lien M3U ou un fichier sur cet appareil.</string>
+    <string name="home_source_hint">Gérez les playlists, serveurs et réglages depuis Plus.</string>
+    <string name="shell_library">Bibliothèque</string>
+    <string name="hub_step_server">1 sur 2 · Serveur</string>
+    <string name="hub_step_account">2 sur 2 · Connexion</string>
+    <string name="hub_intro_connect">Connecter un serveur</string>
+    <string name="hub_intro_return">Se reconnecter</string>
+    <string name="hub_intro_sign_in">Se connecter</string>
+    <string name="hub_intro_description">Saisissez l’adresse de votre serveur OpenTV pour continuer.</string>
+    <string name="hub_account_description">Choisissez une méthode de connexion pour ce serveur.</string>
+    <string name="hub_show_password">Afficher le mot de passe</string>
+    <string name="hub_hide_password">Masquer le mot de passe</string>
+    <string name="hub_method_phone">Se connecter avec un téléphone</string>
+    <string name="hub_method_phone_description">Scannez un QR code pour vous connecter sans saisir avec la télécommande.</string>
+    <string name="hub_phone_scan">Scannez ce code avec votre téléphone, connectez-vous, puis approuvez cet appareil.</string>
+    <string name="common_home">Accueil</string>
+    <string name="common_browse">Parcourir</string>
+    <string name="common_more">Plus</string>
+    <string name="home_library_subtitle">Choisissez une playlist pour parcourir les chaînes, films et séries.</string>
+    <string name="home_on_device">Sur cet appareil</string>
+    <string name="home_item_count">%1$d éléments</string>
+    <string name="home_some_servers_unreachable">Certains serveurs sont injoignables. Réessayez pour charger leurs playlists.</string>
+    <string name="home_library_title">Bibliothèque</string>
+    <string name="home_your_playlists">Vos playlists</string>
 </resources>

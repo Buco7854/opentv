@@ -7,13 +7,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.unit.dp
+import com.buco7854.opentv.ui.theme.ViewingAccent
 
 /** Determinate progress bar with Material3's stop-dot and track gap disabled to match the web client. */
 @Composable
 fun OtvProgressBar(
     progress: () -> Float,
     modifier: Modifier = Modifier,
-    color: Color = MaterialTheme.colorScheme.onSurface,
+    color: Color = ViewingAccent,
     trackColor: Color = MaterialTheme.colorScheme.surfaceContainerHighest,
 ) {
     LinearProgressIndicator(
@@ -31,7 +32,7 @@ fun OtvProgressBar(
 @Composable
 fun OtvProgressBar(
     modifier: Modifier = Modifier,
-    color: Color = MaterialTheme.colorScheme.primary,
+    color: Color = ViewingAccent,
     trackColor: Color = MaterialTheme.colorScheme.surfaceContainerHighest,
 ) {
     LinearProgressIndicator(

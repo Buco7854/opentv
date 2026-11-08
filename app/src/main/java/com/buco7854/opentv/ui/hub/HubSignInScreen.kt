@@ -4,6 +4,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -14,6 +16,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -42,6 +47,12 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import com.buco7854.opentv.ui.theme.ViewingAccent
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -91,6 +102,17 @@ fun HubSignInScreen(hubId: Long?, onDone: (Long) -> Unit, onBack: () -> Unit) {
     )
     val state by viewModel.state.collectAsStateWithLifecycle()
     val backFocusRequester = remember { FocusRequester() }
+    // Password and MFA states intentionally carry no URL; retain the server context for the user.
+    var serverAddress by rememberSaveable { mutableStateOf("") }
+    LaunchedEffect(state) {
+        val address = when (val current = state) {
+            is HubSignInState.MethodChooser -> current.baseUrl
+            is HubSignInState.DeviceLink -> current.baseUrl
+            is HubSignInState.Probing -> current.url
+            else -> null
+        }
+        if (!address.isNullOrBlank()) serverAddress = address
+    }
 
     LaunchedEffect(state) {
         (state as? HubSignInState.Done)?.let { onDone(it.hubId) }
@@ -105,13 +127,7 @@ fun HubSignInScreen(hubId: Long?, onDone: (Long) -> Unit, onBack: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    Text(
-                        stringResource(
-                            if (hubId == null) R.string.hub_add_title else R.string.hub_sign_in_again,
-                        ),
-                    )
-                },
+                title = { Text("OpenTV", style = MaterialTheme.typography.titleMedium) },
                 navigationIcon = {
                     IconButton(
                         onClick = ::handleBack,
@@ -129,18 +145,26 @@ fun HubSignInScreen(hubId: Long?, onDone: (Long) -> Unit, onBack: () -> Unit) {
         },
     ) { padding ->
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(24.dp),
+            modifier = Modifier.fillMaxSize().padding(padding).imePadding()
+                .verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Column(
                 modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
+                val serverStep = state is HubSignInState.UrlEntry || state is HubSignInState.Probing ||
+                    state is HubSignInState.ProbeFailed || state is HubSignInState.UpdateRequired
+                SignInIntroduction(serverStep, hubId != null)
+                if (!serverStep && serverAddress.isNotBlank()) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Icon(Icons.Outlined.CheckCircle, contentDescription = null, tint = ViewingAccent)
+                        Text(serverAddress, style = MaterialTheme.typography.bodyMedium, maxLines = 2)
+                    }
+                }
                 when (val current = state) {
                     is HubSignInState.UrlEntry -> UrlEntryStep(current, viewModel::probe)
                     is HubSignInState.Probing -> BusyStep(stringResource(R.string.hub_checking))
@@ -180,9 +204,31 @@ fun HubSignInScreen(hubId: Long?, onDone: (Long) -> Unit, onBack: () -> Unit) {
 }
 
 @Composable
-private fun UrlEntryStep(state: HubSignInState.UrlEntry, onSubmit: (String) -> Unit) {
+internal fun SignInIntroduction(serverStep: Boolean, reauthenticating: Boolean) {
+    Text(
+        stringResource(if (serverStep) R.string.hub_step_server else R.string.hub_step_account),
+        style = MaterialTheme.typography.labelLarge,
+        color = ViewingAccent,
+    )
+    Text(
+        stringResource(
+            if (serverStep) R.string.hub_intro_connect
+            else if (reauthenticating) R.string.hub_intro_return
+            else R.string.hub_intro_sign_in,
+        ),
+        style = MaterialTheme.typography.titleLarge,
+        modifier = Modifier.semantics { heading() },
+    )
+    Text(
+        stringResource(if (serverStep) R.string.hub_intro_description else R.string.hub_account_description),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+@Composable
+internal fun UrlEntryStep(state: HubSignInState.UrlEntry, onSubmit: (String) -> Unit) {
     var url by rememberSaveable(state.url) { mutableStateOf(state.url) }
-    Text(stringResource(R.string.hub_type_description), style = MaterialTheme.typography.bodyMedium)
     OutlinedTextField(
         value = url,
         onValueChange = { url = it },
@@ -208,20 +254,8 @@ private fun UrlEntryStep(state: HubSignInState.UrlEntry, onSubmit: (String) -> U
 private fun MethodChooserStep(state: HubSignInState.MethodChooser, viewModel: HubSignInViewModel) {
     val context = LocalContext.current
     val handoff = remember(context) { HubBrowserHandoff(context) }
-    val browserFirst = state.browserSignInAvailable && handoff.hasBrowser()
-
-    // Browser-first. Asking which mechanism to use puts a question to the user that the
-    // server has already answered: whatever it supports, its own login page offers. Going
-    // there directly also means a method the server gains later needs no Android release.
-    // Auto-start once per address, so coming back from the browser step lands on a real
-    // chooser rather than bouncing straight out again.
-    var autoStarted by remember(state.baseUrl) { mutableStateOf(false) }
-    LaunchedEffect(state.baseUrl, browserFirst) {
-        if (browserFirst && !autoStarted && state.error == null) {
-            autoStarted = true
-            viewModel.startDeviceLink(DeviceLinkMode.BROWSER_SIGN_IN)
-        }
-    }
+    val hasBrowser = handoff.hasBrowser()
+    val browserFirst = state.browserSignInAvailable
 
     Text(stringResource(R.string.hub_choose_method), style = MaterialTheme.typography.titleMedium)
     state.error?.let { ErrorText(failureMessage(it)) }
@@ -230,15 +264,15 @@ private fun MethodChooserStep(state: HubSignInState.MethodChooser, viewModel: Hu
         OtvButton(
             onClick = { viewModel.startDeviceLink(DeviceLinkMode.BROWSER_SIGN_IN) },
             modifier = Modifier.fillMaxWidth(),
-        ) { Text(stringResource(R.string.hub_method_browser)) }
+        ) { Text(stringResource(if (hasBrowser) R.string.hub_method_browser else R.string.hub_method_phone)) }
         Text(
-            stringResource(R.string.hub_method_browser_description),
+            stringResource(if (hasBrowser) R.string.hub_method_browser_description else R.string.hub_method_phone_description),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
-    // The remaining routes stay reachable but stop competing for attention. A password-only
-    // server reached without a browser still lands here with password as the primary action.
+    // A TV can sign in on a phone via QR instead of typing credentials with a remote.
+    // Password-only servers retain a primary password action.
     if (state.passwordAvailable) {
         if (browserFirst) {
             OtvTextButton(onClick = viewModel::selectPassword, modifier = Modifier.fillMaxWidth()) {
@@ -264,12 +298,14 @@ private fun MethodChooserStep(state: HubSignInState.MethodChooser, viewModel: Hu
 }
 
 @Composable
-private fun PasswordStep(state: HubSignInState.Password, onSubmit: (String, String) -> Unit) {
+internal fun PasswordStep(state: HubSignInState.Password, onSubmit: (String, String) -> Unit) {
     var username by rememberSaveable(state.username) { mutableStateOf(state.username) }
     // Deliberately not rememberSaveable: saved instance state can be written to
     // disk by the system, and a password must not outlive the composition.
     var password by remember { mutableStateOf("") }
+    var passwordVisible by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
+    Text(stringResource(R.string.hub_method_password), style = MaterialTheme.typography.titleMedium)
     state.error?.let { ErrorText(failureMessage(it)) }
     OutlinedTextField(
         value = username,
@@ -287,7 +323,17 @@ private fun PasswordStep(state: HubSignInState.Password, onSubmit: (String, Stri
         onValueChange = { password = it },
         label = { Text(stringResource(R.string.playlist_field_password)) },
         singleLine = true,
-        visualTransformation = PasswordVisualTransformation(),
+        visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+        trailingIcon = {
+            IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                Icon(
+                    if (passwordVisible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                    contentDescription = stringResource(
+                        if (passwordVisible) R.string.hub_hide_password else R.string.hub_show_password,
+                    ),
+                )
+            }
+        },
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Go),
         keyboardActions = KeyboardActions(
             onGo = {
@@ -397,7 +443,14 @@ private fun ColumnScope.DeviceLinkStep(state: HubSignInState.DeviceLink) {
         HubEndpoints.isSameOrigin(hubBaseUrl, state.verificationUri)
     }
 
-    Text(stringResource(R.string.hub_link_title), style = MaterialTheme.typography.titleMedium)
+    Text(
+        stringResource(
+            if (state.mode == DeviceLinkMode.BROWSER_SIGN_IN) {
+                if (handoff.hasBrowser()) R.string.hub_method_browser else R.string.hub_method_phone
+            } else R.string.hub_link_title,
+        ),
+        style = MaterialTheme.typography.titleMedium,
+    )
     if (!trusted) {
         ErrorText(stringResource(R.string.hub_handoff_rejected))
         return
@@ -407,7 +460,7 @@ private fun ColumnScope.DeviceLinkStep(state: HubSignInState.DeviceLink) {
     // QR code for a second device to scan. The QR is still the answer where opening
     // fails or makes no sense — a television, or a device with no browser at all.
     val browserMode = state.mode == DeviceLinkMode.BROWSER_SIGN_IN
-    var showQr by remember(state.verificationUri) { mutableStateOf(!browserMode) }
+    var showQr by remember(state.verificationUri) { mutableStateOf(!browserMode || !handoff.hasBrowser()) }
     // A resumed link was already opened in a previous process; reopening it here would
     // bounce the user straight back out to the browser on top of the one already pending.
     var opened by remember(state.verificationUri) { mutableStateOf(state.resumed) }
@@ -422,7 +475,11 @@ private fun ColumnScope.DeviceLinkStep(state: HubSignInState.DeviceLink) {
     }
 
     Text(
-        stringResource(if (showQr) R.string.hub_link_scan else R.string.hub_link_browser_waiting),
+        stringResource(
+            if (showQr && browserMode) R.string.hub_phone_scan
+            else if (showQr) R.string.hub_link_scan
+            else R.string.hub_link_browser_waiting,
+        ),
         style = MaterialTheme.typography.bodyMedium,
     )
     if (showQr) {
@@ -432,9 +489,8 @@ private fun ColumnScope.DeviceLinkStep(state: HubSignInState.DeviceLink) {
             modifier = Modifier.align(Alignment.CenterHorizontally),
         )
         Text(
-            state.verificationUri,
+            hubBaseUrl,
             style = MaterialTheme.typography.bodyMedium,
-            fontFamily = FontFamily.Monospace,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth(),
@@ -454,7 +510,7 @@ private fun ColumnScope.DeviceLinkStep(state: HubSignInState.DeviceLink) {
             ),
         style = MaterialTheme.typography.bodyMedium,
         textAlign = TextAlign.Center,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite },
     )
     state.error?.let { ErrorText(failureMessage(it)) }
     if (rejected) ErrorText(stringResource(R.string.hub_handoff_rejected))
@@ -504,7 +560,12 @@ private fun MessageStep(message: String) {
 
 @Composable
 private fun ErrorText(message: String) {
-    Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+    Text(
+        message,
+        color = MaterialTheme.colorScheme.error,
+        style = MaterialTheme.typography.bodyMedium,
+        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
+    )
 }
 
 /** The state machine names the failure; the words live here, in both locales. */

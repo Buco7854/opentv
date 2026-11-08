@@ -11,8 +11,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
-/** Design-system buttons: 10dp corners instead of Material pills, shared with the web client. */
-val OtvButtonShape = RoundedCornerShape(10.dp)
+/** Shared web/Android action geometry: 8dp corners and a 48dp minimum target. */
+val OtvButtonShape = RoundedCornerShape(8.dp)
 
 @Composable
 fun OtvButton(
@@ -22,7 +22,7 @@ fun OtvButton(
     content: @Composable RowScope.() -> Unit,
 ) = Button(
     onClick = onClick,
-    modifier = modifier.focusHighlight(OtvButtonShape).heightIn(min = 44.dp),
+    modifier = modifier.focusHighlight(OtvButtonShape).heightIn(min = 48.dp),
     enabled = enabled,
     shape = OtvButtonShape,
     content = content,
@@ -36,7 +36,7 @@ fun OtvTonalButton(
     content: @Composable RowScope.() -> Unit,
 ) = Button(
     onClick = onClick,
-    modifier = modifier.focusHighlight(OtvButtonShape).heightIn(min = 44.dp),
+    modifier = modifier.focusHighlight(OtvButtonShape).heightIn(min = 48.dp),
     enabled = enabled,
     shape = OtvButtonShape,
     colors = ButtonDefaults.buttonColors(
@@ -55,7 +55,7 @@ fun OtvTextButton(
     content: @Composable RowScope.() -> Unit,
 ) = TextButton(
     onClick = onClick,
-    modifier = modifier.focusHighlight(OtvButtonShape),
+    modifier = modifier.focusHighlight(OtvButtonShape).heightIn(min = 48.dp),
     enabled = enabled,
     shape = OtvButtonShape,
     colors = ButtonDefaults.textButtonColors(

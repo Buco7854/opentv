@@ -53,8 +53,8 @@
     <string name="shell_updated">updated %1$s</string>
 
     <!-- Home -->
-    <string name="home_welcome_title">Welcome to OpenTV</string>
-    <string name="home_welcome_subtitle">Add an Xtream login, an M3U playlist URL from your provider,\nor import a local playlist file.</string>
+    <string name="home_welcome_title">Add your first playlist</string>
+    <string name="home_welcome_subtitle">Connect an OpenTV server or add a playlist from your provider.</string>
 
     <!-- Playlists -->
     <string name="playlist_added">Playlist added</string>
@@ -332,13 +332,13 @@
     <string name="hub_not_opentv">That address doesn\'t look like an OpenTV server.</string>
     <string name="hub_unreachable">Couldn\'t reach the server. Check the address and your network.</string>
     <string name="hub_app_too_old">This server needs a newer version of the app.</string>
-    <string name="hub_choose_method">How would you like to sign in?</string>
+    <string name="hub_choose_method">Continue to your account</string>
     <string name="hub_method_password">Username and password</string>
     <string name="hub_method_link">Link this device</string>
-    <string name="hub_link_browser_waiting">Finish signing in in your browser, then come back here.</string>
+    <string name="hub_link_browser_waiting">Your browser is ready for sign-in. Finish there, then return to OpenTV.</string>
     <string name="hub_method_link_description">Approve from a device that is already signed in.</string>
     <string name="hub_method_browser">Sign in with a browser</string>
-    <string name="hub_method_browser_description">Sign in on your server\'s own page, however it asks.</string>
+    <string name="hub_method_browser_description">Use a passkey, single sign-on or your password on the server’s sign-in page.</string>
     <string name="hub_sign_in">Sign in</string>
     <string name="hub_signing_in">Signing in\u2026</string>
     <string name="hub_bad_credentials">Wrong username or password.</string>
@@ -435,4 +435,31 @@
     <string name="watch_together_syncing">Synchronizing the room\u2026</string>
     <string name="watch_together_someone">Someone</string>
     <string name="hub_link_scanned_by">Scanned by %1$s. Approve on that device only if this is your account.</string>
+    <string name="home_server_title">Connect a server</string>
+    <string name="home_server_description">Use your server’s library and keep favorites and watch progress with you.</string>
+    <string name="home_local_title">Add a playlist</string>
+    <string name="home_local_description">Use an Xtream login, an M3U link or a playlist file on this device.</string>
+    <string name="home_source_hint">Manage playlists, servers and settings from More.</string>
+    <string name="shell_library">Library</string>
+    <string name="hub_step_server">1 of 2 · Server</string>
+    <string name="hub_step_account">2 of 2 · Sign in</string>
+    <string name="hub_intro_connect">Connect to a server</string>
+    <string name="hub_intro_return">Sign in again</string>
+    <string name="hub_intro_sign_in">Sign in</string>
+    <string name="hub_intro_description">Enter your OpenTV server address to continue.</string>
+    <string name="hub_account_description">Choose a sign-in method for this server.</string>
+    <string name="hub_show_password">Show password</string>
+    <string name="hub_hide_password">Hide password</string>
+    <string name="hub_method_phone">Sign in on your phone</string>
+    <string name="hub_method_phone_description">Scan a QR code and sign in without typing with your remote.</string>
+    <string name="hub_phone_scan">Scan this code with your phone’s camera, sign in, then approve this device.</string>
+    <string name="common_home">Home</string>
+    <string name="common_browse">Browse</string>
+    <string name="common_more">More</string>
+    <string name="home_library_subtitle">Choose a playlist to browse your live TV, movies and series.</string>
+    <string name="home_on_device">On this device</string>
+    <string name="home_item_count">%1$d items</string>
+    <string name="home_some_servers_unreachable">Some servers could not be reached. Retry to load their playlists.</string>
+    <string name="home_library_title">Library</string>
+    <string name="home_your_playlists">Your playlists</string>
 </resources>

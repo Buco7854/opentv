@@ -64,10 +64,10 @@ fun PosterGrid(
         return
     }
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(minSize = 112.dp),
+        columns = GridCells.Adaptive(minSize = 148.dp),
         contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         items(items, key = { it.id }) { item ->
             PosterCard(item = item, fallback = fallback, onClick = { onClick(item.id) })
@@ -94,14 +94,14 @@ fun PosterCard(
     onLongClick: (() -> Unit)? = null,
 ) {
     Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        shape = RoundedCornerShape(10.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.background),
         border = if (selected == true) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
         modifier = Modifier
-            .focusHighlight(RoundedCornerShape(16.dp))
+            .focusHighlight(RoundedCornerShape(10.dp))
             .dpadLongClick(onLongClick)
             // Clip before the clickable so the ripple stays inside the rounded corners.
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(10.dp))
             .combinedClickable(onClick = onClick, onLongClick = onLongClick),
     ) {
                 Column {
@@ -141,12 +141,12 @@ fun PosterCard(
                     // Fixed min height keeps cards uniform whether or not the title wraps.
                     Column(
                         Modifier
-                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                            .padding(horizontal = 2.dp, vertical = 10.dp)
                             .heightIn(min = if (item.subtitle != null) 56.dp else 40.dp),
                     ) {
                         Text(
                             item.title,
-                            style = MaterialTheme.typography.labelLarge,
+                            style = MaterialTheme.typography.titleSmall,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )

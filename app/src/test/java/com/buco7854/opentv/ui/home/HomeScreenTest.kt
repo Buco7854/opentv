@@ -3,86 +3,51 @@ package com.buco7854.opentv.ui.home
 import com.buco7854.opentv.core.model.Playlist
 import com.buco7854.opentv.source.SourceId
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Test
 
 class HomeScreenTest {
     @Test
-    fun localPlaylistKeepsLegacyActiveThenFirstSelection() {
-        val playlists = listOf(playlist(1), playlist(2))
-
-        assertEquals(
-            SourceId.LocalPlaylist(2),
-            homeSource(playlists, 2, emptyList(), catalogSourcesLoading = false),
-        )
-        assertEquals(
-            SourceId.LocalPlaylist(1),
-            homeSource(playlists, 99, emptyList(), catalogSourcesLoading = false),
-        )
+    fun `local sources are available before remote discovery completes`() {
+        val rows = homeSources(listOf(playlist(1, "Local", 42)), emptyList())
+        assertEquals(listOf(SourceId.LocalPlaylist(1)), rows.map { it.sourceId })
+        assertEquals(42, rows.single().itemCount)
     }
 
     @Test
-    fun hubOnlyInstallWaitsForDiscoveryThenOpensTheHubPlaylist() {
-        val hub = SourceId.Hub(4, 9)
-        val sources = listOf(CatalogSourceEntry(hub, "Remote"))
-
-        assertNull(homeSource(emptyList(), -1, sources, catalogSourcesLoading = true))
-        assertEquals(
-            hub,
-            homeSource(emptyList(), -1, sources, catalogSourcesLoading = false),
+    fun `latest local metadata wins over an older discovery snapshot without duplicate rows`() {
+        val rows = homeSources(
+            listOf(playlist(1, "Renamed", 42)),
+            listOf(CatalogSourceEntry(SourceId.LocalPlaylist(1), "Old", itemCount = 12)),
         )
+        assertEquals(1, rows.size)
+        assertEquals("Renamed", rows.single().title)
+        assertEquals(42, rows.single().itemCount)
     }
 
     @Test
-    fun anUnreachableServerIsNotAFirstRun() {
-        // Someone whose playlists all live on one server, on a morning the server does
-        // not answer. The welcome screen would tell them they have no playlists and
-        // invite them to add one they added long ago; say the server is unreachable.
-        assertEquals(
-            HomeState.UNREACHABLE,
-            homeState(emptyList(), emptyList(), catalogSourcesLoading = false, unreachableHubs = 1),
-        )
-        assertEquals(
-            HomeState.WELCOME,
-            homeState(emptyList(), emptyList(), catalogSourcesLoading = false, unreachableHubs = 0),
-        )
+    fun `a hub source keeps its server identity and actual count`() {
+        val source = CatalogSourceEntry(SourceId.Hub(2, 7), "Movies", "Home server", 120)
+        assertEquals(listOf(source), homeSources(emptyList(), listOf(source)))
     }
 
     @Test
-    fun oneFailedServerDoesNotHideAnotherThatAnswered() {
-        // Partial success is still content: hiding it behind a retry would lose the
-        // playlists we do have, which is worse than the failure it reports.
-        assertEquals(
-            HomeState.CONTENT,
-            homeState(
-                emptyList(),
-                listOf(CatalogSourceEntry(SourceId.Hub(4, 9), "Remote")),
-                catalogSourcesLoading = false,
-                unreachableHubs = 1,
-            ),
+    fun `local and remote playlists with the same numeric id remain separate sources`() {
+        val rows = homeSources(
+            listOf(playlist(7, "Local", 4)),
+            listOf(CatalogSourceEntry(SourceId.Hub(2, 7), "Remote", "Server", 8)),
         )
-        assertEquals(
-            HomeState.CONTENT,
-            homeState(
-                listOf(playlist(1)),
-                emptyList(),
-                catalogSourcesLoading = false,
-                unreachableHubs = 1,
-            ),
-        )
+        assertEquals(2, rows.size)
+        assertEquals(listOf(4, 8), rows.map { it.itemCount })
     }
 
     @Test
-    fun nothingIsDecidedBeforeBothSidesHaveReported() {
+    fun `a deleted local playlist cannot survive in an older discovery snapshot`() {
         assertEquals(
-            HomeState.LOADING,
-            homeState(null, emptyList(), catalogSourcesLoading = false, unreachableHubs = 1),
-        )
-        assertEquals(
-            HomeState.LOADING,
-            homeState(emptyList(), emptyList(), catalogSourcesLoading = true, unreachableHubs = 0),
+            emptyList<CatalogSourceEntry>(),
+            homeSources(emptyList(), listOf(CatalogSourceEntry(SourceId.LocalPlaylist(1), "Deleted"))),
         )
     }
 
-    private fun playlist(id: Long) = Playlist(id = id, name = "$id", url = null)
+    private fun playlist(id: Long, name: String, count: Int) =
+        Playlist(id = id, name = name, url = null, channelCount = count)
 }

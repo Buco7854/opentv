@@ -11,6 +11,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -22,6 +23,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -161,11 +163,8 @@ object Routes {
         hubId?.let { "$HUB_SIGN_IN?hubId=$it" } ?: HUB_SIGN_IN
 }
 
-/** Reauthentication resumes its caller; only adding a new connection opens its settings. */
-internal fun destinationAfterHubSignIn(
-    reauthenticatedHubId: Long?,
-    completedHubId: Long,
-): String? = if (reauthenticatedHubId == null) Routes.hubSettings(completedHubId) else null
+/** Reauthentication resumes its caller; a new connection lands in the populated library. */
+internal fun destinationAfterHubSignIn(reauthenticatedHubId: Long?): String? = if (reauthenticatedHubId == null) Routes.HOME else null
 
 internal data class CatalogSourceAvailability(
     val localPlaylistIds: List<Long>,
@@ -224,6 +223,9 @@ fun AppShell(
     val routeSource = backStack?.arguments?.getString("source")
         ?.let(SourceId::decode)
     var rememberedSource by rememberSaveable { mutableStateOf<String?>(null) }
+    // The dock replaces destination VMs, so keep Browse's explicit per-source choice in the shell.
+    var browseKinds by rememberSaveable { mutableStateOf(HashMap<String, Int>()) }
+    fun browseRoute(source: SourceId) = Routes.browse(source, browseKinds[source.encode()])
 
     // Dock destinations replace the stack like tabs; details push on top.
     fun navigateSection(target: String) = nav.navigate(target) {
@@ -257,7 +259,7 @@ fun AppShell(
         val availability = sourceAvailability ?: return@LaunchedEffect
         if (routeSource == null || availability.contains(routeSource)) return@LaunchedEffect
         rememberedSource = activeSource?.encode()
-        navigateSection(activeSource?.let(Routes::browse) ?: Routes.HOME)
+        navigateSection(activeSource?.let(::browseRoute) ?: Routes.HOME)
     }
     LaunchedEffect(activePlaylistId, sourceAvailability) {
         val availability = sourceAvailability ?: return@LaunchedEffect
@@ -268,45 +270,55 @@ fun AppShell(
     val dockHidden = route?.startsWith("player") == true
 
     val activeSection = when {
-        route?.startsWith("browse/") == true -> {
-            when (backStack?.arguments?.getInt("t")?.takeIf { it >= 0 } ?: ChannelKind.LIVE) {
-                ChannelKind.MOVIE -> DockSection.MOVIES
-                ChannelKind.SERIES -> DockSection.SERIES
-                else -> DockSection.LIVE
-            }
-        }
+        route == Routes.HOME -> DockSection.HOME
+        route?.startsWith("browse/") == true -> DockSection.BROWSE
         route == Routes.ALL_FAVORITES -> DockSection.FAVORITES
         route?.startsWith("search/") == true -> DockSection.SEARCH
-        else -> null
+        else -> DockSection.MORE
+    }
+    val wideNavigation = LocalConfiguration.current.let { it.screenWidthDp >= 840 && it.fontScale < 1.5f }
+    val openSection: (DockSection) -> Unit = { section ->
+        when (section) {
+            DockSection.HOME -> navigateSection(Routes.HOME)
+            DockSection.FAVORITES -> navigateSection(Routes.ALL_FAVORITES)
+            DockSection.SEARCH -> activeSource?.let { navigateSection(Routes.search(it)) }
+            DockSection.BROWSE -> activeSource?.let { navigateSection(browseRoute(it)) }
+            DockSection.MORE -> panelOpen = true
+        }
     }
 
     Scaffold(
-        bottomBar = {
-            if (!dockHidden) {
+        topBar = {
+            if (!dockHidden && wideNavigation) {
                 OpenTvDock(
                     hasActivePlaylist = activeSource != null,
                     activeSection = activeSection,
                     onOpenPanel = { panelOpen = true },
-                    onSection = { section ->
-                        when (section) {
-                            DockSection.FAVORITES -> navigateSection(Routes.ALL_FAVORITES)
-                            DockSection.SEARCH -> activeSource?.let {
-                                navigateSection(Routes.search(it))
-                            }
-                            else -> activeSource?.let {
-                                navigateSection(Routes.browse(it, section.tab))
-                            }
-                        }
-                    },
+                    onSection = openSection,
+                    wide = true,
+                )
+            }
+        },
+        bottomBar = {
+            if (!dockHidden && !wideNavigation) {
+                OpenTvDock(
+                    hasActivePlaylist = activeSource != null,
+                    activeSection = activeSection,
+                    onOpenPanel = { panelOpen = true },
+                    onSection = openSection,
                 )
             }
         },
     ) { padding ->
-        androidx.compose.foundation.layout.Box(Modifier.padding(padding)) {
+        androidx.compose.foundation.layout.Box(Modifier.padding(padding).consumeWindowInsets(padding)) {
             AppNav(
                 nav,
                 onActivePlaylist = viewModel::setActivePlaylist,
                 sourceAvailability = sourceAvailability,
+                browseKinds = browseKinds,
+                onBrowseKindChanged = { source, kind ->
+                    browseKinds = HashMap(browseKinds).apply { put(source.encode(), kind) }
+                },
             )
         }
     }
@@ -320,7 +332,7 @@ fun AppShell(
                 if (it is SourceId.LocalPlaylist) {
                     viewModel.setActivePlaylist(it.playlistId)
                 }
-                navigateSection(Routes.browse(it))
+                navigateSection(browseRoute(it))
             },
             onOpenAccount = { panelOpen = false; nav.navigate(Routes.account(it)) },
             onOpenDownloads = { panelOpen = false; nav.navigate(Routes.DOWNLOADS) },
@@ -352,6 +364,8 @@ internal fun AppNav(
     nav: NavHostController,
     onActivePlaylist: (Long) -> Unit,
     sourceAvailability: CatalogSourceAvailability?,
+    browseKinds: Map<String, Int>,
+    onBrowseKindChanged: (SourceId, Int) -> Unit,
 ) {
     // Quick fades instead of the default slow cross-fade.
     val fadeSpec = tween<Float>(180)
@@ -404,8 +418,8 @@ internal fun AppNav(
                     if (source is SourceId.LocalPlaylist) {
                         onActivePlaylist(source.playlistId)
                     }
-                    nav.navigate(Routes.browse(source)) {
-                        popUpTo(Routes.HOME) { inclusive = true }
+                    nav.navigate(Routes.browse(source, browseKinds[source.encode()])) {
+                        launchSingleTop = true
                     }
                 },
                 onConnectHub = { nav.navigate(Routes.HUB_SIGN_IN) },
@@ -436,9 +450,11 @@ internal fun AppNav(
             val hubId = entry.arguments!!.getLong("hubId").takeIf { it > 0 }
             HubSignInScreen(
                 hubId = hubId,
-                onDone = { completedHubId ->
+                onDone = { _ ->
                     nav.popBackStack()
-                    destinationAfterHubSignIn(hubId, completedHubId)?.let(nav::navigate)
+                    destinationAfterHubSignIn(hubId)?.let { destination ->
+                        nav.navigate(destination) { launchSingleTop = true }
+                    }
                 },
                 onBack = { nav.popBackStack() },
             )
@@ -483,6 +499,7 @@ internal fun AppNav(
                 sourceId = sourceId,
                 initialTab = entry.arguments!!.getInt("t").takeIf { it >= 0 },
                 initialGroup = entry.arguments!!.getString("g").orEmpty().ifEmpty { null },
+                onContentKindChanged = { onBrowseKindChanged(sourceId, it) },
                 onPlay = { item, live ->
                     val playlistId = (sourceId as? SourceId.LocalPlaylist)?.playlistId ?: -1L
                     targetFor(sourceId, item, live, playlistId, item.tvgId)

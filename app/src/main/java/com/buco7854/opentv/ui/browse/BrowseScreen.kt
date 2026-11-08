@@ -1,7 +1,6 @@
 package com.buco7854.opentv.ui.browse
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,7 +27,6 @@ import androidx.compose.material.icons.automirrored.outlined.ViewList
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.rounded.Favorite
-import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Person
@@ -40,6 +38,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -47,6 +46,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.Tab
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -65,6 +66,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.heightIn
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -115,6 +117,7 @@ fun BrowseScreen(
     sourceId: SourceId,
     initialTab: Int? = null,
     initialGroup: String? = null,
+    onContentKindChanged: (Int) -> Unit = {},
     onPlay: (item: CatalogItem, live: Boolean) -> Unit,
     onPlayHubCatchup: (item: CatalogItem, entry: CatalogGuideEntry) -> Unit,
     onOpenMovie: (ContentRef) -> Unit,
@@ -235,7 +238,6 @@ fun BrowseScreen(
                             val warn = info.maxConnections in 1..info.activeConnections
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.clickable { onOpenAccount() },
                             ) {
                                 Icon(
                                     Icons.Outlined.Person,
@@ -261,6 +263,11 @@ fun BrowseScreen(
                     }
                 },
                 actions = {
+                    if (account != null) {
+                        IconButton(onClick = onOpenAccount) {
+                            Icon(Icons.Outlined.Person, contentDescription = stringResource(R.string.account_title))
+                        }
+                    }
                     if (group != null && tab != ChannelKind.LIVE) {
                         IconButton(onClick = { viewModel.toggleGridView() }) {
                             Icon(
@@ -277,6 +284,27 @@ fun BrowseScreen(
         contentWindowInsets = WindowInsets(0.dp),
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
+            val contentKinds = listOf(ChannelKind.LIVE, ChannelKind.MOVIE, ChannelKind.SERIES)
+            PrimaryTabRow(selectedTabIndex = contentKinds.indexOf(tab).coerceAtLeast(0)) {
+                contentKinds.forEach { kind ->
+                    Tab(
+                        selected = tab == kind,
+                        onClick = {
+                            viewModel.selectContentKind(kind)
+                            onContentKindChanged(kind)
+                        },
+                        text = {
+                            Text(stringResource(when (kind) {
+                                ChannelKind.MOVIE -> R.string.common_movies
+                                ChannelKind.SERIES -> R.string.common_series
+                                else -> R.string.common_live
+                            }))
+                        },
+                        modifier = Modifier.focusHighlight(RoundedCornerShape(8.dp)),
+                    )
+                }
+            }
+
             val hasContent = groups.isNotEmpty() || items.isNotEmpty()
             if (hasContent) {
                 FilterField(
@@ -531,33 +559,27 @@ private fun GroupList(
         return
     }
     LazyColumn(
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
     ) {
         items(groups, key = { it.name }) { groupCount ->
             Card(
                 onClick = { onSelect(groupCount.name) },
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-                modifier = Modifier.focusHighlight(RoundedCornerShape(16.dp)),
+                shape = RoundedCornerShape(10.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.background),
+                modifier = Modifier.focusHighlight(RoundedCornerShape(10.dp)),
             ) {
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                    Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = 8.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(
-                        Icons.Outlined.Folder,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.width(14.dp))
                     Text(
                         groupCount.name,
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.weight(1f).padding(vertical = 10.dp),
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    Spacer(Modifier.width(16.dp))
                     Text(
                         "${groupCount.count}",
                         style = MaterialTheme.typography.labelLarge,
@@ -580,6 +602,7 @@ private fun GroupList(
                     }
                 }
             }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         }
     }
 }

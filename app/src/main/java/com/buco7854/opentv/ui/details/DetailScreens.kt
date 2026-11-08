@@ -3,6 +3,9 @@ package com.buco7854.opentv.ui.details
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -50,6 +53,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -81,6 +86,7 @@ import com.buco7854.opentv.ui.components.DownloadStateIcon
 import com.buco7854.opentv.ui.components.ExpandableText
 import com.buco7854.opentv.ui.components.FavoriteIcon
 import com.buco7854.opentv.ui.components.OtvButton
+import com.buco7854.opentv.ui.components.RequestInitialFocusOnTv
 import com.buco7854.opentv.ui.components.OtvMenuDefaults
 import com.buco7854.opentv.ui.components.OtvProgressBar
 import com.buco7854.opentv.ui.components.Pill
@@ -122,9 +128,9 @@ private fun metaChips(channel: CatalogItem, meta: Metadata?): List<String> = bui
 internal fun Poster(logo: String?, fallback: androidx.compose.ui.graphics.vector.ImageVector) {
     Box(
         Modifier
-            .fillMaxWidth()
-            .height(220.dp)
-            .clip(RoundedCornerShape(24.dp))
+            .width(144.dp)
+            .aspectRatio(2f / 3f)
+            .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh),
         contentAlignment = Alignment.Center,
     ) {
@@ -140,8 +146,30 @@ internal fun Poster(logo: String?, fallback: androidx.compose.ui.graphics.vector
                 model = logo,
                 contentDescription = null,
                 contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize().padding(12.dp),
+                modifier = Modifier.fillMaxSize(),
             )
+        }
+    }
+}
+
+/** Portrait and actions share one compact header; synopsis follows the primary task. */
+@Composable
+private fun DetailHeader(
+    logo: String?,
+    fallback: androidx.compose.ui.graphics.vector.ImageVector,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        if (maxWidth >= 600.dp) {
+            Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                Poster(logo, fallback)
+                Column(Modifier.weight(1f), content = content)
+            }
+        } else {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { Poster(logo, fallback) }
+                Column(content = content)
+            }
         }
     }
 }
@@ -250,59 +278,61 @@ fun MovieDetailScreen(
             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp),
         ) {
             item {
-                Poster(meta?.posterUrl ?: movie.imageUrl, Icons.Outlined.Movie)
-                Spacer(Modifier.height(18.dp))
-                Text(movie.title, style = MaterialTheme.typography.headlineMedium)
-                Spacer(Modifier.height(10.dp))
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    metaChips(movie, meta).take(3).forEach { Pill(it) }
-                    BadgeRow(mediaTags(movie.title))
+                DetailHeader(meta?.posterUrl ?: movie.imageUrl, Icons.Outlined.Movie) {
+                    Text(movie.title, style = MaterialTheme.typography.headlineMedium)
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        metaChips(movie, meta).take(3).forEach { Pill(it) }
+                        BadgeRow(mediaTags(movie.title))
+                    }
+                    Spacer(Modifier.height(24.dp))
+                    val playFocus = remember { FocusRequester() }
+                    RequestInitialFocusOnTv(playFocus, movie.ref)
+                    val progress = progressState.progressFor(movie)
+                    if (progress != null) {
+                        WatchProgressBar(progress, Modifier.fillMaxWidth())
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            stringResource(R.string.details_percent_watched, (progress * 100).toInt()),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(10.dp))
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        OtvButton(
+                            onClick = { onPlay(movie) },
+                            modifier = Modifier.weight(1f).height(48.dp).focusRequester(playFocus),
+                        ) {
+                            Icon(Icons.Rounded.PlayArrow, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text(stringResource(if (progress != null) R.string.common_resume else R.string.common_play))
+                        }
+                        if (sourceId is SourceId.LocalPlaylist || sourceId is SourceId.Hub) {
+                            DownloadSlot(
+                                state = downloadState,
+                                onDownload = {
+                                    scope.launch {
+                                        val blocked = viewModel.enqueue(movie)
+                                        snackbar.showSnackbar(
+                                            blocked
+                                                ?: resources.getString(
+                                                    R.string.downloads_started_generic,
+                                                ),
+                                        )
+                                    }
+                                },
+                            )
+                        }
+                    }
                 }
                 MetadataBlock(meta)
-                Spacer(Modifier.height(24.dp))
-                val progress = progressState.progressFor(movie)
-                if (progress != null) {
-                    WatchProgressBar(progress, Modifier.fillMaxWidth())
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        stringResource(R.string.details_percent_watched, (progress * 100).toInt()),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(10.dp))
-                }
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    OtvButton(
-                        onClick = { onPlay(movie) },
-                        modifier = Modifier.weight(1f).height(48.dp),
-                    ) {
-                        Icon(Icons.Rounded.PlayArrow, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text(stringResource(if (progress != null) R.string.common_resume else R.string.common_play))
-                    }
-                    if (sourceId is SourceId.LocalPlaylist || sourceId is SourceId.Hub) {
-                        DownloadSlot(
-                            state = downloadState,
-                            onDownload = {
-                                scope.launch {
-                                    val blocked = viewModel.enqueue(movie)
-                                    snackbar.showSnackbar(
-                                        blocked
-                                            ?: resources.getString(
-                                                R.string.downloads_started_generic,
-                                            ),
-                                    )
-                                }
-                            },
-                        )
-                    }
-                }
                 Spacer(Modifier.height(24.dp))
             }
         }
@@ -315,7 +345,7 @@ private fun DownloadSlot(state: Download?, onDownload: () -> Unit) {
     Box(
         Modifier
             .size(width = 60.dp, height = 48.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh),
         contentAlignment = Alignment.Center,
     ) {
@@ -618,7 +648,7 @@ internal fun EpisodeRow(
 ) {
     Card(
         onClick = onOpen,
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
         modifier = Modifier.padding(vertical = 4.dp).focusHighlight(),
     ) {
@@ -731,7 +761,7 @@ fun EpisodeDetailScreen(
                     Modifier
                         .fillMaxWidth()
                         .height(220.dp)
-                        .clip(RoundedCornerShape(24.dp))
+                        .clip(RoundedCornerShape(12.dp))
                         .background(MaterialTheme.colorScheme.surfaceContainerHigh),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -767,25 +797,9 @@ fun EpisodeDetailScreen(
                     (ep.durationSecs?.let { formatDuration(it) } ?: info?.infoLine)?.let { Pill(it) }
                     info?.rating?.let { Pill("★ %.1f".format(it)) }
                 }
-                plot?.let {
-                    Spacer(Modifier.height(14.dp))
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (seriesCast.isNotEmpty()) {
-                    Spacer(Modifier.height(14.dp))
-                    Text(
-                        stringResource(R.string.details_cast),
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    CastRow(seriesCast)
-                }
                 Spacer(Modifier.height(24.dp))
+                val playFocus = remember { FocusRequester() }
+                RequestInitialFocusOnTv(playFocus, ep.ref)
                 val progress = progressState.progressFor(ep)
                 if (progress != null) {
                     WatchProgressBar(progress, Modifier.fillMaxWidth())
@@ -803,7 +817,7 @@ fun EpisodeDetailScreen(
                 ) {
                     OtvButton(
                         onClick = { onPlay(ep) },
-                        modifier = Modifier.weight(1f).height(48.dp),
+                        modifier = Modifier.weight(1f).height(48.dp).focusRequester(playFocus),
                     ) {
                         Icon(Icons.Rounded.PlayArrow, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
@@ -825,6 +839,24 @@ fun EpisodeDetailScreen(
                             },
                         )
                     }
+                }
+                plot?.let {
+                    Spacer(Modifier.height(14.dp))
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (seriesCast.isNotEmpty()) {
+                    Spacer(Modifier.height(14.dp))
+                    Text(
+                        stringResource(R.string.details_cast),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    CastRow(seriesCast)
                 }
                 Spacer(Modifier.height(24.dp))
             }

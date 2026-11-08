@@ -28,15 +28,16 @@ import com.buco7854.opentv.R
 import com.buco7854.opentv.data.prefs.PlayerSettings
 
 /*
- * Cockpit design system: charcoal/white canvas, one blue accent, green for live, red for errors.
- * Dark canvas is neutral #161616, not pitch black.
+ * Shared web/Android design: neutral surfaces, inverted actions, blue focus and progress.
+ * Green is reserved for live/positive status and red for errors.
  */
 
 /** True when the current theme renders on the dark canvas. */
 val LocalOtvDark = staticCompositionLocalOf { true }
 
-/** Royal blue, the one accent on both canvases. */
-private val Accent = Color(0xFF3E6AE1)
+/** Shared web/Android accent; each canvas has its own contrast-safe shade. */
+val ViewingAccent: Color
+    @Composable @ReadOnlyComposable get() = if (LocalOtvDark.current) Color(0xFF8FA8FF) else Color(0xFF2A4BB8)
 private val GoodDark = Color(0xFF34C759)
 private val GoodLight = Color(0xFF12823B)
 private val BadDark = Color(0xFFF1544B)
@@ -51,8 +52,8 @@ val Coral: Color
     @Composable @ReadOnlyComposable get() = if (LocalOtvDark.current) BadDark else BadLight
 
 private val DarkScheme = darkColorScheme(
-    primary = Accent,
-    onPrimary = Color.White,
+    primary = Color(0xFFF5F5F5),
+    onPrimary = Color(0xFF161616),
     primaryContainer = Color(0xFF282828),
     onPrimaryContainer = Color(0xFFE8E8E8),
     secondary = GoodDark,
@@ -60,14 +61,14 @@ private val DarkScheme = darkColorScheme(
     // Selected pills (FilterChip) and tonal buttons: solid white on charcoal.
     secondaryContainer = Color(0xFFFFFFFF),
     onSecondaryContainer = Color(0xFF161616),
-    tertiary = BadDark,
+    tertiary = Color(0xFF8FA8FF),
     background = Color(0xFF161616),
-    onBackground = Color(0xFFFFFFFF),
+    onBackground = Color(0xFFF5F5F5),
     surface = Color(0xFF161616),
-    onSurface = Color(0xFFFFFFFF),
+    onSurface = Color(0xFFF5F5F5),
     // Must differ from every surfaceContainer* value, or contentColorFor mis-resolves them.
     surfaceVariant = Color(0xFF272727),
-    onSurfaceVariant = Color(0xFF9B9B9B),
+    onSurfaceVariant = Color(0xFFA8A8A8),
     surfaceContainerLowest = Color(0xFF111111),
     surfaceContainerLow = Color(0xFF1A1A1A),
     surfaceContainer = Color(0xFF1F1F1F),
@@ -79,7 +80,7 @@ private val DarkScheme = darkColorScheme(
 )
 
 private val LightScheme = lightColorScheme(
-    primary = Accent,
+    primary = Color(0xFF161616),
     onPrimary = Color.White,
     primaryContainer = Color(0xFFECECEC),
     onPrimaryContainer = Color(0xFF171A20),
@@ -87,7 +88,7 @@ private val LightScheme = lightColorScheme(
     onSecondary = Color.White,
     secondaryContainer = Color(0xFFFFFFFF),
     onSecondaryContainer = Color(0xFF171A20),
-    tertiary = BadLight,
+    tertiary = Color(0xFF2A4BB8),
     background = Color(0xFFFFFFFF),
     onBackground = Color(0xFF171A20),
     surface = Color(0xFFFFFFFF),
@@ -125,10 +126,10 @@ private val OpenTvTypography = Typography().let { base ->
         displayLarge = base.displayLarge.inter(FontWeight.Light),
         displayMedium = base.displayMedium.inter(FontWeight.Light),
         displaySmall = base.displaySmall.inter(FontWeight.Light),
-        headlineLarge = base.headlineLarge.inter(FontWeight.SemiBold, -0.4f),
-        headlineMedium = base.headlineMedium.inter(FontWeight.SemiBold, -0.4f),
+        headlineLarge = base.headlineLarge.inter(FontWeight.SemiBold, -0.3f).copy(fontSize = 24.sp, lineHeight = 32.sp),
+        headlineMedium = base.headlineMedium.inter(FontWeight.SemiBold, -0.3f).copy(fontSize = 24.sp, lineHeight = 32.sp),
         headlineSmall = base.headlineSmall.inter(FontWeight.SemiBold, -0.2f),
-        titleLarge = base.titleLarge.inter(FontWeight.SemiBold, -0.2f),
+        titleLarge = base.titleLarge.inter(FontWeight.SemiBold, -0.2f).copy(fontSize = 24.sp, lineHeight = 32.sp),
         titleMedium = base.titleMedium.inter(FontWeight.SemiBold, -0.1f),
         titleSmall = base.titleSmall.inter(FontWeight.Medium, 0f),
         bodyLarge = base.bodyLarge.inter(tracking = 0f),
@@ -142,10 +143,10 @@ private val OpenTvTypography = Typography().let { base ->
 
 private val OpenTvShapes = Shapes(
     extraSmall = RoundedCornerShape(8.dp),
-    small = RoundedCornerShape(10.dp),
+    small = RoundedCornerShape(8.dp),
     medium = RoundedCornerShape(12.dp),
-    large = RoundedCornerShape(14.dp),
-    extraLarge = RoundedCornerShape(20.dp),
+    large = RoundedCornerShape(12.dp),
+    extraLarge = RoundedCornerShape(12.dp),
 )
 
 @Composable
@@ -167,6 +168,12 @@ fun OpenTvTheme(content: @Composable () -> Unit) {
             }
         }
     }
+    OpenTvDesign(dark, content)
+}
+
+/** The same tokens wrap production, previews and rendered checks. */
+@Composable
+internal fun OpenTvDesign(dark: Boolean, content: @Composable () -> Unit) {
     CompositionLocalProvider(LocalOtvDark provides dark) {
         MaterialTheme(
             colorScheme = if (dark) DarkScheme else LightScheme,

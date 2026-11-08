@@ -4,7 +4,7 @@ import android.content.res.Configuration
 import android.view.KeyEvent
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.border
-import androidx.compose.material3.MaterialTheme
+import com.buco7854.opentv.ui.theme.ViewingAccent
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -42,7 +42,7 @@ fun Modifier.focusHighlight(shape: Shape = RoundedCornerShape(16.dp)): Modifier 
         .scale(scale)
         .border(
             width = 2.dp,
-            color = if (focused) MaterialTheme.colorScheme.onSurface else Color.Transparent,
+            color = if (focused) ViewingAccent else Color.Transparent,
             shape = shape,
         )
 }

@@ -31,11 +31,11 @@ class RoutesIdentityTest {
     }
 
     @Test
-    fun reauthenticationReturnsToItsCallerWhileANewHubOpensSettings() {
-        assertNull(destinationAfterHubSignIn(reauthenticatedHubId = 42, completedHubId = 42))
+    fun reauthenticationReturnsToItsCallerWhileANewHubOpensTheLibrary() {
+        assertNull(destinationAfterHubSignIn(reauthenticatedHubId = 42))
         assertEquals(
-            Routes.hubSettings(42),
-            destinationAfterHubSignIn(reauthenticatedHubId = null, completedHubId = 42),
+            Routes.HOME,
+            destinationAfterHubSignIn(reauthenticatedHubId = null),
         )
     }
 

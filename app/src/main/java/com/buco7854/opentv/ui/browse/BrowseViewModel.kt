@@ -160,6 +160,17 @@ class BrowseViewModel private constructor(
         if (initialGroup != null) group.value = initialGroup
     }
 
+    /** Content kinds are local Browse tabs; switching never carries a category across kinds. */
+    fun selectContentKind(kind: Int) {
+        if (kind !in listOf(ChannelKind.LIVE, ChannelKind.MOVIE, ChannelKind.SERIES) || kind == tab.value) return
+        groupsGeneration++
+        clearListing()
+        mutableCatalog.value = BrowseCatalogState()
+        group.value = null
+        filter.value = ""
+        tab.value = kind
+    }
+
     fun consumeMessage() {
         mutableMessage.value = null
     }

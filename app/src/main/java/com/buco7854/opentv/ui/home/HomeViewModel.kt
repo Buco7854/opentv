@@ -8,7 +8,6 @@ import com.buco7854.opentv.core.log.rethrowCancellation
 import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.R
 import com.buco7854.opentv.core.model.Playlist
-import com.buco7854.opentv.data.prefs.PlayerSettings
 import com.buco7854.opentv.diag.ErrorLog
 import com.buco7854.opentv.hub.HubUnauthorizedException
 import com.buco7854.opentv.source.SourceId
@@ -23,6 +22,7 @@ data class CatalogSourceEntry(
     val sourceId: SourceId,
     val title: String,
     val hubName: String? = null,
+    val itemCount: Int? = null,
 )
 
 class HomeViewModel(app: Application) : AndroidViewModel(app) {
@@ -41,7 +41,6 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     // Nullable presentation types preserve an explicit loading state before
     // either cold persistence flow has emitted its first value.
     val playlists: Flow<List<Playlist>?> = graph.playlists.playlists
-    val settings: Flow<PlayerSettings?> = graph.playerPrefs.settings
 
     private val _catalogSources = MutableStateFlow<List<CatalogSourceEntry>>(emptyList())
     val catalogSources: StateFlow<List<CatalogSourceEntry>> = _catalogSources
@@ -81,8 +80,9 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             ) { local, hubs, _ -> local to hubs }.collectLatest { (local, hubs) ->
                 _catalogSourcesLoading.value = true
                 val entries = local.map {
-                    CatalogSourceEntry(SourceId.LocalPlaylist(it.id), it.name)
+                    CatalogSourceEntry(SourceId.LocalPlaylist(it.id), it.name, itemCount = it.channelCount)
                 }.toMutableList()
+                _catalogSources.value = entries.toList()
                 var unreachable = 0
                 hubs.forEach { hub ->
                     val client = graph.hubs.clientFor(hub.id)
@@ -109,8 +109,10 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                                 sourceId = SourceId.Hub(hub.id, playlist.id),
                                 title = playlist.name,
                                 hubName = hub.name,
+                                itemCount = playlist.channelCount,
                             )
                         }
+                    _catalogSources.value = entries.toList()
                 }
                 _catalogSources.value = entries
                 _unreachableHubs.value = unreachable

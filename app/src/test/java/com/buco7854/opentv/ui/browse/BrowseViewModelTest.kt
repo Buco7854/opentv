@@ -27,6 +27,43 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class BrowseViewModelTest {
     @Test
+    fun `changing Browse content kind clears the old category and filter`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        try {
+            val gateway = CatalogGatewayFake(SourceId.Hub(3, 9))
+            val viewModel = BrowseViewModel(gateway.source, gateway)
+            advanceUntilIdle()
+            viewModel.group.value = "News"
+            viewModel.filter.value = "evening"
+            viewModel.selectContentKind(ChannelKind.MOVIE)
+            advanceUntilIdle()
+            assertEquals(ChannelKind.MOVIE, viewModel.tab.value)
+            assertEquals(null, viewModel.group.value)
+            assertEquals("", viewModel.filter.value)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun `selecting the current Browse tab preserves its category and filter`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        try {
+            val gateway = CatalogGatewayFake(SourceId.Hub(3, 9))
+            val viewModel = BrowseViewModel(gateway.source, gateway)
+            advanceUntilIdle()
+            viewModel.group.value = "News"
+            viewModel.filter.value = "evening"
+            viewModel.selectContentKind(ChannelKind.LIVE)
+            advanceUntilIdle()
+            assertEquals("News", viewModel.group.value)
+            assertEquals("evening", viewModel.filter.value)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
     fun `local source preserves gateway group ordering and counts`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         try {

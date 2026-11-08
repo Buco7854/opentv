@@ -1,21 +1,27 @@
 package com.buco7854.opentv.ui.home
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.PlaylistPlay
 import androidx.compose.material.icons.outlined.Add
-import com.buco7854.opentv.ui.components.OtvButton
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -28,17 +34,27 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.buco7854.opentv.R
 import com.buco7854.opentv.core.model.Playlist
 import com.buco7854.opentv.source.SourceId
+import com.buco7854.opentv.source.encode
+import com.buco7854.opentv.ui.components.OtvButton
+import com.buco7854.opentv.ui.components.OtvProgressBar
+import com.buco7854.opentv.ui.components.OtvTextButton
+import com.buco7854.opentv.ui.components.OtvTonalButton
 import com.buco7854.opentv.ui.components.PlaylistDialog
-import com.buco7854.opentv.ui.components.SourceUnreachable
+import com.buco7854.opentv.ui.components.focusHighlight
 
-/** Forwards into the active (or first) playlist, or greets a fresh install. */
+/** Home is a stable library overview. Opening a source is always an explicit action. */
 @Composable
 fun HomeScreen(
     onOpenSource: (SourceId) -> Unit,
@@ -46,10 +62,10 @@ fun HomeScreen(
     viewModel: HomeViewModel = viewModel(),
 ) {
     val playlists by viewModel.playlists.collectAsStateWithLifecycle(initialValue = null)
-    val settings by viewModel.settings.collectAsStateWithLifecycle(initialValue = null)
     val catalogSources by viewModel.catalogSources.collectAsStateWithLifecycle()
     val catalogSourcesLoading by viewModel.catalogSourcesLoading.collectAsStateWithLifecycle()
     val unreachableHubs by viewModel.unreachableHubs.collectAsStateWithLifecycle()
+    val busy by viewModel.busy.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     var showAdd by remember { mutableStateOf(false) }
@@ -61,60 +77,17 @@ fun HomeScreen(
         }
     }
 
-    // Forward once both the list and the saved active id are known.
-    LaunchedEffect(playlists, settings, catalogSources, catalogSourcesLoading) {
-        homeSource(
-            playlists = playlists,
-            activePlaylistId = settings?.activePlaylistId,
-            catalogSources = catalogSources,
-            catalogSourcesLoading = catalogSourcesLoading,
-        )?.let(onOpenSource)
-    }
-
-    Box(Modifier.fillMaxSize()) {
-        when (homeState(playlists, catalogSources, catalogSourcesLoading, unreachableHubs)) {
-            HomeState.LOADING -> CircularProgressIndicator(
-                Modifier.align(Alignment.Center),
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            HomeState.UNREACHABLE -> SourceUnreachable(
-                onRetry = viewModel::retryCatalogSources,
-            )
-            HomeState.WELCOME -> Column(
-                modifier = Modifier.fillMaxSize().padding(32.dp),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(96.dp)
-                        .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(20.dp)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Outlined.PlaylistPlay,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(48.dp),
-                    )
-                }
-                Spacer(Modifier.height(24.dp))
-                Text(stringResource(R.string.home_welcome_title), style = MaterialTheme.typography.titleLarge)
-                Text(
-                    stringResource(R.string.home_welcome_subtitle),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 8.dp),
-                )
-                Spacer(Modifier.height(24.dp))
-                OtvButton(onClick = { showAdd = true }) {
-                    Icon(Icons.Outlined.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.size(8.dp))
-                    Text(stringResource(R.string.shell_add_playlist))
-                }
-            }
-            HomeState.CONTENT -> {}
-        }
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        HomeLibrary(
+            sources = homeSources(playlists, catalogSources),
+            loading = playlists == null || catalogSourcesLoading,
+            unreachableHubs = unreachableHubs,
+            busy = busy,
+            onOpenSource = onOpenSource,
+            onConnectHub = onConnectHub,
+            onAddPlaylist = { showAdd = true },
+            onRetry = viewModel::retryCatalogSources,
+        )
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
     }
 
@@ -133,38 +106,120 @@ fun HomeScreen(
     }
 }
 
-internal enum class HomeState { LOADING, UNREACHABLE, WELCOME, CONTENT }
-
-/**
- * What an empty home screen actually means.
- *
- * The welcome is a first-run screen, so it may only appear when we know there is
- * nothing to show. A server that refused to answer is not an account without
- * playlists, and someone whose playlists all live on a server would otherwise be
- * told they have none and asked to add one they already have.
- */
-internal fun homeState(
-    playlists: List<Playlist>?,
-    catalogSources: List<CatalogSourceEntry>,
-    catalogSourcesLoading: Boolean,
+/** Stateless so preview and production use exactly the same layout and state treatment. */
+@Composable
+internal fun HomeLibrary(
+    sources: List<CatalogSourceEntry>,
+    loading: Boolean,
     unreachableHubs: Int,
-): HomeState = when {
-    playlists == null || catalogSourcesLoading -> HomeState.LOADING
-    playlists.isNotEmpty() || catalogSources.isNotEmpty() -> HomeState.CONTENT
-    unreachableHubs > 0 -> HomeState.UNREACHABLE
-    else -> HomeState.WELCOME
+    busy: Boolean,
+    onOpenSource: (SourceId) -> Unit,
+    onConnectHub: () -> Unit,
+    onAddPlaylist: () -> Unit,
+    onRetry: () -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier.widthIn(max = 960.dp).fillMaxSize(),
+        contentPadding = PaddingValues(24.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        stringResource(R.string.home_library_title),
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.weight(1f).semantics { heading() },
+                    )
+                    if (sources.isNotEmpty()) {
+                        IconButton(onClick = onAddPlaylist, enabled = !busy, modifier = Modifier.focusHighlight()) {
+                            Icon(Icons.Outlined.Add, contentDescription = stringResource(R.string.home_local_title))
+                        }
+                    }
+                }
+                if (sources.isEmpty()) {
+                    Text(
+                        stringResource(R.string.home_welcome_subtitle),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        if (busy) item { OtvProgressBar(Modifier.fillMaxWidth()) }
+        if (sources.isNotEmpty()) {
+            item { Text(stringResource(R.string.home_your_playlists), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(vertical = 8.dp)) }
+            items(sources, key = { it.sourceId.encode() }) { source ->
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp)
+                            .focusHighlight(RoundedCornerShape(12.dp)).clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceContainer)
+                            .clickable(role = Role.Button, onClick = { onOpenSource(source.sourceId) })
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(source.title, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                listOfNotNull(
+                                    source.hubName ?: stringResource(R.string.home_on_device),
+                                    source.itemCount?.let { stringResource(R.string.home_item_count, it) },
+                                ).joinToString(" · "),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, contentDescription = null, modifier = Modifier.size(20.dp))
+                    }
+                }
+            }
+        }
+        if (loading) {
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    Text(stringResource(R.string.common_loading), style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        }
+        if (unreachableHubs > 0) {
+            item {
+                Column {
+                    Text(stringResource(R.string.home_some_servers_unreachable), style = MaterialTheme.typography.bodyMedium)
+                    OtvTextButton(onClick = onRetry) { Text(stringResource(R.string.hub_retry)) }
+                }
+            }
+        }
+        if (!loading && sources.isEmpty() && unreachableHubs == 0) {
+            item {
+                Text(stringResource(R.string.home_welcome_title), style = MaterialTheme.typography.titleMedium)
+            }
+        }
+        if (!loading || sources.isNotEmpty()) item {
+            Column(Modifier.widthIn(max = 480.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (sources.isEmpty() && unreachableHubs == 0) {
+                    OtvButton(onClick = onConnectHub, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                        Text(stringResource(R.string.home_server_title))
+                    }
+                    OtvTonalButton(onClick = onAddPlaylist, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                        Text(stringResource(R.string.home_local_title))
+                    }
+                } else {
+                    OtvTextButton(onClick = onConnectHub, enabled = !busy) {
+                        Text(stringResource(R.string.home_server_title))
+                    }
+                }
+            }
+        }
+    }
 }
 
-internal fun homeSource(
-    playlists: List<Playlist>?,
-    activePlaylistId: Long?,
-    catalogSources: List<CatalogSourceEntry>,
-    catalogSourcesLoading: Boolean,
-): SourceId? {
-    val local = playlists ?: return null
-    val active = activePlaylistId ?: return null
-    if (local.isNotEmpty()) {
-        return SourceId.LocalPlaylist(local.firstOrNull { it.id == active }?.id ?: local.first().id)
-    }
-    return if (catalogSourcesLoading) null else catalogSources.firstOrNull()?.sourceId
+/** Keep local sources available during remote discovery, and never display a source twice. */
+internal fun homeSources(playlists: List<Playlist>?, sources: List<CatalogSourceEntry>): List<CatalogSourceEntry> {
+    val local = playlists?.map {
+        CatalogSourceEntry(SourceId.LocalPlaylist(it.id), it.name, itemCount = it.channelCount)
+    } ?: sources.filter { it.sourceId is SourceId.LocalPlaylist }
+    return (local + sources.filterNot { it.sourceId is SourceId.LocalPlaylist }).distinctBy { it.sourceId }
 }
