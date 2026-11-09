@@ -170,6 +170,20 @@ internal class PersistentSessionService(
         cleanup.sessionRevoked(userId, null)
     }
 
+    suspend fun revokeOthers(userId: String, currentSessionId: String, atMs: Long) {
+        val revokedIds = db.useWriterConnection { connection ->
+            connection.immediateTransaction {
+                val ids = db.sessions().activeForUser(userId)
+                    .filter { it.id != currentSessionId }.map { it.id }
+                db.sessions().revokeOthers(userId, currentSessionId, atMs)
+                ids
+            }
+        }
+        // Keep the current session's playback and download capabilities intact. Individual
+        // revocations use the same cleanup seam as administrator and sign-out operations.
+        revokedIds.forEach { cleanup.sessionRevoked(userId, it) }
+    }
+
     suspend fun revoke(userId: String, sessionId: String, atMs: Long) {
         db.sessions().revoke(sessionId, atMs)
         cleanup.sessionRevoked(userId, sessionId)

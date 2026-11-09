@@ -1,5 +1,23 @@
 # Account and privacy
 
+## Your OpenTV account
+
+In the web client, open **More → Your account** to manage security, watch
+progress and signed-in devices. From Android, open **More → Connected servers**,
+choose the server, then **Your account**. These server account controls open in
+a browser; a TV offers a QR code instead.
+
+**Watch progress** lists your saved positions by title. Remove a position to
+start that title from the beginning, or clear all saved progress. Entries whose
+content has disappeared can still be removed. This changes only your account's
+progress on that server.
+
+**Sessions** lists the browsers and apps signed in to your account, with their
+last activity and expiry. The current browser is marked. You can sign out one
+device, every other session, or all sessions. Signing out an Android app session
+ends its server playback and asks that app to sign in again; it does not remove
+its standalone playlists.
+
 ## Account monitor
 
 For Xtream logins, a dedicated account page shows your active and maximum connections and your plan expiry, so you can see at a glance whether you have a free connection slot.

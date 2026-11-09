@@ -81,6 +81,7 @@ class AuthService(
     private val accounts = AuthAccountService(db, clock, playlistExists)
     private val credentials = AuthCredentialService(db, config, clock)
     internal val requestAuthenticator = RequestAuthenticator(sessionService)
+    private val accountManagement = AccountManagementService(db, sessionService, resumeTitles, clock)
     internal val flows = AuthFlowService(
         db,
         config,
@@ -585,6 +586,13 @@ class AuthService(
         if (all) revokeUserSessions(actor.userId, now)
         else revokeSessionInternal(actor.userId, actor.authSessionId, now)
     }
+
+    suspend fun ownProgress(actor: Actor): List<AccountProgressDto> = accountManagement.progress(actor)
+    suspend fun deleteOwnProgress(actor: Actor, contentId: String) = accountManagement.deleteProgress(actor, contentId)
+    suspend fun clearOwnProgress(actor: Actor) = accountManagement.clearProgress(actor)
+    suspend fun ownSessions(actor: Actor): List<AuthSessionDto> = accountManagement.sessions(actor)
+    suspend fun revokeOwnSession(actor: Actor, sessionId: String) = accountManagement.revokeSession(actor, sessionId)
+    suspend fun revokeOtherSessions(actor: Actor) = accountManagement.revokeOtherSessions(actor)
 
     suspend fun adminUsers(actor: Actor): List<AdminUserDto> =
         userAdministration.users(actor)

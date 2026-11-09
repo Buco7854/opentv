@@ -416,7 +416,7 @@ function PasskeyList({ credentials, onRemove }: {
   );
 }
 
-export function SecurityScreen() {
+export function SecurityScreen({ embedded = false }: { embedded?: boolean }) {
   const auth = useAuth();
   const navigate = useNavigate();
   const beginCeremony = useCeremonySignal();
@@ -575,12 +575,12 @@ export function SecurityScreen() {
 
   return (
     <div className="security-page">
-      <ScreenHeader
+      {!embedded && <ScreenHeader
         compact
         title={tx('securityTitle')}
         subtitle={<span className="subtitle">{tx('securitySubtitle')}</span>}
         onBack={() => navigate(-1)}
-      />
+      />}
       <div className="security-content">
         <ErrorNotice message={error} />
 
@@ -669,7 +669,7 @@ export function SecurityScreen() {
         )}
         {!passwordAccount && <p className="auth-hint">{tx('noPasswordAccount')}</p>}
 
-        <SecurityCard icon="logout" title={tx('sessionsCard')} subtitle={tx('sessionsCardBody')}>
+        {!embedded && <SecurityCard icon="logout" title={tx('sessionsCard')} subtitle={tx('sessionsCardBody')}>
           <div className="actions">
             <button className="btn tonal" disabled={working} onClick={() => void logout(false)}>
               {tx('currentLogout')}
@@ -679,7 +679,7 @@ export function SecurityScreen() {
               {tx('allLogout')}
             </button>
           </div>
-        </SecurityCard>
+        </SecurityCard>}
       </div>
 
       {addingTotp && (

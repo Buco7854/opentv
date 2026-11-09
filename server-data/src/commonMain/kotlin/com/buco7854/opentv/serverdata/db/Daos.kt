@@ -185,6 +185,12 @@ interface SessionDao {
 
     @Query("""
         UPDATE auth_sessions SET revokedAtMs = :atMs
+        WHERE userId = :userId AND id != :exceptSessionId AND revokedAtMs IS NULL
+    """)
+    suspend fun revokeOthers(userId: String, exceptSessionId: String, atMs: Long): Int
+
+    @Query("""
+        UPDATE auth_sessions SET revokedAtMs = :atMs
         WHERE authMethod = 'PASSWORD' AND revokedAtMs IS NULL
     """)
     suspend fun revokePasswordSessions(atMs: Long): Int
@@ -380,6 +386,9 @@ interface ActivityDao {
 
     @Query("DELETE FROM user_resume WHERE userId = :userId AND contentId = :contentId")
     suspend fun deleteResume(userId: String, contentId: String)
+
+    @Query("DELETE FROM user_resume WHERE userId = :userId")
+    suspend fun clearResumeForUser(userId: String)
 
     @Query("""
         DELETE FROM user_resume WHERE userId = :userId

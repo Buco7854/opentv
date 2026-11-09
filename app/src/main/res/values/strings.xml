@@ -365,9 +365,9 @@
     <string name="hub_signed_in_as">Signed in as %1$s</string>
     <string name="hub_remove_download_after_pull">Remove from server after download</string>
     <string name="hub_remove_download_after_pull_description">Off by default because the server file may be shared with other users.</string>
-    <string name="hub_open_account">Account and security</string>
+    <string name="hub_open_account">Your account</string>
     <string name="hub_opens_in_browser">Opens in your browser</string>
-    <string name="hub_open_account_description">Manage your password, two-factor authentication and sessions in a browser.</string>
+    <string name="hub_open_account_description">Manage security, watch progress and signed-in devices in a browser.</string>
     <string name="hub_open_admin">Administration</string>
     <string name="hub_open_admin_description">Manage users, playlists and activity in a browser.</string>
     <string name="hub_open_sessions">Now watching</string>

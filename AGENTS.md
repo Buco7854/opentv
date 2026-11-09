@@ -422,6 +422,14 @@ absent from the initial bundle.
 - Android More separates local playlists from connected server identities. Server playlists
   and their capability-driven operations live in the server workspace. Its browser management
   link uses `/?manage=playlist`, which must also open for an empty server library.
+- `/security` is the shared Your account entry, including security, watch progress and
+  signed-in sessions; Android opens it from the server workspace. Self-service management
+  under `/auth/progress` and `/auth/sessions` derives ownership only from the current actor,
+  including removal of orphaned progress. Revoking other sessions preserves the current one
+  and uses the existing playback/download cleanup policy.
+- Android Browse puts its title, tabs, view controls and filter in the same lazy scrolling
+  host as catalog rows, including loading, empty and error states. Keep that host stable
+  while typing a filter; replacing it on each request loses input focus and scroll state.
 - `DownloadStateIcon` is the single contextual `POST_NOTIFICATIONS` request seam for every
   download source, including hub downloads. It asks only on Android 13+ and always invokes the
   enqueue callback immediately, so denial hides progress notification UI but never blocks work.

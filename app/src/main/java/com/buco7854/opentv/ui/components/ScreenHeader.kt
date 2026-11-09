@@ -30,6 +30,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import com.buco7854.opentv.R
 import com.buco7854.opentv.ui.shell.libraryControl
@@ -43,11 +44,12 @@ internal fun ScreenHeader(
     supportingText: List<String> = emptyList(),
     backModifier: Modifier = Modifier,
     titleStyle: TextStyle = utilityTitleStyle(),
+    horizontalPadding: Dp? = null,
     actions: (@Composable RowScope.() -> Unit)? = null,
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background)) {
         val narrow = maxWidth < 640.dp
-        Column(Modifier.padding(horizontal = if (narrow) 16.dp else 24.dp, vertical = 4.dp)) {
+        Column(Modifier.padding(horizontal = horizontalPadding ?: if (narrow) 16.dp else 24.dp, vertical = 4.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (onBack != null) HeaderIconButton(Icons.AutoMirrored.Outlined.ArrowBack,
                     stringResource(R.string.common_back), onBack, backModifier)

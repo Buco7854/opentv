@@ -68,10 +68,13 @@ Choose your server under **More → Connected servers** to see its playlists,
 connection and account actions. **On this device** contains only local playlists;
 adding a playlist there does not add one to your server.
 
-The server workspace includes **Account and security**
-(password, two-factor, sessions), and, if your account is an administrator,
-**Administration** and **Now watching**. On a TV, where a browser is awkward or
-absent, the app shows a QR code to open the page on your phone.
+The server workspace includes **Your account**, with sections for security,
+watch progress and signed-in devices. You can remove saved progress, sign out a
+device, or sign out every other session while keeping the current browser signed
+in. Administrators also have **Administration** and **Now watching**. On a TV,
+where a browser is awkward or absent, the app shows a QR code to open the page on
+your phone. The browser has its own session; the app appears separately in the
+session list, so signing it out asks the app to sign in again.
 
 ## Watching
 

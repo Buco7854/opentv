@@ -327,7 +327,7 @@ function PlaylistsPanel({ activeId, downloading, onClose }: {
             </button>
             <button className="panel-row" onClick={() => { onClose(); navigate('/security'); }}>
               <Icon name="person" />
-              <div className="body"><div className="name">{t('nav.security')}</div></div>
+              <div className="body"><div className="name">{t('nav.security')}</div><div className="sub whitespace-normal">{t('nav.accountHint')}</div></div>
             </button>
             {/* Signing out was reachable only from Account security, two screens deep. */}
             <button className="panel-row" onClick={() => { onClose(); void logout(); }}>

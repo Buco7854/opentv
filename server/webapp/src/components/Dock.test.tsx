@@ -15,6 +15,7 @@ const library = vi.hoisted(() => ({
   forgetPlaylist: vi.fn(),
   setPlaylistPanelOpen: vi.fn(),
 }));
+const actor = vi.hoisted(() => ({ role: 'ADMIN' }));
 
 vi.mock('../library', () => ({
   useLibrary: () => ({
@@ -36,7 +37,7 @@ vi.mock('../hooks', () => ({
 }));
 vi.mock('../auth/AuthProvider', () => ({
   useAuth: () => ({
-    user: { role: 'ADMIN', displayName: 'Admin', username: 'admin' },
+    user: { role: actor.role, displayName: 'Admin', username: 'admin' },
     logout: vi.fn().mockResolvedValue(undefined),
   }),
 }));
@@ -60,6 +61,7 @@ async function openAction(view: ReturnType<typeof render>, label: string) {
 
 describe('Dock playlist operations', () => {
   beforeEach(() => {
+    actor.role = 'ADMIN';
     vi.restoreAllMocks();
     library.playlistPanelOpen = true;
     library.empty = false;
@@ -74,6 +76,15 @@ describe('Dock playlist operations', () => {
   afterEach(() => {
     languageSetting.set('auto');
     document.getElementById('toast-root')?.remove();
+  });
+
+  it('gives an ordinary user a discoverable account area without administration actions', async () => {
+    actor.role = 'USER';
+    const view = renderDock();
+    expect(view.getByText('Security, watch progress and signed-in devices')).toBeTruthy();
+    expect(view.queryByRole('button', { name: 'Administration' })).toBeNull();
+    fireEvent.click(view.getByRole('button', { name: 'Your account Security, watch progress and signed-in devices' }));
+    await waitFor(() => expect(view.getByTestId('path').textContent).toBe('/security'));
   });
 
   it('opens the browser management handoff even when the server has no playlists yet', async () => {

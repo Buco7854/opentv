@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { api } from './api';
 import { clearUserActivitySnapshots, useAsync, useFavorites, useWatchProgress } from './hooks';
 import {
-  confirmWatchProgress, publishWatchProgress, watchProgressStore,
+  confirmWatchProgress, forgetWatchProgress, publishWatchProgress, watchProgressStore,
 } from './watchProgress';
 
 function deferred<T>() {
@@ -157,5 +157,26 @@ describe('useWatchProgress', () => {
     expect(watchProgressStore.getSnapshot().get('shared-movie')).toBe(0.75);
     vi.restoreAllMocks();
     clearUserActivitySnapshots();
+  });
+
+  it('does not resurrect a confirmed history reset from a read already in flight', async () => {
+    clearUserActivitySnapshots();
+    const stale = deferred<Awaited<ReturnType<typeof api.resumeAll>>>();
+    vi.spyOn(api, 'resumeAll').mockReturnValue(stale.promise);
+    publishWatchProgress('reset-film', 60_000, 120_000);
+    publishWatchProgress('keep-film', 30_000, 120_000);
+    const request = watchProgressStore.refresh();
+    forgetWatchProgress('reset-film');
+    expect(watchProgressStore.getSnapshot().has('reset-film')).toBe(false);
+    expect(watchProgressStore.getSnapshot().get('keep-film')).toBe(0.25);
+    await act(async () => {
+      stale.resolve([{ contentId: 'reset-film', positionMs: 60_000, durationMs: 120_000, updatedMs: 1 }]);
+      await request;
+    });
+    expect(watchProgressStore.getSnapshot().has('reset-film')).toBe(false);
+    expect(watchProgressStore.getSnapshot().get('keep-film')).toBe(0.25);
+    forgetWatchProgress();
+    expect(watchProgressStore.getSnapshot().size).toBe(0);
+    vi.restoreAllMocks();
   });
 });

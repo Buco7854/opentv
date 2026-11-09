@@ -169,6 +169,13 @@ class BrowseViewModel private constructor(
         tab.value = kind
     }
 
+    /** Reset only for a real category change, never merely when its screen resumes. */
+    fun selectGroup(selected: String?) {
+        if (selected == group.value) return
+        filter.value = ""
+        group.value = selected
+    }
+
     fun consumeMessage() {
         mutableMessage.value = null
     }

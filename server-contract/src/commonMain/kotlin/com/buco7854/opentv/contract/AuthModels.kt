@@ -122,6 +122,16 @@ data class UpdateUserRequestDto(
 @Serializable data class ResetUserDto(val setupToken: String)
 @Serializable data class PlaylistIdsDto(val playlistIds: List<Long>)
 
+/** The account's own history, including titles no longer available in its catalog. */
+@Serializable
+data class AccountProgressDto(
+    val contentId: String,
+    val title: String?,
+    val positionMs: Long,
+    val durationMs: Long,
+    val updatedMs: Long = 0,
+)
+
 @Serializable
 data class AdminResumeDto(
     val contentId: String,

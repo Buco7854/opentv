@@ -6,13 +6,6 @@
   /* 1160 = 200 navigation + 32 gutter + 928 canvas; the shell and content share their edges. */
   .admin-layout { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 32px; max-width: 1208px; margin: 0 auto; padding: 24px 24px 48px; }
   .admin-main { min-width: 0; }
-  .admin-nav { position: sticky; top: 112px; display: flex; flex-direction: column; align-self: start; gap: 4px; }
-  .admin-nav-item { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 10px 12px; text-align: left; border-radius: 10px; color: var(--c-fg2); font: var(--type-body-medium); }
-  .admin-nav-item > .icon { width: 18px; height: 18px; flex: none; }
-  .admin-nav-item > span:first-of-type { flex: 1; }
-  .admin-nav-item:hover, .admin-nav-item.selected { background: var(--c-panel); color: var(--c-fg); }
-  .admin-nav-item.selected { font-weight: 600; }
-  .admin-mobile-nav { display: none; }
   .admin-section-heading { display: flex; align-items: start; justify-content: space-between; flex-wrap: wrap; gap: 16px; margin-bottom: 24px; }
   .admin-section-heading > div:first-child { flex: 1 1 240px; }
   .admin-section-heading h2 { font: var(--type-title-medium); letter-spacing: -0.2px; margin-bottom: 8px; }
@@ -128,18 +121,13 @@
 
   @media (max-width: 1000px) {
     .admin-layout { grid-template-columns: minmax(0, 1fr); gap: 20px; max-width: 860px; }
-    .admin-nav { display: none; }
-    .admin-mobile-nav { display: flex; align-items: center; gap: 16px; color: var(--c-fg2); font: var(--type-body-small); }
-    .admin-mobile-nav select { flex: 1; min-width: 0; min-height: 44px; padding: 8px 12px; border: 1px solid var(--c-hairline); border-radius: 10px; background: var(--c-panel); color: var(--c-fg); font: var(--type-body-medium); }
   }
   @media (max-width: 600px) {
     .admin-workspace > .topbar { min-height: 64px; padding-top: 12px; padding-bottom: 12px; }
     .admin-workspace > .topbar .subtitle { display: none; }
     .admin-layout { padding: 16px 16px 32px; }
     .admin-layout { gap: 16px; }
-    .admin-mobile-nav > span { display: none; }
     .admin-section-heading { gap: 12px; margin-bottom: 16px; }
-    .admin-section-heading h2 { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
     .admin-section-heading > div:first-child { flex-basis: 100%; }
     .admin-heading-actions { width: 100%; justify-content: space-between; }
     .admin-user-columns { display: none; }

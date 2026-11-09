@@ -180,15 +180,24 @@ switch between existing playlists.
   </figure>
 </div>
 
+## Your account
+
+Open **Your account** from **More**. **Security** contains your credentials and
+sign-in options. **Watch progress** lets you remove saved positions for individual
+titles or clear the list, including titles no longer in the catalog. **Sessions**
+shows your signed-in browsers and apps, marks the current browser and lets you
+sign out individual devices or every other session. These controls are available
+to every user and affect only their own account.
+
 ## Administration
 
 Administrators can open **Administration** from **More**. Search the account list
 or filter by status, then open an account to edit its profile, playlist access,
 sessions or watch progress. Returning to the list keeps your search and filter.
 
-The administration sidebar also contains default playlist assignments, pending
-single sign-on accounts and shared downloads. On a phone, choose the section
-from the selector above the page.
+The administration navigation also contains default playlist assignments,
+pending single sign-on accounts and shared downloads. Each section has a visible
+navigation link on phones as well as wider screens.
 
 ## On a phone
 

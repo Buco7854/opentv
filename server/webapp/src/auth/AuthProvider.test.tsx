@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ACCESS_TOKEN_STORAGE_KEY, ApiError, TRANSPORT_STATUS } from '../api/http';
@@ -7,9 +7,10 @@ import {
   AuthProvider, AuthReturnHandler, RequireAuth, useAuth,
 } from './AuthProvider';
 import { AuthCapabilities, CurrentUser } from './types';
+import { AccountSessionsSection } from './AccountWorkspace';
 
 vi.mock('./api', () => ({
-  authApi: { capabilities: vi.fn(), me: vi.fn() },
+  authApi: { capabilities: vi.fn(), me: vi.fn(), sessions: vi.fn(), logout: vi.fn() },
 }));
 
 const capabilities = (overrides: Partial<AuthCapabilities> = {}): AuthCapabilities => ({
@@ -131,6 +132,35 @@ describe('RequireAuth', () => {
     vi.mocked(authApi.capabilities).mockResolvedValue(capabilities());
     renderApp();
     expect(await screen.findByText('login screen')).toBeTruthy();
+  });
+
+  it('retains the signed-in account and confirmation when all-device logout fails, then retries', async () => {
+    localStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, 'keep-until-server-success');
+    vi.mocked(authApi.capabilities).mockResolvedValue(capabilities());
+    vi.mocked(authApi.me).mockResolvedValue(currentUser());
+    vi.mocked(authApi.sessions).mockResolvedValue([{
+      id: 'session-1', authMethod: 'PASSWORD', clientKind: 'BROWSER', deviceName: 'This browser',
+      createdAtMs: 1_700_000_000_000, lastSeenAtMs: 1_700_000_000_000,
+      idleExpiresAtMs: 1_800_000_000_000, absoluteExpiresAtMs: 1_900_000_000_000,
+    }]);
+    vi.mocked(authApi.logout).mockReset()
+      .mockRejectedValueOnce(new ApiError('server unavailable', 500, 'internal_error'))
+      .mockResolvedValue(null);
+    render(<MemoryRouter initialEntries={['/security/sessions']}><AuthProvider><Routes>
+      <Route path="/security/sessions" element={<RequireAuth><AccountSessionsSection /></RequireAuth>} />
+      <Route path="/login" element={<p>login screen</p>} />
+    </Routes></AuthProvider></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign out everywhere' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Sign out everywhere' }));
+    expect(await within(screen.getByRole('dialog')).findByRole('alert')).toBeTruthy();
+    expect(screen.queryByText('login screen')).toBeNull();
+    expect(localStorage.getItem(ACCESS_TOKEN_STORAGE_KEY)).toBe('keep-until-server-success');
+    expect(screen.getByText('This session')).toBeTruthy();
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Sign out everywhere' }));
+    expect(await screen.findByText('login screen')).toBeTruthy();
+    expect(authApi.logout).toHaveBeenNthCalledWith(1, true);
+    expect(authApi.logout).toHaveBeenNthCalledWith(2, true);
+    expect(localStorage.getItem(ACCESS_TOKEN_STORAGE_KEY)).toBeNull();
   });
 
   it('still lands on sign-in while the server has no administrator', async () => {

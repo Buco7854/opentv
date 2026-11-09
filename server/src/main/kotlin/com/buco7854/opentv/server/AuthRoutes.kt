@@ -296,6 +296,24 @@ internal fun Route.authenticatedAuthRoutes(
 ) {
     route("/auth") {
         get("/me") { call.respond(auth.current(call.actor)) }
+        get("/progress") { call.respond(auth.ownProgress(call.actor)) }
+        delete("/progress") {
+            auth.clearOwnProgress(call.actor)
+            call.respond(HttpStatusCode.NoContent)
+        }
+        delete("/progress/{contentId}") {
+            auth.deleteOwnProgress(call.actor, requireNotNull(call.parameters["contentId"]))
+            call.respond(HttpStatusCode.NoContent)
+        }
+        get("/sessions") { call.respond(auth.ownSessions(call.actor)) }
+        delete("/sessions") {
+            auth.revokeOtherSessions(call.actor)
+            call.respond(HttpStatusCode.NoContent)
+        }
+        delete("/sessions/{sessionId}") {
+            auth.revokeOwnSession(call.actor, requireNotNull(call.parameters["sessionId"]))
+            call.respond(HttpStatusCode.NoContent)
+        }
         post("/logout") {
             val request = call.receive<LogoutRequestDto>()
             auth.logout(call.actor, request.all)

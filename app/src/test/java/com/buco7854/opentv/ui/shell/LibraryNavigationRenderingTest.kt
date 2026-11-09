@@ -1,6 +1,21 @@
 package com.buco7854.opentv.ui.shell
 
 import android.app.Application
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.ui.text.AnnotatedString
+import com.buco7854.opentv.source.CatalogItem
+import com.buco7854.opentv.source.ContentRef
+import com.buco7854.opentv.ui.browse.BrowseChrome
+import com.buco7854.opentv.ui.browse.BrowseScrollPosition
+import com.buco7854.opentv.ui.browse.ChannelList
+import com.buco7854.opentv.ui.browse.SeriesList
+import com.buco7854.opentv.ui.browse.XtreamSeriesList
+import com.buco7854.opentv.ui.components.PosterGrid
+import com.buco7854.opentv.ui.components.PosterItem
+import com.buco7854.opentv.ui.components.SourceUnreachable
+import com.buco7854.opentv.ui.components.SourceLoadFailed
+import com.buco7854.opentv.ui.components.SourceSignedOut
+import com.buco7854.opentv.ui.components.kindIcon
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.os.Looper
@@ -272,6 +287,154 @@ class LibraryNavigationRenderingTest {
         }
     }
 
+    @Test
+    fun `all Browse containers scroll the complete header out and return it with its filter`() {
+        ScrollLayout.entries.forEach { layout ->
+            var filter by mutableStateOf("")
+            render("scroll-${layout.name.lowercase()}-top") { ScrollScene(layout, filter = filter, onFilter = { filter = it }) }.use { screen ->
+                assertTrue(screen.hasText("Scrollable catalog"))
+                screen.setText("Title")
+                assertEquals("Title", filter)
+                screen.swipeUp()
+                screen.swipeUp()
+                screen.capture("scroll-${layout.name.lowercase()}-away")
+                assertFalse("Pinned header in $layout", screen.hasText("Scrollable catalog"))
+                assertFalse("Pinned filter in $layout", screen.nodes().any { it.config.contains(SemanticsActions.SetText) })
+                assertTrue(screen.hasText("OpenTV"))
+                assertTrue(screen.hasText("More"))
+                screen.scrollTo(0)
+                assertTrue(screen.hasText("Scrollable catalog"))
+                assertEquals("Title", screen.field().config[SemanticsProperties.EditableText].text)
+            }
+        }
+    }
+
+    @Test
+    fun `loading empty and failed results retain the same focused filter in every Browse host`() {
+        ScrollLayout.entries.forEach { layout ->
+            var phase by mutableStateOf(0)
+            var filter by mutableStateOf("")
+            render("scroll-${layout.name.lowercase()}-states") { ScrollScene(layout, phase = phase, filter = filter, onFilter = { filter = it }) }.use { screen ->
+                screen.focus(screen.field())
+                screen.setText("Title")
+                val fieldId = screen.field().id
+                listOf(1, 2, 3, 4, 5, 0).forEach { next ->
+                    phase = next
+                    screen.refresh()
+                    val field = screen.field()
+                    assertEquals("Header was replaced for $layout/$next", fieldId, field.id)
+                    assertEquals("Title", field.config[SemanticsProperties.EditableText].text)
+                    assertTrue("Filter focus was lost for $layout/$next", field.config[SemanticsProperties.Focused])
+                }
+                screen.setText("Title 2")
+                assertEquals("Title 2", filter)
+            }
+        }
+    }
+
+    @Test
+    fun `poster and row pagination only starts when the footer enters the viewport and keeps appended rows`() {
+        listOf(ScrollLayout.POSTERS, ScrollLayout.LIVE).forEach { layout ->
+            var count by mutableStateOf(40)
+            var hasMore by mutableStateOf(true)
+            var requests = 0
+            render("scroll-${layout.name.lowercase()}-paging") {
+                ScrollScene(layout, count = count, hasMore = hasMore, onLoadMore = { requests++; count = 80; hasMore = false })
+            }.use { screen ->
+                assertEquals(0, requests)
+                screen.scrollTo(41) // Header + 40 content items + the full-span page sentinel.
+                assertEquals(1, requests)
+                assertFalse(screen.hasText("Scrollable catalog"))
+                screen.scrollTo(80)
+                assertTrue(screen.hasText("Title 79"))
+                assertEquals(1, requests)
+            }
+        }
+    }
+
+    @Test
+    fun `source category and view changes restore their own saved Browse position`() {
+        var source by mutableStateOf<SourceId>(SourceId.LocalPlaylist(1))
+        var group by mutableStateOf("Cinema")
+        var layout by mutableStateOf(ScrollLayout.POSTERS)
+        render("scroll-restoration") { ScrollScene(layout, source = source, group = group) }.use { screen ->
+            screen.scrollTo(25)
+            val position = screen.scrollPosition()
+            source = SourceId.LocalPlaylist(2)
+            screen.refresh()
+            assertTrue(screen.hasText("Scrollable catalog"))
+            screen.scrollTo(9)
+            source = SourceId.LocalPlaylist(1)
+            screen.refresh()
+            assertEquals(position, screen.scrollPosition(), .1f)
+            group = "Family"
+            screen.refresh()
+            assertTrue(screen.hasText("Scrollable catalog"))
+            group = "Cinema"
+            screen.refresh()
+            assertEquals(position, screen.scrollPosition(), .1f)
+            layout = ScrollLayout.MOVIES
+            screen.refresh()
+            assertTrue(screen.hasText("Scrollable catalog"))
+            layout = ScrollLayout.POSTERS
+            screen.refresh()
+            assertEquals(position, screen.scrollPosition(), .1f)
+        }
+    }
+
+    private enum class ScrollLayout { CATEGORIES, POSTERS, LIVE, MOVIES, SERIES, XTREAM }
+
+    @Composable
+    private fun ScrollScene(
+        layout: ScrollLayout,
+        phase: Int = 0,
+        filter: String = "",
+        onFilter: (String) -> Unit = {},
+        count: Int = 80,
+        hasMore: Boolean = false,
+        onLoadMore: () -> Unit = {},
+        source: SourceId = SourceId.LocalPlaylist(1),
+        group: String = "Cinema",
+    ) {
+        val kind = when (layout) {
+            ScrollLayout.LIVE -> ChannelKind.LIVE
+            ScrollLayout.SERIES, ScrollLayout.XTREAM -> ChannelKind.SERIES
+            else -> ChannelKind.MOVIE
+        }
+        val status: (@Composable () -> Unit)? = when (phase) {
+            1 -> ({ CircularProgressIndicator() })
+            3 -> ({ SourceUnreachable(onRetry = {}) })
+            4 -> ({ SourceLoadFailed(null, {}) })
+            5 -> ({ SourceSignedOut(onSignIn = {}) })
+            else -> null
+        }
+        val header: @Composable () -> Unit = {
+            BrowseChrome("Scrollable catalog", kind, mapOf(kind to count), "$count titles", layout == ScrollLayout.POSTERS,
+                filter, true, {}, {}, {}, onFilter, layout == ScrollLayout.CATEGORIES)
+        }
+        val rows = if (phase == 0) List(count) { index ->
+            CatalogItem(ContentRef.LocalUrl("https://test.invalid/$index", index.toLong() + 1), "Title $index", null, kind, group)
+        } else emptyList()
+        Scaffold(
+            topBar = { OpenTvMasthead(true, DockSection.BROWSE, "Family library", true, {}, {}, {}, {}, false) },
+            bottomBar = { OpenTvDock(true, DockSection.BROWSE, {}, {}) },
+        ) { padding ->
+            Box(Modifier.padding(padding).fillMaxSize()) {
+                BrowseScrollPosition(source, kind, if (layout == ScrollLayout.CATEGORIES) null else group, layout == ScrollLayout.POSTERS) {
+                    when (layout) {
+                        ScrollLayout.CATEGORIES -> BrowseCategories(rows.map { CatalogGroup(it.title, 1) }, null, header, status) {}
+                        ScrollLayout.POSTERS -> PosterGrid(rows.map { PosterItem(it.ref.toString(), null, it.title, null) }, kindIcon(kind), {},
+                            hasMore = hasMore, onLoadMore = onLoadMore, header = header, status = status)
+                        ScrollLayout.LIVE, ScrollLayout.MOVIES -> ChannelList(source, rows, emptyMap(), emptySet(), emptyMap(), emptySet(), {}, {}, null, null,
+                            hasMore, false, onLoadMore, header, status)
+                        ScrollLayout.SERIES -> SeriesList(rows, emptySet(), {}, {}, hasMore, false, onLoadMore, header, status)
+                        ScrollLayout.XTREAM -> XtreamSeriesList(rows, emptySet(), {}, {}, hasMore, false, onLoadMore, header, status)
+                    }
+                }
+            }
+        }
+    }
+
     @Composable
     private fun BrowseScene(
         title: String,
@@ -285,12 +448,11 @@ class LibraryNavigationRenderingTest {
             bottomBar = { if (!wide) OpenTvDock(true, DockSection.BROWSE, {}, {}) },
         ) { padding ->
             Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.TopCenter) {
-                Column(Modifier.widthIn(max = 1180.dp).fillMaxSize()) {
-                    BrowseHeading(title, onBack)
-                    BrowseTabs(ChannelKind.MOVIE, mapOf(ChannelKind.LIVE to 20, ChannelKind.MOVIE to 120, ChannelKind.SERIES to 80)) {}
-                    BrowseToolbar("120 films", grid, onToggle)
-                    FilterField("", {}, "Filter this category")
-                    BrowseCategories(listOf(CatalogGroup("International cinema", 120), CatalogGroup("Documentaries", 80)), null) {}
+                Box(Modifier.widthIn(max = 1180.dp).fillMaxSize()) {
+                    BrowseCategories(listOf(CatalogGroup("International cinema", 120), CatalogGroup("Documentaries", 80)), null,
+                        header = { BrowseChrome(title, ChannelKind.MOVIE,
+                            mapOf(ChannelKind.LIVE to 20, ChannelKind.MOVIE to 120, ChannelKind.SERIES to 80),
+                            "120 films", grid, "", true, onBack, {}, onToggle, {}, false) }, onSelect = {})
                 }
             }
         }
@@ -399,6 +561,33 @@ class LibraryNavigationRenderingTest {
                 assertTrue(action.boundsInRoot.width >= 48f && action.boundsInRoot.height >= 48f)
                 assertTrue(action.boundsInRoot.left >= 0 && action.boundsInRoot.right <= decor.width)
             }
+        }
+        fun refresh() = settle()
+        fun field() = nodes().single { it.config.contains(SemanticsActions.SetText) }
+        fun setText(text: String) {
+            assertTrue(field().config[SemanticsActions.SetText].action!!.invoke(AnnotatedString(text)))
+            settle()
+        }
+        private fun scroller() = nodes().single {
+            it.config.contains(SemanticsProperties.VerticalScrollAxisRange) && it.config.contains(SemanticsActions.ScrollToIndex)
+        }
+        fun scrollPosition() = scroller().config[SemanticsProperties.VerticalScrollAxisRange].value()
+        fun scrollTo(index: Int) {
+            assertTrue(scroller().config[SemanticsActions.ScrollToIndex].action!!.invoke(index))
+            settle()
+        }
+        fun swipeUp() {
+            val start = SystemClock.uptimeMillis()
+            val x = decor.width / 2f
+            fun send(action: Int, y: Float) {
+                val event = MotionEvent.obtain(start, SystemClock.uptimeMillis(), action, x, y, 0)
+                view.dispatchTouchEvent(event)
+                event.recycle()
+                settle()
+            }
+            send(MotionEvent.ACTION_DOWN, 700f)
+            repeat(10) { send(MotionEvent.ACTION_MOVE, 700f - (it + 1) * 50f) }
+            send(MotionEvent.ACTION_UP, 200f)
         }
         fun destination(label: String) = nodes().single {
             it.config.contains(SemanticsActions.OnClick) &&

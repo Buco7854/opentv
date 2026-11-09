@@ -365,9 +365,9 @@
     <string name="hub_signed_in_as">Connecté en tant que %1$s</string>
     <string name="hub_remove_download_after_pull">Supprimer du serveur après le téléchargement</string>
     <string name="hub_remove_download_after_pull_description">Désactivé par défaut, car le fichier du serveur peut être partagé avec d\'autres utilisateurs.</string>
-    <string name="hub_open_account">Compte et sécurité</string>
+    <string name="hub_open_account">Votre compte</string>
     <string name="hub_opens_in_browser">S\'ouvre dans votre navigateur</string>
-    <string name="hub_open_account_description">Gérez votre mot de passe, l\'authentification à deux facteurs et vos sessions dans un navigateur.</string>
+    <string name="hub_open_account_description">Gérez la sécurité, la progression de lecture et les appareils connectés dans un navigateur.</string>
     <string name="hub_open_admin">Administration</string>
     <string name="hub_open_admin_description">Gérez les utilisateurs, les playlists et l\'activité dans un navigateur.</string>
     <string name="hub_open_sessions">Lectures en cours</string>

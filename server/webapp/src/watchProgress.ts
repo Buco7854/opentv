@@ -81,6 +81,17 @@ class WatchProgressStore {
     this.publish(new Map());
   }
 
+  remove(contentId: string) {
+    // A read started before the confirmed reset must not put its old position back.
+    this.generation++;
+    this.request = null;
+    this.changedAt.set(contentId, ++this.revision);
+    this.pending.delete(contentId);
+    const next = new Map(this.snapshot);
+    next.delete(contentId);
+    this.publish(next);
+  }
+
   private publish(next: Map<string, number>) {
     if (sameProgress(this.snapshot, next)) return;
     this.snapshot = next;
@@ -116,4 +127,10 @@ export function publishWatchProgress(
 /** Mark exactly the position accepted by the server as synchronized. */
 export function confirmWatchProgress(contentId: string, revision: number) {
   watchProgressStore.confirm(contentId, revision);
+}
+
+/** A confirmed account reset updates detail progress immediately, before the next read. */
+export function forgetWatchProgress(contentId?: string) {
+  if (contentId === undefined) watchProgressStore.clear();
+  else watchProgressStore.remove(contentId);
 }

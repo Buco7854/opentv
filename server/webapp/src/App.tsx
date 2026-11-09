@@ -30,7 +30,7 @@ const AdminScreen = lazy(() => import('./admin/AdminScreen').then((m) => ({ defa
 const LoginScreen = lazy(() => import('./auth/AuthScreens').then((m) => ({ default: m.LoginScreen })));
 const SetupScreen = lazy(() => import('./auth/AuthScreens').then((m) => ({ default: m.SetupScreen })));
 const ActivateScreen = lazy(() => import('./auth/AuthScreens').then((m) => ({ default: m.ActivateScreen })));
-const SecurityScreen = lazy(() => import('./auth/AuthScreens').then((m) => ({ default: m.SecurityScreen })));
+const AccountWorkspace = lazy(() => import('./auth/AccountWorkspace').then((m) => ({ default: m.AccountWorkspace })));
 const DeviceLinkScreen = lazy(() => import('./auth/DeviceLink').then((m) => ({ default: m.DeviceLinkScreen })));
 const LinkLandingScreen = lazy(() => import('./auth/LinkLanding').then((m) => ({ default: m.LinkLandingScreen })));
 
@@ -149,7 +149,7 @@ function AuthenticatedApp() {
                 <Route path="/downloads" element={<DownloadsScreen />} />
                 <Route path="/sessions" element={<RequireAdmin><SessionsScreen /></RequireAdmin>} />
                 <Route path="/admin" element={<RequireAdmin><AdminScreen /></RequireAdmin>} />
-                <Route path="/security" element={<SecurityScreen />} />
+                <Route path="/security/*" element={<AccountWorkspace />} />
                 <Route path="/watch/:channelId" element={<WatchChannelScreen />} />
                 <Route path="/watch/catchup/:channelId/:startMs/:endMs" element={<WatchCatchupScreen />} />
                 <Route path="/watch/download/:downloadId" element={<WatchDownloadScreen />} />

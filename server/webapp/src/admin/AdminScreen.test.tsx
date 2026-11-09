@@ -1,4 +1,5 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../api/http';
 import { AdminUser, adminApi } from './api';
@@ -52,6 +53,12 @@ const signedInAccount: AdminUser = {
 };
 
 const settled = async () => { await act(async () => {}); };
+function RouteMarker() {
+  const { pathname, search } = useLocation();
+  const navigate = useNavigate();
+  return <><span data-testid="admin-route">{pathname + search}</span><button onClick={() => navigate(-1)}>Browser back</button><button onClick={() => navigate(1)}>Browser forward</button></>;
+}
+const renderAdmin = (entry = '/admin') => render(<MemoryRouter initialEntries={[entry]}><AdminScreen /><RouteMarker /></MemoryRouter>);
 
 describe('AdminScreen', () => {
   beforeEach(() => {
@@ -67,7 +74,7 @@ describe('AdminScreen', () => {
   it('offers a retry instead of an endless spinner when a section fails', async () => {
     vi.mocked(adminApi.users)
       .mockRejectedValueOnce(new ApiError('Internal error', 500, 'internal_error'));
-    const view = render(<AdminScreen />);
+    const view = renderAdmin();
     await settled();
 
     expect(view.container.querySelector('.spinner')).toBeNull();
@@ -82,7 +89,7 @@ describe('AdminScreen', () => {
   it('does not offer to demote, disable or delete your own account', async () => {
     // The server refuses all three for the acting administrator; another administrator is
     // the way out. Offering them and explaining the refusal afterwards is worse.
-    render(<AdminScreen />);
+    renderAdmin();
     await settled();
 
     fireEvent.click(screen.getByText('Root'));
@@ -108,7 +115,7 @@ describe('AdminScreen', () => {
     };
     vi.mocked(adminApi.users).mockResolvedValue([signedInAccount, mappedAdmin]);
     vi.mocked(adminApi.updateUser).mockResolvedValue(mappedAdmin);
-    render(<AdminScreen />);
+    renderAdmin();
     await settled();
 
     fireEvent.click(screen.getByText('Mapped Admin'));
@@ -128,7 +135,7 @@ describe('AdminScreen', () => {
 
   it('explains disabled local provisioning and hides actions the server will refuse', async () => {
     capabilities.mockReturnValue({ passwordEnabled: false });
-    render(<AdminScreen />);
+    renderAdmin();
     await settled();
 
     const disclaimer = 'Local account provisioning is off on this server. Accounts come from the identity provider and appear under Pending SSO for administrator approval; passwords, activation links and credential resets are unavailable.';
@@ -142,7 +149,7 @@ describe('AdminScreen', () => {
   });
 
   it('keeps local provisioning actions unchanged when password authentication is on', async () => {
-    render(<AdminScreen />);
+    renderAdmin();
     await settled();
 
     expect(screen.getByRole('button', { name: 'Create user' })).toBeTruthy();
@@ -175,7 +182,7 @@ describe('AdminScreen', () => {
       { ...signedInAccount, id: 'user-9', username: 'other', displayName: 'Other',
         manualRole: 'USER', effectiveRole: 'USER' },
     ]);
-    render(<AdminScreen />);
+    renderAdmin();
     await settled();
 
     fireEvent.click(screen.getByText('Other'));
@@ -192,7 +199,7 @@ describe('AdminScreen', () => {
       { ...signedInAccount, id: 'user-2', username: 'newcomer', displayName: 'Newcomer',
         status: 'INVITED', manualRole: 'USER', effectiveRole: 'USER' },
     ]);
-    render(<AdminScreen />);
+    renderAdmin();
     await settled();
 
     fireEvent.click(screen.getByText('Newcomer'));
@@ -208,7 +215,7 @@ describe('AdminScreen', () => {
       user: { ...signedInAccount, id: 'user-3', username: 'direct', displayName: 'Direct' },
       activationToken: null,
     });
-    render(<AdminScreen />);
+    renderAdmin();
     await settled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Create user' }));
@@ -226,7 +233,7 @@ describe('AdminScreen', () => {
 
   it('keeps the one-time setup link when refreshing the row fails', async () => {
     vi.mocked(adminApi.resetUser).mockResolvedValue({ setupToken: 'setup-token' });
-    render(<AdminScreen />);
+    renderAdmin();
     await settled();
 
     fireEvent.click(screen.getByText('Root'));
@@ -241,7 +248,7 @@ describe('AdminScreen', () => {
   });
 
   it('marks the signed-in administrator and shows every playlist for admins', async () => {
-    render(<AdminScreen />);
+    renderAdmin();
     await settled();
 
     expect(screen.getByText('You')).toBeTruthy();
@@ -250,13 +257,13 @@ describe('AdminScreen', () => {
   });
 
   it('loads unrelated server collections only when their administration section opens', async () => {
-    render(<AdminScreen />);
+    renderAdmin();
     await settled();
     expect(adminApi.playlistTemplate).not.toHaveBeenCalled();
     expect(adminApi.pendingOidc).not.toHaveBeenCalled();
     expect(adminApi.downloads).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Shared downloads' }));
+    fireEvent.click(screen.getByRole('link', { name: 'Shared downloads' }));
     await settled();
     expect(adminApi.downloads).toHaveBeenCalledTimes(1);
     expect(adminApi.playlistTemplate).not.toHaveBeenCalled();
@@ -264,7 +271,7 @@ describe('AdminScreen', () => {
   });
 
   it('keeps the last useful account list when refresh fails and retries in place', async () => {
-    render(<AdminScreen />);
+    renderAdmin();
     await settled();
     vi.mocked(adminApi.users).mockRejectedValueOnce(new ApiError('offline', 500, 'internal_error'));
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
@@ -280,7 +287,7 @@ describe('AdminScreen', () => {
   it('keeps account details in the administration workspace and does not mistake pending playlists for no access', async () => {
     let finishPlaylists!: (value: Awaited<ReturnType<typeof adminApi.playlists>>) => void;
     vi.mocked(adminApi.playlists).mockReturnValue(new Promise((resolve) => { finishPlaylists = resolve; }));
-    render(<AdminScreen />);
+    renderAdmin();
     await settled();
     fireEvent.click(screen.getByText('Root'));
     expect(screen.getByRole('navigation', { name: 'Administration' })).toBeTruthy();
@@ -297,7 +304,7 @@ describe('AdminScreen', () => {
       signedInAccount,
       { ...signedInAccount, id: 'other', username: 'marie', displayName: 'Marie', effectiveRole: 'USER', manualRole: 'USER' },
     ]);
-    render(<AdminScreen />);
+    renderAdmin();
     await settled();
     fireEvent.click(screen.getByText('Marie'));
     fireEvent.click(screen.getByRole('button', { name: 'Delete user' }));
@@ -305,7 +312,7 @@ describe('AdminScreen', () => {
   });
 
   it('returns to the same account search and keyboard position after opening details', async () => {
-    render(<AdminScreen />);
+    renderAdmin();
     await settled();
     const search = screen.getByPlaceholderText('Search users') as HTMLInputElement;
     fireEvent.change(search, { target: { value: 'root' } });
@@ -314,7 +321,7 @@ describe('AdminScreen', () => {
     fireEvent.click(opener);
     fireEvent.click(screen.getByRole('button', { name: 'Back to users' }));
     expect((screen.getByPlaceholderText('Search users') as HTMLInputElement).value).toBe('root');
-    expect(document.activeElement).toBe(opener);
+    await waitFor(() => expect(document.activeElement).toBe(opener));
   });
 
   it('describes shared download cancellation with titles and account names instead of internal IDs', async () => {
@@ -322,9 +329,9 @@ describe('AdminScreen', () => {
       userId: 'admin-1', userDownloadId: 'request-secret', blobId: 'blob-secret', contentId: 'content-secret',
       title: 'Evening cinema', status: 'RUNNING', active: true, suspended: false, totalBytes: 1000, downloadedBytes: 500,
     }]);
-    render(<AdminScreen />);
+    renderAdmin();
     await settled();
-    fireEvent.click(screen.getByRole('button', { name: 'Shared downloads' }));
+    fireEvent.click(screen.getByRole('link', { name: 'Shared downloads' }));
     await settled();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel download' }));
     const dialog = screen.getByRole('dialog');
@@ -332,5 +339,33 @@ describe('AdminScreen', () => {
     expect(dialog.textContent).toContain('Root');
     expect(dialog.textContent).not.toContain('admin-1');
     expect(dialog.textContent).not.toContain('blob-secret');
+  });
+
+  it('uses visible section links with deep links and browser history', async () => {
+    renderAdmin('/admin?section=downloads');
+    await settled();
+    expect(screen.getByRole('link', { name: 'Shared downloads' }).getAttribute('aria-current')).toBe('page');
+    expect(screen.queryByRole('combobox')).toBeNull();
+    fireEvent.click(screen.getByRole('link', { name: 'Default playlists' }));
+    await settled();
+    expect(screen.getByTestId('admin-route').textContent).toBe('/admin?section=template');
+    expect(screen.getByRole('link', { name: 'Default playlists' }).getAttribute('aria-current')).toBe('page');
+    fireEvent.click(screen.getByRole('button', { name: 'Browser back' }));
+    await settled();
+    expect(screen.getByRole('link', { name: 'Shared downloads' }).getAttribute('aria-current')).toBe('page');
+    fireEvent.click(screen.getByRole('button', { name: 'Browser forward' }));
+    await settled();
+    expect(screen.getByRole('link', { name: 'Default playlists' }).getAttribute('aria-current')).toBe('page');
+  });
+
+  it('preserves the account search while visiting another administration section', async () => {
+    renderAdmin();
+    await settled();
+    fireEvent.change(screen.getByPlaceholderText('Search users'), { target: { value: 'root' } });
+    fireEvent.click(screen.getByRole('link', { name: 'Shared downloads' }));
+    await settled();
+    fireEvent.click(screen.getByRole('link', { name: 'Users' }));
+    await settled();
+    expect((screen.getByPlaceholderText('Search users') as HTMLInputElement).value).toBe('root');
   });
 });

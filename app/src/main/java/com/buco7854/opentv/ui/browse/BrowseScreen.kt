@@ -14,11 +14,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,11 +24,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
-import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.outlined.MoreVert
-import androidx.compose.material.icons.outlined.Replay
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -38,9 +33,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -49,10 +42,12 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalResources
@@ -62,6 +57,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.layout.heightIn
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -83,19 +79,16 @@ import com.buco7854.opentv.source.PlaylistOperation
 import com.buco7854.opentv.source.SourceId
 import com.buco7854.opentv.source.encode
 import com.buco7854.opentv.source.seriesEpisodeCount
-import com.buco7854.opentv.ui.components.BadgeRow
-import com.buco7854.opentv.ui.components.ChannelLogo
-import com.buco7854.opentv.ui.components.DownloadStateIcon
-import com.buco7854.opentv.ui.components.FavoriteIcon
 import com.buco7854.opentv.ui.components.GuideSheet
 import com.buco7854.opentv.ui.components.MediaListRow
 import com.buco7854.opentv.ui.components.mediaTags
 import com.buco7854.opentv.ui.components.PosterGrid
 import com.buco7854.opentv.ui.components.PosterItem
+import com.buco7854.opentv.ui.components.CatalogList
+import com.buco7854.opentv.ui.components.CatalogStatus
 import com.buco7854.opentv.ui.components.focusHighlight
 import com.buco7854.opentv.ui.components.kindIcon
 import com.buco7854.opentv.ui.components.EmptyState
-import com.buco7854.opentv.ui.components.OtvProgressBar
 import com.buco7854.opentv.ui.components.OtvTextButton
 import com.buco7854.opentv.ui.components.SourceLoadFailed
 import com.buco7854.opentv.ui.components.SourceSignedOut
@@ -103,9 +96,6 @@ import com.buco7854.opentv.ui.components.SourceUnreachable
 import com.buco7854.opentv.ui.components.sourceViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -165,7 +155,6 @@ fun BrowseScreen(
     var correctingGroup by remember { mutableStateOf<String?>(null) }
     // Filters the currently-shown list (categories at the root, items inside one).
     val filter by viewModel.filter.collectAsStateWithLifecycle()
-    LaunchedEffect(group, tab) { viewModel.filter.value = "" }
 
     val resources = LocalResources.current
     val download: (CatalogItem) -> Unit = viewModel::download
@@ -197,205 +186,199 @@ fun BrowseScreen(
     // Single-group playlists skip the pointless category level.
     LaunchedEffect(groups, tab) {
         if (group == null && groups.size == 1) {
-            viewModel.group.value = groups.first().name
+            viewModel.selectGroup(groups.first().name)
         }
     }
     val singleGroup = groups.size == 1
 
     BackHandler(enabled = group != null && !singleGroup) {
-        viewModel.group.value = null
+        viewModel.selectGroup(null)
     }
 
+    val shownCount = if (group != null) catalog.total else when (tab) {
+        ChannelKind.MOVIE -> movieCount
+        ChannelKind.SERIES -> seriesCount
+        else -> liveCount
+    }
+    val header: @Composable () -> Unit = {
+        BrowseChrome(
+            title = (if (singleGroup) null else group) ?: stringResource(when (tab) {
+                ChannelKind.MOVIE -> R.string.common_movies
+                ChannelKind.SERIES -> R.string.common_series
+                else -> R.string.common_live
+            }),
+            kind = tab,
+            counts = contentCounts,
+            summary = stringResource(when (tab) {
+                ChannelKind.MOVIE -> R.string.browse_movies_count
+                ChannelKind.SERIES -> R.string.browse_series_count
+                else -> R.string.browse_live_count
+            }, shownCount),
+            gridView = gridView,
+            filter = filter,
+            showFilter = group != null || groups.isNotEmpty() || filter.isNotEmpty(),
+            onBack = if (group != null && !singleGroup) ({ viewModel.selectGroup(null) }) else null,
+            onKind = { kind -> viewModel.selectContentKind(kind); onContentKindChanged(kind) },
+            onToggleGridView = if (group != null && tab != ChannelKind.LIVE) viewModel::toggleGridView else null,
+            onFilter = { viewModel.filter.value = it },
+            categories = group == null,
+        )
+    }
+    val status: (@Composable () -> Unit)? = when {
+        catalog.error is CatalogLoadError.SignedOut -> ({ SourceSignedOut(onSignIn) })
+        catalog.error is CatalogLoadError.Unreachable -> ({ SourceUnreachable(viewModel::retry) })
+        catalog.error is CatalogLoadError.Failed -> ({ SourceLoadFailed(message = null, onRetry = viewModel::retry) })
+        browseListLoading(catalog.loading, group != null, groups.size, items.size) -> ({
+            Box(Modifier.fillMaxWidth().heightIn(min = 240.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.onSurface)
+            }
+        })
+        else -> null
+    }
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
-        topBar = {
-            BrowseHeading(
-                title = (if (singleGroup) null else group) ?: stringResource(when (tab) {
-                    ChannelKind.MOVIE -> R.string.common_movies
-                    ChannelKind.SERIES -> R.string.common_series
-                    else -> R.string.common_live
-                }),
-                onBack = if (group != null && !singleGroup) ({ viewModel.group.value = null }) else null,
-            )
-        },
-        // Shell already reserves dock space; zero insets avoid a double gap.
+        // The global shell alone is fixed. Browse chrome belongs to the catalog's lazy host.
         contentWindowInsets = WindowInsets(0.dp),
     ) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize()) {
-            BrowseTabs(tab, contentCounts) { kind ->
-                viewModel.selectContentKind(kind)
-                onContentKindChanged(kind)
-            }
+        Box(Modifier.padding(padding).fillMaxSize()) {
+            BrowseScrollPosition(sourceId, tab, group, gridView) {
+                val f = filter.trim()
+                fun matches(s: String) = f.isBlank() || s.contains(f, ignoreCase = true)
+                val hasMore = sourceId is SourceId.Hub && catalog.error == null && items.size < catalog.total
+                when {
+                    group == null -> BrowseCategories(
+                        header = header, status = status,
+                        groups = groups.filter { matches(it.name) },
+                        // Xtream categories come from the panel; only M3U guessing needs correcting.
+                        onCorrect = if (isXtreamNative || !correctionOffered) {
+                            null
+                        } else {
+                            ({ correctingGroup = it })
+                        },
+                        onSelect = viewModel::selectGroup,
+                    )
 
-            val shownCount = if (group != null) catalog.total else when (tab) {
-                ChannelKind.MOVIE -> movieCount
-                ChannelKind.SERIES -> seriesCount
-                else -> liveCount
-            }
-            BrowseToolbar(
-                summary = stringResource(when (tab) {
-                    ChannelKind.MOVIE -> R.string.browse_movies_count
-                    ChannelKind.SERIES -> R.string.browse_series_count
-                    else -> R.string.browse_live_count
-                }, shownCount),
-                gridView = gridView,
-                onToggleGridView = if (group != null && tab != ChannelKind.LIVE) viewModel::toggleGridView else null,
-            )
-            val hasContent = groups.isNotEmpty() || items.isNotEmpty()
-            if (hasContent) {
-                FilterField(
-                    value = filter,
-                    onValueChange = { viewModel.filter.value = it },
-                    placeholder = stringResource(if (group == null) R.string.browse_filter_categories else R.string.browse_filter_category),
-                )
-            }
-            val f = filter.trim()
-            fun matches(s: String) = f.isBlank() || s.contains(f, ignoreCase = true)
-            val hasMore = sourceId is SourceId.Hub &&
-                catalog.error == null && items.size < catalog.total
-
-            when {
-                catalog.error is CatalogLoadError.SignedOut -> SourceSignedOut(onSignIn)
-                catalog.error is CatalogLoadError.Unreachable ->
-                    SourceUnreachable(viewModel::retry)
-                catalog.error is CatalogLoadError.Failed ->
-                    SourceLoadFailed(message = null, onRetry = viewModel::retry)
-                browseListLoading(
-                    loading = catalog.loading,
-                    groupSelected = group != null,
-                    groupCount = groups.size,
-                    itemCount = items.size,
-                ) -> Box(
-                    Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator(color = MaterialTheme.colorScheme.onSurface)
-                }
-                group == null -> BrowseCategories(
-                    groups = groups.filter { matches(it.name) },
-                    // Xtream categories come from the panel; only M3U guessing needs correcting.
-                    onCorrect = if (isXtreamNative || !correctionOffered) {
-                        null
-                    } else {
-                        ({ correctingGroup = it })
-                    },
-                    onSelect = { viewModel.group.value = it },
-                )
-
-                // Native Xtream playlists list the panel's series catalog.
-                tab == ChannelKind.SERIES && isXtreamNative -> {
-                    val shown = items.filter { matches(it.title) }
-                    if (gridView) {
-                        PosterGrid(
-                            items = shown.map {
-                                PosterItem(it.ref.encode(), it.imageUrl, it.title, it.genre)
-                            },
-                            fallback = kindIcon(ChannelKind.SERIES),
-                            onClick = { id ->
-                                shown.firstOrNull { it.ref.encode() == id }
-                                    ?.let(onOpenXtreamSeries)
-                            },
-                            hasMore = hasMore,
-                            loadingMore = catalog.loading,
-                            onLoadMore = viewModel::loadMore,
-                        )
-                    } else {
-                        XtreamSeriesList(
-                            series = shown,
-                            favoriteKeys = favoriteKeys,
-                            onToggleFavorite = {
-                                viewModel.toggleFavorite(
-                                    it,
-                                )
-                            },
-                            onSelect = onOpenXtreamSeries,
-                            hasMore = hasMore,
-                            loadingMore = catalog.loading,
-                            onLoadMore = viewModel::loadMore,
-                        )
+                    // Native Xtream playlists list the panel's series catalog.
+                    tab == ChannelKind.SERIES && isXtreamNative -> {
+                        val shown = items.filter { matches(it.title) }
+                        if (gridView) {
+                            PosterGrid(
+                                header = header, status = status,
+                                items = shown.map {
+                                    PosterItem(it.ref.encode(), it.imageUrl, it.title, it.genre)
+                                },
+                                fallback = kindIcon(ChannelKind.SERIES),
+                                onClick = { id ->
+                                    shown.firstOrNull { it.ref.encode() == id }
+                                        ?.let(onOpenXtreamSeries)
+                                },
+                                hasMore = hasMore,
+                                loadingMore = catalog.loading,
+                                onLoadMore = viewModel::loadMore,
+                            )
+                        } else {
+                            XtreamSeriesList(
+                                header = header, status = status,
+                                series = shown,
+                                favoriteKeys = favoriteKeys,
+                                onToggleFavorite = {
+                                    viewModel.toggleFavorite(
+                                        it,
+                                    )
+                                },
+                                onSelect = onOpenXtreamSeries,
+                                hasMore = hasMore,
+                                loadingMore = catalog.loading,
+                                onLoadMore = viewModel::loadMore,
+                            )
+                        }
                     }
-                }
 
-                // Series open their own page (poster, season picker, episodes).
-                tab == ChannelKind.SERIES -> {
-                    val shown = items.filter { matches(it.title) }
-                    if (gridView) {
-                        PosterGrid(
-                            items = shown.map {
-                                PosterItem(
-                                    it.ref.encode(), it.imageUrl, it.title,
-                                    seriesEpisodeCount(it.count)?.let { episodes ->
-                                        pluralStringResource(
-                                            R.plurals.details_episode_count,
-                                            episodes,
-                                            episodes,
-                                        )
-                                    },
-                                )
-                            },
-                            fallback = kindIcon(ChannelKind.SERIES),
-                            onClick = { id ->
-                                shown.firstOrNull { it.ref.encode() == id }
-                                    ?.let(onOpenSeries)
-                            },
-                            hasMore = hasMore,
-                            loadingMore = catalog.loading,
-                            onLoadMore = viewModel::loadMore,
-                        )
-                    } else {
-                        SeriesList(
-                            series = shown,
-                            favoriteKeys = favoriteKeys,
-                            onToggleFavorite = viewModel::toggleFavorite,
-                            onSelect = onOpenSeries,
-                            hasMore = hasMore,
-                            loadingMore = catalog.loading,
-                            onLoadMore = viewModel::loadMore,
-                        )
+                    // Series open their own page (poster, season picker, episodes).
+                    tab == ChannelKind.SERIES -> {
+                        val shown = items.filter { matches(it.title) }
+                        if (gridView) {
+                            PosterGrid(
+                                header = header, status = status,
+                                items = shown.map {
+                                    PosterItem(
+                                        it.ref.encode(), it.imageUrl, it.title,
+                                        seriesEpisodeCount(it.count)?.let { episodes ->
+                                            pluralStringResource(
+                                                R.plurals.details_episode_count,
+                                                episodes,
+                                                episodes,
+                                            )
+                                        },
+                                    )
+                                },
+                                fallback = kindIcon(ChannelKind.SERIES),
+                                onClick = { id ->
+                                    shown.firstOrNull { it.ref.encode() == id }
+                                        ?.let(onOpenSeries)
+                                },
+                                hasMore = hasMore,
+                                loadingMore = catalog.loading,
+                                onLoadMore = viewModel::loadMore,
+                            )
+                        } else {
+                            SeriesList(
+                                header = header, status = status,
+                                series = shown,
+                                favoriteKeys = favoriteKeys,
+                                onToggleFavorite = viewModel::toggleFavorite,
+                                onSelect = onOpenSeries,
+                                hasMore = hasMore,
+                                loadingMore = catalog.loading,
+                                onLoadMore = viewModel::loadMore,
+                            )
+                        }
                     }
+
+                    tab == ChannelKind.MOVIE && gridView -> PosterGrid(
+                        header = header, status = status,
+                        items = items.filter { matches(it.title) }.map {
+                            PosterItem(
+                                it.ref.encode(),
+                                it.imageUrl,
+                                it.title,
+                                null,
+                                tags = mediaTags(it.title, 1),
+                            )
+                        },
+                        fallback = kindIcon(ChannelKind.MOVIE),
+                        onClick = { id ->
+                            items.firstOrNull { it.ref.encode() == id }?.let { onOpenMovie(it.ref) }
+                        },
+                        hasMore = hasMore,
+                        loadingMore = catalog.loading,
+                        onLoadMore = viewModel::loadMore,
+                    )
+
+                    // Movies open a detail page with play/download; live plays directly.
+                    else -> ChannelList(
+                        header = header, status = status,
+                        sourceId = sourceId,
+                        channels = items.filter { matches(it.title) },
+                        nowAiring = if (tab == ChannelKind.LIVE) nowAiring else emptyMap(),
+                        guideIds = guideIds,
+                        downloadsByUrl = if (tab == ChannelKind.MOVIE) downloadsByUrl else emptyMap(),
+                        favoriteKeys = favoriteKeys,
+                        onToggleFavorite = viewModel::toggleFavorite,
+                        onPlay = {
+                            if (tab == ChannelKind.MOVIE) onOpenMovie(it.ref)
+                            else play(it, true)
+                        },
+                        onDownload = if (
+                            tab == ChannelKind.MOVIE &&
+                                (sourceId is SourceId.LocalPlaylist || sourceId is SourceId.Hub)
+                        ) download else null,
+                        onGuide = if (tab == ChannelKind.LIVE) ({ guideItem = it }) else null,
+                        hasMore = hasMore,
+                        loadingMore = catalog.loading,
+                        onLoadMore = viewModel::loadMore,
+                    )
                 }
-
-                tab == ChannelKind.MOVIE && gridView -> PosterGrid(
-                    items = items.filter { matches(it.title) }.map {
-                        PosterItem(
-                            it.ref.encode(),
-                            it.imageUrl,
-                            it.title,
-                            null,
-                            tags = mediaTags(it.title, 1),
-                        )
-                    },
-                    fallback = kindIcon(ChannelKind.MOVIE),
-                    onClick = { id ->
-                        items.firstOrNull { it.ref.encode() == id }?.let { onOpenMovie(it.ref) }
-                    },
-                    hasMore = hasMore,
-                    loadingMore = catalog.loading,
-                    onLoadMore = viewModel::loadMore,
-                )
-
-                // Movies open a detail page with play/download; live plays directly.
-                else -> ChannelList(
-                    sourceId = sourceId,
-                    channels = items.filter { matches(it.title) },
-                    nowAiring = if (tab == ChannelKind.LIVE) nowAiring else emptyMap(),
-                    guideIds = guideIds,
-                    downloadsByUrl = if (tab == ChannelKind.MOVIE) downloadsByUrl else emptyMap(),
-                    favoriteKeys = favoriteKeys,
-                    onToggleFavorite = viewModel::toggleFavorite,
-                    onPlay = {
-                        if (tab == ChannelKind.MOVIE) onOpenMovie(it.ref)
-                        else play(it, true)
-                    },
-                    onDownload = if (
-                        tab == ChannelKind.MOVIE &&
-                            (sourceId is SourceId.LocalPlaylist || sourceId is SourceId.Hub)
-                    ) download else null,
-                    onGuide = if (tab == ChannelKind.LIVE) ({ guideItem = it }) else null,
-                    hasMore = hasMore,
-                    loadingMore = catalog.loading,
-                    onLoadMore = viewModel::loadMore,
-                )
             }
         }
     }
@@ -437,7 +420,7 @@ fun BrowseScreen(
 }
 
 @Composable
-private fun XtreamSeriesList(
+internal fun XtreamSeriesList(
     series: List<CatalogItem>,
     favoriteKeys: Set<String>,
     onToggleFavorite: (CatalogItem) -> Unit,
@@ -445,19 +428,18 @@ private fun XtreamSeriesList(
     hasMore: Boolean,
     loadingMore: Boolean,
     onLoadMore: () -> Unit,
+    header: (@Composable () -> Unit)? = null,
+    status: (@Composable () -> Unit)? = null,
 ) {
-    if (series.isEmpty()) {
-        EmptyState(
+    CatalogList(
+        itemCount = series.size, header = header, status = status,
+        empty = { EmptyState(
             stringResource(R.string.browse_no_series_title),
             stringResource(R.string.browse_no_series_category),
-        )
-        return
-    }
-    LazyColumn(
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) },
+        hasMore = hasMore, loadingMore = loadingMore, onLoadMore = onLoadMore,
     ) {
-        items(series, key = { it.ref.encode() }) { item ->
+        items(series, key = { "catalog-item:${it.ref.encode()}" }) { item ->
             MediaListRow(
                 title = item.title,
                 subtitle = listOfNotNull(item.genre, item.rating?.let { "★ %.1f".format(it) })
@@ -470,14 +452,6 @@ private fun XtreamSeriesList(
                 trailingChevron = true,
             )
         }
-        if (hasMore) {
-            item(key = "catalog-page-${series.size}") {
-                LaunchedEffect(series.size, loadingMore) {
-                    if (!loadingMore) onLoadMore()
-                }
-                OtvProgressBar(Modifier.fillMaxWidth().padding(vertical = 8.dp))
-            }
-        }
     }
 }
 
@@ -485,12 +459,10 @@ private fun XtreamSeriesList(
 internal fun BrowseCategories(
     groups: List<CatalogGroup>,
     onCorrect: ((String) -> Unit)?,
+    header: (@Composable () -> Unit)? = null,
+    status: (@Composable () -> Unit)? = null,
     onSelect: (String) -> Unit,
 ) {
-    if (groups.isEmpty()) {
-        EmptyState(stringResource(R.string.browse_empty_title), stringResource(R.string.browse_empty_subtitle))
-        return
-    }
     BoxWithConstraints {
         val narrow = maxWidth < 640.dp
         LazyVerticalGrid(
@@ -499,28 +471,35 @@ internal fun BrowseCategories(
             horizontalArrangement = Arrangement.spacedBy(if (narrow) 8.dp else 10.dp),
             verticalArrangement = Arrangement.spacedBy(if (narrow) 8.dp else 10.dp),
         ) {
-            items(groups, key = { it.name }) { category ->
-                Card(
-                    onClick = { onSelect(category.name) },
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-                    modifier = Modifier.focusHighlight(RoundedCornerShape(12.dp)),
-                ) {
-                    Row(
-                        Modifier.fillMaxWidth().heightIn(min = if (narrow) 72.dp else 76.dp)
-                            .padding(start = 14.dp, end = if (onCorrect != null) 4.dp else 14.dp, top = 12.dp, bottom = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+            if (header != null) item(key = "catalog-header", contentType = "header", span = { GridItemSpan(maxLineSpan) }) { header() }
+            if (status != null || groups.isEmpty()) {
+                item(key = "catalog-status", contentType = "status", span = { GridItemSpan(maxLineSpan) }) {
+                    CatalogStatus { if (status != null) status() else EmptyState(stringResource(R.string.browse_empty_title), stringResource(R.string.browse_empty_subtitle)) }
+                }
+            } else {
+                items(groups, key = { "catalog-item:${it.name}" }) { category ->
+                    Card(
+                        onClick = { onSelect(category.name) },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+                        modifier = Modifier.focusHighlight(RoundedCornerShape(12.dp)),
                     ) {
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text(category.name, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            Text("${category.count}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        if (onCorrect != null) {
-                            IconButton(onClick = { onCorrect(category.name) }, modifier = Modifier.focusHighlight()) {
-                                Icon(Icons.Outlined.MoreVert, contentDescription = stringResource(R.string.browse_correct_category))
+                        Row(
+                            Modifier.fillMaxWidth().heightIn(min = if (narrow) 72.dp else 76.dp)
+                                .padding(start = 14.dp, end = if (onCorrect != null) 4.dp else 14.dp, top = 12.dp, bottom = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(category.name, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Text("${category.count}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
-                        } else {
-                            Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                            if (onCorrect != null) {
+                                IconButton(onClick = { onCorrect(category.name) }, modifier = Modifier.focusHighlight()) {
+                                    Icon(Icons.Outlined.MoreVert, contentDescription = stringResource(R.string.browse_correct_category))
+                                }
+                            } else {
+                                Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                            }
                         }
                     }
                 }
@@ -567,7 +546,7 @@ private fun GroupKindDialog(
 }
 
 @Composable
-private fun SeriesList(
+internal fun SeriesList(
     series: List<CatalogItem>,
     favoriteKeys: Set<String>,
     onToggleFavorite: (CatalogItem) -> Unit,
@@ -575,19 +554,18 @@ private fun SeriesList(
     hasMore: Boolean,
     loadingMore: Boolean,
     onLoadMore: () -> Unit,
+    header: (@Composable () -> Unit)? = null,
+    status: (@Composable () -> Unit)? = null,
 ) {
-    if (series.isEmpty()) {
-        EmptyState(
+    CatalogList(
+        itemCount = series.size, header = header, status = status,
+        empty = { EmptyState(
             stringResource(R.string.browse_no_series_title),
             stringResource(R.string.browse_no_episodes_category),
-        )
-        return
-    }
-    LazyColumn(
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) },
+        hasMore = hasMore, loadingMore = loadingMore, onLoadMore = onLoadMore,
     ) {
-        items(series, key = { it.ref.encode() }) { item ->
+        items(series, key = { "catalog-item:${it.ref.encode()}" }) { item ->
             MediaListRow(
                 title = item.title,
                 subtitle = seriesEpisodeCount(item.count)?.let { episodes ->
@@ -601,19 +579,11 @@ private fun SeriesList(
                 trailingChevron = true,
             )
         }
-        if (hasMore) {
-            item(key = "catalog-page-${series.size}") {
-                LaunchedEffect(series.size, loadingMore) {
-                    if (!loadingMore) onLoadMore()
-                }
-                OtvProgressBar(Modifier.fillMaxWidth().padding(vertical = 8.dp))
-            }
-        }
     }
 }
 
 @Composable
-private fun ChannelList(
+internal fun ChannelList(
     sourceId: SourceId,
     channels: List<CatalogItem>,
     nowAiring: Map<String, CatalogProgramme>,
@@ -627,19 +597,18 @@ private fun ChannelList(
     hasMore: Boolean,
     loadingMore: Boolean,
     onLoadMore: () -> Unit,
+    header: (@Composable () -> Unit)? = null,
+    status: (@Composable () -> Unit)? = null,
 ) {
-    if (channels.isEmpty()) {
-        EmptyState(
+    CatalogList(
+        itemCount = channels.size, header = header, status = status,
+        empty = { EmptyState(
             stringResource(R.string.browse_empty_category),
             stringResource(R.string.browse_empty_category_subtitle),
-        )
-        return
-    }
-    LazyColumn(
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) },
+        hasMore = hasMore, loadingMore = loadingMore, onLoadMore = onLoadMore,
     ) {
-        items(channels, key = { it.ref.encode() }) { channel ->
+        items(channels, key = { "catalog-item:${it.ref.encode()}" }) { channel ->
             ChannelRow(
                 channel = channel,
                 airing = channel.tvgId?.let { nowAiring[it] },
@@ -654,14 +623,6 @@ private fun ChannelList(
                     (channel.hasGuide || channel.tvgId?.let { it in guideIds } == true)
                 ) ({ onGuide(channel) }) else null,
             )
-        }
-        if (hasMore) {
-            item(key = "catalog-page-${channels.size}") {
-                LaunchedEffect(channels.size, loadingMore) {
-                    if (!loadingMore) onLoadMore()
-                }
-                OtvProgressBar(Modifier.fillMaxWidth().padding(vertical = 8.dp))
-            }
         }
     }
 }
@@ -725,7 +686,7 @@ internal fun browseListLoading(
 
 /** Compact filter field for the browse content area. */
 @Composable
-internal fun FilterField(value: String, onValueChange: (String) -> Unit, placeholder: String) {
+internal fun FilterField(value: String, onValueChange: (String) -> Unit, placeholder: String, horizontalPadding: Dp? = null) {
     val keyboardController = LocalSoftwareKeyboardController.current
     BoxWithConstraints {
         OutlinedTextField(
@@ -746,8 +707,32 @@ internal fun FilterField(value: String, onValueChange: (String) -> Unit, placeho
             shape = RoundedCornerShape(8.dp),
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = if (maxWidth < 640.dp) 16.dp else 24.dp)
+                .padding(horizontal = horizontalPadding ?: if (maxWidth < 640.dp) 16.dp else 24.dp)
                 .padding(top = 8.dp, bottom = 4.dp),
         )
+    }
+}
+
+/** Saved positions belong to one source, content kind, category and presentation. */
+internal fun browseScrollKey(source: SourceId, kind: Int, group: String?, grid: Boolean): String =
+    "${source.encode()}|$kind|${group?.let { "${it.length}:$it" } ?: "-"}|${when {
+        group == null -> "categories"
+        grid && kind != ChannelKind.LIVE -> "grid"
+        else -> "list"
+    }}"
+
+@Composable
+internal fun BrowseScrollPosition(
+    source: SourceId,
+    kind: Int,
+    group: String?,
+    grid: Boolean,
+    content: @Composable () -> Unit,
+) {
+    val positions = rememberSaveableStateHolder()
+    val positionKey = browseScrollKey(source, kind, group, grid)
+    positions.SaveableStateProvider(positionKey) {
+        // Recreate the lazy state in the selected registry rather than reusing the prior host.
+        key(positionKey) { content() }
     }
 }

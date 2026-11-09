@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
+import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import { useAuth } from '../auth/AuthProvider';
 import { Icon, IconName } from '../components/Icons';
 import { ScreenHeader } from '../components/Primitives';
+import { WorkspaceNavigation } from '../components/WorkspaceNavigation';
 import { AdminUser, adminApi } from './api';
 import type { AdminTextKey } from './copy';
 import { adminText as c } from './copy';
@@ -23,22 +25,35 @@ const SECTIONS: { id: Section; icon: IconName; label: AdminTextKey }[] = [
 export function AdminScreen() {
   const { capabilities } = useAuth();
   const localAccountProvisioning = canProvisionLocalAccounts(capabilities);
-  const [section, setSection] = useState<Section>('users');
+  const [search, setSearch] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const requestedSection = search.get('section');
+  const section = SECTIONS.find(({ id }) => id === requestedSection)?.id ?? 'users';
   const users = useAdminSection(adminApi.users);
   const playlists = useAdminSection(adminApi.playlists);
   const template = useAdminSection(adminApi.playlistTemplate, section === 'template');
   const pending = useAdminSection(adminApi.pendingOidc, section === 'oidc');
   const downloads = useAdminSection(adminApi.downloads, section === 'downloads');
   const [createOpen, setCreateOpen] = useState(false);
-  const [openUserId, setOpenUserId] = useState<string | null>(null);
+  const openUserId = section === 'users' ? search.get('user') : null;
+  const setOpenUserId = (id: string | null, replace = false) => {
+    const next = new URLSearchParams(search);
+    next.set('section', 'users');
+    if (id) next.set('user', id); else next.delete('user');
+    setSearch(next, { replace, state: id ? { adminUserFromList: true } : null });
+  };
   const userOpener = useRef<HTMLElement | null>(null);
-  useEffect(() => { if (openUserId === null) userOpener.current?.focus({ preventScroll: true }); }, [openUserId]);
+  useEffect(() => {
+    if (openUserId !== null || section !== 'users' || !userOpener.current) return;
+    const frame = requestAnimationFrame(() => userOpener.current?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(frame);
+  }, [openUserId, section]);
 
   const replaceUser = (next: AdminUser) =>
     users.set((current) => current?.map((user) => user.id === next.id ? next : user) ?? current);
 
   const openUser = users.data?.find((user) => user.id === openUserId) ?? null;
-  const selectSection = (next: Section) => { setOpenUserId(null); setSection(next); };
   const activeState = { users, template, oidc: pending, downloads }[section];
   const description = {
     users: 'usersHelp', template: 'templateSummary', oidc: 'oidcHelp', downloads: 'downloadsHelp',
@@ -52,23 +67,8 @@ export function AdminScreen() {
         subtitle={<span className="subtitle">{c('subtitle')}</span>}
       />
       <div className="admin-layout">
-        <nav className="admin-nav" aria-label={c('title')}>
-          {SECTIONS.map(({ id, icon, label }) => (
-            <button key={id} className={`admin-nav-item${section === id ? ' selected' : ''}`}
-                    aria-current={section === id ? 'page' : undefined}
-                    onClick={() => selectSection(id)}>
-              <Icon name={icon} />
-              <span>{c(label)}</span>
-              {id === 'oidc' && (pending.data?.length ?? 0) > 0 && <span className="pill">{pending.data!.length}</span>}
-            </button>
-          ))}
-        </nav>
-        <label className="admin-mobile-nav">
-          <span>{c('administrationSection')}</span>
-          <select aria-label={c('administrationSection')} value={section} onChange={(event) => selectSection(event.target.value as Section)}>
-            {SECTIONS.map(({ id, label }) => <option key={id} value={id}>{c(label)}</option>)}
-          </select>
-        </label>
+        <WorkspaceNavigation label={c('title')} active={section} className="admin-navigation"
+          destinations={SECTIONS.map(({ id, icon, label }) => ({ id, icon, label: c(label), to: id === 'users' ? '/admin' : `/admin?section=${id}`, count: id === 'oidc' ? pending.data?.length : undefined }))} />
         <div className="admin-main">
           {openUser && (
             <UserDetail
@@ -76,14 +76,17 @@ export function AdminScreen() {
               user={openUser}
               playlists={playlists}
               localAccountProvisioning={localAccountProvisioning}
-              onBack={() => setOpenUserId(null)}
+              onBack={() => { if (location.state?.adminUserFromList) navigate(-1); else setOpenUserId(null, true); }}
               onChanged={replaceUser}
               onDeleted={() => {
                 users.set((current) => current?.filter((user) => user.id !== openUser.id) ?? current);
-                setOpenUserId(null);
+                setOpenUserId(null, true);
               }}
             />
           )}
+          {openUserId !== null && users.data !== null && !openUser && <div className="admin-feedback" role="status">
+            <p>{c('errorNotFound')}</p><button className="btn text" onClick={() => setOpenUserId(null, true)}>{c('backToUsers')}</button>
+          </div>}
           <div hidden={openUser !== null}>
             <header className="admin-section-heading">
               <div>
@@ -97,8 +100,7 @@ export function AdminScreen() {
                 )}
               </div>
             </header>
-            {section === 'users' && (
-            <>
+            <div hidden={section !== 'users'}>
               {!openUser && !localAccountProvisioning && (
                 <p className="admin-hint admin-provisioning-note">
                   {c('localProvisioningOff')}
@@ -106,8 +108,7 @@ export function AdminScreen() {
               )}
               <UsersPanel users={users} playlists={playlists.data ?? []}
                           onOpen={(user) => { userOpener.current = document.activeElement as HTMLElement; setOpenUserId(user.id); }} />
-            </>
-          )}
+            </div>
           {section === 'template' && (
             <TemplatePanel playlists={playlists} template={template} />
           )}

@@ -1,0 +1,40 @@
+.account-workspace { max-width: 860px; margin: 0 auto; }
+.account-section { min-width: 0; padding: 0 24px 32px; }
+.account-section-header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: start; gap: 12px; margin-bottom: 20px; }
+.account-section-header > div { flex: 1 1 260px; }
+.account-section-header h2 { font: var(--type-title-medium); margin-bottom: 8px; }
+.account-section-header p, .account-description { color: var(--c-fg2); font: var(--type-body-medium); }
+.account-section .btn { width: auto; max-width: 100%; min-height: 44px; height: auto; padding-top: 10px; padding-bottom: 10px; }
+.account-section > .search-wrap { margin: 0 0 12px; padding: 0; }
+.account-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 16px; margin-bottom: 16px; border: 1px solid var(--c-hairline); border-radius: 10px; font: var(--type-body-medium); }
+.account-notice p { flex: 1 1 220px; }
+.account-loading { display: grid; gap: 12px; padding: 8px 0 16px; }
+.account-loading > span { display: block; height: 100px; background: var(--c-panel); border-radius: 12px; }
+.account-count { font: var(--type-body-small); color: var(--c-fg2); margin: 0 0 12px; font-variant-numeric: tabular-nums; }
+.account-list { display: flex; flex-direction: column; border-radius: 12px; background: var(--c-panel); padding: 0 20px; }
+.account-row { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; padding: 20px 0; }
+.account-row + .account-row { border-top: 1px solid var(--c-hairline); }
+.account-row-copy { flex: 1 1 240px; min-width: 0; }
+.account-row h3 { font: var(--type-title-small); overflow-wrap: anywhere; }
+.account-row p { margin-top: 5px; color: var(--c-fg2); font: var(--type-body-small); overflow-wrap: anywhere; }
+.account-row .progress-track { margin-top: 12px; }
+.account-row-action { flex: none; margin-left: auto; }
+.account-session-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.account-session-title .pill { flex: none; }
+.account-bulk-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 20px; }
+.account-empty { padding: 28px 20px; background: var(--c-panel); border-radius: 12px; }
+.account-empty h3 { font: var(--type-title-small); margin-bottom: 8px; }
+.account-empty p { color: var(--c-fg2); font: var(--type-body-medium); }
+.account-operation-error { color: var(--c-bad); font: var(--type-body-medium); }
+.account-confirm .buttons { flex-wrap: wrap; }
+.account-confirm .buttons .btn { flex: 1 1 130px; width: auto; height: auto; min-height: 44px; padding-top: 10px; padding-bottom: 10px; }
+.account-workspace .security-page { max-width: none; }
+.account-workspace .security-content { padding-top: 0; }
+@media (max-width: 640px) {
+  .account-section { padding: 0 16px 24px; }
+  .account-section-header { gap: 4px; margin-bottom: 16px; }
+  .account-section-header > div { flex-basis: 100%; }
+  .account-section-header > .btn { margin-left: auto; }
+  .account-list { padding: 0 16px; }
+  .account-row { gap: 8px; padding: 16px 0; }
+}

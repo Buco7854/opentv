@@ -27,6 +27,27 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class BrowseViewModelTest {
     @Test
+    fun `returning to a seeded category keeps its filter while selecting another clears it`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        try {
+            val gateway = CatalogGatewayFake(SourceId.Hub(3, 9))
+            val viewModel = BrowseViewModel(gateway.source, gateway)
+            viewModel.seedFromRoute(ChannelKind.MOVIE, "Cinema")
+            advanceUntilIdle()
+            viewModel.filter.value = "documentary"
+            viewModel.seedFromRoute(ChannelKind.MOVIE, "Cinema")
+            viewModel.selectGroup("Cinema")
+            assertEquals("documentary", viewModel.filter.value)
+            viewModel.selectGroup("Family")
+            assertEquals("", viewModel.filter.value)
+            assertEquals("Family", viewModel.group.value)
+            advanceUntilIdle()
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
     fun `browse tabs use known source counts without treating an unknown count as zero`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         try {

@@ -29,6 +29,26 @@ export interface CurrentUser {
   playlistIds: number[];
 }
 
+/** The signed-in account's own history, including titles no longer in its library. */
+export interface AccountProgress {
+  contentId: string;
+  title: string | null;
+  positionMs: number;
+  durationMs: number;
+  updatedMs: number;
+}
+
+export interface AccountAuthSession {
+  id: string;
+  authMethod: string;
+  clientKind: ClientKind;
+  deviceName: string | null;
+  createdAtMs: number;
+  lastSeenAtMs: number;
+  idleExpiresAtMs: number;
+  absoluteExpiresAtMs: number;
+}
+
 export interface AuthFlow {
   status: AuthStatus;
   code: string | null;

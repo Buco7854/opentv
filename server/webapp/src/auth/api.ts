@@ -1,6 +1,6 @@
 import { ApiError, browserApiHttp, post } from '../api/http';
 import {
-  AuthCapabilities, AuthFlow, CurrentUser, DeviceLinkRequest, DeviceLinkStart,
+  AccountAuthSession, AccountProgress, AuthCapabilities, AuthFlow, CurrentUser, DeviceLinkRequest, DeviceLinkStart,
   DeviceLinkStartRequest, DeviceLinkStatus, TotpEnrollment, TotpStatus,
   WebAuthnCredential, WebAuthnOptions,
 } from './types';
@@ -115,6 +115,14 @@ export const authApi = {
     flow('/auth/webauthn/credentials/delete', { id }, true),
   logout: (all = false) =>
     browserApiHttp.json<null>('/auth/logout', post({ all })),
+  sessions: () => browserApiHttp.json<AccountAuthSession[]>('/auth/sessions'),
+  revokeSession: (id: string) =>
+    browserApiHttp.json<null>(`/auth/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  revokeOtherSessions: () => browserApiHttp.json<null>('/auth/sessions', { method: 'DELETE' }),
+  progress: () => browserApiHttp.json<AccountProgress[]>('/auth/progress'),
+  deleteProgress: (contentId: string) =>
+    browserApiHttp.json<null>(`/auth/progress/${encodeURIComponent(contentId)}`, { method: 'DELETE' }),
+  clearProgress: () => browserApiHttp.json<null>('/auth/progress', { method: 'DELETE' }),
   additionalRegistrationOptions: () =>
     browserApiHttp.json<WebAuthnOptions>('/auth/webauthn/add/options', { method: 'POST' }),
   completeAdditionalRegistration: (challenge: string, credential: string, label: string) =>

@@ -55,29 +55,33 @@ fun PosterGrid(
     hasMore: Boolean = false,
     loadingMore: Boolean = false,
     onLoadMore: () -> Unit = {},
+    header: (@Composable () -> Unit)? = null,
+    status: (@Composable () -> Unit)? = null,
 ) {
-    if (items.isEmpty()) {
-        EmptyState(
-            stringResource(R.string.browse_empty_category),
-            stringResource(R.string.browse_empty_category_subtitle),
-        )
-        return
-    }
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = 148.dp),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        items(items, key = { it.id }) { item ->
-            PosterCard(item = item, fallback = fallback, onClick = { onClick(item.id) })
-        }
-        if (hasMore) {
-            item(key = "catalog-page-${items.size}", span = { GridItemSpan(maxLineSpan) }) {
-                LaunchedEffect(items.size, loadingMore) {
-                    if (!loadingMore) onLoadMore()
+        if (header != null) item(key = "catalog-header", contentType = "header", span = { GridItemSpan(maxLineSpan) }) { header() }
+        if (status != null || items.isEmpty() && !hasMore) {
+            item(key = "catalog-status", contentType = "status", span = { GridItemSpan(maxLineSpan) }) {
+                CatalogStatus {
+                    if (status != null) status() else EmptyState(stringResource(R.string.browse_empty_category), stringResource(R.string.browse_empty_category_subtitle))
                 }
-                OtvProgressBar(Modifier.fillMaxWidth().padding(vertical = 8.dp))
+            }
+        } else {
+            items(items, key = { "catalog-item:${it.id}" }) { item ->
+                PosterCard(item = item, fallback = fallback, onClick = { onClick(item.id) })
+            }
+            if (hasMore) {
+                item(key = "catalog-page-${items.size}", span = { GridItemSpan(maxLineSpan) }) {
+                    LaunchedEffect(items.size, loadingMore) {
+                        if (!loadingMore) onLoadMore()
+                    }
+                    OtvProgressBar(Modifier.fillMaxWidth().padding(vertical = 8.dp))
+                }
             }
         }
     }

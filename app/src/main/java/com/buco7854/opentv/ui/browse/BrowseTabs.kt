@@ -25,6 +25,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import com.buco7854.opentv.R
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.ui.shell.libraryControl
@@ -33,8 +34,8 @@ import java.text.NumberFormat
 
 /** Shared web/Android tabs: content-sized labels, real gaps, a plain underline and honest counts. */
 @Composable
-internal fun BrowseTabs(kind: Int, counts: Map<Int, Int>, onSelect: (Int) -> Unit) {
-    val horizontal = if (LocalConfiguration.current.screenWidthDp < 640) 16.dp else 24.dp
+internal fun BrowseTabs(kind: Int, counts: Map<Int, Int>, horizontalPadding: Dp? = null, onSelect: (Int) -> Unit) {
+    val horizontal = horizontalPadding ?: if (LocalConfiguration.current.screenWidthDp < 640) 16.dp else 24.dp
     Column(Modifier.padding(horizontal = horizontal)) {
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
             listOf(ChannelKind.LIVE, ChannelKind.MOVIE, ChannelKind.SERIES).forEach { value ->

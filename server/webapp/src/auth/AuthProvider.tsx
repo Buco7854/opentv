@@ -183,8 +183,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [installUser]);
 
   const logout = useCallback(async (all = false) => {
+    if (all) {
+      // Ending other devices is a server operation: a failed request must stay retryable.
+      await authApi.logout(true);
+      clearSession();
+      return;
+    }
     try {
-      await authApi.logout(all);
+      await authApi.logout(false);
     } finally {
       clearSession();
     }
