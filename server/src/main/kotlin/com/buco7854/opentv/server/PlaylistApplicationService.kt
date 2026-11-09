@@ -2,6 +2,7 @@ package com.buco7854.opentv.server
 
 import com.buco7854.opentv.contract.*
 import com.buco7854.opentv.core.log.ProviderSecrets
+import com.buco7854.opentv.core.log.rethrowCancellation
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.model.Playlist
 import com.buco7854.opentv.core.model.SeriesGroup
@@ -24,11 +25,12 @@ import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -242,25 +244,29 @@ class PlaylistApplicationService(
 
     suspend fun detail(actor: Actor, id: Long): PlaylistDetailDto {
         requireAccess(actor, id)
-        val playlist = playlist(id)
-        val nativeXtream = playlist.isXtreamNative
-        val seriesCount = if (nativeXtream) storage.xtreamSeries.observeCount(id).first()
-        else storage.channels.observeCount(id, ChannelKind.SERIES).first()
-        return PlaylistDetailDto(
-            playlist.toApiDto(),
-            nativeXtream,
-            storage.channels.observeCount(id, ChannelKind.LIVE).first(),
-            storage.channels.observeCount(id, ChannelKind.MOVIE).first(),
-            seriesCount,
-        )
+        return content.withStablePlaylist(id) {
+            val playlist = playlist(id)
+            val nativeXtream = playlist.isXtreamNative
+            val seriesCount = if (nativeXtream) storage.xtreamSeries.count(id)
+            else storage.channels.count(id, ChannelKind.SERIES)
+            PlaylistDetailDto(
+                playlist.toApiDto(),
+                nativeXtream,
+                storage.channels.count(id, ChannelKind.LIVE),
+                storage.channels.count(id, ChannelKind.MOVIE),
+                seriesCount,
+            )
+        }
     }
 
     suspend fun groups(actor: Actor, id: Long, kind: Int): List<GroupCountDto> {
         requireAccess(actor, id)
-        val groups = if (kind == ChannelKind.SERIES && playlist(id).isXtreamNative) {
-            storage.xtreamSeries.observeCategories(id).first()
-        } else storage.channels.observeGroups(id, kind).first()
-        return groups.map { it.toDto() }
+        return content.withStablePlaylist(id) {
+            val groups = if (kind == ChannelKind.SERIES && playlist(id).isXtreamNative) {
+                storage.xtreamSeries.categories(id)
+            } else storage.channels.groups(id, kind)
+            groups.map { it.toDto() }
+        }
     }
 
     suspend fun channels(
@@ -271,22 +277,24 @@ class PlaylistApplicationService(
         page: ListingRequest,
     ): ChannelPageDto {
         requireAccess(actor, id)
-        val result = storage.channels.pageInGroup(
-            id, kind, group, page.filter, page.limit, page.offset,
-        )
-        val identities = content.channelListings(result.items)
-        return ChannelPageDto(
-            result.items.map {
-                it.toChannelListItemDto(
-                    cipher,
-                    requireNotNull(identities[it.id]).contentId,
-                    actor.userId,
-                )
-            },
-            result.total,
-            page.offset,
-            page.limit,
-        )
+        return content.withStablePlaylist(id) {
+            val result = storage.channels.pageInGroup(
+                id, kind, group, page.filter, page.limit, page.offset,
+            )
+            val identities = content.channelListings(result.items)
+            ChannelPageDto(
+                result.items.map {
+                    it.toChannelListItemDto(
+                        cipher,
+                        requireNotNull(identities[it.id]).contentId,
+                        actor.userId,
+                    )
+                },
+                result.total,
+                page.offset,
+                page.limit,
+            )
+        }
     }
 
     suspend fun seriesGroups(
@@ -296,23 +304,25 @@ class PlaylistApplicationService(
         page: ListingRequest,
     ): SeriesGroupPageDto {
         requireAccess(actor, id)
-        val result = storage.channels.pageSeriesInGroup(
-            id, group, page.filter, page.limit, page.offset,
-        )
-        val identities = content.m3uSeriesIdentities(id, result.items)
-        return SeriesGroupPageDto(
-            result.items.map {
-                it.toDto(
-                    cipher,
-                    requireNotNull(identities[it.seriesKey]).contentId,
-                    actor.userId,
-                    id,
-                )
-            },
-            result.total,
-            page.offset,
-            page.limit,
-        )
+        return content.withStablePlaylist(id) {
+            val result = storage.channels.pageSeriesInGroup(
+                id, group, page.filter, page.limit, page.offset,
+            )
+            val identities = content.m3uSeriesIdentities(id, result.items)
+            SeriesGroupPageDto(
+                result.items.map {
+                    it.toDto(
+                        cipher,
+                        requireNotNull(identities[it.seriesKey]).contentId,
+                        actor.userId,
+                        id,
+                    )
+                },
+                result.total,
+                page.offset,
+                page.limit,
+            )
+        }
     }
 
     suspend fun xtreamSeries(
@@ -322,22 +332,24 @@ class PlaylistApplicationService(
         page: ListingRequest,
     ): XtreamSeriesPageDto {
         requireAccess(actor, id)
-        val result = storage.xtreamSeries.pageInCategory(
-            id, category, page.filter, page.limit, page.offset,
-        )
-        val identities = content.xtreamSeriesListingIdentities(result.items)
-        return XtreamSeriesPageDto(
-            result.items.map {
-                it.toListItemDto(
-                    cipher,
-                    requireNotNull(identities[it.seriesId]).contentId,
-                    actor.userId,
-                )
-            },
-            result.total,
-            page.offset,
-            page.limit,
-        )
+        return content.withStablePlaylist(id) {
+            val result = storage.xtreamSeries.pageInCategory(
+                id, category, page.filter, page.limit, page.offset,
+            )
+            val identities = content.xtreamSeriesListingIdentities(result.items)
+            XtreamSeriesPageDto(
+                result.items.map {
+                    it.toListItemDto(
+                        cipher,
+                        requireNotNull(identities[it.seriesId]).contentId,
+                        actor.userId,
+                    )
+                },
+                result.total,
+                page.offset,
+                page.limit,
+            )
+        }
     }
 
     suspend fun nowAiring(
@@ -375,52 +387,54 @@ class PlaylistApplicationService(
 
     suspend fun search(actor: Actor, id: Long, query: String): SearchResultsDto {
         requireAccess(actor, id)
-        val term = query.trim().take(MAX_SEARCH_QUERY_CHARS)
-        if (term.length < 2) return SearchResultsDto()
-        val (rows, panelHits) = coroutineScope {
-            val rows = async { storage.channels.search(id, term) }
-            val panelHits = async { storage.xtreamSeries.search(id, term) }
-            rows.await() to panelHits.await()
-        }
-        val m3uGroups = rows.filter { it.kind == ChannelKind.SERIES }
-            .filterNot { it.seriesKey?.startsWith("xs:") == true }
-            .groupBy { it.seriesKey ?: it.name }
-            .map { (key, episodes) ->
-                SeriesGroup(
-                    key,
-                    episodes.size,
-                    episodes.firstOrNull { it.logo != null }?.logo,
-                    episodes.first().groupTitle,
+        return content.withStablePlaylist(id) {
+            val term = query.trim().take(MAX_SEARCH_QUERY_CHARS)
+            if (term.length < 2) return@withStablePlaylist SearchResultsDto()
+            val (rows, panelHits) = coroutineScope {
+                val rows = async { storage.channels.search(id, term) }
+                val panelHits = async { storage.xtreamSeries.search(id, term) }
+                rows.await() to panelHits.await()
+            }
+            val m3uGroups = rows.filter { it.kind == ChannelKind.SERIES }
+                .filterNot { it.seriesKey?.startsWith("xs:") == true }
+                .groupBy { it.seriesKey ?: it.name }
+                .map { (key, episodes) ->
+                    SeriesGroup(
+                        key,
+                        episodes.size,
+                        episodes.firstOrNull { it.logo != null }?.logo,
+                        episodes.first().groupTitle,
+                    )
+                }
+            val m3uIdentities = content.m3uSeriesIdentities(id, m3uGroups)
+            val m3uSeries = m3uGroups.map { group ->
+                SeriesHitDto(
+                    requireNotNull(m3uIdentities[group.seriesKey]).contentId,
+                    group.seriesKey,
+                    group.count,
+                    cipher.encryptOrNull(group.logo, actor.userId, id),
+                    group.groupTitle,
                 )
             }
-        val m3uIdentities = content.m3uSeriesIdentities(id, m3uGroups)
-        val m3uSeries = m3uGroups.map { group ->
-            SeriesHitDto(
-                requireNotNull(m3uIdentities[group.seriesKey]).contentId,
-                group.seriesKey,
-                group.count,
-                cipher.encryptOrNull(group.logo, actor.userId, id),
-                group.groupTitle,
+            val panelIdentities = content.xtreamSeriesIdentities(panelHits)
+            val panelSeries = panelHits.map {
+                SeriesHitDto(
+                    requireNotNull(panelIdentities[it.seriesId]).contentId,
+                    it.name,
+                    0,
+                    cipher.encryptOrNull(it.cover, actor.userId, id),
+                    it.categoryName,
+                    it.seriesId.toString(),
+                )
+            }
+            SearchResultsDto(
+                live = channelDtos(actor, rows.filter { it.kind == ChannelKind.LIVE }),
+                movies = channelDtos(actor, rows.filter { it.kind == ChannelKind.MOVIE }),
+                series = (panelSeries + m3uSeries)
+                    .sortedWith(seriesSearchComparator(term))
+                    .take(SEARCH_RESULTS_PER_KIND),
             )
         }
-        val panelIdentities = content.xtreamSeriesIdentities(panelHits)
-        val panelSeries = panelHits.map {
-            SeriesHitDto(
-                requireNotNull(panelIdentities[it.seriesId]).contentId,
-                it.name,
-                0,
-                cipher.encryptOrNull(it.cover, actor.userId, id),
-                it.categoryName,
-                it.seriesId.toString(),
-            )
-        }
-        return SearchResultsDto(
-            live = channelDtos(actor, rows.filter { it.kind == ChannelKind.LIVE }),
-            movies = channelDtos(actor, rows.filter { it.kind == ChannelKind.MOVIE }),
-            series = (panelSeries + m3uSeries)
-                .sortedWith(seriesSearchComparator(term))
-                .take(SEARCH_RESULTS_PER_KIND),
-        )
     }
 
     suspend fun account(actor: Actor, id: Long, force: Boolean): AccountInfoDto {
@@ -575,36 +589,63 @@ class PlaylistApplicationService(
         page: ListingRequest,
     ): EpisodePageDto {
         requireAccess(actor, id)
-        val result = storage.channels.pageEpisodes(
-            id, seriesKey, season, page.limit, page.offset,
-        )
-        val seasons = storage.channels.episodeSeasons(id, seriesKey)
-        val identities = content.channelListings(result.items)
-        return EpisodePageDto(
-            result.items.map {
-                it.toEpisodeListItemDto(
-                    cipher,
-                    requireNotNull(identities[it.id]).contentId,
-                    actor.userId,
-                )
-            },
-            result.total,
-            page.offset,
-            page.limit,
-            seasons,
-            if (result.total > 0 || seasons.isNotEmpty()) {
-                content.m3uSeries(id, seriesKey).contentId
-            } else null,
-            result.items.firstOrNull()?.groupTitle,
-        )
+        return content.withStablePlaylist(id) {
+            val result = storage.channels.pageEpisodes(
+                id, seriesKey, season, page.limit, page.offset,
+            )
+            val seasons = storage.channels.episodeSeasons(id, seriesKey)
+            val identities = content.channelListings(result.items)
+            EpisodePageDto(
+                result.items.map {
+                    it.toEpisodeListItemDto(
+                        cipher,
+                        requireNotNull(identities[it.id]).contentId,
+                        actor.userId,
+                    )
+                },
+                result.total,
+                page.offset,
+                page.limit,
+                seasons,
+                if (result.total > 0 || seasons.isNotEmpty()) {
+                    content.m3uSeries(id, seriesKey).contentId
+                } else null,
+                result.items.firstOrNull()?.groupTitle,
+            )
+        }
     }
 
     suspend fun xtreamSeriesDetail(actor: Actor, id: Long, seriesId: Long): XtreamSeriesDetailDto {
         requireAccess(actor, id)
+        val failure = try {
+            xtream.ensureEpisodes(id, seriesId, withCatalogWrite = { commit ->
+                content.mutatePlaylist(id) {
+                    // Once admitted, complete the local swap and rebind together even if the
+                    // requesting tab leaves. Provider work remains cancellable outside the gate.
+                    withContext(NonCancellable) {
+                        try {
+                            commit()
+                            content.channels(storage.channels.episodes(id, xtreamSeriesKey(seriesId)))
+                        } catch (failure: Throwable) {
+                            try {
+                                content.repairPlaylist(id)
+                            } catch (repairFailure: Throwable) {
+                                failure.addSuppressed(repairFailure)
+                            }
+                            throw failure
+                        }
+                    }
+                }
+            })
+            null
+        } catch (error: Exception) {
+            error.rethrowCancellation()
+            error
+        }
+        requireAccess(actor, id)
         return content.withStablePlaylist(id) {
             val series = storage.xtreamSeries.get(id, seriesId) ?: throw ResourceNotFound("series")
-            val failure = runCatching { xtream.ensureEpisodes(id, seriesId) }.exceptionOrNull()
-            val episodes = storage.channels.observeEpisodes(id, xtreamSeriesKey(seriesId)).first()
+            val episodes = storage.channels.episodes(id, xtreamSeriesKey(seriesId))
             content.channels(episodes)
             XtreamSeriesDetailDto(
                 series.toDto(cipher, content.xtreamSeries(series).contentId, actor.userId),

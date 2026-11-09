@@ -29,6 +29,11 @@ vi.mock('./api', () => ({
     createUser: vi.fn(),
     updateUser: vi.fn(),
     resetUser: vi.fn(),
+    deleteUser: vi.fn(),
+    setUserPlaylists: vi.fn(),
+    sessions: vi.fn(),
+    progress: vi.fn(),
+    cancelDownloadBlob: vi.fn(),
   },
 }));
 
@@ -52,9 +57,9 @@ describe('AdminScreen', () => {
   beforeEach(() => {
     vi.mocked(adminApi.users).mockReset().mockResolvedValue([signedInAccount]);
     vi.mocked(adminApi.playlists).mockResolvedValue([]);
-    vi.mocked(adminApi.playlistTemplate).mockResolvedValue({ playlistIds: [] });
-    vi.mocked(adminApi.pendingOidc).mockResolvedValue([]);
-    vi.mocked(adminApi.downloads).mockResolvedValue([]);
+    vi.mocked(adminApi.playlistTemplate).mockReset().mockResolvedValue({ playlistIds: [] });
+    vi.mocked(adminApi.pendingOidc).mockReset().mockResolvedValue([]);
+    vi.mocked(adminApi.downloads).mockReset().mockResolvedValue([]);
     vi.mocked(adminApi.updateUser).mockReset().mockResolvedValue(signedInAccount);
     capabilities.mockReturnValue({ passwordEnabled: true });
   });
@@ -240,6 +245,92 @@ describe('AdminScreen', () => {
     await settled();
 
     expect(screen.getByText('You')).toBeTruthy();
-    expect(screen.getByText('@root · All playlists')).toBeTruthy();
+    expect(screen.getByText('@root')).toBeTruthy();
+    expect(screen.getByText('All playlists')).toBeTruthy();
+  });
+
+  it('loads unrelated server collections only when their administration section opens', async () => {
+    render(<AdminScreen />);
+    await settled();
+    expect(adminApi.playlistTemplate).not.toHaveBeenCalled();
+    expect(adminApi.pendingOidc).not.toHaveBeenCalled();
+    expect(adminApi.downloads).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Shared downloads' }));
+    await settled();
+    expect(adminApi.downloads).toHaveBeenCalledTimes(1);
+    expect(adminApi.playlistTemplate).not.toHaveBeenCalled();
+    expect(adminApi.pendingOidc).not.toHaveBeenCalled();
+  });
+
+  it('keeps the last useful account list when refresh fails and retries in place', async () => {
+    render(<AdminScreen />);
+    await settled();
+    vi.mocked(adminApi.users).mockRejectedValueOnce(new ApiError('offline', 500, 'internal_error'));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await settled();
+    expect(screen.getByText('Root')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await settled();
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(screen.getByText('Root')).toBeTruthy();
+  });
+
+  it('keeps account details in the administration workspace and does not mistake pending playlists for no access', async () => {
+    let finishPlaylists!: (value: Awaited<ReturnType<typeof adminApi.playlists>>) => void;
+    vi.mocked(adminApi.playlists).mockReturnValue(new Promise((resolve) => { finishPlaylists = resolve; }));
+    render(<AdminScreen />);
+    await settled();
+    fireEvent.click(screen.getByText('Root'));
+    expect(screen.getByRole('navigation', { name: 'Administration' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Back to users' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Playlists' }));
+    expect(screen.queryByText('No playlists are configured.')).toBeNull();
+    expect((screen.getByRole('button', { name: 'Save playlist access' }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => { finishPlaylists([]); });
+    expect(screen.getByText('No playlists are configured.')).toBeTruthy();
+  });
+
+  it('names the account in a destructive confirmation', async () => {
+    vi.mocked(adminApi.users).mockResolvedValue([
+      signedInAccount,
+      { ...signedInAccount, id: 'other', username: 'marie', displayName: 'Marie', effectiveRole: 'USER', manualRole: 'USER' },
+    ]);
+    render(<AdminScreen />);
+    await settled();
+    fireEvent.click(screen.getByText('Marie'));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete user' }));
+    expect(screen.getByRole('dialog', { name: 'Delete Marie permanently?' })).toBeTruthy();
+  });
+
+  it('returns to the same account search and keyboard position after opening details', async () => {
+    render(<AdminScreen />);
+    await settled();
+    const search = screen.getByPlaceholderText('Search users') as HTMLInputElement;
+    fireEvent.change(search, { target: { value: 'root' } });
+    const opener = screen.getByRole('button', { name: /Root.*@root/ });
+    opener.focus();
+    fireEvent.click(opener);
+    fireEvent.click(screen.getByRole('button', { name: 'Back to users' }));
+    expect((screen.getByPlaceholderText('Search users') as HTMLInputElement).value).toBe('root');
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it('describes shared download cancellation with titles and account names instead of internal IDs', async () => {
+    vi.mocked(adminApi.downloads).mockResolvedValue([{
+      userId: 'admin-1', userDownloadId: 'request-secret', blobId: 'blob-secret', contentId: 'content-secret',
+      title: 'Evening cinema', status: 'RUNNING', active: true, suspended: false, totalBytes: 1000, downloadedBytes: 500,
+    }]);
+    render(<AdminScreen />);
+    await settled();
+    fireEvent.click(screen.getByRole('button', { name: 'Shared downloads' }));
+    await settled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel download' }));
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.textContent).toContain('Evening cinema');
+    expect(dialog.textContent).toContain('Root');
+    expect(dialog.textContent).not.toContain('admin-1');
+    expect(dialog.textContent).not.toContain('blob-secret');
   });
 });

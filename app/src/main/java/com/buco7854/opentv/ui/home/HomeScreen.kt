@@ -32,6 +32,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -116,8 +117,8 @@ internal fun HomeLibrary(
     onRetry: () -> Unit,
 ) {
     LazyColumn(
-        modifier = Modifier.widthIn(max = 960.dp).fillMaxSize(),
-        contentPadding = PaddingValues(24.dp),
+        modifier = Modifier.widthIn(max = 1180.dp).fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = if (LocalConfiguration.current.screenWidthDp < 640) 16.dp else 24.dp, vertical = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item {
@@ -128,7 +129,6 @@ internal fun HomeLibrary(
                         style = MaterialTheme.typography.titleLarge,
                         modifier = Modifier.weight(1f).semantics { heading() },
                     )
-
                 }
                 if (sources.isEmpty()) {
                     Text(

@@ -13,6 +13,7 @@ import com.buco7854.opentv.core.model.ResumePoint
 import com.buco7854.opentv.core.model.SeriesGroup
 import com.buco7854.opentv.core.model.XtreamSeries
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 
 /** A search response is intentionally small enough for phone, TV, and browser list rendering. */
 const val SEARCH_RESULTS_PER_KIND = 50
@@ -107,6 +108,8 @@ interface ChannelStore {
     }
     suspend fun count(playlistId: Long, kind: Int): Int
     fun observeGroups(playlistId: Long, kind: Int): Flow<List<GroupCount>>
+    /** Database adapters override this with a one-shot read without invalidation tracking. */
+    suspend fun groups(playlistId: Long, kind: Int): List<GroupCount> = observeGroups(playlistId, kind).first()
     fun observeInGroup(playlistId: Long, kind: Int, group: String): Flow<List<Channel>>
     suspend fun pageInGroup(
         playlistId: Long,
@@ -126,6 +129,8 @@ interface ChannelStore {
     ): ListingPage<SeriesGroup>
     fun observeAllSeries(playlistId: Long): Flow<List<SeriesGroup>>
     fun observeEpisodes(playlistId: Long, seriesKey: String): Flow<List<Channel>>
+    suspend fun episodes(playlistId: Long, seriesKey: String): List<Channel> =
+        observeEpisodes(playlistId, seriesKey).first()
     suspend fun pageEpisodes(
         playlistId: Long,
         seriesKey: String,
@@ -162,6 +167,11 @@ interface ChannelStore {
     suspend fun inGroup(playlistId: Long, groupTitle: String): List<Channel>
     suspend fun updateAll(channels: List<Channel>)
     suspend fun deleteEpisodes(playlistId: Long, seriesKey: String)
+    /** Replace one cached series atomically in persistent adapters; the default is for fakes. */
+    suspend fun replaceEpisodes(playlistId: Long, seriesKey: String, channels: List<Channel>) {
+        deleteEpisodes(playlistId, seriesKey)
+        insertAll(channels)
+    }
 }
 
 interface XtreamSeriesStore {
@@ -175,6 +185,7 @@ interface XtreamSeriesStore {
         insertAll(series)
     }
     fun observeCategories(playlistId: Long): Flow<List<GroupCount>>
+    suspend fun categories(playlistId: Long): List<GroupCount> = observeCategories(playlistId).first()
     fun observeInCategory(playlistId: Long, category: String): Flow<List<XtreamSeries>>
     suspend fun pageInCategory(
         playlistId: Long,
@@ -184,6 +195,7 @@ interface XtreamSeriesStore {
         offset: Int,
     ): ListingPage<XtreamSeriesListing>
     fun observeAll(playlistId: Long): Flow<List<XtreamSeries>>
+    suspend fun getAll(playlistId: Long): List<XtreamSeries> = observeAll(playlistId).first()
     fun observeCount(playlistId: Long): Flow<Int>
     suspend fun get(playlistId: Long, seriesId: Long): XtreamSeries?
     /** Ranked substring search bounded to [limit]; see [ChannelStore.search]. */

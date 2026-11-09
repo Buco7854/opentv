@@ -70,6 +70,7 @@ class HubCatalogGateway internal constructor(
             usesXtreamCredentials = edit?.mode == "xtream",
             usesM3uUrl = edit?.mode == "url",
             isFileImport = edit?.mode == "file",
+            contentCounts = mapOf(ChannelKind.LIVE to detail.liveCount, ChannelKind.MOVIE to detail.movieCount, ChannelKind.SERIES to detail.seriesCount),
         )
     }
 

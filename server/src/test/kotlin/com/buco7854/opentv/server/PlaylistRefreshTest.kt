@@ -1,5 +1,8 @@
 package com.buco7854.opentv.server
 
+import androidx.room.immediateTransaction
+import androidx.room.useWriterConnection
+import com.buco7854.opentv.contract.FavoriteRequest
 import com.buco7854.opentv.contract.PlaylistRefreshJobDto
 import com.buco7854.opentv.contract.PlaylistRefreshJobStatus
 import com.buco7854.opentv.core.epg.TextSource
@@ -8,6 +11,7 @@ import com.buco7854.opentv.core.model.Playlist
 import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.model.GroupOverride
+import com.buco7854.opentv.core.model.XtreamSeries
 import com.buco7854.opentv.core.net.ConditionalFetch
 import com.buco7854.opentv.core.net.ConditionalFetcher
 import com.buco7854.opentv.core.net.TextBody
@@ -16,6 +20,7 @@ import com.buco7854.opentv.core.repo.EpgRepository
 import com.buco7854.opentv.core.repo.PlaylistRepository
 import com.buco7854.opentv.core.repo.XtreamRepository
 import com.buco7854.opentv.core.storage.Storage
+import com.buco7854.opentv.core.storage.ChannelStore
 import com.buco7854.opentv.core.xtream.XtreamApi
 import com.buco7854.opentv.serverdata.AuthMethod
 import com.buco7854.opentv.serverdata.ClientKind
@@ -27,6 +32,7 @@ import com.buco7854.opentv.serverdata.db.OpenTvServerDatabase
 import com.buco7854.opentv.serverdata.db.UserPlaylistGrantRow
 import com.buco7854.opentv.serverdata.db.UserRow
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -59,6 +65,120 @@ class PlaylistRefreshTest {
         "#EXTINF:-1 tvg-id=\"two\" group-title=\"Live\",Channel Two",
         "https://provider.example/live/u/p/2.ts",
     )
+
+    @Test
+    fun `a page and its content identities belong to one catalog generation`() {
+        val rowsRead = CompletableDeferred<Unit>()
+        val releasePage = CompletableDeferred<Unit>()
+        withService(wrapStorage = { original ->
+            object : Storage by original {
+                override val channels = object : ChannelStore by original.channels {
+                    override suspend fun pageInGroup(playlistId: Long, kind: Int, group: String, filter: String, limit: Int, offset: Int) =
+                        original.channels.pageInGroup(playlistId, kind, group, filter, limit, offset).also {
+                            rowsRead.complete(Unit)
+                            releasePage.await()
+                        }
+                }
+            }
+        }) { fixture ->
+            val id = fixture.storage.playlists.insert(Playlist(name = "Library", url = "https://provider.example/playlist.m3u"))
+            fixture.service.refresh(admin, id, force = true)
+            withContext(Dispatchers.IO) {
+                val page = async { fixture.service.channels(admin, id, ChannelKind.LIVE, "Live", ListingRequest(0, 50)) }
+                try {
+                    withTimeout(5_000) { rowsRead.await() }
+                    val enteredRefresh = CompletableDeferred<Unit>()
+                    val refresh = async(start = CoroutineStart.UNDISPATCHED) {
+                        fixture.content.refreshPlaylist(id) {
+                            enteredRefresh.complete(Unit)
+                            false
+                        }
+                    }
+                    assertFalse(enteredRefresh.isCompleted, "refresh cannot enter between a page read and identity binding")
+                    releasePage.complete(Unit)
+                    assertEquals(2, withTimeout(5_000) { page.await() }.total)
+                    refresh.await()
+                    assertTrue(enteredRefresh.isCompleted)
+                } finally {
+                    releasePage.complete(Unit)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `cold browse and favorites reads do not wait for the database writer`() = withService { fixture ->
+        val id = fixture.storage.playlists.insert(Playlist(name = "Library", url = null))
+        fixture.storage.channels.insertAll(listOf(Channel(
+            playlistId = id, name = "A movie", url = "https://provider.example/movie.mp4",
+            logo = null, groupTitle = "Cinema", tvgId = null, kind = ChannelKind.MOVIE,
+            seriesKey = null, season = null, episode = null, position = 0,
+        )))
+        fixture.content.reconcilePlaylist(id)
+        fixture.service.addFavorite(admin, id, FavoriteRequest(fixture.userDatabase.content().forPlaylist(id).single().contentId))
+        withContext(Dispatchers.IO) {
+            val acquired = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val writer = async {
+                fixture.userDatabase.useWriterConnection { connection ->
+                    connection.immediateTransaction {
+                        acquired.complete(Unit)
+                        release.await()
+                    }
+                }
+            }
+            try {
+                withTimeout(5_000) { acquired.await() }
+                withTimeout(2_000) {
+                    assertEquals(1, fixture.service.detail(admin, id).movieCount)
+                    assertEquals(1, fixture.service.groups(admin, id, ChannelKind.MOVIE).size)
+                    assertEquals(1, fixture.service.channels(admin, id, ChannelKind.MOVIE, "Cinema", ListingRequest(0, 50)).total)
+                    assertEquals(1, fixture.service.resolvedFavorites(admin, id).movies.size)
+                }
+                assertFalse(writer.isCompleted, "read requests must finish while the writer remains held")
+            } finally {
+                release.complete(Unit)
+                writer.await()
+            }
+        }
+    }
+
+    @Test
+    fun `slow episode fetch owns no catalog gate and does not queue another series`() = withService { fixture ->
+        val id = fixture.storage.playlists.insert(Playlist(
+            name = "Panel", url = null, xtreamBase = "https://provider.example", xtreamUser = "u", xtreamPass = "p",
+        ))
+        fixture.storage.xtreamSeries.insertAll(listOf(66L, 67L).map { seriesId -> XtreamSeries(
+            playlistId = id, seriesId = seriesId, name = "Show $seriesId", categoryName = "Drama",
+            cover = null, plot = null, castNames = null, genre = null, rating = null,
+        ) })
+        fixture.content.reconcilePlaylist(id)
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        fixture.panel = { url ->
+            if (url.contains("series_id=66")) {
+                started.complete(Unit)
+                release.await()
+            }
+            """{"episodes":{"1":[{"id":"900","title":"Episode one","container_extension":"mp4","season":1,"episode_num":1}]}}"""
+        }
+        withContext(Dispatchers.IO) {
+            val slow = async { fixture.service.xtreamSeriesDetail(admin, id, 66) }
+            try {
+                withTimeout(5_000) { started.await() }
+                withTimeout(2_000) {
+                    fixture.content.mutatePlaylist(id) { Unit }
+                    assertEquals(1, fixture.service.xtreamSeriesDetail(admin, id, 67).episodes.size)
+                    assertEquals(2, fixture.service.xtreamSeries(admin, id, "Drama", ListingRequest(0, 50)).total)
+                    fixture.service.resolvedFavorites(admin, id)
+                }
+                assertFalse(slow.isCompleted)
+            } finally {
+                release.complete(Unit)
+            }
+            assertEquals(1, slow.await().episodes.size)
+        }
+    }
 
     @Test
     fun `a refresh that did no work does not reconcile the catalog`() = withService { fixture ->
@@ -354,16 +474,20 @@ class PlaylistRefreshTest {
         val bodies = mutableMapOf<String, List<String>>()
         var responseEtag: String? = null
         var fetchFailure = false
+        var panel: suspend (String) -> String = { error("no panel in this test") }
 
         /** Lets a test block one URL's fetch mid-flight while another proceeds. */
         var gateUrl: String? = null
         var gate: CompletableDeferred<Unit>? = null
     }
 
-    private fun withService(block: suspend (Fixture) -> Unit) = runTest {
+    private fun withService(
+        wrapStorage: (Storage) -> Storage = { it },
+        block: suspend (Fixture) -> Unit,
+    ) = runTest {
         val persistence = ServerTestPersistence("playlist-refresh")
         val dir = persistence.directory
-        val storage = persistence.storage
+        val storage = wrapStorage(persistence.storage)
         val userDatabase = persistence.database
         try {
             userDatabase.users().insert(
@@ -389,7 +513,7 @@ class PlaylistRefreshTest {
                 ConditionalFetch.Success(LineBody(lines), etag = fixture.responseEtag, lastModified = null)
             }
             val log = CoreLog { _, _ -> }
-            val xtreamApi = XtreamApi { _ -> error("no panel in this test") }
+            val xtreamApi = XtreamApi { url -> fixture.panel(url) }
             val account = AccountRepository(xtreamApi, log)
             val playlists = PlaylistRepository(storage, xtreamApi, fetcher, log, account)
             val epg = EpgRepository(storage, fetcher)

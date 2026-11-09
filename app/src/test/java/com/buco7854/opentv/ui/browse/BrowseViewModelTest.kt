@@ -27,6 +27,23 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class BrowseViewModelTest {
     @Test
+    fun `browse tabs use known source counts without treating an unknown count as zero`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        try {
+            val source = SourceId.Hub(3, 9)
+            val traits = CatalogGatewayFake(source).sourceTraits.copy(contentCounts = mapOf(ChannelKind.MOVIE to 0, ChannelKind.SERIES to 12))
+            val gateway = CatalogGatewayFake(source, traits).apply {
+                groupsResult = CatalogResult.Success(listOf(CatalogGroup("News", 7)))
+            }
+            val viewModel = BrowseViewModel(source, gateway)
+            advanceUntilIdle()
+            assertEquals(mapOf(ChannelKind.LIVE to 7, ChannelKind.MOVIE to 0, ChannelKind.SERIES to 12), viewModel.contentCounts.value)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
     fun `changing Browse content kind clears the old category and filter`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         try {

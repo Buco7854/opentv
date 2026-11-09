@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../auth/AuthProvider';
 import { Icon, IconName } from '../components/Icons';
-import { IconBtn, ScreenHeader, Segmented } from '../components/Primitives';
+import { ScreenHeader } from '../components/Primitives';
 import { AdminUser, adminApi } from './api';
 import type { AdminTextKey } from './copy';
 import { adminText as c } from './copy';
@@ -26,94 +26,94 @@ export function AdminScreen() {
   const [section, setSection] = useState<Section>('users');
   const users = useAdminSection(adminApi.users);
   const playlists = useAdminSection(adminApi.playlists);
-  const template = useAdminSection(adminApi.playlistTemplate);
-  const pending = useAdminSection(adminApi.pendingOidc);
-  const downloads = useAdminSection(adminApi.downloads);
+  const template = useAdminSection(adminApi.playlistTemplate, section === 'template');
+  const pending = useAdminSection(adminApi.pendingOidc, section === 'oidc');
+  const downloads = useAdminSection(adminApi.downloads, section === 'downloads');
   const [createOpen, setCreateOpen] = useState(false);
   const [openUserId, setOpenUserId] = useState<string | null>(null);
+  const userOpener = useRef<HTMLElement | null>(null);
+  useEffect(() => { if (openUserId === null) userOpener.current?.focus({ preventScroll: true }); }, [openUserId]);
 
   const replaceUser = (next: AdminUser) =>
     users.set((current) => current?.map((user) => user.id === next.id ? next : user) ?? current);
 
-  const counts: Record<Section, number | null> = {
-    users: users.data?.length ?? null,
-    template: template.data?.playlistIds.length ?? null,
-    oidc: pending.data?.length ?? null,
-    downloads: downloads.data?.length ?? null,
-  };
-
   const openUser = users.data?.find((user) => user.id === openUserId) ?? null;
-  if (openUser) {
-    return (
-      <UserDetail
-        user={openUser}
-        playlists={playlists.data ?? []}
-        localAccountProvisioning={localAccountProvisioning}
-        onBack={() => setOpenUserId(null)}
-        onChanged={replaceUser}
-        onDeleted={() => {
-          users.set((current) => current?.filter((user) => user.id !== openUser.id) ?? current);
-          setOpenUserId(null);
-        }}
-      />
-    );
-  }
+  const selectSection = (next: Section) => { setOpenUserId(null); setSection(next); };
+  const activeState = { users, template, oidc: pending, downloads }[section];
+  const description = {
+    users: 'usersHelp', template: 'templateSummary', oidc: 'oidcHelp', downloads: 'downloadsHelp',
+  } as const;
 
   return (
-    <>
+    <div className="admin-workspace">
       <ScreenHeader
         title={c('title')}
         subtitle={<span className="subtitle">{c('subtitle')}</span>}
-        actions={section === 'users' && localAccountProvisioning && (
-          <IconBtn name="add" label={c('createUser')} onClick={() => setCreateOpen(true)} />
-        )}
       />
-
-      <div className="mx-3 mt-1 mb-2 md:hidden">
-        <Segmented<Section>
-          className="scroll"
-          options={SECTIONS.map(({ id, label }): [Section, string] => [
-            id,
-            counts[id] ? `${c(label)} · ${counts[id]}` : c(label),
-          ])}
-          selected={section}
-          onSelect={setSection}
-        />
-      </div>
-
-      <div className="mx-auto flex max-w-[1040px] items-start gap-8 px-4">
-        <nav className="sticky top-[92px] hidden w-[236px] flex-none flex-col gap-1 self-start pt-4 md:flex">
+      <div className="admin-layout">
+        <nav className="admin-nav" aria-label={c('title')}>
           {SECTIONS.map(({ id, icon, label }) => (
-            <button key={id} className={`panel-row${section === id ? ' selected' : ''}`}
-                    onClick={() => setSection(id)}>
+            <button key={id} className={`admin-nav-item${section === id ? ' selected' : ''}`}
+                    aria-current={section === id ? 'page' : undefined}
+                    onClick={() => selectSection(id)}>
               <Icon name={icon} />
-              <div className="body"><div className="name">{c(label)}</div></div>
-              {counts[id] ? <span className="pill">{counts[id]}</span> : null}
+              <span>{c(label)}</span>
+              {id === 'oidc' && (pending.data?.length ?? 0) > 0 && <span className="pill">{pending.data!.length}</span>}
             </button>
           ))}
         </nav>
-
-        <div className="min-w-0 flex-1 pt-4 pb-6">
-          <div className="admin-label">{c(SECTIONS.find(({ id }) => id === section)!.label)}</div>
-
-          {section === 'users' && (
+        <label className="admin-mobile-nav">
+          <span>{c('administrationSection')}</span>
+          <select aria-label={c('administrationSection')} value={section} onChange={(event) => selectSection(event.target.value as Section)}>
+            {SECTIONS.map(({ id, label }) => <option key={id} value={id}>{c(label)}</option>)}
+          </select>
+        </label>
+        <div className="admin-main">
+          {openUser && (
+            <UserDetail
+              key={openUser.id}
+              user={openUser}
+              playlists={playlists}
+              localAccountProvisioning={localAccountProvisioning}
+              onBack={() => setOpenUserId(null)}
+              onChanged={replaceUser}
+              onDeleted={() => {
+                users.set((current) => current?.filter((user) => user.id !== openUser.id) ?? current);
+                setOpenUserId(null);
+              }}
+            />
+          )}
+          <div hidden={openUser !== null}>
+            <header className="admin-section-heading">
+              <div>
+                <h2>{c(SECTIONS.find(({ id }) => id === section)!.label)}</h2>
+                <p className="admin-hint">{c(description[section])}</p>
+              </div>
+              <div className="admin-heading-actions">
+                <button className="btn text" onClick={activeState.reload}><Icon name="refresh" /><span>{c('refresh')}</span></button>
+                {section === 'users' && localAccountProvisioning && (
+                  <button className="btn" onClick={() => setCreateOpen(true)}><Icon name="add" />{c('createUser')}</button>
+                )}
+              </div>
+            </header>
+            {section === 'users' && (
             <>
-              {!localAccountProvisioning && (
+              {!openUser && !localAccountProvisioning && (
                 <p className="admin-hint admin-provisioning-note">
                   {c('localProvisioningOff')}
                 </p>
               )}
               <UsersPanel users={users} playlists={playlists.data ?? []}
-                          onOpen={(user) => setOpenUserId(user.id)} />
+                          onOpen={(user) => { userOpener.current = document.activeElement as HTMLElement; setOpenUserId(user.id); }} />
             </>
           )}
           {section === 'template' && (
             <TemplatePanel playlists={playlists} template={template} />
           )}
-          {section === 'oidc' && (
+            {section === 'oidc' && (
             <OidcPanel
               pending={pending}
-              users={users.data ?? []}
+              users={users}
               onApproved={(identity, user) => {
                 pending.set((current) => current?.filter((item) =>
                   item.issuer !== identity.issuer || item.subject !== identity.subject) ?? current);
@@ -124,8 +124,9 @@ export function AdminScreen() {
             />
           )}
           {section === 'downloads' && (
-            <DownloadsPanel downloads={downloads} />
+            <DownloadsPanel downloads={downloads} users={users.data ?? []} />
           )}
+          </div>
         </div>
       </div>
 
@@ -135,6 +136,6 @@ export function AdminScreen() {
           onCreated={(user) => users.set((current) => current ? [...current, user] : [user])}
         />
       )}
-    </>
+    </div>
   );
 }

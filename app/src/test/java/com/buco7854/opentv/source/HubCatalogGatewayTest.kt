@@ -320,6 +320,7 @@ class HubCatalogGatewayTest {
         assertTrue(traits.supportsRefresh)
         assertTrue(traits.supportsSourceEditing)
         assertTrue(traits.usesXtreamCredentials)
+        assertEquals(mapOf(ChannelKind.LIVE to 20, ChannelKind.MOVIE to 10, ChannelKind.SERIES to 10), traits.contentCounts)
     }
 
     @Test

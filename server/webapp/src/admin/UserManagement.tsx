@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
-import { asyncFallback, EmptyState } from '../components/Common';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { EmptyState } from '../components/Common';
 import { Icon } from '../components/Icons';
 import {
-  ConfirmDialog, Dialog, IconBtn, ScreenHeader, SearchField, Segmented, SelectField, TextField,
+  ConfirmDialog, Dialog, IconBtn, SearchField, Segmented, Select, SelectField, TextField,
 } from '../components/Primitives';
 import { reportSuccess } from '../errors';
 import { useAuth } from '../auth/AuthProvider';
@@ -12,7 +12,7 @@ import {
   authMethodLabel, clientLabel, dateTime, initials, reportAdminError, roleLabel,
   statusLabel, statusTone,
 } from './format';
-import { AdminSection, OneTimeTokenDialog, PlaylistPicker, useAdminSection } from './AdminShared';
+import { AdminSection, AdminSectionFeedback, OneTimeTokenDialog, PlaylistPicker, useAdminSection } from './AdminShared';
 import { WatchProgressBar } from '../components/WatchProgress';
 
 type StatusFilter = 'ALL' | AdminUser['status'];
@@ -22,12 +22,12 @@ const displayed = (user: AdminUser) => user.displayName || user.username;
 
 const grantsApply = (user: AdminUser) => user.effectiveRole !== 'ADMIN';
 
-function UserTags({ user, self }: { user: AdminUser; self: boolean }) {
+function UserTags({ user, self, statusOnly = false }: { user: AdminUser; self: boolean; statusOnly?: boolean }) {
   return (
-    <div className="flex flex-none flex-wrap items-center justify-end gap-1.5">
-      {self && <span className="pill strong">{c('you')}</span>}
+    <div className="admin-user-tags">
+      {self && !statusOnly && <span className="pill strong">{c('you')}</span>}
       <span className={`pill${statusTone(user.status)}`}>{statusLabel(user.status)}</span>
-      {user.effectiveRole === 'ADMIN' && <span className="pill strong">{c('adminShort')}</span>}
+      {!statusOnly && user.effectiveRole === 'ADMIN' && <span className="pill strong">{c('adminShort')}</span>}
     </div>
   );
 }
@@ -41,17 +41,18 @@ export function UsersPanel({ users, playlists, onOpen }: {
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState<StatusFilter>('ALL');
 
-  const fallback = asyncFallback(users);
-  if (fallback) return fallback;
+  if (users.data === null) return <AdminSectionFeedback state={users} />;
   const all = users.data ?? [];
-  if (all.length === 0) return <EmptyState title={c('noUsers')} subtitle={c('noUsersBody')} />;
+  if (all.length === 0) return <><AdminSectionFeedback state={users} /><EmptyState title={c('noUsers')} subtitle={c('noUsersBody')} /></>;
 
   const names = new Map(playlists.map((playlist) => [playlist.id, playlist.name]));
   const access = (user: AdminUser) => !grantsApply(user)
     ? c('allPlaylists')
     : user.playlistIds.length === 0
       ? c('noAssignedPlaylists')
-      : user.playlistIds.map((id) => names.get(id) ?? c('playlistNumber', { id })).join(' · ');
+      : user.playlistIds.every((id) => names.has(id))
+        ? user.playlistIds.map((id) => names.get(id)).join(' · ')
+        : c('playlistAccessCount', { count: user.playlistIds.length });
   const needle = query.trim().toLowerCase();
   const visible = all.filter((user) =>
     (status === 'ALL' || user.status === status)
@@ -61,10 +62,11 @@ export function UsersPanel({ users, playlists, onOpen }: {
 
   return (
     <>
+      <AdminSectionFeedback state={users} />
       <div className="admin-toolbar">
         <SearchField placeholder={c('searchUsers')} value={query} onChange={setQuery} />
-        <Segmented<StatusFilter>
-          className="scroll"
+        <Select<StatusFilter>
+          ariaLabel={c('filterStatus')}
           options={[
             ['ALL', c('filterAll')],
             ['ACTIVE', c('active')],
@@ -75,23 +77,33 @@ export function UsersPanel({ users, playlists, onOpen }: {
           onSelect={setStatus}
         />
       </div>
+      <p className="admin-results" role="status">{c('usersShown', { count: visible.length, total: all.length })}</p>
       {visible.length === 0
         ? <EmptyState title={c('noMatches')} subtitle={c('noMatchesBody')} />
         : (
-          <div className="flex flex-col gap-2">
+          <div className="admin-user-list">
+            <div className="admin-user-columns" aria-hidden="true">
+              <span>{c('accountSection')}</span><span>{c('accessSection')}</span><span>{c('status')}</span>
+            </div>
             {visible.map((user) => (
-              <button className="card" key={user.id} onClick={() => onOpen(user)}>
-                <div className="row">
-                  <span className="admin-avatar">{initials(user)}</span>
-                  <div className="body">
-                    <div className="title-line"><span className="title">{displayed(user)}</span></div>
-                    <div className="sub">{`@${user.username} · ${access(user)}`}</div>
-                  </div>
-                  <div className="actions">
-                    <UserTags user={user} self={user.id === signedIn?.id} />
-                    <Icon name="chevron" className="sm ml-1 text-on-surface-variant" />
-                  </div>
-                </div>
+              <button className="admin-user-row" key={user.id} onClick={() => onOpen(user)}>
+                <span className="admin-user-identity">
+                  <span className="admin-avatar" aria-hidden="true">{initials(user)}</span>
+                  <span className="body">
+                    <span className="name">{displayed(user)}</span>
+                    <span className="sub admin-identity-meta">
+                      <span>{`@${user.username}`}</span>
+                      {user.id === signedIn?.id && <span>{c('you')}</span>}
+                      {user.effectiveRole === 'ADMIN' && <span>{c('adminShort')}</span>}
+                    </span>
+                  </span>
+                </span>
+                <span className="admin-user-access">
+                  <span>{access(user)}</span>
+                  <span className="sub">{c('lastLogin', { date: dateTime(user.lastLoginAtMs) })}</span>
+                </span>
+                <UserTags user={user} self={user.id === signedIn?.id} statusOnly />
+                <Icon name="chevron" className="sm admin-row-chevron" />
               </button>
             ))}
           </div>
@@ -111,6 +123,7 @@ export function CreateUserDialog({ onDismiss, onCreated }: {
   const [password, setPassword] = useState('');
   const [saving, setSaving] = useState(false);
   const [activationToken, setActivationToken] = useState<string | null>(null);
+  const formId = useId();
 
   const withPassword = credentials === 'password';
   // The server enforces this too; checking here keeps the button honest.
@@ -152,22 +165,25 @@ export function CreateUserDialog({ onDismiss, onCreated }: {
   }
   return (
     <Dialog
+      className="admin-create-dialog"
       title={c('createLocalUser')}
       onDismiss={onDismiss}
+      dismissible={!saving}
       buttons={
         <>
-          <button className="btn text" onClick={onDismiss}>{c('cancel')}</button>
+          <button className="btn text" disabled={saving} onClick={onDismiss}>{c('cancel')}</button>
           <button
-            className="btn text"
+            className="btn"
+            type="submit"
+            form={formId}
             disabled={saving || username.trim().length === 0 || (withPassword && !passwordUsable)}
-            onClick={() => void create()}
           >
             {saving ? c('creating') : c('create')}
           </button>
         </>
       }
     >
-      <div className="admin-form">
+      <form id={formId} className="admin-form" onSubmit={(event) => { event.preventDefault(); if (!saving && username.trim() && (!withPassword || passwordUsable)) void create(); }}>
         <TextField label={c('username')} value={username} onChange={setUsername} autoFocus autoComplete="off" />
         <TextField label={c('displayName')} value={displayName} onChange={setDisplayName} autoComplete="off" />
         <SelectField
@@ -176,11 +192,15 @@ export function CreateUserDialog({ onDismiss, onCreated }: {
           selected={role}
           onSelect={setRole}
         />
-        <Segmented
-          options={[['password', c('setPassword')], ['link', c('sendActivation')]]}
-          selected={credentials}
-          onSelect={setCredentials}
-        />
+        <fieldset className="admin-credential-options">
+          <legend>{c('credentials')}</legend>
+          {(['password', 'link'] as const).map((mode) => (
+            <label key={mode}>
+              <input type="radio" name={`credentials-${formId}`} checked={credentials === mode} onChange={() => setCredentials(mode)} />
+              <span>{c(mode === 'password' ? 'setPassword' : 'sendActivation')}</span>
+            </label>
+          ))}
+        </fieldset>
         {withPassword ? (
           <>
             <TextField label={c('password')} value={password} onChange={setPassword}
@@ -191,7 +211,7 @@ export function CreateUserDialog({ onDismiss, onCreated }: {
           <p className="admin-hint">{c('invitedHelp')}</p>
         )}
         <p className="admin-hint">{c('credentialsHelp')}</p>
-      </div>
+      </form>
     </Dialog>
   );
 }
@@ -253,9 +273,9 @@ function ProfileSection({
 
   return (
     <>
-      <section className="admin-card">
-        <div className="title">{c('accountSection')}</div>
-        <div className="admin-form">
+      <form className="admin-card" onSubmit={(event) => { event.preventDefault(); if (!saving && username.trim()) void save(); }}>
+        <h3 className="title">{c('accountSection')}</h3>
+        <div className="admin-form admin-profile-form">
           <TextField label={c('username')} value={username} onChange={setUsername} />
           <TextField label={c('displayName')} value={displayName} onChange={setDisplayName} />
           <SelectField
@@ -281,18 +301,18 @@ function ProfileSection({
             selected={status}
             onSelect={setStatus}
           />
-          <p className="admin-hint">{c('statusHelp')}</p>
-          {self && <p className="admin-hint">{c('selfGuardHelp')}</p>}
-          <p className="admin-hint">{c('effectiveRoleHelp', { role: roleLabel(user.effectiveRole) })}</p>
+          <p className="admin-hint admin-form-wide">{c('statusHelp')}</p>
+          {self && <p className="admin-hint admin-form-wide">{c('selfGuardHelp')}</p>}
+          <p className="admin-hint admin-form-wide">{c('effectiveRoleHelp', { role: roleLabel(user.effectiveRole) })}</p>
         </div>
         <div className="actions end">
-          <button className="btn" disabled={saving} onClick={() => void save()}>
+          <button className="btn" type="submit" disabled={saving || !username.trim()}>
             {c('saveChanges')}
           </button>
         </div>
-      </section>
-      <section className="admin-card">
-        <div className="title">{c('dangerZone')}</div>
+      </form>
+      <section className="admin-card admin-danger-zone">
+        <h3 className="title">{c('dangerZone')}</h3>
         <p className="admin-hint">
           {c(localAccountProvisioning ? 'dangerZoneHelp' : 'localProvisioningOff')}
         </p>
@@ -317,7 +337,7 @@ function ProfileSection({
 
 function AccessSection({ user, playlists, onChanged }: {
   user: AdminUser;
-  playlists: AdminPlaylist[];
+  playlists: AdminSection<AdminPlaylist[]>;
   onChanged: (user: AdminUser) => void;
 }) {
   const [grants, setGrants] = useState(user.playlistIds);
@@ -340,11 +360,12 @@ function AccessSection({ user, playlists, onChanged }: {
   const applies = grantsApply(user);
   return (
     <section className="admin-card">
-      <div className="title">{c('accessSection')}</div>
+      <h3 className="title">{c('accessSection')}</h3>
       <p className="admin-hint">{applies ? c('removeAccessHelp') : c('adminAccessHelp')}</p>
-      <PlaylistPicker playlists={playlists} selected={grants} onChange={setGrants} disabled={!applies} />
+      <AdminSectionFeedback state={playlists} />
+      {playlists.data !== null && <PlaylistPicker playlists={playlists.data} selected={grants} onChange={setGrants} disabled={!applies} />}
       <div className="actions end">
-        <button className="btn" disabled={saving || !applies} onClick={() => void save()}>
+        <button className="btn" disabled={saving || !applies || playlists.data === null} onClick={() => void save()}>
           {c('saveAccess')}
         </button>
       </div>
@@ -389,9 +410,9 @@ function SessionsSection({ userId, currentSessionId }: {
   const revokesMine = rows.some((session) => session.id === currentSessionId);
   return (
     <section className="admin-card">
-      <div className="title">{c('sessions')}</div>
+      <h3 className="title">{c('sessions')}</h3>
       <p className="admin-hint">{c('sessionsHelp')}</p>
-      {asyncFallback(sessions)}
+      <AdminSectionFeedback state={sessions} />
       {rows.length === 0 && sessions.data !== null && (
         <p className="admin-hint">{c('noActiveSessions')}</p>
       )}
@@ -467,9 +488,9 @@ function ProgressSection({ userId }: { userId: string }) {
   const items = progress.data ?? [];
   return (
     <section className="admin-card">
-      <div className="title">{c('progress')}</div>
+      <h3 className="title">{c('progress')}</h3>
       <p className="admin-hint">{c('progressHelp')}</p>
-      {asyncFallback(progress)}
+      <AdminSectionFeedback state={progress} />
       {items.length === 0 && progress.data !== null && (
         <p className="admin-hint">{c('noResume')}</p>
       )}
@@ -507,7 +528,7 @@ export function UserDetail({
   user, playlists, localAccountProvisioning, onBack, onChanged, onDeleted,
 }: {
   user: AdminUser;
-  playlists: AdminPlaylist[];
+  playlists: AdminSection<AdminPlaylist[]>;
   localAccountProvisioning: boolean;
   onBack: () => void;
   onChanged: (user: AdminUser) => void;
@@ -519,6 +540,8 @@ export function UserDetail({
   const [confirm, setConfirm] = useState<'reset' | 'delete' | null>(null);
   const [busy, setBusy] = useState(false);
   const [resetToken, setResetToken] = useState<string | null>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => { heading.current?.focus({ preventScroll: true }); }, [user.id]);
 
   const reset = async () => {
     setBusy(true);
@@ -551,16 +574,13 @@ export function UserDetail({
 
   return (
     <>
-      <ScreenHeader
-        title={displayed(user)}
-        subtitle={<span className="subtitle">{`@${user.username}`}</span>}
-        onBack={onBack}
-      />
       <div className="admin-detail">
+        <button className="admin-back btn text" onClick={onBack}><Icon name="back" />{c('backToUsers')}</button>
         <div className="admin-hero">
           <span className="admin-avatar">{initials(user)}</span>
           <div className="body">
-            <div className="name">{displayed(user)}</div>
+            <h2 className="name" ref={heading} tabIndex={-1}>{displayed(user)}</h2>
+            <div className="sub">{`@${user.username}`}</div>
             <div className="sub">
               {user.authMethods.length > 0
                 ? user.authMethods.map(authMethodLabel).join(' · ')
@@ -608,7 +628,7 @@ export function UserDetail({
 
       {localAccountProvisioning && confirm === 'reset' && (
         <ConfirmDialog
-          title={c('resetTitle')}
+          title={c('resetNamedTitle', { name: displayed(user) })}
           message={self ? `${c('resetBody')} ${c('resetSelfBody')}` : c('resetBody')}
           confirmLabel={c('resetCredentials')}
           onDismiss={() => setConfirm(null)}
@@ -617,7 +637,7 @@ export function UserDetail({
       )}
       {confirm === 'delete' && (
         <ConfirmDialog
-          title={c('deleteUserTitle')}
+          title={c('deleteNamedTitle', { name: displayed(user) })}
           message={self ? `${c('deleteUserBody')} ${c('deleteSelfBody')}` : c('deleteUserBody')}
           confirmLabel={c('deleteUser')}
           onDismiss={() => setConfirm(null)}

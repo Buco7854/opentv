@@ -165,6 +165,17 @@ absent from the initial bundle.
   endpoints take `offset`/`limit` (validated at the route, 1..MAX) and answer with a page
   object plus a total; `useServerPaged` drives them. Listing DTOs are projections - they
   carry no provider URLs or detail-only fields.
+- Read-only Room pages use an explicit reader/deferred transaction for rows plus count.
+  A SELECT-only DAO `@Transaction` still acquires Room's writer and blocks cold browsing
+  behind catalog/guide writes. Server one-shot groups/counts/episodes/series reads also
+  bypass `Flow.first()`, whose initial invalidation-trigger sync acquires the writer.
+  Keep page reads and content-identity mapping inside the same stable catalog read gate.
+- Xtream episode fetches are single-flighted per series outside catalog gates; only the
+  source-rechecked atomic episode replacement and identity rebind hold the server write gate.
+  Once admitted, that local commit/rebind completes despite request cancellation.
+- API handlers taking at least one second emit `api_slow_response` with method, path,
+  status and elapsed milliseconds before response streaming. Never add query strings,
+  authorization headers, provider credentials or bodies to this diagnostic.
 - Search is indexed, never a scan: a normalized `searchName` prefix B-tree, plus FTS5
   `unicode61` (word prefixes) and trigram (mid-word, three characters or more) sidecars
   maintained by triggers. Ranking is title-prefix, then word boundary, then mid-word, and
@@ -178,6 +189,9 @@ absent from the initial bundle.
   never the server's ability to start. Image elements authenticate with the signed,
   expiring image capability minted only into an entitled listing; no media element depends
   on the bearer header.
+- Image fetches have a five-second total deadline covering headers and body. Blocking
+  reads are interruptible, so an upstream that sends headers then stalls cannot keep
+  an IO worker, browser connection or single-flight waiter stuck indefinitely.
 - Remux fragments are served with `LocalFileContent`, so ranges work and a fragment never
   lands in heap. One `media_start` debug record per playback start carries the stage
   timings (connection limit, ffprobe, preparation, launch, init, first fragment), so
@@ -361,6 +375,9 @@ absent from the initial bundle.
   progress accents aligned across clients. Source management lives under More.
   The playlist selector only switches existing sources; creation uses labeled
   Add playlist/Connect server actions, and More keeps management separate.
+  Both clients keep the brand and current-playlist chooser in the shared header;
+  navigation controls have 8px phone / 12px wide gaps. Android focus rings stay
+  inside their controls rather than scaling into neighboring hover highlights.
 - Android catalog gateways are cached in a thread-safe, access-order LRU capped at 64.
   Gateway lookup/construction never reads Room: `CatalogGateway.traits()` is suspending, and
   a local gateway resolves its playlist-backed traits only after the ViewModel has entered a

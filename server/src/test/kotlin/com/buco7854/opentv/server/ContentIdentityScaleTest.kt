@@ -12,7 +12,6 @@ import java.nio.file.Files
 import kotlin.system.measureTimeMillis
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.test.runTest
 import org.junit.Assume.assumeTrue
 
@@ -45,8 +44,8 @@ class ContentIdentityScaleTest {
                 }
             }
             val measuredSeries = object : XtreamSeriesStore by storage.xtreamSeries {
-                override fun observeAll(playlistId: Long) =
-                    storage.xtreamSeries.observeAll(playlistId).onStart { catalogReadQueries++ }
+                override suspend fun getAll(playlistId: Long) =
+                    storage.xtreamSeries.getAll(playlistId).also { catalogReadQueries++ }
             }
             val measuredStorage = object : Storage by storage {
                 override val channels = measuredChannels

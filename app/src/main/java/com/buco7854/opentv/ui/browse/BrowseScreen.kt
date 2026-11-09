@@ -3,6 +3,7 @@ package com.buco7854.opentv.ui.browse
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -17,6 +18,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -46,8 +50,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.PrimaryTabRow
-import androidx.compose.material3.Tab
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -105,7 +107,6 @@ import com.buco7854.opentv.ui.components.SourceLoadFailed
 import com.buco7854.opentv.ui.components.SourceSignedOut
 import com.buco7854.opentv.ui.components.SourceUnreachable
 import com.buco7854.opentv.ui.components.sourceViewModel
-import com.buco7854.opentv.ui.shell.PlaylistSelector
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -116,7 +117,6 @@ import java.util.Locale
 @Composable
 fun BrowseScreen(
     sourceId: SourceId,
-    onChoosePlaylist: () -> Unit,
     initialTab: Int? = null,
     initialGroup: String? = null,
     onContentKindChanged: (Int) -> Unit = {},
@@ -164,6 +164,7 @@ fun BrowseScreen(
     val liveCount by viewModel.liveCount.collectAsStateWithLifecycle()
     val movieCount by viewModel.movieCount.collectAsStateWithLifecycle()
     val seriesCount by viewModel.seriesCount.collectAsStateWithLifecycle()
+    val contentCounts by viewModel.contentCounts.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
 
     val snackbar = remember { SnackbarHostState() }
@@ -218,10 +219,11 @@ fun BrowseScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    PlaylistSelector(
-                        title = playlist?.name ?: traits?.title ?: stringResource(R.string.browse_fallback_title),
-                        onChoose = onChoosePlaylist,
-                    )
+                    Text((if (singleGroup) null else group) ?: stringResource(when (tab) {
+                        ChannelKind.MOVIE -> R.string.common_movies
+                        ChannelKind.SERIES -> R.string.common_series
+                        else -> R.string.common_live
+                    }), style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 },
                 navigationIcon = {
                     if (group != null && !singleGroup) {
@@ -252,25 +254,9 @@ fun BrowseScreen(
         contentWindowInsets = WindowInsets(0.dp),
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
-            val contentKinds = listOf(ChannelKind.LIVE, ChannelKind.MOVIE, ChannelKind.SERIES)
-            PrimaryTabRow(selectedTabIndex = contentKinds.indexOf(tab).coerceAtLeast(0)) {
-                contentKinds.forEach { kind ->
-                    Tab(
-                        selected = tab == kind,
-                        onClick = {
-                            viewModel.selectContentKind(kind)
-                            onContentKindChanged(kind)
-                        },
-                        text = {
-                            Text(stringResource(when (kind) {
-                                ChannelKind.MOVIE -> R.string.common_movies
-                                ChannelKind.SERIES -> R.string.common_series
-                                else -> R.string.common_live
-                            }))
-                        },
-                        modifier = Modifier.focusHighlight(RoundedCornerShape(8.dp)),
-                    )
-                }
+            BrowseTabs(tab, contentCounts) { kind ->
+                viewModel.selectContentKind(kind)
+                onContentKindChanged(kind)
             }
 
             Row(
@@ -328,7 +314,7 @@ fun BrowseScreen(
                 ) {
                     CircularProgressIndicator(color = MaterialTheme.colorScheme.onSurface)
                 }
-                group == null -> GroupList(
+                group == null -> BrowseCategories(
                     groups = groups.filter { matches(it.name) },
                     // Xtream categories come from the panel; only M3U guessing needs correcting.
                     onCorrect = if (isXtreamNative || !correctionOffered) {
@@ -539,63 +525,49 @@ private fun XtreamSeriesList(
 }
 
 @Composable
-private fun GroupList(
+internal fun BrowseCategories(
     groups: List<CatalogGroup>,
     onCorrect: ((String) -> Unit)?,
     onSelect: (String) -> Unit,
 ) {
     if (groups.isEmpty()) {
-        EmptyState(
-            stringResource(R.string.browse_empty_title),
-            stringResource(R.string.browse_empty_subtitle),
-        )
+        EmptyState(stringResource(R.string.browse_empty_title), stringResource(R.string.browse_empty_subtitle))
         return
     }
-    LazyColumn(
-        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
-    ) {
-        items(groups, key = { it.name }) { groupCount ->
-            Card(
-                onClick = { onSelect(groupCount.name) },
-                shape = RoundedCornerShape(10.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.background),
-                modifier = Modifier.focusHighlight(RoundedCornerShape(10.dp)),
-            ) {
-                Row(
-                    Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = 8.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+    BoxWithConstraints {
+        val narrow = maxWidth < 640.dp
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(if (maxWidth >= 1100.dp) 3 else 2),
+            contentPadding = PaddingValues(horizontal = if (narrow) 16.dp else 24.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(if (narrow) 8.dp else 10.dp),
+            verticalArrangement = Arrangement.spacedBy(if (narrow) 8.dp else 10.dp),
+        ) {
+            items(groups, key = { it.name }) { category ->
+                Card(
+                    onClick = { onSelect(category.name) },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+                    modifier = Modifier.focusHighlight(RoundedCornerShape(12.dp)),
                 ) {
-                    Text(
-                        groupCount.name,
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f).padding(vertical = 10.dp),
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Spacer(Modifier.width(16.dp))
-                    Text(
-                        "${groupCount.count}",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    if (onCorrect != null) {
-                        IconButton(onClick = { onCorrect(groupCount.name) }) {
-                            Icon(
-                                Icons.Outlined.MoreVert,
-                                contentDescription = stringResource(R.string.browse_correct_category),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                    Row(
+                        Modifier.fillMaxWidth().heightIn(min = if (narrow) 72.dp else 76.dp)
+                            .padding(start = 14.dp, end = if (onCorrect != null) 4.dp else 14.dp, top = 12.dp, bottom = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(category.name, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text("${category.count}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                    } else {
-                        Icon(
-                            Icons.AutoMirrored.Outlined.KeyboardArrowRight,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        if (onCorrect != null) {
+                            IconButton(onClick = { onCorrect(category.name) }, modifier = Modifier.focusHighlight()) {
+                                Icon(Icons.Outlined.MoreVert, contentDescription = stringResource(R.string.browse_correct_category))
+                            }
+                        } else {
+                            Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                        }
                     }
                 }
             }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         }
     }
 }

@@ -195,6 +195,14 @@ option can remove the Android user's server download association after the
 local file completes; it is off by default, and a blob shared by another user
 is retained.
 
+## Diagnosing slow catalog pages
+
+The server logs `api_slow_response` when preparing an API response takes at least
+one second. The record includes the request method, endpoint path, response status
+and `elapsed_ms`. Check these records when a page stalls to identify which server
+operation is slow. Query strings, authorization headers and response bodies are
+excluded. These timings cover the handler before the response streams to the client.
+
 ## Running without Docker
 
 ```bash

@@ -2,7 +2,6 @@ package com.buco7854.opentv.ui.components
 
 import android.content.res.Configuration
 import android.view.KeyEvent
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.border
 import com.buco7854.opentv.ui.theme.ViewingAccent
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -14,7 +13,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
@@ -24,7 +22,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
 
 /**
- * D-pad focus treatment: focused cards scale up and gain a ring.
+ * D-pad focus treatment: a contained blue ring without changing the control’s size.
  *
  * Television only. A phone reaches everything by touch and already has Material's own
  * focus and error styling; drawing a second ring on top of that is not a nicer version
@@ -36,10 +34,8 @@ import androidx.compose.ui.unit.dp
 fun Modifier.focusHighlight(shape: Shape = RoundedCornerShape(16.dp)): Modifier = composed {
     if (!isTelevisionUiMode(LocalConfiguration.current.uiMode)) return@composed this
     var focused by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (focused) 1.03f else 1f, label = "focusScale")
     this
         .onFocusChanged { focused = it.hasFocus }
-        .scale(scale)
         .border(
             width = 2.dp,
             color = if (focused) ViewingAccent else Color.Transparent,

@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
@@ -17,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.automirrored.outlined.PlaylistPlay
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -85,21 +87,28 @@ fun PlaylistPicker(
 
 /** The visible current source and its disclosure affordance have no creation action. */
 @Composable
-internal fun PlaylistSelector(title: String, onChoose: () -> Unit) {
+internal fun PlaylistSelector(
+    title: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    onChoose: () -> Unit,
+) {
     val description = stringResource(R.string.playlist_picker_current, title)
-    OtvTextButton(
-        onClick = onChoose,
-        modifier = Modifier.fillMaxWidth().semantics { contentDescription = description },
+    val interaction = remember { MutableInteractionSource() }
+    val style = libraryControlStyle(false, enabled, interaction, base = MaterialTheme.colorScheme.surfaceContainer)
+    Row(
+        modifier.heightIn(min = 48.dp).libraryControl(style, interaction, enabled, onClick = onChoose)
+            .semantics { contentDescription = description }.padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
+        Icon(Icons.AutoMirrored.Outlined.PlaylistPlay, null, Modifier.size(18.dp), tint = style.foreground)
         Column(Modifier.weight(1f), horizontalAlignment = Alignment.Start) {
-            Text(
-                stringResource(R.string.playlist_picker_label),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(stringResource(R.string.shell_playlists), style = MaterialTheme.typography.labelSmall, color = style.foreground)
+            Text(title, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                color = if (enabled) MaterialTheme.colorScheme.onSurface else style.foreground)
         }
-        Icon(Icons.Outlined.ExpandMore, contentDescription = null, modifier = Modifier.size(20.dp))
+        Icon(Icons.Outlined.ExpandMore, null, Modifier.size(14.dp), tint = style.foreground)
     }
 }
 

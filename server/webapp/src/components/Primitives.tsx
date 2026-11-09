@@ -479,7 +479,7 @@ function SelectMenu<T extends string | number>({ options, selected, onPick, id }
   return (
     <div ref={ref} id={id} className="select-menu" role="listbox" onKeyDown={onKeyDown}>
       {options.map(([value, text]) => (
-        <button key={String(value)} role="option" aria-selected={value === selected}
+        <button type="button" key={String(value)} role="option" aria-selected={value === selected}
                 className={`menu-option${value === selected ? ' selected' : ''}`}
                 onClick={() => onPick(value)}>
           {text}

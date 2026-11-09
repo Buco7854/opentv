@@ -284,7 +284,7 @@
   .library-switcher:disabled { opacity: .5; cursor: default; }
   .library-switcher > .icon { width: 18px; height: 18px; }
   .library-switcher > .icon:last-child { width: 14px; height: 14px; }
-  .dock { display: flex; align-items: center; gap: 4px; }
+  .dock { display: flex; align-items: center; gap: 12px; }
   .dock-btn { position: relative; display: flex; align-items: center; justify-content: center; gap: 8px; min-width: 0; min-height: 44px; padding: 0 12px; border-radius: 8px; color: var(--c-fg2); }
   .dock-label { font: var(--type-label-large); }
   .dock-btn .icon { width: 18px; height: 18px; stroke-width: 1.6; }
@@ -304,7 +304,7 @@
   @media (hover: hover) { .dock-btn:hover, .library-switcher:hover { background: var(--c-press); color: var(--c-fg); } }
   @media (max-width: 959px) {
     .library-masthead { gap: 16px; padding: 0 20px; }
-    .dock { position: fixed; inset: auto 0 0; z-index: 40; gap: 0; height: calc(var(--dock-h) + env(safe-area-inset-bottom)); padding: 4px 8px calc(4px + env(safe-area-inset-bottom)); background: var(--c-bg); border-top: 1px solid var(--c-hairline); }
+    .dock { position: fixed; inset: auto 0 0; z-index: 40; gap: 8px; height: calc(var(--dock-h) + env(safe-area-inset-bottom)); padding: 4px 8px calc(4px + env(safe-area-inset-bottom)); background: var(--c-bg); border-top: 1px solid var(--c-hairline); }
     .dock-btn { flex: 1; flex-direction: column; gap: 5px; min-height: 56px; padding: 4px 2px; }
     .dock-label { font: 500 11px/16px var(--font-sans); }
     .dock-btn .icon { width: 22px; height: 22px; }

@@ -11,6 +11,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
@@ -23,6 +24,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -51,6 +54,8 @@ import com.buco7854.opentv.ui.diag.LogScreen
 import com.buco7854.opentv.ui.downloads.DownloadsScreen
 import com.buco7854.opentv.ui.favorites.AllFavoritesScreen
 import com.buco7854.opentv.ui.home.HomeScreen
+import com.buco7854.opentv.ui.home.HomeViewModel
+import com.buco7854.opentv.ui.home.homeSources
 import com.buco7854.opentv.ui.hub.HubSettingsScreen
 import com.buco7854.opentv.ui.hub.HubSignInScreen
 import com.buco7854.opentv.ui.player.PipController
@@ -63,6 +68,7 @@ import com.buco7854.opentv.ui.settings.SettingsScreen
 import com.buco7854.opentv.ui.shell.DockSection
 import com.buco7854.opentv.ui.shell.AppShellViewModel
 import com.buco7854.opentv.ui.shell.OpenTvDock
+import com.buco7854.opentv.ui.shell.OpenTvMasthead
 import com.buco7854.opentv.ui.shell.PlaylistsPanel
 import com.buco7854.opentv.ui.shell.PlaylistPicker
 import com.buco7854.opentv.hub.BrowserSignInReturn
@@ -172,7 +178,8 @@ internal fun playlistSelectionRoute(
     current: SourceId?,
     chosen: SourceId,
     browseKinds: Map<String, Int>,
-): String? = if (chosen == current) null else Routes.browse(chosen, browseKinds[chosen.encode()])
+    alreadyBrowsing: Boolean = true,
+): String? = if (chosen == current && alreadyBrowsing) null else Routes.browse(chosen, browseKinds[chosen.encode()])
 
 internal data class CatalogSourceAvailability(
     val localPlaylistIds: List<Long>,
@@ -219,6 +226,11 @@ fun AppShell(
     viewModel: AppShellViewModel = viewModel(),
 ) {
     val nav = rememberNavController()
+    // One shared source presentation feeds the masthead, Home, chooser and More.
+    val libraryViewModel: HomeViewModel = viewModel()
+    val localPlaylists by libraryViewModel.playlists.collectAsStateWithLifecycle(initialValue = null)
+    val catalogSources by libraryViewModel.catalogSources.collectAsStateWithLifecycle()
+    val sources = homeSources(localPlaylists, catalogSources)
     val availabilityViewModel: CatalogSourceAvailabilityViewModel = viewModel()
     val sourceAvailability by
         availabilityViewModel.availability.collectAsStateWithLifecycle()
@@ -264,7 +276,9 @@ fun AppShell(
         rememberedSource,
         activePlaylistId,
         sourceAvailability,
+        knownSources = sources.map { it.sourceId },
     )
+    val sourceTitle = sources.firstOrNull { it.sourceId == activeSource }?.title
     LaunchedEffect(routeSource, sourceAvailability, activeSource) {
         val availability = sourceAvailability ?: return@LaunchedEffect
         if (routeSource == null || availability.contains(routeSource)) return@LaunchedEffect
@@ -286,7 +300,7 @@ fun AppShell(
         route?.startsWith("search/") == true -> DockSection.SEARCH
         else -> DockSection.MORE
     }
-    val wideNavigation = LocalConfiguration.current.let { it.screenWidthDp >= 840 && it.fontScale < 1.5f }
+    val wideNavigation = LocalConfiguration.current.let { it.screenWidthDp >= 960 && it.fontScale < 1.5f }
     val openSection: (DockSection) -> Unit = { section ->
         when (section) {
             DockSection.HOME -> navigateSection(Routes.HOME)
@@ -299,13 +313,17 @@ fun AppShell(
 
     Scaffold(
         topBar = {
-            if (!dockHidden && wideNavigation) {
-                OpenTvDock(
+            if (!dockHidden) {
+                OpenTvMasthead(
                     hasActivePlaylist = activeSource != null,
                     activeSection = activeSection,
-                    onOpenPanel = { panelOpen = true },
+                    playlistTitle = sourceTitle,
+                    canChoosePlaylist = sources.isNotEmpty(),
+                    onHome = { navigateSection(Routes.HOME) },
+                    onChoosePlaylist = { panelOpen = false; playlistPickerOpen = true },
+                    onOpenPanel = { playlistPickerOpen = false; panelOpen = true },
                     onSection = openSection,
-                    wide = true,
+                    wide = wideNavigation,
                 )
             }
         },
@@ -320,27 +338,30 @@ fun AppShell(
             }
         },
     ) { padding ->
-        androidx.compose.foundation.layout.Box(Modifier.padding(padding).consumeWindowInsets(padding)) {
-            AppNav(
-                nav,
-                onActivePlaylist = viewModel::setActivePlaylist,
-                sourceAvailability = sourceAvailability,
-                browseKinds = browseKinds,
-                onChoosePlaylist = { playlistPickerOpen = true },
-                onBrowseKindChanged = { source, kind ->
-                    browseKinds = HashMap(browseKinds).apply { put(source.encode(), kind) }
-                },
-            )
+        androidx.compose.foundation.layout.Box(Modifier.padding(padding).consumeWindowInsets(padding).fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+            androidx.compose.foundation.layout.Box(Modifier.then(if (dockHidden) Modifier else Modifier.widthIn(max = 1180.dp)).fillMaxSize()) {
+                AppNav(
+                    nav,
+                    onActivePlaylist = viewModel::setActivePlaylist,
+                    sourceAvailability = sourceAvailability,
+                    browseKinds = browseKinds,
+                    libraryViewModel = libraryViewModel,
+                    onBrowseKindChanged = { source, kind ->
+                        browseKinds = HashMap(browseKinds).apply { put(source.encode(), kind) }
+                    },
+                )
+            }
         }
     }
 
     if (playlistPickerOpen) {
         PlaylistPicker(
             selectedSource = activeSource,
+            viewModel = libraryViewModel,
             onDismiss = { playlistPickerOpen = false },
             onChoose = { source ->
                 playlistPickerOpen = false
-                playlistSelectionRoute(activeSource, source, browseKinds)?.let { destination ->
+                playlistSelectionRoute(activeSource, source, browseKinds, alreadyBrowsing = route?.startsWith("browse/") == true)?.let { destination ->
                     if (source is SourceId.LocalPlaylist) viewModel.setActivePlaylist(source.playlistId)
                     navigateSection(destination)
                 }
@@ -350,6 +371,7 @@ fun AppShell(
 
     if (panelOpen) {
         PlaylistsPanel(
+            viewModel = libraryViewModel,
             activeSourceId = activeSource,
             onDismiss = { panelOpen = false },
             onOpenAccount = { panelOpen = false; nav.navigate(Routes.account(it)) },
@@ -368,13 +390,14 @@ internal fun activeCatalogSource(
     rememberedSource: String?,
     activePlaylistId: Long,
     availability: CatalogSourceAvailability?,
+    knownSources: List<SourceId> = emptyList(),
 ): SourceId? {
     availability ?: return null
     return listOfNotNull(
         routeSource,
         rememberedSource?.let(SourceId::decode),
         activePlaylistId.takeIf { it > 0 }?.let(SourceId::LocalPlaylist),
-    ).firstOrNull(availability::contains) ?: availability.fallback
+    ).firstOrNull(availability::contains) ?: availability.fallback ?: knownSources.firstOrNull(availability::contains)
 }
 
 @Composable
@@ -383,7 +406,7 @@ internal fun AppNav(
     onActivePlaylist: (Long) -> Unit,
     sourceAvailability: CatalogSourceAvailability?,
     browseKinds: Map<String, Int>,
-    onChoosePlaylist: () -> Unit,
+    libraryViewModel: HomeViewModel,
     onBrowseKindChanged: (SourceId, Int) -> Unit,
 ) {
     // Quick fades instead of the default slow cross-fade.
@@ -433,6 +456,7 @@ internal fun AppNav(
     ) {
         composable(Routes.HOME) {
             HomeScreen(
+                viewModel = libraryViewModel,
                 onOpenSource = { source ->
                     if (source is SourceId.LocalPlaylist) {
                         onActivePlaylist(source.playlistId)
@@ -517,7 +541,6 @@ internal fun AppNav(
             }
             BrowseScreen(
                 sourceId = sourceId,
-                onChoosePlaylist = onChoosePlaylist,
                 initialTab = entry.arguments!!.getInt("t").takeIf { it >= 0 },
                 initialGroup = entry.arguments!!.getString("g").orEmpty().ifEmpty { null },
                 onContentKindChanged = { onBrowseKindChanged(sourceId, it) },

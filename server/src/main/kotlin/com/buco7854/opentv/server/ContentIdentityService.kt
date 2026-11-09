@@ -21,7 +21,6 @@ import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -287,7 +286,7 @@ class ContentIdentityService(
         retireMissing: Boolean,
     ) {
         val observedAt = clock()
-        val xtreamSeries = storage.xtreamSeries.observeAll(playlistId).first()
+        val xtreamSeries = storage.xtreamSeries.getAll(playlistId)
         reconciliation.withLock {
             val existing = db.content().forPlaylist(playlistId)
                 .associateBy { IdentityKey(it.kind, it.providerFingerprint) }

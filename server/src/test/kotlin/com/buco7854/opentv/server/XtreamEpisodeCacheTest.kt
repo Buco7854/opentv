@@ -14,6 +14,12 @@ import com.buco7854.opentv.serverdata.createOpenTvServerStorage
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -22,6 +28,41 @@ import kotlin.test.assertEquals
  * difference is only ever visible on the attempt after the first.
  */
 class XtreamEpisodeCacheTest {
+
+    @Test
+    fun a_provider_response_cannot_overwrite_a_changed_source() = runBlocking {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        withPanel(fetch = {
+            entered.complete(Unit)
+            release.await()
+            EPISODES
+        }) { fixture ->
+            withContext(Dispatchers.IO) {
+                val pending = async { fixture.xtream.ensureEpisodes(fixture.playlistId, SERIES_ID) }
+                try {
+                    withTimeout(5_000) { entered.await() }
+                    val previous = requireNotNull(fixture.storage.playlists.get(fixture.playlistId))
+                    fixture.storage.playlists.update(previous.copy(xtreamPass = "replacement"))
+                } finally {
+                    release.complete(Unit)
+                }
+                pending.await()
+                assertEquals(0, fixture.storage.channels.countEpisodes(fixture.playlistId, xtreamSeriesKey(SERIES_ID)))
+                assertEquals(0L, fixture.storage.xtreamSeries.get(fixture.playlistId, SERIES_ID)?.episodesFetchedAtMs)
+            }
+        }
+    }
+
+    @Test
+    fun concurrent_requests_for_one_series_share_the_fetched_episode_cache() = withPanel(fetch = { EPISODES }) { fixture ->
+        coroutineScope {
+            val requests = List(4) { async(Dispatchers.IO) { fixture.xtream.ensureEpisodes(fixture.playlistId, SERIES_ID) } }
+            requests.forEach { it.await() }
+        }
+        assertEquals(1, fixture.panelCalls())
+        assertEquals(1, fixture.storage.channels.countEpisodes(fixture.playlistId, xtreamSeriesKey(SERIES_ID)))
+    }
 
     @Test
     fun an_empty_first_fetch_does_not_silence_the_panel_for_a_day() = withPanel { fixture ->
@@ -78,15 +119,18 @@ class XtreamEpisodeCacheTest {
     }
 
     /** A panel playlist holding one series that the panel answers about with no episodes. */
-    private fun withPanel(block: suspend (Fixture) -> Unit) = runBlocking {
+    private fun withPanel(
+        fetch: suspend (String) -> String = { """{"episodes":{}}""" },
+        block: suspend (Fixture) -> Unit,
+    ) = runBlocking {
         val directory: Path = Files.createTempDirectory("xtream-episode-cache")
         val persistence = createOpenTvServerStorage(directory.resolve("opentv.db").toString())
         val storage = persistence.catalog
         try {
             var panelCalls = 0
-            val api = XtreamApi {
+            val api = XtreamApi { url ->
                 panelCalls += 1
-                """{"episodes":{}}"""
+                fetch(url)
             }
             val log = CoreLog { _, _ -> }
             val xtream = XtreamRepository(
@@ -130,5 +174,6 @@ class XtreamEpisodeCacheTest {
     private companion object {
         const val SERIES_ID = 66L
         const val NOW = 1_700_000_000_000L
+        const val EPISODES = """{"episodes":{"1":[{"id":"900","title":"Episode one","container_extension":"mp4","season":1,"episode_num":1}]}}"""
     }
 }

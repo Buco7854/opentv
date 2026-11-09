@@ -180,6 +180,16 @@ switch between existing playlists.
   </figure>
 </div>
 
+## Administration
+
+Administrators can open **Administration** from **More**. Search the account list
+or filter by status, then open an account to edit its profile, playlist access,
+sessions or watch progress. Returning to the list keeps your search and filter.
+
+The administration sidebar also contains default playlist assignments, pending
+single sign-on accounts and shared downloads. On a phone, choose the section
+from the selector above the page.
+
 ## On a phone
 
 On a phone, the five navigation destinations move into a labeled bottom bar.

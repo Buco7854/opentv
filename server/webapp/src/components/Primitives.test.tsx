@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { Dialog, SearchField, Sheet } from './Primitives';
+import { Dialog, SearchField, SelectField, Sheet } from './Primitives';
 
 describe('SearchField', () => {
   it('owns one clear action without requesting the browser-native cancel control', () => {
@@ -54,5 +54,25 @@ describe('modal scrims', () => {
     fireEvent.pointerDown(scrim, { pointerId: 12 });
     fireEvent.pointerUp(scrim, { pointerId: 12 });
     expect(onDismiss).toHaveBeenCalledOnce();
+  });
+});
+
+describe('SelectField in a form', () => {
+  it('changes an option without submitting the surrounding account form', () => {
+    const onSelect = vi.fn();
+    const onSubmit = vi.fn((event: React.FormEvent) => event.preventDefault());
+    render(
+      <form onSubmit={onSubmit}>
+        <SelectField label="Account status" options={[["ACTIVE", "Active"], ["DISABLED", "Disabled"]]}
+                     selected="ACTIVE" onSelect={onSelect} />
+        <button type="submit">Save account</button>
+      </form>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Account status' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Disabled' }));
+    expect(onSelect).toHaveBeenCalledWith('DISABLED');
+    expect(onSubmit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Save account' }));
+    expect(onSubmit).toHaveBeenCalledOnce();
   });
 });

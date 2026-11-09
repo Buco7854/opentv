@@ -2,7 +2,9 @@ package com.buco7854.opentv.data
 
 import androidx.room.PooledConnection
 import androidx.room.RoomDatabase
+import androidx.room.deferredTransaction
 import androidx.room.immediateTransaction
+import androidx.room.useReaderConnection
 import androidx.room.useWriterConnection
 import com.buco7854.opentv.core.model.Channel
 import com.buco7854.opentv.core.model.ChannelKind
@@ -48,6 +50,16 @@ class RoomStorage(
     private val roomDatabase = db as? RoomDatabase
 
     override fun close() = closeDatabase()
+
+    private suspend fun <T> readSnapshot(block: suspend () -> T): T {
+        val database = roomDatabase ?: return block()
+        return database.useReaderConnection { connection ->
+            // A SELECT-only DAO @Transaction uses Room's writer and an IMMEDIATE transaction.
+            // Pin both the page and its count to one WAL reader snapshot instead, so refreshes
+            // and guide ingestion cannot queue browsing behind the single writer connection.
+            connection.deferredTransaction { block() }
+        }
+    }
 
     override val playlists = object : PlaylistStore {
         override fun observeAll(): Flow<List<Playlist>> =
@@ -103,6 +115,9 @@ class RoomStorage(
         override fun observeGroups(playlistId: Long, kind: Int): Flow<List<GroupCount>> =
             db.channelDao().observeGroups(playlistId, kind)
 
+        override suspend fun groups(playlistId: Long, kind: Int): List<GroupCount> =
+            db.channelDao().groups(playlistId, kind)
+
         override fun observeInGroup(playlistId: Long, kind: Int, group: String): Flow<List<Channel>> =
             db.channelDao().observeInGroup(playlistId, kind, group).map { rows -> rows.map { it.toModel() } }
 
@@ -113,8 +128,9 @@ class RoomStorage(
             filter: String,
             limit: Int,
             offset: Int,
-        ): ListingPage<ChannelListing> =
+        ): ListingPage<ChannelListing> = readSnapshot {
             db.channelDao().pageInGroup(playlistId, kind, group, likeTerm(filter), limit, offset)
+        }
 
         override fun observeSeriesInGroup(playlistId: Long, group: String): Flow<List<SeriesGroup>> =
             db.channelDao().observeSeriesInGroup(playlistId, group)
@@ -125,8 +141,9 @@ class RoomStorage(
             filter: String,
             limit: Int,
             offset: Int,
-        ): ListingPage<SeriesGroup> =
+        ): ListingPage<SeriesGroup> = readSnapshot {
             db.channelDao().pageSeriesInGroup(playlistId, group, likeTerm(filter), limit, offset)
+        }
 
         override fun observeAllSeries(playlistId: Long): Flow<List<SeriesGroup>> =
             db.channelDao().observeAllSeries(playlistId)
@@ -134,14 +151,18 @@ class RoomStorage(
         override fun observeEpisodes(playlistId: Long, seriesKey: String): Flow<List<Channel>> =
             db.channelDao().observeEpisodes(playlistId, seriesKey).map { rows -> rows.map { it.toModel() } }
 
+        override suspend fun episodes(playlistId: Long, seriesKey: String): List<Channel> =
+            db.channelDao().episodes(playlistId, seriesKey).map { it.toModel() }
+
         override suspend fun pageEpisodes(
             playlistId: Long,
             seriesKey: String,
             season: Int?,
             limit: Int,
             offset: Int,
-        ): ListingPage<ChannelListing> =
+        ): ListingPage<ChannelListing> = readSnapshot {
             db.channelDao().pageEpisodes(playlistId, seriesKey, season, limit, offset)
+        }
 
         override suspend fun episodeSeasons(playlistId: Long, seriesKey: String): List<Int> =
             db.channelDao().episodeSeasons(playlistId, seriesKey)
@@ -231,6 +252,11 @@ class RoomStorage(
 
         override suspend fun deleteEpisodes(playlistId: Long, seriesKey: String) =
             db.channelDao().deleteEpisodes(playlistId, seriesKey)
+
+        override suspend fun replaceEpisodes(playlistId: Long, seriesKey: String, channels: List<Channel>) =
+            // A series-sized slice keeps ordinary FTS triggers: rebuilding the whole catalog's
+            // search index here would turn a small episode update into another long writer.
+            db.channelDao().replaceEpisodes(playlistId, seriesKey, channels.map { it.toRow() })
     }
 
     override val xtreamSeries = object : XtreamSeriesStore {
@@ -265,6 +291,9 @@ class RoomStorage(
         override fun observeCategories(playlistId: Long): Flow<List<GroupCount>> =
             db.xtreamSeriesDao().observeCategories(playlistId)
 
+        override suspend fun categories(playlistId: Long): List<GroupCount> =
+            db.xtreamSeriesDao().categories(playlistId)
+
         override fun observeInCategory(playlistId: Long, category: String): Flow<List<XtreamSeries>> =
             db.xtreamSeriesDao().observeInCategory(playlistId, category).map { rows -> rows.map { it.toModel() } }
 
@@ -274,13 +303,17 @@ class RoomStorage(
             filter: String,
             limit: Int,
             offset: Int,
-        ): ListingPage<XtreamSeriesListing> =
+        ): ListingPage<XtreamSeriesListing> = readSnapshot {
             db.xtreamSeriesDao().pageInCategory(
                 playlistId, category, likeTerm(filter), limit, offset,
             )
+        }
 
         override fun observeAll(playlistId: Long): Flow<List<XtreamSeries>> =
             db.xtreamSeriesDao().observeAll(playlistId).map { rows -> rows.map { it.toModel() } }
+
+        override suspend fun getAll(playlistId: Long): List<XtreamSeries> =
+            db.xtreamSeriesDao().getAll(playlistId).map { it.toModel() }
 
         override fun observeCount(playlistId: Long): Flow<Int> = db.xtreamSeriesDao().observeCount(playlistId)
 

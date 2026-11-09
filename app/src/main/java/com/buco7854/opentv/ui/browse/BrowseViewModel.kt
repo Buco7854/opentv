@@ -108,6 +108,8 @@ class BrowseViewModel private constructor(
     val movieCount: StateFlow<Int> = mutableMovieCount
     private val mutableSeriesCount = MutableStateFlow(0)
     val seriesCount: StateFlow<Int> = mutableSeriesCount
+    private val mutableContentCounts = MutableStateFlow<Map<Int, Int>>(emptyMap())
+    val contentCounts: StateFlow<Map<Int, Int>> = mutableContentCounts
 
     val downloadsByUrl: StateFlow<Map<String, Download>> =
         graph?.downloads?.downloads
@@ -142,6 +144,7 @@ class BrowseViewModel private constructor(
                 return@launch
             }
             mutableTraits.value = resolvedTraits
+            resolvedTraits.contentCounts.forEach(::setCount)
             val localSource = sourceId as? SourceId.LocalPlaylist
             if (graph != null && localSource != null) {
                 observeLocal(localSource.playlistId, resolvedTraits)
@@ -359,18 +362,18 @@ class BrowseViewModel private constructor(
         }
         viewModelScope.launch {
             currentGraph.storage.channels.observeCount(playlistId, ChannelKind.LIVE)
-                .collect(mutableLiveCount::emit)
+                .collect { setCount(ChannelKind.LIVE, it) }
         }
         viewModelScope.launch {
             currentGraph.storage.channels.observeCount(playlistId, ChannelKind.MOVIE)
-                .collect(mutableMovieCount::emit)
+                .collect { setCount(ChannelKind.MOVIE, it) }
         }
         viewModelScope.launch {
             if (traits.hasXtreamSeries) {
                 currentGraph.storage.xtreamSeries.observeCount(playlistId)
             } else {
                 currentGraph.storage.channels.observeCount(playlistId, ChannelKind.SERIES)
-            }.collect(mutableSeriesCount::emit)
+            }.collect { setCount(ChannelKind.SERIES, it) }
         }
     }
 
@@ -563,6 +566,7 @@ class BrowseViewModel private constructor(
     }
 
     private fun setCount(kind: Int, count: Int) {
+        mutableContentCounts.value = mutableContentCounts.value + (kind to count)
         when (kind) {
             ChannelKind.MOVIE -> mutableMovieCount.value = count
             ChannelKind.SERIES -> mutableSeriesCount.value = count

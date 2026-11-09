@@ -38,6 +38,7 @@ import com.buco7854.opentv.ui.hub.PasswordStep
 import com.buco7854.opentv.source.SourceId
 import com.buco7854.opentv.ui.shell.DockSection
 import com.buco7854.opentv.ui.shell.OpenTvDock
+import com.buco7854.opentv.ui.shell.OpenTvMasthead
 import com.buco7854.opentv.ui.shell.PlaylistPickerContent
 import com.buco7854.opentv.ui.shell.PlaylistSelector
 import com.buco7854.opentv.ui.theme.OpenTvDesign
@@ -69,7 +70,8 @@ class HomeRenderingTest {
             assertNull(opened)
             val source = screen.nodes().single {
                 it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == "Family library" } == true &&
-                    it.config.contains(SemanticsActions.OnClick)
+                    it.config.contains(SemanticsActions.OnClick) &&
+                    !it.config.contains(SemanticsProperties.ContentDescription)
             }
             assertTrue(source.config[SemanticsActions.OnClick].action!!.invoke())
             assertEquals(SourceId.LocalPlaylist(1), opened)
@@ -303,7 +305,7 @@ class HomeRenderingTest {
     @Composable
     private fun Library(wide: Boolean, onOpenSource: (SourceId) -> Unit) {
         Scaffold(
-            topBar = { if (wide) OpenTvDock(true, DockSection.HOME, {}, {}, wide = true) },
+            topBar = { OpenTvMasthead(true, DockSection.HOME, "Family library", true, {}, {}, {}, {}, wide) },
             bottomBar = { if (!wide) OpenTvDock(true, DockSection.HOME, {}, {}) },
         ) { padding ->
             Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.TopCenter) {
@@ -332,7 +334,7 @@ class HomeRenderingTest {
     ): RenderedScreen {
         val controller = Robolectric.buildActivity(ComponentActivity::class.java).setup()
         val activity = controller.get()
-        activity.setContent { OpenTvDesign(dark) { content(width >= 840) } }
+        activity.setContent { OpenTvDesign(dark) { content(width >= 960) } }
         val decor = activity.window.decorView
         val settle = {
             Snapshot.sendApplyNotifications()

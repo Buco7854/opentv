@@ -18,10 +18,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
 import java.io.IOException
 import java.io.FilterInputStream
@@ -44,13 +46,29 @@ import java.util.concurrent.atomic.AtomicBoolean
  * directly: CORS, mixed content). HLS playlists are rewritten to route segment/key
  * URIs through the proxy too; Range requests pass through for VOD seeking.
  */
-class StreamProxy(
+class StreamProxy private constructor(
     private val http: ServerHttp,
     private val cipher: StreamCipher,
     private val gate: StreamGate,
     /** Concurrent reads the provider behind a URL permits (its max_connections). */
     private val connectionLimit: suspend (String) -> Int,
+    private val imageFetchTimeoutMs: Long,
 ) {
+    constructor(
+        http: ServerHttp,
+        cipher: StreamCipher,
+        gate: StreamGate,
+        connectionLimit: suspend (String) -> Int,
+    ) : this(http, cipher, gate, connectionLimit, IMAGE_FETCH_TIMEOUT_MS)
+
+    internal constructor(
+        http: ServerHttp,
+        cipher: StreamCipher,
+        gate: StreamGate,
+        imageFetchTimeoutMs: Long,
+        connectionLimit: suspend (String) -> Int,
+    ) : this(http, cipher, gate, connectionLimit, imageFetchTimeoutMs)
+
     private val log = LoggerFactory.getLogger("opentv")
     private val activeBodies = ConcurrentHashMap<String, MutableSet<InputStream>>()
     private class StreamingClientUse(
@@ -260,7 +278,27 @@ class StreamProxy(
     }
 
     private suspend fun fetchImage(uri: URI, stale: CachedImage?): CachedImage =
-        withContext(Dispatchers.IO) {
+        // HttpRequest.timeout stops protecting a response when ofInputStream delivers its
+        // headers. Bound the body and disk spool too; interruption closes a stalled read
+        // through use/finally rather than leaving an IO worker and browser socket occupied.
+        withTimeoutOrNull(imageFetchTimeoutMs) {
+            try {
+                readImage(uri, stale)
+            } catch (failure: Exception) {
+                // JDK image-body streams wrap interruption in IOException. Restore the
+                // coroutine's own cancellation so caller cancellation stays cancellation
+                // and only this timeout becomes a recoverable upstream image failure.
+                currentCoroutineContext().ensureActive()
+                throw failure
+            }
+        } ?: throw ImageFetchException(
+            HttpStatusCode.GatewayTimeout,
+            "upstream_timeout",
+            "Image request timed out",
+        )
+
+    private suspend fun readImage(uri: URI, stale: CachedImage?): CachedImage =
+        runInterruptible(Dispatchers.IO) {
             val builder = HttpRequest.newBuilder(uri)
                 .timeout(Duration.ofSeconds(30))
                 .header("User-Agent", http.userAgent)
@@ -277,7 +315,7 @@ class StreamProxy(
             }
             upstream.body().use { input ->
                 if (upstream.statusCode() == 304 && stale != null && stale.storageExists()) {
-                    return@withContext stale.copy(cachedAtMs = System.currentTimeMillis())
+                    return@runInterruptible stale.copy(cachedAtMs = System.currentTimeMillis())
                 }
                 if (upstream.statusCode() !in 200..299) {
                     throw ImageFetchException(
@@ -322,7 +360,7 @@ class StreamProxy(
                             "Image response ended early",
                         )
                     }
-                    return@withContext CachedImage(
+                    return@runInterruptible CachedImage(
                         path = null,
                         bytes = bytes,
                         size = bytes.size.toLong(),
@@ -357,7 +395,7 @@ class StreamProxy(
                         collected.write(buffer, 0, count)
                     }
                     val bytes = collected.toByteArray()
-                    return@withContext CachedImage(
+                    return@runInterruptible CachedImage(
                         path = null,
                         bytes = bytes,
                         size = bytes.size.toLong(),
@@ -943,6 +981,7 @@ class StreamProxy(
         const val MAX_MEMORY_IMAGE_CACHE_BYTES = 32L * 1024 * 1024
         const val MAX_IMAGE_CACHE_ENTRIES = 512
         const val IMAGE_REVALIDATE_MS = 60 * 60_000L
+        const val IMAGE_FETCH_TIMEOUT_MS = 5_000L
         const val IMAGE_COPY_BUFFER_BYTES = 64 * 1024
         const val IMAGE_CACHE_CONTROL = "private, max-age=86400"
         const val MAX_HLS_PLAYLIST_BYTES = 2 * 1024 * 1024

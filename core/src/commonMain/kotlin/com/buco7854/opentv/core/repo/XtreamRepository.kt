@@ -20,6 +20,8 @@ import com.buco7854.opentv.core.xtream.XtreamEpgEntry
 import kotlinx.datetime.TimeZone
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** seriesKey used for episodes cached from the panel, unique per series. */
@@ -58,69 +60,102 @@ class XtreamRepository(
         private const val SLOW_PANEL_BACKOFF_MS = 60_000L
     }
 
-    private val mutex = Mutex()
+    private class EpisodeFetch(val mutex: Mutex = Mutex(), var callers: Int = 0)
+    private val episodeFetchesGuard = Mutex()
+    private val episodeFetches = mutableMapOf<Pair<Long, Long>, EpisodeFetch>()
 
-    /** Fetch and cache the episode list for one series (throttled to 24h). */
-    suspend fun ensureEpisodes(playlistId: Long, seriesId: Long, force: Boolean = false) {
-        mutex.withLock {
-            val series = storage.xtreamSeries.get(playlistId, seriesId) ?: return
-            val seriesKey = xtreamSeriesKey(seriesId)
-            val now = clock()
-            val cached = storage.channels.countEpisodes(playlistId, seriesKey) > 0
-            // A cache window over nothing is not a cache. Honouring the timestamp
-            // without checking that it stands for stored episodes is what let a single
-            // empty reply hold a series blank for a day, and it would go on doing so
-            // for every series already stamped that way before this was fixed.
-            if (!force && cached && series.episodesFetchedAtMs > 0 &&
-                now - series.episodesFetchedAtMs < EPISODES_CACHE_MS
-            ) return
+    /**
+     * Fetches one series without holding a catalog gate. The server guards only the commit;
+     * provider work for a different series remains independent and a changed source is discarded.
+     */
+    suspend fun ensureEpisodes(
+        playlistId: Long,
+        seriesId: Long,
+        force: Boolean = false,
+        withCatalogWrite: suspend (suspend () -> Unit) -> Unit = { it() },
+    ) {
+        val key = playlistId to seriesId
+        val fetch = episodeFetchesGuard.withLock {
+            episodeFetches.getOrPut(key, ::EpisodeFetch).also { it.callers++ }
+        }
+        try {
+            fetch.mutex.withLock {
+                val series = storage.xtreamSeries.get(playlistId, seriesId) ?: return
+                val seriesKey = xtreamSeriesKey(seriesId)
+                val now = clock()
+                val cached = storage.channels.countEpisodes(playlistId, seriesKey) > 0
+                // A cache window over nothing is not a cache. Honouring the timestamp
+                // without checking that it stands for stored episodes is what let a single
+                // empty reply hold a series blank for a day, and it would go on doing so
+                // for every series already stamped that way before this was fixed.
+                if (!force && cached && series.episodesFetchedAtMs > 0 &&
+                    now - series.episodesFetchedAtMs < EPISODES_CACHE_MS
+                ) return
 
-            val creds = storage.playlists.get(playlistId)?.credentials() ?: return
-            val episodes = xtreamApi.fetchSeriesEpisodes(creds, seriesId)
-            if (episodes.isEmpty()) {
-                // Say so where it can be read back. Whether the panel truly has no
-                // episodes or replied in a shape we could not parse is the one thing
-                // an empty series page cannot tell you from the outside.
-                log.log(
-                    "Series episodes",
-                    XtreamApiException("Panel listed no episodes for series $seriesId"),
-                )
-                // An empty answer is not proof that the series is empty: a panel that
-                // hiccups, rate-limits, or replies in a shape we could not read looks
-                // exactly like one with no episodes. Keep whatever we already had.
-                //
-                // Only record the attempt when we did. Stamping an empty first fetch
-                // silences the next day of asking, and since the stamp is what the
-                // early return above consults, the series page stays blank and its
-                // retry cannot reach the panel at all. Leaving it unstamped costs one
-                // panel call each time that page is opened, which is the right price
-                // for the difference between "no episodes" and "we never got any".
-                if (cached) storage.xtreamSeries.setEpisodesFetched(playlistId, seriesId, now)
-                return
-            }
+                val creds = storage.playlists.get(playlistId)?.credentials() ?: return
+                val episodes = xtreamApi.fetchSeriesEpisodes(creds, seriesId)
+                withCatalogWrite commit@{
+                    // The provider request may outlive a source edit, removal, or full catalog refresh.
+                    // Only the current source and a still-present series may receive its response.
+                    val currentCredentials = storage.playlists.get(playlistId)?.credentials() ?: return@commit
+                    if (currentCredentials.base != creds.base || currentCredentials.user != creds.user ||
+                        currentCredentials.pass != creds.pass
+                    ) return@commit
+                    val currentSeries = storage.xtreamSeries.get(playlistId, seriesId) ?: return@commit
+                    if (episodes.isEmpty()) {
+                        // Say so where it can be read back. Whether the panel truly has no
+                        // episodes or replied in a shape we could not parse is the one thing
+                        // an empty series page cannot tell you from the outside.
+                        log.log(
+                            "Series episodes",
+                            XtreamApiException("Panel listed no episodes for series $seriesId"),
+                        )
+                        // An empty answer is not proof that the series is empty: a panel that
+                        // hiccups, rate-limits, or replies in a shape we could not read looks
+                        // exactly like one with no episodes. Keep whatever we already had.
+                        //
+                        // Only record the attempt when we did. Stamping an empty first fetch
+                        // silences the next day of asking, and since the stamp is what the
+                        // early return above consults, the series page stays blank and its
+                        // retry cannot reach the panel at all. Leaving it unstamped costs one
+                        // panel call each time that page is opened, which is the right price
+                        // for the difference between "no episodes" and "we never got any".
+                        if (cached) storage.xtreamSeries.setEpisodesFetched(playlistId, seriesId, now)
+                        return@commit
+                    }
 
-            storage.channels.deleteEpisodes(playlistId, seriesKey)
-            storage.channels.insertAll(
-                episodes.mapIndexed { index, ep ->
-                    Channel(
-                        playlistId = playlistId,
-                        name = ep.title,
-                        url = com.buco7854.opentv.core.xtream.Xtream.episodeUrl(creds, ep.episodeId, ep.containerExtension),
-                        logo = ep.image ?: series.cover,
-                        groupTitle = series.categoryName,
-                        tvgId = null,
-                        kind = ChannelKind.SERIES,
-                        seriesKey = seriesKey,
-                        season = ep.season,
-                        episode = ep.episodeNum,
-                        position = index,
-                        description = ep.plot,
-                        durationSecs = ep.durationSecs,
-                        airDate = ep.airDate,
+                    storage.channels.replaceEpisodes(
+                        playlistId,
+                        seriesKey,
+                        episodes.mapIndexed { index, ep ->
+                            Channel(
+                                playlistId = playlistId,
+                                name = ep.title,
+                                url = com.buco7854.opentv.core.xtream.Xtream.episodeUrl(creds, ep.episodeId, ep.containerExtension),
+                                logo = ep.image ?: currentSeries.cover,
+                                groupTitle = currentSeries.categoryName,
+                                tvgId = null,
+                                kind = ChannelKind.SERIES,
+                                seriesKey = seriesKey,
+                                season = ep.season,
+                                episode = ep.episodeNum,
+                                position = index,
+                                description = ep.plot,
+                                durationSecs = ep.durationSecs,
+                                airDate = ep.airDate,
+                            )
+                        }
                     )
+                    storage.xtreamSeries.setEpisodesFetched(playlistId, seriesId, now)
                 }
-            )
-            storage.xtreamSeries.setEpisodesFetched(playlistId, seriesId, now)
+            }
+        } finally {
+            withContext(NonCancellable) {
+                episodeFetchesGuard.withLock {
+                    fetch.callers--
+                    if (fetch.callers == 0) episodeFetches.remove(key)
+                }
+            }
         }
     }
 

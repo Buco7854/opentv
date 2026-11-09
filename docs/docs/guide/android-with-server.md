@@ -13,14 +13,19 @@ Connecting gets you the playlists your account is granted on the server, your
 watch progress and favorites synced across every device signed in to it, watch
 together with other viewers, and downloads saved to the device.
 
+The header keeps your current playlist visible across Library, Browse, Favorites
+and Search. Tap it to switch an existing source, or tap **OpenTV** to return to
+Library. Browse uses the same Live, Movies and Series tabs as the web client.
+
 ## Connecting
 
 In Library, choose **Connect a server** and enter its address (for example
 `https://tv.example.com`). The app checks the address before continuing.
 
 Use **Continue in browser** on the address screen to connect and sign in. Your
-server's browser page handles passwords, passkeys, single sign-on and any two-factor checks; Android does not
-ask you to choose between those methods a second time. Return to OpenTV after
+server's browser page handles passwords, passkeys, single sign-on and any
+two-factor checks; Android does not ask you to choose between those methods a
+second time. Return to OpenTV after
 completing the browser step. If the browser was closed, you can reopen it from
 the waiting screen without starting a second sign-in request.
 

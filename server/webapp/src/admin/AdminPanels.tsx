@@ -1,14 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
-import { asyncFallback, EmptyState } from '../components/Common';
-import { Icon } from '../components/Icons';
-import { ConfirmDialog, IconBtn, SelectField } from '../components/Primitives';
+import { EmptyState } from '../components/Common';
+import { ConfirmDialog, SelectField } from '../components/Primitives';
 import { reportSuccess } from '../errors';
 import {
   AdminDownload, AdminPlaylist, AdminUser, adminApi, PendingOidcIdentity,
 } from './api';
 import { adminText as c } from './copy';
 import { bytes, dateTime, downloadStatusLabel, initials, reportAdminError } from './format';
-import { AdminSection, PlaylistPicker } from './AdminShared';
+import { AdminSection, AdminSectionFeedback, PlaylistPicker } from './AdminShared';
 import { WatchProgressBar } from '../components/WatchProgress';
 
 export function TemplatePanel({ playlists, template }: {
@@ -20,8 +19,9 @@ export function TemplatePanel({ playlists, template }: {
   const loaded = template.data;
   useEffect(() => { if (loaded) setDraft(loaded.playlistIds); }, [loaded]);
 
-  const fallback = asyncFallback(playlists) ?? asyncFallback(template);
-  if (fallback) return fallback;
+  if (playlists.data === null || template.data === null) return <>
+    <AdminSectionFeedback state={playlists} /><AdminSectionFeedback state={template} />
+  </>;
 
   const save = async () => {
     setSaving(true);
@@ -38,8 +38,9 @@ export function TemplatePanel({ playlists, template }: {
 
   return (
     <section className="admin-card">
-      <div className="title">{c('templateTitle')}</div>
+      <h3 className="title">{c('templateTitle')}</h3>
       <p className="admin-hint">{c('templateHelp')}</p>
+      <AdminSectionFeedback state={playlists} /><AdminSectionFeedback state={template} />
       <PlaylistPicker playlists={playlists.data ?? []} selected={draft} onChange={setDraft} />
       <div className="actions end">
         <button className="btn" disabled={saving} onClick={() => void save()}>{c('saveTemplate')}</button>
@@ -99,23 +100,24 @@ function OidcCard({ identity, users, onApproved }: {
 
 export function OidcPanel({ pending, users, onApproved }: {
   pending: AdminSection<PendingOidcIdentity[]>;
-  users: AdminUser[];
+  users: AdminSection<AdminUser[]>;
   onApproved: (identity: PendingOidcIdentity, user: AdminUser) => void;
 }) {
-  const fallback = asyncFallback(pending);
-  if (fallback) return fallback;
+  if (pending.data === null || users.data === null) return <>
+    <AdminSectionFeedback state={pending} /><AdminSectionFeedback state={users} />
+  </>;
   const identities = pending.data ?? [];
   if (identities.length === 0) {
-    return <EmptyState title={c('noPendingSso')} subtitle={c('noPendingSsoBody')} />;
+    return <><AdminSectionFeedback state={pending} /><AdminSectionFeedback state={users} /><EmptyState title={c('noPendingSso')} subtitle={c('noPendingSsoBody')} /></>;
   }
   return (
-    <div className="flex flex-col gap-2">
-      <p className="admin-hint">{c('oidcHelp')}</p>
+    <div className="admin-panel-stack">
+      <AdminSectionFeedback state={pending} /><AdminSectionFeedback state={users} />
       {identities.map((identity) => (
         <OidcCard
           key={`${identity.issuer} ${identity.subject}`}
           identity={identity}
-          users={users}
+          users={users.data ?? []}
           onApproved={(user) => onApproved(identity, user)}
         />
       ))}
@@ -133,7 +135,7 @@ interface BlobGroup {
   entries: AdminDownload[];
 }
 
-export function DownloadsPanel({ downloads }: { downloads: AdminSection<AdminDownload[]> }) {
+export function DownloadsPanel({ downloads, users }: { downloads: AdminSection<AdminDownload[]>; users: AdminUser[] }) {
   const items = downloads.data;
   const groups = useMemo(() => {
     const map = new Map<string, BlobGroup>();
@@ -154,14 +156,13 @@ export function DownloadsPanel({ downloads }: { downloads: AdminSection<AdminDow
   }, [items]);
   const [confirm, setConfirm] = useState<BlobGroup | null>(null);
 
-  const fallback = asyncFallback(downloads);
-  if (fallback) return fallback;
-  if (groups.length === 0) return <EmptyState title={c('noDownloads')} subtitle={c('noDownloadsBody')} />;
+  if (downloads.data === null) return <AdminSectionFeedback state={downloads} />;
+  if (groups.length === 0) return <><AdminSectionFeedback state={downloads} /><EmptyState title={c('noDownloads')} subtitle={c('noDownloadsBody')} /></>;
 
   return (
     <>
       <section className="admin-card">
-        <p className="admin-hint">{c('downloadsHelp')}</p>
+        <AdminSectionFeedback state={downloads} />
         <div className="admin-rows">
           {groups.map((group) => {
             const owners = new Set(group.entries.map((entry) => entry.userId));
@@ -171,7 +172,6 @@ export function DownloadsPanel({ downloads }: { downloads: AdminSection<AdminDow
               ? Math.min(1, group.downloadedBytes / group.totalBytes) : 0;
             return (
               <div className="admin-row" key={group.blobId}>
-                <span className="logo-box"><Icon name="download" /></span>
                 <div className="body">
                   <div className="name">{group.title}</div>
                   <div className="sub">
@@ -186,8 +186,7 @@ export function DownloadsPanel({ downloads }: { downloads: AdminSection<AdminDow
                   </div>
                   <WatchProgressBar fraction={fraction} />
                 </div>
-                <IconBtn name="del" className="danger" label={c('cancelBlob')}
-                         onClick={() => setConfirm(group)} />
+                <button className="btn text danger-text admin-row-action" onClick={() => setConfirm(group)}>{c('cancelBlob')}</button>
               </div>
             );
           })}
@@ -197,8 +196,12 @@ export function DownloadsPanel({ downloads }: { downloads: AdminSection<AdminDow
         <ConfirmDialog
           title={c('cancelDownloadTitle')}
           message={c('cancelDownloadBody', {
+            title: confirm.title,
             count: confirm.entries.length,
-            ids: [...new Set(confirm.entries.map((entry) => entry.userId))].join(', '),
+            users: [...new Set(confirm.entries.map((entry) => entry.userId))].map((id) => {
+              const user = users.find((item) => item.id === id);
+              return user ? user.displayName || user.username : c('unavailableUser');
+            }).join(', '),
           })}
           confirmLabel={c('cancelEveryone')}
           onDismiss={() => setConfirm(null)}

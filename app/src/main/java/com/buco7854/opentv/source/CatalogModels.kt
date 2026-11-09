@@ -100,6 +100,8 @@ data class SourceTraits(
     val usesXtreamCredentials: Boolean,
     val usesM3uUrl: Boolean,
     val isFileImport: Boolean,
+    /** Counts already present in the entitled source detail; unknown counts stay absent. */
+    val contentCounts: Map<Int, Int> = emptyMap(),
 )
 
 enum class PlaylistOperation {

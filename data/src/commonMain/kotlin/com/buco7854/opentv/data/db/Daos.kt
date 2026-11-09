@@ -69,6 +69,13 @@ interface ChannelDao {
     fun observeGroups(playlistId: Long, kind: Int): Flow<List<GroupCount>>
 
     @Query(
+        "SELECT groupTitle, COUNT(*) as count FROM channels " +
+            "WHERE playlistId = :playlistId AND kind = :kind " +
+            "GROUP BY groupTitle ORDER BY MIN(position)"
+    )
+    suspend fun groups(playlistId: Long, kind: Int): List<GroupCount>
+
+    @Query(
         "SELECT * FROM channels WHERE playlistId = :playlistId AND kind = :kind " +
             "AND groupTitle = :group ORDER BY position"
     )
@@ -96,7 +103,7 @@ interface ChannelDao {
     )
     suspend fun countInGroup(playlistId: Long, kind: Int, group: String, filter: String): Int
 
-    @Transaction
+    // RoomStorage owns the reader snapshot. @Transaction here would acquire the writer.
     suspend fun pageInGroup(
         playlistId: Long,
         kind: Int,
@@ -139,7 +146,6 @@ interface ChannelDao {
     )
     suspend fun countSeriesInGroup(playlistId: Long, group: String, filter: String): Int
 
-    @Transaction
     suspend fun pageSeriesInGroup(
         playlistId: Long,
         group: String,
@@ -156,6 +162,12 @@ interface ChannelDao {
             "ORDER BY season, episode, position"
     )
     fun observeEpisodes(playlistId: Long, seriesKey: String): Flow<List<ChannelRow>>
+
+    @Query(
+        "SELECT * FROM channels WHERE playlistId = :playlistId AND kind = 2 AND seriesKey = :seriesKey " +
+            "ORDER BY season, episode, position"
+    )
+    suspend fun episodes(playlistId: Long, seriesKey: String): List<ChannelRow>
 
     @Query(
         "SELECT id, playlistId, name, url, logo, groupTitle, tvgId, kind, seriesKey, season, " +
@@ -178,7 +190,6 @@ interface ChannelDao {
     )
     suspend fun countEpisodes(playlistId: Long, seriesKey: String, season: Int?): Int
 
-    @Transaction
     suspend fun pageEpisodes(
         playlistId: Long,
         seriesKey: String,
@@ -269,6 +280,12 @@ interface ChannelDao {
 
     @Query("DELETE FROM channels WHERE playlistId = :playlistId AND seriesKey = :seriesKey")
     suspend fun deleteEpisodes(playlistId: Long, seriesKey: String)
+
+    @Transaction
+    suspend fun replaceEpisodes(playlistId: Long, seriesKey: String, rows: List<ChannelRow>) {
+        deleteEpisodes(playlistId, seriesKey)
+        insertAll(rows)
+    }
 }
 
 @Dao
@@ -294,6 +311,12 @@ interface XtreamSeriesDao {
             "WHERE playlistId = :playlistId GROUP BY categoryName ORDER BY categoryName"
     )
     fun observeCategories(playlistId: Long): Flow<List<GroupCount>>
+
+    @Query(
+        "SELECT categoryName as groupTitle, COUNT(*) as count FROM xtream_series " +
+            "WHERE playlistId = :playlistId GROUP BY categoryName ORDER BY categoryName"
+    )
+    suspend fun categories(playlistId: Long): List<GroupCount>
 
     @Query(
         "SELECT * FROM xtream_series WHERE playlistId = :playlistId " +
@@ -322,7 +345,6 @@ interface XtreamSeriesDao {
     )
     suspend fun countInCategory(playlistId: Long, category: String, filter: String): Int
 
-    @Transaction
     suspend fun pageInCategory(
         playlistId: Long,
         category: String,
@@ -342,6 +364,9 @@ interface XtreamSeriesDao {
 
     @Query("SELECT * FROM xtream_series WHERE playlistId = :playlistId ORDER BY name")
     fun observeAll(playlistId: Long): Flow<List<XtreamSeriesRow>>
+
+    @Query("SELECT * FROM xtream_series WHERE playlistId = :playlistId ORDER BY name")
+    suspend fun getAll(playlistId: Long): List<XtreamSeriesRow>
 
     @Query(
         "SELECT * FROM xtream_series WHERE playlistId = :playlistId " +

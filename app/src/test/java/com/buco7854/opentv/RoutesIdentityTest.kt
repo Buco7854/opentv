@@ -22,6 +22,24 @@ import org.robolectric.annotation.Config
 @Config(sdk = [35], application = Application::class)
 class RoutesIdentityTest {
     @Test
+    fun globalChooserOnHomeOpensTheChosenPlaylistEvenWhenItIsAlreadyCurrent() {
+        val source = SourceId.Hub(3, 7)
+        assertEquals(
+            Routes.browse(source, ChannelKind.MOVIE),
+            playlistSelectionRoute(source, source, mapOf(source.encode() to ChannelKind.MOVIE), alreadyBrowsing = false),
+        )
+    }
+
+    @Test
+    fun aHubOnlyLibraryCanOfferBrowseFromTheGlobalHeaderWithoutAnAutomaticRedirect() {
+        val source = SourceId.Hub(3, 7)
+        assertEquals(source, activeCatalogSource(null, null, -1,
+            CatalogSourceAvailability(emptyList(), setOf(3)), knownSources = listOf(source)))
+        assertNull(activeCatalogSource(null, null, -1,
+            CatalogSourceAvailability(emptyList(), emptySet()), knownSources = listOf(source)))
+    }
+
+    @Test
     fun choosingTheCurrentPlaylistDoesNotReplaceItsBrowseDestination() {
         val source = SourceId.Hub(3, 7)
         assertNull(playlistSelectionRoute(source, source, mapOf(source.encode() to ChannelKind.MOVIE)))

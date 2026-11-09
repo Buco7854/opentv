@@ -255,6 +255,7 @@ fun Application.openTvModule(
     apiSecurity: ApiSecurity = ApiSecurity.authenticated(graph.auth, graph.cipher),
 ) {
     val origins = PublicOrigin(graph.authConfig, graph.trustedProxies::trustsPeer)
+    installOpenTvApiRequestTiming()
     install(ContentNegotiation) {
         json(Json {
             ignoreUnknownKeys = true

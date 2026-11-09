@@ -11,15 +11,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,14 +22,10 @@ import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.MoreVert
-import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Restore
-import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.PlaylistPlay
@@ -54,7 +44,6 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -87,120 +76,6 @@ import com.buco7854.opentv.source.PlaylistEpgRefreshOutcome
 import com.buco7854.opentv.source.SourceId
 import java.text.DateFormat
 import java.util.Date
-
-/** The same five destinations as the web client; TV/wide layouts put them in a top bar. */
-@Composable
-fun OpenTvDock(
-    hasActivePlaylist: Boolean,
-    activeSection: DockSection?,
-    onOpenPanel: () -> Unit,
-    onSection: (DockSection) -> Unit,
-    wide: Boolean = false,
-) {
-    Column(Modifier.background(MaterialTheme.colorScheme.background)) {
-        if (!wide) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        Row(
-            modifier = Modifier.fillMaxWidth()
-                .then(if (wide) Modifier.statusBarsPadding() else Modifier.navigationBarsPadding())
-                .padding(horizontal = if (wide) 24.dp else 4.dp, vertical = if (wide) 8.dp else 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = if (wide) Arrangement.spacedBy(16.dp) else Arrangement.Center,
-        ) {
-            if (wide) Text("OpenTV", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(end = 16.dp))
-            DockSection.entries.forEach { section ->
-                val active = activeSection == section
-                val enabled = hasActivePlaylist || section !in setOf(DockSection.BROWSE, DockSection.SEARCH)
-                val action = { if (section == DockSection.MORE) onOpenPanel() else onSection(section) }
-                if (wide) {
-                    TextButton(
-                        onClick = action,
-                        enabled = enabled,
-                        modifier = Modifier.height(48.dp).focusHighlight(RoundedCornerShape(8.dp))
-                            .background(
-                                if (active) MaterialTheme.colorScheme.surfaceContainerHighest else androidx.compose.ui.graphics.Color.Transparent,
-                                RoundedCornerShape(8.dp),
-                            ),
-                    ) {
-                        Icon(section.icon, contentDescription = null, modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text(stringResource(section.labelRes))
-                    }
-                } else {
-                    DockButton(
-                        icon = { Icon(section.icon, contentDescription = null) },
-                        label = stringResource(section.labelRes),
-                        active = active,
-                        enabled = enabled,
-                        onClick = action,
-                        modifier = Modifier.weight(1f),
-                        role = if (section == DockSection.MORE) Role.Button else Role.Tab,
-                    )
-                }
-            }
-        }
-        if (wide) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-    }
-}
-
-enum class DockSection(val labelRes: Int) {
-    HOME(R.string.common_home),
-    BROWSE(R.string.common_browse),
-    FAVORITES(R.string.common_favorites),
-    SEARCH(R.string.common_search),
-    MORE(R.string.common_more);
-
-    val icon get() = when (this) {
-        HOME -> Icons.Outlined.Home
-        BROWSE -> Icons.Outlined.GridView
-        FAVORITES -> Icons.Outlined.FavoriteBorder
-        SEARCH -> Icons.Outlined.Search
-        MORE -> Icons.Outlined.MoreVert
-    }
-}
-
-@Composable
-private fun DockButton(
-    icon: @Composable () -> Unit,
-    label: String,
-    active: Boolean,
-    enabled: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    role: Role = Role.Tab,
-) {
-    val tint = when {
-        !enabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-        active -> MaterialTheme.colorScheme.onSurface
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
-    }
-    Column(
-        modifier = modifier
-            .focusHighlight(RoundedCornerShape(12.dp))
-            .clip(RoundedCornerShape(12.dp))
-            .background(if (active) MaterialTheme.colorScheme.surfaceContainerHighest else androidx.compose.ui.graphics.Color.Transparent)
-            .then(
-                if (role == Role.Tab) Modifier.selectable(selected = active, enabled = enabled, role = role, onClick = onClick)
-                else Modifier.clickable(enabled = enabled, role = role, onClick = onClick),
-            )
-            .semantics(mergeDescendants = true) {}
-            .padding(horizontal = 2.dp, vertical = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        androidx.compose.runtime.CompositionLocalProvider(
-            androidx.compose.material3.LocalContentColor provides tint,
-            content = icon,
-        )
-        Text(
-            label,
-            color = tint,
-            style = MaterialTheme.typography.labelSmall,
-            fontSize = 11.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
 
 /** Shared press treatment for dock/panel items: pressed shows the same rounded pill as active (no rectangular ripple). */
 @Composable
