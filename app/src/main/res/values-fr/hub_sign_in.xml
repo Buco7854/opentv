@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="hub_browser_account_description">Connectez-vous sur la page de votre serveur, puis revenez dans OpenTV.</string>
+    <string name="hub_browser_continue">Continuer dans le navigateur</string>
+    <string name="hub_browser_continue_description">Votre serveur gère les mots de passe, clés d’accès et la connexion unique au même endroit.</string>
+    <string name="hub_browser_preparing">Préparation de la connexion…</string>
+    <string name="hub_browser_waiting_description">Terminez la connexion et approuvez cet appareil dans votre navigateur. OpenTV continuera automatiquement.</string>
+    <string name="hub_browser_waiting">En attente de connexion…</string>
+    <string name="hub_browser_reopen">Rouvrir le navigateur</string>
+    <string name="hub_browser_unavailable">Ce serveur ne peut pas connecter cette application. Demandez à votre administrateur d’activer la connexion par navigateur ou par mot de passe.</string>
+    <string name="hub_browser_continue_phone">Continuer sur le téléphone</string>
+</resources>

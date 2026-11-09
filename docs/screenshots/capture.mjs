@@ -23,6 +23,7 @@ const openDetails = async (p) => {
 // name, url, viewport, optional action(page)
 const shots = [
   ['home', '/', DESKTOP],
+  ['device-approval', '/link#t=docs-browser-sign-in&mode=sign-in', PHONE],
   ['playlist-chooser', '/browse/1?t=0', DESKTOP, async (p) => {
     await p.getByRole('button', { name: 'Switch playlist', exact: true }).click();
     await p.getByRole('dialog', { name: 'Switch playlist' }).waitFor();
@@ -55,10 +56,12 @@ const shots = [
 ];
 
 const browser = await chromium.launch({ executablePath: process.env.PW_EXECUTABLE || undefined });
+const requestedShots = process.env.OPENTV_SCREENSHOT_NAMES?.split(',');
 for (const theme of ['dark', 'light']) {
-  for (const [name, url, viewport, action] of shots) {
+  for (const [name, url, viewport, action] of shots.filter(([name]) => !requestedShots || requestedShots.includes(name))) {
     const ctx = await browser.newContext({ viewport, deviceScaleFactor: 2, baseURL: BASE });
     await ctx.addInitScript((t) => {
+      localStorage.setItem('opentv.accessToken', 'docs-token');
       localStorage.setItem('theme', t);
       localStorage.setItem('activePlaylist', '1');
       localStorage.setItem('gridBrowse', '1');

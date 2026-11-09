@@ -2,10 +2,11 @@ import {
   useCallback, useEffect, useRef, useState,
 } from 'react';
 import { useNavigate } from 'react-router';
+import { ApiError } from '../api/http';
 import { EmptyState } from '../components/Common';
 import { Icon } from '../components/Icons';
-import { ScreenHeader, Spinner } from '../components/Primitives';
-import { reportSuccess } from '../errors';
+import { Spinner } from '../components/Primitives';
+import { AuthLayout } from './AuthLayout';
 import { getLocale } from '../i18n';
 import { deviceLabel } from '../lib/format';
 import { authApi } from './api';
@@ -58,6 +59,8 @@ export function LinkApprovalScreen({ pending }: { pending: PendingDeviceLink | n
   const navigate = useNavigate();
   const [request, setRequest] = useState<DeviceLinkRequest | null>(null);
   const [busy, setBusy] = useState(true);
+  const [lookupAttempt, setLookupAttempt] = useState(0);
+  const [retryLookup, setRetryLookup] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<'approved' | 'denied' | null>(null);
   const returnedLinkToken = useRef<string | null>(null);
@@ -68,6 +71,9 @@ export function LinkApprovalScreen({ pending }: { pending: PendingDeviceLink | n
       return undefined;
     }
     let active = true;
+    setBusy(true);
+    setError(null);
+    setRetryLookup(false);
     loadLink(pending)
       .then((loaded) => {
         if (!active) return;
@@ -75,13 +81,18 @@ export function LinkApprovalScreen({ pending }: { pending: PendingDeviceLink | n
         if (loaded.approved) {
           clearPendingDeviceLink(pending.linkToken);
           setDone('approved');
-          reportSuccess(tx('linkApproved'));
         }
       })
-      .catch(() => { if (active) setError(tx('linkNotFound')); })
+      .catch((failure: unknown) => {
+        if (!active) return;
+        const expired = failure instanceof ApiError &&
+          ([404, 410].includes(failure.status) || failure.code === 'challenge_invalid');
+        setError(expired ? tx('linkNotFound') : errorMessage(failure));
+        setRetryLookup(!expired);
+      })
       .finally(() => { if (active) setBusy(false); });
     return () => { active = false; };
-  }, [pending]);
+  }, [pending, lookupAttempt]);
 
   useEffect(() => {
     // The fragment's mode is untrusted routing input. Only the mode recovered from
@@ -102,7 +113,6 @@ export function LinkApprovalScreen({ pending }: { pending: PendingDeviceLink | n
         : authApi.linkDeny({ linkToken: pending.linkToken }));
       clearPendingDeviceLink(pending.linkToken);
       setDone(approve ? 'approved' : 'denied');
-      if (approve) reportSuccess(tx('linkApproved'));
     } catch (requestError) {
       setError(errorMessage(requestError));
     } finally {
@@ -121,30 +131,23 @@ export function LinkApprovalScreen({ pending }: { pending: PendingDeviceLink | n
   const canReturnToApp = browserSignInDone && supportsBrowserSignInReturn();
 
   return (
-    <>
-      <ScreenHeader
-        title={tx('linkApproveTitle')}
-        subtitle={<span className="subtitle">{tx('linkApproveSubtitle')}</span>}
-        onBack={leave}
-      />
-      <div className="mx-auto flex max-w-[520px] flex-col gap-3 px-4 pb-6">
+    <AuthLayout flow
+      title={done ? tx(done === 'approved' ? 'linkApproved' : 'linkDeniedDone') : tx('linkApproveTitle')}
+      subtitle={!done ? tx('linkApproveSubtitle') : undefined}
+      footer={!done && <button className="link" onClick={leave}>{tx('back')}</button>}>
+      <div className="auth-step link-approval-content">
         <ErrorNotice message={error} />
+        {!busy && retryLookup && !request && <button className="btn tonal"
+          onClick={() => setLookupAttempt((attempt) => attempt + 1)}>{tx('retry')}</button>}
 
-        {done && (
-          <EmptyState
-            title={done === 'approved' ? tx('linkApproved') : tx('linkDeniedDone')}
-            subtitle={browserSignInDone
-              ? tx('browserSignInApprovedBody')
-              : done === 'approved' ? tx('linkApprovedBody') : tx('linkDeniedDoneBody')}
-            action={canReturnToApp
-              ? <a className="btn" href={BROWSER_SIGN_IN_RETURN_URL}>{tx('openOpenTv')}</a>
-              : <button className="btn" onClick={leave}>{tx('continue')}</button>}
-          >
-            <div className="empty-home-art">
-              <Icon name={done === 'approved' ? 'check' : 'close'} />
-            </div>
-          </EmptyState>
-        )}
+        {done && <section className="link-result" role="status">
+          <Icon name={done === 'approved' ? 'check' : 'close'} />
+          <p>{browserSignInDone ? tx('browserSignInApprovedBody')
+            : tx(done === 'approved' ? 'linkApprovedBody' : 'linkDeniedDoneBody')}</p>
+          {canReturnToApp
+            ? <a className="btn" href={BROWSER_SIGN_IN_RETURN_URL}>{tx('openOpenTv')}</a>
+            : <button className="btn" onClick={leave}>{tx('continue')}</button>}
+        </section>}
 
         {!done && busy && !request && <Spinner />}
 
@@ -154,34 +157,25 @@ export function LinkApprovalScreen({ pending }: { pending: PendingDeviceLink | n
           </EmptyState>
         )}
 
-        {!done && request && (
-          <>
-            <section className="link-card">
-              <div className="row">
-                <span className="logo-box"><Icon name="liveTv" /></span>
-                <div className="body">
-                  <div className="title">{request.deviceName || tx('linkDeviceUnknown')}</div>
-                  <div className="sub">
-                    {[browser === request.deviceName ? null : browser, request.ip]
-                      .filter(Boolean).join(' · ')}
-                  </div>
-                  <div className="sub">{tx('linkRequestedAt', { date: stamp(request.requestedAtMs) })}</div>
-                </div>
-              </div>
-              <p className="link-question">{tx('linkQuestion', { account })}</p>
-              <p className="auth-hint">{tx('linkApproveIntro')}</p>
-              <div className="actions">
-                <button className="btn" disabled={busy} onClick={() => void decide(true)}>
-                  {busy ? tx('working') : tx('linkApprove')}
-                </button>
-                <button className="btn danger-text" disabled={busy} onClick={() => void decide(false)}>
-                  {tx('linkDeny')}
-                </button>
-              </div>
-            </section>
-          </>
-        )}
+        {!done && request && <section className="link-card" aria-label={tx('linkApproveTitle')}>
+          <div className="link-device">
+            <Icon name="liveTv" />
+            <div className="body">
+              <h2>{request.deviceName || tx('linkDeviceUnknown')}</h2>
+              <p>{[browser === request.deviceName ? null : browser, request.ip].filter(Boolean).join(' · ')}</p>
+              <p>{tx('linkRequestedAt', { date: stamp(request.requestedAtMs) })}</p>
+            </div>
+          </div>
+          <p className="link-question">{tx('linkQuestion', { account })}</p>
+          <p className="auth-hint">{tx('linkApproveIntro')}</p>
+          <div className="link-approval-actions">
+            <button className="btn" disabled={busy} onClick={() => void decide(true)}>
+              {busy ? tx('working') : tx('linkApprove')}
+            </button>
+            <button className="btn tonal" disabled={busy} onClick={() => void decide(false)}>{tx('linkDeny')}</button>
+          </div>
+        </section>}
       </div>
-    </>
+    </AuthLayout>
   );
 }

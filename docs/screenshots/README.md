@@ -24,3 +24,7 @@ capture`, `npm run frame`, `npm run compress`.
 
 The data is fictional: the playlists, channels, movies and series exist only in
 `mock-server.mjs`.
+
+Capture selected screens from a production preview with
+`OPENTV_SCREENSHOT_URL=http://127.0.0.1:4173 OPENTV_SCREENSHOT_NAMES=device-approval npm run shots`.
+The name filter applies to capture, framing, and compression so unrelated images stay unchanged.

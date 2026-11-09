@@ -5,8 +5,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'static', 'img', 'web');
+const requestedShots = process.env.OPENTV_SCREENSHOT_NAMES?.split(',');
 let before = 0, after = 0;
-for (const f of fs.readdirSync(DIR).filter((x) => x.endsWith('.png'))) {
+for (const f of fs.readdirSync(DIR).filter((x) => x.endsWith('.png') && (!requestedShots || requestedShots.some((name) => x === `${name}-dark.png` || x === `${name}-light.png`)))) {
   const p = path.join(DIR, f);
   before += fs.statSync(p).size;
   const buf = await sharp(p).png({ palette: true, quality: 88, effort: 9 }).toBuffer();

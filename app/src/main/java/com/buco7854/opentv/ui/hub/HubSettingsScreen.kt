@@ -7,6 +7,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.ui.text.style.TextOverflow
+import com.buco7854.opentv.source.SourceId
+import com.buco7854.opentv.ui.home.CatalogSourceEntry
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -30,10 +40,13 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -73,6 +86,7 @@ fun HubSettingsScreen(
     onBack: () -> Unit,
     onRemoved: () -> Unit,
     onSignIn: () -> Unit,
+    onOpenPlaylistAccount: (SourceId) -> Unit,
 ) {
     val graph = OpenTvApp.graph
     val accounts = graph.hubAccounts
@@ -82,14 +96,34 @@ fun HubSettingsScreen(
     val removeCancelFocusRequester = remember { FocusRequester() }
     RequestInitialFocusOnTv(backFocusRequester)
 
-    val source by produceState<HubSource?>(initialValue = null, hubId) {
-        value = graph.storage.hubSources.get(hubId)
-        // Refresh identity so the administration entry reflects the server, not
-        // a role cached when the account was first added.
-        runCatching { accounts.refresh(hubId) }
-        value = graph.storage.hubSources.get(hubId)
+    val viewModel: HubSettingsViewModel = viewModel(
+        key = "HubSettings-$hubId",
+        factory = viewModelFactory {
+            initializer {
+                HubSettingsViewModel(
+                    hubId = hubId,
+                    observeSources = accounts.sources,
+                    readSource = { graph.storage.hubSources.get(hubId) },
+                    refreshIdentity = { accounts.refresh(hubId) },
+                    loadPlaylists = {
+                        val client = graph.hubs.clientFor(hubId) ?: error("Server session unavailable")
+                        client.call { playlists(it) }.map {
+                            CatalogSourceEntry(SourceId.Hub(hubId, it.id), it.name, itemCount = it.channelCount)
+                        }
+                    },
+                )
+            }
+        },
+    )
+    val workspace by viewModel.state.collectAsStateWithLifecycle()
+    val source = workspace.source
+    LifecycleResumeEffect(viewModel) {
+        viewModel.refresh()
+        onPauseOrDispose {}
     }
 
+    val snackbar = androidx.compose.runtime.remember { androidx.compose.material3.SnackbarHostState() }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
     var qrUrl by remember { mutableStateOf<String?>(null) }
     var rejected by remember { mutableStateOf(false) }
     var confirmRemove by remember { mutableStateOf(false) }
@@ -129,132 +163,103 @@ fun HubSettingsScreen(
         },
     ) { padding ->
         val hub = source
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            if (hub == null) return@Column
-            val signedOut = hub.userId == null
-
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text(hub.baseUrl, style = MaterialTheme.typography.bodyMedium)
-                    hub.username?.let {
-                        Text(
-                            stringResource(R.string.hub_signed_in_as, it),
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
-                    if (accounts.canAdminister(hub)) Pill(text = "ADMIN")
-                }
-            }
-
-            if (rejected) {
-                Text(
-                    stringResource(R.string.hub_handoff_rejected),
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-
-            // Session/removal actions belong to the server identity above, not below every
-            // browser handoff and download preference. Keeping them here makes them visible
-            // without discovering that the page continues below the fold.
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+        Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
+            Column(
+                modifier = Modifier.widthIn(max = 960.dp).fillMaxSize()
+                    .verticalScroll(rememberScrollState()).padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(24.dp),
             ) {
-                if (!signedOut) {
-                    OtvTextButton(
-                        // The sign-out must outlive this composition: leaving would otherwise
-                        // cancel it before the local session is forgotten.
-                        onClick = {
+                if (!workspace.sourceLoaded) {
+                    CircularProgressIndicator()
+                } else if (hub == null) {
+                    Text(stringResource(R.string.management_server_removed), style = MaterialTheme.typography.bodyLarge)
+                    OtvTextButton(onClick = onBack) { Text(stringResource(R.string.common_back)) }
+                } else {
+                    ServerWorkspaceHeader(
+                        hub = hub,
+                        onSignIn = onSignIn,
+                    )
+                    if (rejected) Text(
+                        stringResource(R.string.hub_handoff_rejected),
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    if (hub.userId != null) {
+                        ServerPlaylistSection(
+                            state = workspace,
+                            onRetry = viewModel::refresh,
+                            onManage = if (accounts.canAdminister(hub)) {
+                                { openPage(com.buco7854.opentv.hub.HubEndpoints.webPath(hub.baseUrl, "/?manage=playlist")) }
+                            } else null,
+                        ) { entry ->
+                            ServerPlaylistActionsRow(
+                                source = entry,
+                                hubBaseUrl = hub.baseUrl,
+                                selected = false,
+                                onOpenAccount = { onOpenPlaylistAccount(entry.sourceId) },
+                                onNotify = { message -> scope.launch { snackbar.showSnackbar(message) } },
+                                onChanged = { scope.launch { viewModel.refresh() } },
+                            )
+                        }
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            SectionTitle(stringResource(R.string.management_account))
+                            Card(Modifier.fillMaxWidth()) {
+                                Column {
+                                    BrowserEntry(
+                                        icon = Icons.Outlined.Person,
+                                        title = stringResource(R.string.hub_open_account),
+                                        description = stringResource(R.string.hub_open_account_description),
+                                        onClick = { openPage(accounts.webSecurity(hub)) },
+                                    )
+                                    if (accounts.canAdminister(hub)) {
+                                        HorizontalDivider()
+                                        BrowserEntry(
+                                            icon = Icons.Outlined.AdminPanelSettings,
+                                            title = stringResource(R.string.hub_open_admin),
+                                            description = stringResource(R.string.hub_open_admin_description),
+                                            onClick = { openPage(accounts.webAdmin(hub)) },
+                                        )
+                                        HorizontalDivider()
+                                        BrowserEntry(
+                                            icon = Icons.Outlined.Devices,
+                                            title = stringResource(R.string.hub_open_sessions),
+                                            description = null,
+                                            onClick = { openPage(accounts.webSessions(hub)) },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        SectionTitle(stringResource(R.string.management_device_preferences))
+                        Card(Modifier.fillMaxWidth()) {
+                            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f).padding(end = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text(stringResource(R.string.hub_remove_download_after_pull), style = MaterialTheme.typography.titleSmall)
+                                    Text(stringResource(R.string.hub_remove_download_after_pull_description), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                Switch(checked = removeAfterDownload, onCheckedChange = {
+                                    removeAfterDownload = it
+                                    graph.hubDownloadPreferences.setRemoveFromServerAfterDownload(hubId, it)
+                                }, modifier = Modifier.focusHighlight())
+                            }
+                        }
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SectionTitle(stringResource(R.string.management_connection))
+                        Text(stringResource(R.string.management_connection_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (hub.userId != null) OtvTextButton(onClick = {
                             graph.applicationScope.launch { accounts.signOut(hubId) }
                             onBack()
-                        },
-                        modifier = Modifier.weight(1f),
-                    ) { Text(stringResource(R.string.hub_sign_out)) }
-                }
-                OtvTextButton(
-                    onClick = { confirmRemove = true },
-                    enabled = !removing,
-                    danger = true,
-                    modifier = Modifier.weight(1f),
-                ) { Text(stringResource(R.string.hub_remove)) }
-            }
-
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(
-                        modifier = Modifier.weight(1f).padding(end = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Text(
-                            stringResource(R.string.hub_remove_download_after_pull),
-                            style = MaterialTheme.typography.titleSmall,
-                        )
-                        Text(
-                            stringResource(R.string.hub_remove_download_after_pull_description),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Switch(
-                        checked = removeAfterDownload,
-                        onCheckedChange = {
-                            removeAfterDownload = it
-                            graph.hubDownloadPreferences
-                                .setRemoveFromServerAfterDownload(hubId, it)
-                        },
-                        modifier = Modifier.focusHighlight(),
-                    )
-                }
-            }
-
-            // Every entry below needs a session. Signed out, they would open the server's
-            // login page instead of the page they name, so offer signing in and nothing else.
-            if (signedOut) {
-                OtvButton(onClick = onSignIn, modifier = Modifier.fillMaxWidth()) {
-                    Text(stringResource(R.string.hub_sign_in_again))
-                }
-            }
-
-            if (!signedOut) Card(modifier = Modifier.fillMaxWidth()) {
-                Column {
-                    BrowserEntry(
-                        icon = Icons.Outlined.Person,
-                        title = stringResource(R.string.hub_open_account),
-                        description = stringResource(R.string.hub_open_account_description),
-                        onClick = { openPage(accounts.webSecurity(hub)) },
-                    )
-                    if (accounts.canAdminister(hub)) {
-                        HorizontalDivider()
-                        BrowserEntry(
-                            icon = Icons.Outlined.AdminPanelSettings,
-                            title = stringResource(R.string.hub_open_admin),
-                            description = stringResource(R.string.hub_open_admin_description),
-                            onClick = { openPage(accounts.webAdmin(hub)) },
-                        )
-                        HorizontalDivider()
-                        BrowserEntry(
-                            icon = Icons.Outlined.Devices,
-                            title = stringResource(R.string.hub_open_sessions),
-                            description = null,
-                            onClick = { openPage(accounts.webSessions(hub)) },
-                        )
+                        }) { Text(stringResource(R.string.hub_sign_out)) }
+                        OtvTextButton(onClick = { confirmRemove = true }, enabled = !removing, danger = true) {
+                            Text(stringResource(R.string.hub_remove))
+                        }
                     }
                 }
             }
+            androidx.compose.material3.SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
         }
     }
 
@@ -333,6 +338,63 @@ fun HubSettingsScreen(
                 }
             },
         )
+    }
+}
+
+@Composable
+private fun SectionTitle(title: String) {
+    Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() })
+}
+
+/** Identity first; account actions never hide among individual playlists. */
+@Composable
+internal fun ServerWorkspaceHeader(hub: HubSource, onSignIn: () -> Unit) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(hub.name, style = MaterialTheme.typography.titleLarge)
+            Text(hub.baseUrl, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                if (hub.userId == null) stringResource(R.string.hub_status_signed_out)
+                else stringResource(R.string.hub_signed_in_as, hub.username.orEmpty()),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            if (hub.userId == null) OtvButton(onClick = onSignIn, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.hub_sign_in_again))
+            }
+        }
+    }
+}
+
+@Composable
+internal fun ServerPlaylistSection(
+    state: HubWorkspaceState,
+    onRetry: () -> Unit,
+    onManage: (() -> Unit)?,
+    playlist: @Composable (CatalogSourceEntry) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        SectionTitle(stringResource(R.string.management_server_playlists))
+        Text(stringResource(R.string.management_server_playlists_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (state.loading) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+            Text(stringResource(R.string.common_loading), style = MaterialTheme.typography.bodyMedium)
+        }
+        if (state.failed) {
+            Text(stringResource(R.string.management_playlists_failed), style = MaterialTheme.typography.bodyMedium)
+            OtvTextButton(onClick = onRetry) { Text(stringResource(R.string.hub_retry)) }
+        }
+        if (state.playlists.isNotEmpty()) Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(8.dp)) { state.playlists.forEach { playlist(it) } }
+        } else if (!state.loading && !state.failed) {
+            Text(stringResource(R.string.management_no_playlists), style = MaterialTheme.typography.bodyMedium)
+        }
+        if (onManage != null) {
+            OtvButton(onClick = onManage, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.management_server_playlists_browser))
+                Spacer(Modifier.width(8.dp))
+                Icon(Icons.AutoMirrored.Outlined.OpenInNew, contentDescription = stringResource(R.string.hub_opens_in_browser), modifier = Modifier.size(18.dp))
+            }
+        }
     }
 }
 

@@ -37,6 +37,18 @@ contains management actions. Add playlist is a separate labeled library action.
   <figcaption>Switch an existing playlist here; adding and editing have separate actions.</figcaption>
 </figure>
 
+## Signing in from Android
+
+When Android opens your server in a browser, sign in and review the requesting
+device and account. Approve the request, then return to OpenTV to finish connecting.
+
+<figure className="doc-screen">
+  <ThemedImage
+    alt="Review and approve an Android sign-in request on a phone"
+    sources={{ light: useBaseUrl('/img/web/device-approval-light.png'), dark: useBaseUrl('/img/web/device-approval-dark.png') }}
+  />
+</figure>
+
 ## Live TV
 
 Live channels are a list with the now-and-next line and a progress bar pulled

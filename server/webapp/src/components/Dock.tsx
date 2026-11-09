@@ -99,12 +99,12 @@ export function Dock() {
 
   const managePlaylist = new URLSearchParams(search).get('manage') === 'playlist';
   useEffect(() => {
-    if (!managePlaylist || active == null) return;
+    if (!managePlaylist || playlists === null) return;
     setPanelOpen(true);
     const next = new URLSearchParams(search);
     next.delete('manage');
     navigate({ pathname, search: next.size ? `?${next}` : '' }, { replace: true });
-  }, [active, managePlaylist, navigate, pathname, search, setPanelOpen]);
+  }, [playlists, managePlaylist, navigate, pathname, search, setPanelOpen]);
 
   const closePanel = useCallback(() => setPanelOpen(false), [setPanelOpen]);
 

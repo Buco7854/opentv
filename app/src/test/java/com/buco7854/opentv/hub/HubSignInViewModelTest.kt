@@ -10,6 +10,7 @@ import com.buco7854.opentv.contract.TotpEnrollmentDto
 import com.buco7854.opentv.core.model.HubSource
 import com.buco7854.opentv.diag.ErrorLog
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -23,6 +24,169 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class HubSignInViewModelTest {
+    @Test
+    fun `submitting an address starts browser sign in without another chooser action`() = runTest {
+        val gateway = FakeGateway(browserSignIn = true).apply { link = linkStart(intervalMs = 1_000) }
+        val viewModel = newViewModel(gateway, FakeSink())
+        viewModel.connect(BASE_URL)
+        runCurrent()
+        assertTrue(viewModel.state.value is HubSignInState.DeviceLink)
+        assertEquals(listOf(true), gateway.browserStarts)
+        assertEquals(1, gateway.linkStartCalls)
+        viewModel.cancel()
+    }
+
+    @Test
+    fun `existing hub sign in proceeds directly to its browser attempt`() = runTest {
+        val gateway = FakeGateway(browserSignIn = true).apply { link = linkStart(intervalMs = 1_000) }
+        val viewModel = newViewModel(gateway, FakeSink(), reauthenticateHubId = HUB_ID)
+        runCurrent()
+        assertTrue(viewModel.state.value is HubSignInState.DeviceLink)
+        assertEquals(listOf(true), gateway.browserStarts)
+        viewModel.cancel()
+    }
+
+    @Test
+    fun `a browser approval cannot send the app into native MFA entry`() = runTest {
+        val gateway = FakeGateway(browserSignIn = true).apply {
+            pollResults += { linkStatus("APPROVED", flow = mfaRequired()) }
+        }
+        val viewModel = newViewModel(gateway, FakeSink())
+        viewModel.connect(BASE_URL)
+        advanceUntilIdle()
+        val recovery = viewModel.state.value as HubSignInState.MethodChooser
+        assertEquals(HubSignInFailure.UNEXPECTED_RESPONSE, recovery.error)
+        assertTrue(recovery.browserSignInAvailable)
+        assertFalse(recovery.passwordAvailable)
+        assertTrue(gateway.totpSubmissions.isEmpty())
+    }
+
+    @Test
+    fun `browser capable servers delegate all authentication choices to the browser`() = runTest {
+        val gateway = FakeGateway(browserSignIn = true)
+        val viewModel = probedViewModel(gateway, FakeSink())
+        val ready = viewModel.state.value as HubSignInState.MethodChooser
+        assertTrue(ready.browserSignInAvailable)
+        assertFalse(ready.passwordAvailable)
+        assertEquals(0, gateway.linkStartCalls)
+
+        viewModel.selectPassword()
+        assertEquals(ready, viewModel.state.value)
+    }
+
+    @Test
+    fun `native password remains available only when browser sign in is unsupported`() = runTest {
+        val viewModel = probedViewModel(FakeGateway(), FakeSink())
+        val ready = viewModel.state.value as HubSignInState.MethodChooser
+        assertFalse(ready.browserSignInAvailable)
+        assertTrue(ready.passwordAvailable)
+        viewModel.selectPassword()
+        assertTrue(viewModel.state.value is HubSignInState.Password)
+    }
+
+    @Test
+    fun `repeated continue while browser sign in is preparing creates one attempt`() = runTest {
+        val prepared = CompletableDeferred<Unit>()
+        val gateway = FakeGateway(browserSignIn = true).apply {
+            link = linkStart(intervalMs = 1_000).copy(verificationUriComplete = "$BASE_URL/link#t=browser&mode=sign-in")
+            beforeLinkStart = { prepared.await() }
+        }
+        val viewModel = probedViewModel(gateway, FakeSink())
+        viewModel.startDeviceLink(DeviceLinkMode.BROWSER_SIGN_IN)
+        runCurrent()
+        assertTrue((viewModel.state.value as HubSignInState.MethodChooser).busy)
+        viewModel.startDeviceLink(DeviceLinkMode.BROWSER_SIGN_IN)
+        runCurrent()
+        assertEquals(1, gateway.linkStartCalls)
+        assertEquals(listOf(true), gateway.browserStarts)
+        prepared.complete(Unit)
+        runCurrent()
+        assertTrue(viewModel.state.value is HubSignInState.DeviceLink)
+        viewModel.cancel()
+    }
+
+    @Test
+    fun `browser handoff is claimed once across screen recreation and poll updates`() = runTest {
+        val uri = "$BASE_URL/link#t=browser&mode=sign-in"
+        val gateway = FakeGateway(browserSignIn = true).apply {
+            link = linkStart(intervalMs = 1_000).copy(verificationUriComplete = uri)
+            pollResults += { linkStatus("PENDING", intervalMs = 1_000) }
+        }
+        val viewModel = probedViewModel(gateway, FakeSink())
+        viewModel.startDeviceLink(DeviceLinkMode.BROWSER_SIGN_IN)
+        runCurrent()
+        assertFalse(viewModel.claimBrowserLaunch("$BASE_URL/link#t=another&mode=sign-in"))
+        assertTrue(viewModel.claimBrowserLaunch(uri))
+        assertFalse(viewModel.claimBrowserLaunch(uri))
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertFalse(viewModel.claimBrowserLaunch(uri))
+        viewModel.back()
+        assertTrue(viewModel.state.value is HubSignInState.MethodChooser)
+        advanceTimeBy(10_000)
+        runCurrent()
+        assertEquals(1, gateway.linkStartCalls)
+    }
+
+    @Test
+    fun `restored browser handoff stays consumed after polling replaces the resumed state`() = runTest {
+        val uri = "$BASE_URL/link#t=resumed&mode=sign-in"
+        val store = PendingDeviceLinkStore(FakePendingLinkPrefs()).apply {
+            save(PendingDeviceLink(null, BASE_URL, "resumed-poll", uri, 1_000, 60_000, DeviceLinkMode.BROWSER_SIGN_IN))
+        }
+        val gateway = FakeGateway(browserSignIn = true).apply {
+            pollResults += { linkStatus("PENDING", intervalMs = 1_000) }
+        }
+        val viewModel = newViewModel(gateway, FakeSink(), pendingLinkStore = store)
+        viewModel.probe(BASE_URL)
+        runCurrent()
+        assertTrue((viewModel.state.value as HubSignInState.DeviceLink).resumed)
+        assertFalse(viewModel.claimBrowserLaunch(uri))
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertFalse((viewModel.state.value as HubSignInState.DeviceLink).resumed)
+        assertFalse(viewModel.claimBrowserLaunch(uri))
+        assertEquals(0, gateway.linkStartCalls)
+        viewModel.cancel()
+    }
+
+    @Test
+    fun `browser return only wakes polling and cannot authenticate an unapproved attempt`() = runTest {
+        val sink = FakeSink()
+        val gateway = FakeGateway(browserSignIn = true).apply {
+            link = linkStart(intervalMs = 60_000).copy(verificationUriComplete = "$BASE_URL/link#t=browser&mode=sign-in")
+            pollResults += { linkStatus("PENDING", intervalMs = 60_000) }
+            pollResults += { linkStatus("APPROVED", flow = authenticated()) }
+        }
+        val viewModel = probedViewModel(gateway, sink)
+        viewModel.startDeviceLink(DeviceLinkMode.BROWSER_SIGN_IN)
+        runCurrent()
+        BrowserSignInReturn.signal()
+        runCurrent()
+        assertEquals(1, gateway.pollCalls)
+        assertTrue(viewModel.state.value is HubSignInState.DeviceLink)
+        assertTrue(sink.addedHubs.isEmpty())
+        BrowserSignInReturn.signal()
+        runCurrent()
+        assertEquals(HubSignInState.Done(HUB_ID), viewModel.state.value)
+        assertEquals(2, gateway.pollCalls)
+    }
+
+    @Test
+    fun `unreachable browser polling stops when the issued attempt expires`() = runTest {
+        val gateway = FakeGateway(browserSignIn = true).apply {
+            link = linkStart(intervalMs = 1_000).copy(
+                verificationUriComplete = "$BASE_URL/link#t=browser&mode=sign-in", expiresAtMs = 2_000,
+            )
+            pollResults += { throw HubUnreachableException("offline") }
+        }
+        val viewModel = probedViewModel(gateway, FakeSink())
+        viewModel.startDeviceLink(DeviceLinkMode.BROWSER_SIGN_IN)
+        advanceUntilIdle()
+        assertEquals(HubSignInState.DeviceLinkExpired(DeviceLinkMode.BROWSER_SIGN_IN), viewModel.state.value)
+        assertEquals(1, gateway.pollCalls)
+    }
+
     @Test
     fun `re-authentication updates the requested hub instead of adding another`() = runTest {
         val gateway = FakeGateway().apply {
@@ -262,7 +426,7 @@ class HubSignInViewModelTest {
     @Test
     fun `device link honors interval changes and capacity retry-after`() = runTest {
         val pollTimes = mutableListOf<Long>()
-        val gateway = FakeGateway().apply {
+        val gateway = FakeGateway(browserSignIn = true).apply {
             link = linkStart(intervalMs = 1_000)
             pollResults.addAll(
                 listOf(
@@ -323,7 +487,7 @@ class HubSignInViewModelTest {
 
     @Test
     fun `device link denied and expired can restart`() = runTest {
-        val deniedGateway = FakeGateway().apply {
+        val deniedGateway = FakeGateway(browserSignIn = true).apply {
             link = linkStart().copy(
                 verificationUriComplete = "$BASE_URL/link#t=link-token&mode=sign-in",
             )
@@ -342,7 +506,7 @@ class HubSignInViewModelTest {
         advanceUntilIdle()
         assertEquals(HubSignInState.Done(HUB_ID), denied.state.value)
 
-        val expiredGateway = FakeGateway().apply {
+        val expiredGateway = FakeGateway(browserSignIn = true).apply {
             pollResults += { linkStatus("EXPIRED") }
         }
         val expired = probedViewModel(expiredGateway, FakeSink())
@@ -373,7 +537,7 @@ class HubSignInViewModelTest {
                 mode = DeviceLinkMode.BROWSER_SIGN_IN,
             ),
         )
-        val gateway = FakeGateway().apply {
+        val gateway = FakeGateway(browserSignIn = true).apply {
             pollResults += { linkStatus("APPROVED", flow = authenticated()) }
         }
         val viewModel = newViewModel(gateway, FakeSink(), pendingLinkStore = store)
@@ -405,7 +569,7 @@ class HubSignInViewModelTest {
                 mode = DeviceLinkMode.BROWSER_SIGN_IN,
             ),
         )
-        val viewModel = newViewModel(FakeGateway(), FakeSink(), pendingLinkStore = store)
+        val viewModel = newViewModel(FakeGateway(browserSignIn = true), FakeSink(), pendingLinkStore = store)
 
         advanceTimeBy(1_000)
         viewModel.probe("$BASE_URL/api/v1/")
@@ -416,7 +580,7 @@ class HubSignInViewModelTest {
 
     @Test
     fun `cancel stops the device-link poller`() = runTest {
-        val gateway = FakeGateway().apply {
+        val gateway = FakeGateway(browserSignIn = true).apply {
             link = linkStart(intervalMs = 1_000)
             pollResults += { linkStatus("PENDING", intervalMs = 1_000) }
             pollResults += { linkStatus("PENDING", intervalMs = 1_000) }
@@ -439,7 +603,7 @@ class HubSignInViewModelTest {
     @Test
     fun `device link refuses a query secret and cancels it but accepts a fragment secret`() =
         runTest {
-            val unsafeGateway = FakeGateway().apply {
+            val unsafeGateway = FakeGateway(browserSignIn = true).apply {
                 link = linkStart().copy(
                     verificationUriComplete = "$BASE_URL/link?t=link-token",
                 )
@@ -454,7 +618,7 @@ class HubSignInViewModelTest {
             assertEquals(listOf("poll-token"), unsafeGateway.cancelledPollTokens)
             assertEquals(0, unsafeGateway.pollCalls)
 
-            val safeGateway = FakeGateway().apply {
+            val safeGateway = FakeGateway(browserSignIn = true).apply {
                 link = linkStart(intervalMs = 60_000).copy(
                     verificationUriComplete = "$BASE_URL/link#t=link-token&mode=sign-in",
                 )
@@ -516,9 +680,9 @@ class HubSignInViewModelTest {
         reauthenticateHubId = reauthenticateHubId,
     )
 
-    private class FakeGateway : HubAuthGateway {
+    private class FakeGateway(browserSignIn: Boolean = false) : HubAuthGateway {
         var info = ServerInfoDto(product = "opentv", apiVersion = 1, version = "test")
-        var capabilities = CAPABILITIES
+        var capabilities = CAPABILITIES.copy(deviceLinkEnabled = browserSignIn)
         var enrollment = TotpEnrollmentDto(
             challenge = ENROLLMENT_CHALLENGE,
             secret = "secret",
@@ -536,6 +700,8 @@ class HubSignInViewModelTest {
         val enrollmentSubmissions = mutableListOf<Pair<String, String>>()
         var pollCalls = 0
         var linkStartCalls = 0
+        var beforeLinkStart: suspend () -> Unit = {}
+        val browserStarts = mutableListOf<Boolean>()
         val cancelledPollTokens = mutableListOf<String>()
         var onPoll: () -> Unit = {}
 
@@ -573,6 +739,8 @@ class HubSignInViewModelTest {
             browserSignIn: Boolean,
         ): DeviceLinkStartDto {
             linkStartCalls++
+            browserStarts += browserSignIn
+            beforeLinkStart()
             return link
         }
 
@@ -705,7 +873,7 @@ class HubSignInViewModelTest {
         fun linkStart(intervalMs: Long = 1) = DeviceLinkStartDto(
             pollToken = "poll-token",
             linkToken = "link-token",
-            verificationUriComplete = "$BASE_URL/link#t=link-token",
+            verificationUriComplete = "$BASE_URL/link#t=link-token&mode=sign-in",
             expiresAtMs = Long.MAX_VALUE,
             intervalMs = intervalMs,
         )

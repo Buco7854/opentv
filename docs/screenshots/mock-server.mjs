@@ -260,6 +260,8 @@ const server = http.createServer((req, res) => {
   });
 
   if (p.includes('/refresh-jobs')) return send(res, { id: 'docs-refresh', status: 'SUCCEEDED', result: { playlist: playlists[0], catalogChanged: false, epgStatus: 'NOT_CONFIGURED' } });
+  if (p === '/api/auth/link/lookup') return send(res, { deviceName: 'OpenTV on Android', userAgent: 'OpenTV Android', ip: '192.0.2.2', requestedAtMs: now, expiresAtMs: now + 300_000, browserSignIn: true });
+  if (p === '/api/auth/link/approve' || p === '/api/auth/link/deny') return send(res, 'null');
   if (req.method !== 'GET') { res.writeHead(200, { 'Access-Control-Allow-Origin': '*' }); return res.end('{}'); }
 
   if (p === '/api/img') {

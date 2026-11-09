@@ -57,6 +57,8 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
      */
     private val _unreachableHubs = MutableStateFlow(0)
     val unreachableHubs: StateFlow<Int> = _unreachableHubs
+    private val _unreachableHubIds = MutableStateFlow<Set<Long>>(emptySet())
+    val unreachableHubIds: StateFlow<Set<Long>> = _unreachableHubIds
 
     private val retryNonce = MutableStateFlow(0)
 
@@ -84,10 +86,12 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                 }.toMutableList()
                 _catalogSources.value = entries.toList()
                 var unreachable = 0
+                val unavailableIds = mutableSetOf<Long>()
                 hubs.forEach { hub ->
                     val client = graph.hubs.clientFor(hub.id)
                     if (client == null) {
                         unreachable += 1
+                        unavailableIds += hub.id
                         return@forEach
                     }
                     val playlists = try {
@@ -101,6 +105,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                         error.rethrowCancellation()
                         ErrorLog.log("Hub playlists", error)
                         unreachable += 1
+                        unavailableIds += hub.id
                         emptyList()
                     }
                     playlists
@@ -116,6 +121,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 _catalogSources.value = entries
                 _unreachableHubs.value = unreachable
+                _unreachableHubIds.value = unavailableIds
                 _catalogSourcesLoading.value = false
             }
         }

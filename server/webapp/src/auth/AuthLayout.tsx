@@ -8,15 +8,17 @@ import './auth.css';
  * states rendered from AuthProvider. Living outside the lazily loaded screen
  * chunk keeps the stylesheet available before any screen is fetched.
  */
-export function AuthLayout({ eyebrow, title, subtitle, children, footer }: {
+export function AuthLayout({ eyebrow, title, subtitle, children, footer, flow = false }: {
   eyebrow?: string;
+  /** Standalone handoff pages start at the top and scroll without app-shell offsets. */
+  flow?: boolean;
   title: string;
   subtitle?: string;
   children: ReactNode;
   footer?: ReactNode;
 }) {
   return (
-    <main className="auth-page">
+    <main className={`auth-page${flow ? ' auth-page-flow' : ''}`}>
       <div className="auth-container">
         <div className="auth-brand">
           <span className="mark"><Icon name="liveTv" /></span>

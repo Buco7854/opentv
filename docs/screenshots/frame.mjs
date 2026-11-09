@@ -51,14 +51,15 @@ const html = (dataUri, w, pad, th) => `<!doctype html><html><head><meta charset=
   <span class="dot" style="background:#28c840"></span>
 </div><img src="${dataUri}"></div></div></body></html>`;
 
-const files = fs.readdirSync(RAW).filter((f) => f.endsWith('.png'));
+const requestedShots = process.env.OPENTV_SCREENSHOT_NAMES?.split(',');
+const files = fs.readdirSync(RAW).filter((f) => f.endsWith('.png') && (!requestedShots || requestedShots.some((name) => f === `${name}-dark.png` || f === `${name}-light.png`)));
 const browser = await chromium.launch({ executablePath: process.env.PW_EXECUTABLE || undefined });
 const page = await browser.newPage({ viewport: { width: 1600, height: 1500 }, deviceScaleFactor: 2 });
 
 for (const file of files) {
   const base = file.replace(/\.png$/, '');
   const theme = base.endsWith('-dark') ? 'dark' : 'light';
-  const isPhone = base.startsWith('phone-');
+  const isPhone = base.startsWith('phone-') || base.startsWith('device-approval-');
   const dataUri = `data:image/png;base64,${fs.readFileSync(path.join(RAW, file)).toString('base64')}`;
   await page.setContent(html(dataUri, isPhone ? 402 : 1240, isPhone ? 40 : 60, THEME[theme]), { waitUntil: 'load' });
   await page.waitForTimeout(120);

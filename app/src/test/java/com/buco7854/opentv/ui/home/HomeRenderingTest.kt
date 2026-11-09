@@ -25,6 +25,12 @@ import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.unit.dp
+import com.buco7854.opentv.core.model.HubSource
+import com.buco7854.opentv.ui.shell.ConnectedServerCard
+import com.buco7854.opentv.ui.hub.HubWorkspaceState
+import com.buco7854.opentv.ui.hub.ServerWorkspaceHeader
+import com.buco7854.opentv.ui.hub.ServerPlaylistSection
+import androidx.compose.material3.Text
 import com.buco7854.opentv.hub.HubSignInState
 import com.buco7854.opentv.ui.hub.SignInIntroduction
 import com.buco7854.opentv.ui.hub.UrlEntryStep
@@ -118,7 +124,7 @@ class HomeRenderingTest {
             }
         }.use { screen ->
             val create = screen.nodes().single {
-                it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == "Add playlist" } == true &&
+                it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == "Add playlist on this device" } == true &&
                     it.config.contains(SemanticsActions.OnClick)
             }
             assertTrue(create.config[SemanticsActions.OnClick].action!!.invoke())
@@ -212,7 +218,7 @@ class HomeRenderingTest {
         }.use { screen ->
             assertNull(submitted)
             val connect = screen.nodes().single {
-                it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == "Connect" } == true &&
+                it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text in setOf("Continue on phone", "Continue in browser") } == true &&
                     it.config.contains(SemanticsActions.OnClick)
             }
             assertTrue(connect.config[SemanticsActions.OnClick].action!!.invoke())
@@ -240,6 +246,57 @@ class HomeRenderingTest {
             assertTrue(screen.nodes().any {
                 it.config.getOrNull(SemanticsProperties.EditableText)?.text == "alex"
             })
+        }
+    }
+
+    @Test
+    fun `More shows one clear server destination instead of nested playlist menus`() {
+        var managed = false
+        val hub = HubSource(4, "Living room server", "https://tv.example", "one", "alex", "ADMIN", 1)
+        render("more-server-card", dark = true) {
+            Surface(Modifier.fillMaxSize()) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("Connected servers")
+                    ConnectedServerCard(hub, 3, { managed = true }, {})
+                }
+            }
+        }.use { screen ->
+            assertTrue(screen.hasText("Living room server"))
+            assertTrue(screen.hasText("3 playlists"))
+            val manage = screen.nodes().single {
+                it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == "Manage server" } == true &&
+                    it.config.contains(SemanticsActions.OnClick)
+            }
+            assertTrue(manage.config[SemanticsActions.OnClick].action!!.invoke())
+            assertTrue(managed)
+            assertFalse(screen.hasText("Cinema"))
+        }
+    }
+
+    @Test
+    fun `server workspace keeps remote playlist management distinct from local creation`() {
+        var opened = false
+        val hub = HubSource(4, "Living room server", "https://tv.example", "one", "alex", "ADMIN", 1)
+        render("server-workspace", dark = true) {
+            Surface(Modifier.fillMaxSize()) {
+                Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                    ServerWorkspaceHeader(hub, {})
+                    ServerPlaylistSection(
+                        HubWorkspaceState(hub, true, listOf(CatalogSourceEntry(SourceId.Hub(4, 8), "Cinema", itemCount = 120)), loading = false),
+                        onRetry = {}, onManage = { opened = true },
+                    ) { Text(it.title, modifier = Modifier.padding(16.dp)) }
+                }
+            }
+        }.use { screen ->
+            assertTrue(screen.hasText("Playlists on this server"))
+            assertTrue(screen.hasText("Cinema"))
+            assertFalse(screen.hasText("Add playlist on this device"))
+            val manage = screen.nodes().single {
+                it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == "Manage playlists in browser" } == true &&
+                    it.config.contains(SemanticsActions.OnClick)
+            }
+            assertTrue(manage.config[SemanticsActions.OnClick].action!!.invoke())
+            assertTrue(opened)
         }
     }
 

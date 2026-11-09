@@ -277,7 +277,7 @@ fun AppShell(
             viewModel.setActivePlaylist(availability.localPlaylistIds.firstOrNull() ?: -1L)
         }
     }
-    val dockHidden = route?.startsWith("player") == true
+    val dockHidden = route?.startsWith("player") == true || route?.startsWith(Routes.HUB_SIGN_IN) == true
 
     val activeSection = when {
         route == Routes.HOME -> DockSection.HOME
@@ -489,6 +489,7 @@ internal fun AppNav(
                 onSignIn = {
                     nav.navigate(Routes.hubSignIn(entry.arguments!!.getLong("hubId")))
                 },
+                onOpenPlaylistAccount = { nav.navigate(Routes.account(it)) },
             )
         }
         composable(Routes.LOG) {

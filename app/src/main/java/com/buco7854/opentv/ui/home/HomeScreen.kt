@@ -99,7 +99,6 @@ fun HomeScreen(
             },
             onSubmitFile = { _, name, uri -> showAdd = false; viewModel.addFromFile(name, uri) },
             onRename = { _, _ -> },
-            onConnectHub = { showAdd = false; onConnectHub() },
         )
     }
 }
@@ -198,11 +197,11 @@ internal fun HomeLibrary(
                         Text(stringResource(R.string.home_server_title))
                     }
                     OtvTonalButton(onClick = onAddPlaylist, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-                        Text(stringResource(R.string.home_local_title))
+                        Text(stringResource(R.string.management_add_local))
                     }
                 } else {
                     OtvTonalButton(onClick = onAddPlaylist, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-                        Text(stringResource(R.string.home_local_title))
+                        Text(stringResource(R.string.management_add_local))
                     }
                     OtvTextButton(onClick = onConnectHub, enabled = !busy) {
                         Text(stringResource(R.string.home_server_title))

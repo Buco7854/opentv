@@ -142,3 +142,24 @@
 
 @keyframes otp-blink { 50% { opacity: 0; } }
 @keyframes link-pulse { 50% { opacity: 0.25; } }
+
+/* Browser/app handoff is a standalone flow, not a library screen. */
+@layer components {
+  .auth-page-flow { justify-content: flex-start; padding-top: max(24px, env(safe-area-inset-top)); padding-bottom: max(24px, env(safe-area-inset-bottom)); }
+  .auth-page-flow .auth-container { max-width: 520px; }
+  .auth-page-flow .auth-brand { margin-bottom: 20px; }
+  .auth-page-flow .auth-server { margin-bottom: 24px; }
+  .link-approval-content { min-width: 0; }
+  .link-approval-content .link-question { overflow-wrap: anywhere; }
+  .link-device { display: flex; align-items: flex-start; gap: 12px; }
+  .link-device > .icon { width: 24px; height: 24px; margin-top: 2px; color: var(--c-fg2); }
+  .link-device > .body { min-width: 0; flex: 1; }
+  .link-device h2 { font: var(--type-title-medium); overflow-wrap: anywhere; }
+  .link-device p { margin-top: 4px; color: var(--c-fg2); font: var(--type-body-small); overflow-wrap: anywhere; }
+  .link-approval-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 4px; }
+  .link-approval-actions .btn { flex: 1 1 140px; min-height: 48px; }
+  .link-result { display: flex; flex-direction: column; gap: 20px; padding: 20px; border-radius: 12px; background: var(--c-panel); }
+  .link-result > .icon { width: 32px; height: 32px; }
+  .link-result > p { font: var(--type-body-large); overflow-wrap: anywhere; }
+  .link-result .btn { min-height: 48px; }
+}

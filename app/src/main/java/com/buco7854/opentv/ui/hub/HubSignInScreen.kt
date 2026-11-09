@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -120,7 +122,10 @@ fun HubSignInScreen(hubId: Long?, onDone: (Long) -> Unit, onBack: () -> Unit) {
     RequestInitialFocusOnTv(backFocusRequester, state::class)
 
     fun handleBack() {
-        if (isHubSignInRoot(state, hubId != null)) onBack() else viewModel.back()
+        if (isHubSignInRoot(state, hubId != null)) {
+            viewModel.cancel()
+            onBack()
+        } else viewModel.back()
     }
     BackHandler(onBack = ::handleBack)
 
@@ -155,7 +160,14 @@ fun HubSignInScreen(hubId: Long?, onDone: (Long) -> Unit, onBack: () -> Unit) {
             ) {
                 val serverStep = state is HubSignInState.UrlEntry || state is HubSignInState.Probing ||
                     state is HubSignInState.ProbeFailed || state is HubSignInState.UpdateRequired
-                SignInIntroduction(serverStep, hubId != null)
+                val browserSignIn = when (val current = state) {
+                    is HubSignInState.MethodChooser -> current.browserSignInAvailable
+                    is HubSignInState.DeviceLink -> current.mode == DeviceLinkMode.BROWSER_SIGN_IN
+                    is HubSignInState.DeviceLinkDenied -> current.mode == DeviceLinkMode.BROWSER_SIGN_IN
+                    is HubSignInState.DeviceLinkExpired -> current.mode == DeviceLinkMode.BROWSER_SIGN_IN
+                    else -> false
+                }
+                SignInIntroduction(serverStep, hubId != null, browserSignIn)
                 if (!serverStep && serverAddress.isNotBlank()) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -166,13 +178,13 @@ fun HubSignInScreen(hubId: Long?, onDone: (Long) -> Unit, onBack: () -> Unit) {
                     }
                 }
                 when (val current = state) {
-                    is HubSignInState.UrlEntry -> UrlEntryStep(current, viewModel::probe)
+                    is HubSignInState.UrlEntry -> UrlEntryStep(current, viewModel::connect)
                     is HubSignInState.Probing -> BusyStep(stringResource(R.string.hub_checking))
                     is HubSignInState.ProbeFailed ->
                         if (hubId == null) {
                             UrlEntryStep(
                                 HubSignInState.UrlEntry(current.url, current.error),
-                                viewModel::probe,
+                                viewModel::connect,
                             )
                         } else {
                             RetryStep(failureMessage(current.error), viewModel::retryKnownHub)
@@ -183,7 +195,7 @@ fun HubSignInScreen(hubId: Long?, onDone: (Long) -> Unit, onBack: () -> Unit) {
                     is HubSignInState.Password -> PasswordStep(current, viewModel::submitPassword)
                     is HubSignInState.MfaChallenge -> MfaStep(current, viewModel)
                     is HubSignInState.TotpEnrollment -> EnrollmentStep(current, viewModel::completeTotpEnrollment)
-                    is HubSignInState.DeviceLink -> DeviceLinkStep(current)
+                    is HubSignInState.DeviceLink -> DeviceLinkStep(current, viewModel::claimBrowserLaunch)
                     is HubSignInState.DeviceLinkDenied -> RestartStep(
                         stringResource(R.string.hub_link_denied),
                         viewModel::restartDeviceLink,
@@ -204,7 +216,7 @@ fun HubSignInScreen(hubId: Long?, onDone: (Long) -> Unit, onBack: () -> Unit) {
 }
 
 @Composable
-internal fun SignInIntroduction(serverStep: Boolean, reauthenticating: Boolean) {
+internal fun SignInIntroduction(serverStep: Boolean, reauthenticating: Boolean, browserSignIn: Boolean = false) {
     Text(
         stringResource(if (serverStep) R.string.hub_step_server else R.string.hub_step_account),
         style = MaterialTheme.typography.labelLarge,
@@ -220,7 +232,11 @@ internal fun SignInIntroduction(serverStep: Boolean, reauthenticating: Boolean) 
         modifier = Modifier.semantics { heading() },
     )
     Text(
-        stringResource(if (serverStep) R.string.hub_intro_description else R.string.hub_account_description),
+        stringResource(
+            if (serverStep) R.string.hub_intro_description
+            else if (browserSignIn) R.string.hub_browser_account_description
+            else R.string.hub_account_description,
+        ),
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -229,6 +245,8 @@ internal fun SignInIntroduction(serverStep: Boolean, reauthenticating: Boolean) 
 @Composable
 internal fun UrlEntryStep(state: HubSignInState.UrlEntry, onSubmit: (String) -> Unit) {
     var url by rememberSaveable(state.url) { mutableStateOf(state.url) }
+    val context = LocalContext.current
+    val hasBrowser = remember(context) { HubBrowserHandoff(context).hasBrowser() }
     OutlinedTextField(
         value = url,
         onValueChange = { url = it },
@@ -247,53 +265,53 @@ internal fun UrlEntryStep(state: HubSignInState.UrlEntry, onSubmit: (String) -> 
         onClick = { onSubmit(url) },
         enabled = url.isNotBlank(),
         modifier = Modifier.fillMaxWidth(),
-    ) { Text(stringResource(R.string.hub_connect)) }
+    ) { Text(stringResource(if (hasBrowser) R.string.hub_browser_continue else R.string.hub_browser_continue_phone)) }
 }
 
 @Composable
 private fun MethodChooserStep(state: HubSignInState.MethodChooser, viewModel: HubSignInViewModel) {
     val context = LocalContext.current
     val handoff = remember(context) { HubBrowserHandoff(context) }
-    val hasBrowser = handoff.hasBrowser()
-    val browserFirst = state.browserSignInAvailable
+    SignInContinuation(
+        state = state,
+        hasBrowser = handoff.hasBrowser(),
+        onBrowserSignIn = { viewModel.startDeviceLink(DeviceLinkMode.BROWSER_SIGN_IN) },
+        onPasswordSignIn = viewModel::selectPassword,
+    )
+}
 
-    Text(stringResource(R.string.hub_choose_method), style = MaterialTheme.typography.titleMedium)
+/** One continuation, with authentication choices delegated to the server's sign-in page. */
+@Composable
+internal fun SignInContinuation(
+    state: HubSignInState.MethodChooser,
+    hasBrowser: Boolean,
+    onBrowserSignIn: () -> Unit,
+    onPasswordSignIn: () -> Unit,
+) {
     state.error?.let { ErrorText(failureMessage(it)) }
-
-    if (browserFirst) {
-        OtvButton(
-            onClick = { viewModel.startDeviceLink(DeviceLinkMode.BROWSER_SIGN_IN) },
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text(stringResource(if (hasBrowser) R.string.hub_method_browser else R.string.hub_method_phone)) }
-        Text(
-            stringResource(if (hasBrowser) R.string.hub_method_browser_description else R.string.hub_method_phone_description),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-    // A TV can sign in on a phone via QR instead of typing credentials with a remote.
-    // Password-only servers retain a primary password action.
-    if (state.passwordAvailable) {
-        if (browserFirst) {
-            OtvTextButton(onClick = viewModel::selectPassword, modifier = Modifier.fillMaxWidth()) {
-                Text(stringResource(R.string.hub_method_password))
+    if (state.browserSignInAvailable) {
+        OtvButton(onClick = onBrowserSignIn, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) {
+            if (state.busy) {
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
+                Spacer(Modifier.size(8.dp))
             }
-        } else {
-            OtvButton(onClick = viewModel::selectPassword, modifier = Modifier.fillMaxWidth()) {
-                Text(stringResource(R.string.hub_method_password))
-            }
+            Text(stringResource(
+                if (state.busy) R.string.hub_browser_preparing
+                else if (hasBrowser) R.string.hub_browser_continue
+                else R.string.hub_method_phone,
+            ))
         }
-    }
-    if (state.deviceLinkAvailable) {
-        OtvTextButton(
-            onClick = { viewModel.startDeviceLink(DeviceLinkMode.LINK_THIS_DEVICE) },
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text(stringResource(R.string.hub_method_link)) }
         Text(
-            stringResource(R.string.hub_method_link_description),
-            style = MaterialTheme.typography.bodySmall,
+            stringResource(if (hasBrowser) R.string.hub_browser_continue_description else R.string.hub_method_phone_description),
+            style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    } else if (state.passwordAvailable) {
+        OtvButton(onClick = onPasswordSignIn, modifier = Modifier.fillMaxWidth()) {
+            Text(stringResource(R.string.hub_method_password))
+        }
+    } else {
+        MessageStep(stringResource(R.string.hub_browser_unavailable))
     }
 }
 
@@ -432,25 +450,20 @@ private fun ColumnScope.EnrollmentStep(state: HubSignInState.TotpEnrollment, onS
 }
 
 @Composable
-private fun ColumnScope.DeviceLinkStep(state: HubSignInState.DeviceLink) {
+private fun ColumnScope.DeviceLinkStep(
+    state: HubSignInState.DeviceLink,
+    claimBrowserLaunch: (String) -> Boolean,
+) {
     val hubBaseUrl = state.baseUrl
     val context = LocalContext.current
     val handoff = remember(context) { HubBrowserHandoff(context) }
-    var rejected by remember { mutableStateOf(false) }
+    var rejected by rememberSaveable(state.verificationUri) { mutableStateOf(false) }
     // A link pointing off the hub's own origin is not shown at all: a QR code
     // is scanned by another device, which would follow it without question.
     val trusted = remember(hubBaseUrl, state.verificationUri) {
         HubEndpoints.isSameOrigin(hubBaseUrl, state.verificationUri)
     }
 
-    Text(
-        stringResource(
-            if (state.mode == DeviceLinkMode.BROWSER_SIGN_IN) {
-                if (handoff.hasBrowser()) R.string.hub_method_browser else R.string.hub_method_phone
-            } else R.string.hub_link_title,
-        ),
-        style = MaterialTheme.typography.titleMedium,
-    )
     if (!trusted) {
         ErrorText(stringResource(R.string.hub_handoff_rejected))
         return
@@ -460,13 +473,11 @@ private fun ColumnScope.DeviceLinkStep(state: HubSignInState.DeviceLink) {
     // QR code for a second device to scan. The QR is still the answer where opening
     // fails or makes no sense — a television, or a device with no browser at all.
     val browserMode = state.mode == DeviceLinkMode.BROWSER_SIGN_IN
-    var showQr by remember(state.verificationUri) { mutableStateOf(!browserMode || !handoff.hasBrowser()) }
-    // A resumed link was already opened in a previous process; reopening it here would
-    // bounce the user straight back out to the browser on top of the one already pending.
-    var opened by remember(state.verificationUri) { mutableStateOf(state.resumed) }
+    var showQr by rememberSaveable(state.verificationUri) { mutableStateOf(!browserMode || !handoff.hasBrowser()) }
+    // The ViewModel owns the one automatic handoff for this explicit attempt. Rotation,
+    // returning from the browser and restoration must never open another tab.
     LaunchedEffect(state.verificationUri) {
-        if (!browserMode || opened) return@LaunchedEffect
-        opened = true
+        if (!browserMode || showQr || !claimBrowserLaunch(state.verificationUri)) return@LaunchedEffect
         when (handoff.open(hubBaseUrl, state.verificationUri)) {
             HandoffResult.Opened -> Unit
             is HandoffResult.ShowQrInstead -> showQr = true
@@ -474,11 +485,42 @@ private fun ColumnScope.DeviceLinkStep(state: HubSignInState.DeviceLink) {
         }
     }
 
+    DeviceLinkWaiting(
+        state = state,
+        showQr = showQr,
+        rejected = rejected,
+        onReopen = if (handoff.hasBrowser()) {
+            {
+                when (handoff.open(hubBaseUrl, state.verificationUri)) {
+                    HandoffResult.Opened -> { rejected = false; showQr = false }
+                    is HandoffResult.ShowQrInstead -> showQr = true
+                    HandoffResult.Rejected -> rejected = true
+                }
+            }
+        } else null,
+    )
+}
+
+/** A waiting state, with QR only where a browser cannot be opened on this device. */
+@Composable
+internal fun ColumnScope.DeviceLinkWaiting(
+    state: HubSignInState.DeviceLink,
+    showQr: Boolean,
+    rejected: Boolean = false,
+    onReopen: (() -> Unit)? = null,
+) {
+    val browserMode = state.mode == DeviceLinkMode.BROWSER_SIGN_IN
+    if (showQr) {
+        Text(
+            stringResource(if (browserMode) R.string.hub_method_phone else R.string.hub_link_title),
+            style = MaterialTheme.typography.titleMedium,
+        )
+    }
     Text(
         stringResource(
             if (showQr && browserMode) R.string.hub_phone_scan
             else if (showQr) R.string.hub_link_scan
-            else R.string.hub_link_browser_waiting,
+            else R.string.hub_browser_waiting_description,
         ),
         style = MaterialTheme.typography.bodyMedium,
     )
@@ -488,24 +530,17 @@ private fun ColumnScope.DeviceLinkStep(state: HubSignInState.DeviceLink) {
             contentDescription = null,
             modifier = Modifier.align(Alignment.CenterHorizontally),
         )
-        Text(
-            hubBaseUrl,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth(),
-        )
+    } else {
+        CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally).size(28.dp), strokeWidth = 2.dp)
     }
     Text(
-        // Naming the scanning account lets the user refuse an approval that is
-        // not theirs; whoever holds the link can approve with their own account.
         state.scannedBy
             ?.takeIf { state.phase == DeviceLinkPhase.SCANNED }
             ?.let { stringResource(R.string.hub_link_scanned_by, it) }
             ?: stringResource(
                 when (state.phase) {
                     DeviceLinkPhase.SCANNED -> R.string.hub_link_scanned
-                    DeviceLinkPhase.PENDING -> R.string.hub_link_waiting
+                    DeviceLinkPhase.PENDING -> if (browserMode) R.string.hub_browser_waiting else R.string.hub_link_waiting
                 },
             ),
         style = MaterialTheme.typography.bodyMedium,
@@ -514,14 +549,10 @@ private fun ColumnScope.DeviceLinkStep(state: HubSignInState.DeviceLink) {
     )
     state.error?.let { ErrorText(failureMessage(it)) }
     if (rejected) ErrorText(stringResource(R.string.hub_handoff_rejected))
-    if (handoff.hasBrowser()) {
-        // Approving on this very device is only sensible where a browser exists.
-        OtvTextButton(
-            onClick = {
-                rejected = handoff.open(hubBaseUrl, state.verificationUri) == HandoffResult.Rejected
-            },
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text(stringResource(R.string.hub_link_open_here)) }
+    onReopen?.let { reopen ->
+        OtvTextButton(onClick = reopen, modifier = Modifier.fillMaxWidth()) {
+            Text(stringResource(if (browserMode) R.string.hub_browser_reopen else R.string.hub_link_open_here))
+        }
     }
 }
 

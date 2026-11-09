@@ -156,13 +156,14 @@ sealed interface HubSignInState {
         val baseUrl: String,
         val capabilities: AuthCapabilitiesDto,
         val error: HubSignInFailure? = null,
+        val busy: Boolean = false,
     ) : HubSignInState {
-        val passwordAvailable: Boolean
-            get() = capabilities.passwordEnabled
-        val deviceLinkAvailable: Boolean
-            get() = capabilities.deviceLinkEnabled
+        // The server's page owns password, passkey and SSO choices. Native entry exists
+        // only for servers which cannot hand a browser sign-in back to this device.
         val browserSignInAvailable: Boolean
             get() = capabilities.deviceLinkEnabled
+        val passwordAvailable: Boolean
+            get() = capabilities.passwordEnabled && !browserSignInAvailable
     }
 
     data class Password(
@@ -251,6 +252,7 @@ class HubSignInViewModel(
     private var capabilities: AuthCapabilitiesDto? = null
     private var username = ""
     private var targetHubId = reauthenticateHubId
+    private var browserLaunchClaimedFor: String? = null
 
     init {
         targetHubId?.let { hubId ->
@@ -268,12 +270,18 @@ class HubSignInViewModel(
                     mutableState.value = HubSignInState.UrlEntry()
                     return@launch
                 }
-                probeKnown(source.baseUrl)
+                probeKnown(source.baseUrl, continueInBrowser = true)
             }
         }
     }
 
-    fun probe(url: String) {
+    /** A submitted address authorizes the one browser/phone handoff after discovery. */
+    fun connect(url: String) = probe(url, continueInBrowser = true)
+
+    /** Discovery by itself does not create or open an authentication attempt. */
+    fun probe(url: String) = probe(url, continueInBrowser = false)
+
+    private fun probe(url: String, continueInBrowser: Boolean) {
         if (activeJob?.isActive == true) return
         val normalized = HubEndpoints.normalizeBaseUrl(url)
         if (normalized.isBlank()) {
@@ -283,18 +291,18 @@ class HubSignInViewModel(
         }
         mutableState.value = HubSignInState.Probing(normalized)
         launch {
-            probeKnown(normalized)
+            probeKnown(normalized, continueInBrowser)
         }
     }
 
     fun retryKnownHub() {
         if (targetHubId == null || baseUrl.isBlank() || activeJob?.isActive == true) return
-        launch { probeKnown(baseUrl) }
+        launch { probeKnown(baseUrl, continueInBrowser = true) }
     }
 
     fun selectPassword() {
         val offered = capabilities ?: return
-        if (!offered.passwordEnabled || activeJob?.isActive == true) return
+        if (!offered.passwordEnabled || offered.deviceLinkEnabled || activeJob?.isActive == true) return
         mutableState.value = HubSignInState.Password(username)
     }
 
@@ -366,47 +374,61 @@ class HubSignInViewModel(
         }
     }
 
+    /** Survives screen recreation and poll updates, unlike a composable-local launch flag. */
+    fun claimBrowserLaunch(verificationUri: String): Boolean {
+        val current = mutableState.value as? HubSignInState.DeviceLink ?: return false
+        if (current.mode != DeviceLinkMode.BROWSER_SIGN_IN || current.verificationUri != verificationUri ||
+            current.resumed || browserLaunchClaimedFor == verificationUri
+        ) return false
+        browserLaunchClaimedFor = verificationUri
+        return true
+    }
+
     fun startDeviceLink(mode: DeviceLinkMode = DeviceLinkMode.LINK_THIS_DEVICE) {
         val offered = capabilities ?: return
         if (!offered.deviceLinkEnabled || activeJob?.isActive == true) return
-        launch {
-            try {
-                val link = gateway.linkStart(
-                    baseUrl,
-                    deviceName,
-                    browserSignIn = mode == DeviceLinkMode.BROWSER_SIGN_IN,
-                )
-                if (!isSafeDeviceLinkUrl(link.verificationUriComplete, mode)) {
-                    try {
-                        gateway.linkCancel(baseUrl, link.pollToken)
-                    } catch (error: Throwable) {
-                        error.rethrowCancellation()
-                        ErrorLog.log(LOG_TAG, error, "Could not cancel unsafe device-link request")
-                    }
-                    mutableState.value = HubSignInState.MethodChooser(
-                        baseUrl,
-                        offered,
-                        unexpectedResponse("The hub returned an unsafe device-link URL"),
-                    )
-                    return@launch
+        launch { beginDeviceLink(offered, mode) }
+    }
+
+    private suspend fun beginDeviceLink(offered: AuthCapabilitiesDto, mode: DeviceLinkMode) {
+        mutableState.value = HubSignInState.MethodChooser(baseUrl, offered, busy = true)
+        try {
+            val link = gateway.linkStart(
+                baseUrl,
+                deviceName,
+                browserSignIn = mode == DeviceLinkMode.BROWSER_SIGN_IN,
+            )
+            if (!isSafeDeviceLinkUrl(link.verificationUriComplete, mode)) {
+                try {
+                    gateway.linkCancel(baseUrl, link.pollToken)
+                } catch (error: Throwable) {
+                    error.rethrowCancellation()
+                    ErrorLog.log(LOG_TAG, error, "Could not cancel unsafe device-link request")
                 }
-                pendingLinkStore?.save(
-                    PendingDeviceLink(
-                        hubId = targetHubId,
-                        baseUrl = baseUrl,
-                        pollToken = link.pollToken,
-                        verificationUri = link.verificationUriComplete,
-                        intervalMs = link.intervalMs,
-                        expiresAtMs = link.expiresAtMs,
-                        mode = mode,
-                    ),
+                mutableState.value = HubSignInState.MethodChooser(
+                    baseUrl,
+                    offered,
+                    unexpectedResponse("The hub returned an unsafe device-link URL"),
                 )
-                mutableState.value = link.toState(DeviceLinkPhase.PENDING, mode)
-                pollLink(link, mode)
-            } catch (error: Throwable) {
-                error.rethrowCancellation()
-                mutableState.value = HubSignInState.MethodChooser(baseUrl, offered, safeError(error))
+                return
             }
+            pendingLinkStore?.save(
+                PendingDeviceLink(
+                    hubId = targetHubId,
+                    baseUrl = baseUrl,
+                    pollToken = link.pollToken,
+                    verificationUri = link.verificationUriComplete,
+                    intervalMs = link.intervalMs,
+                    expiresAtMs = link.expiresAtMs,
+                    mode = mode,
+                ),
+            )
+            browserLaunchClaimedFor = null
+            mutableState.value = link.toState(DeviceLinkPhase.PENDING, mode)
+            pollLink(link, mode)
+        } catch (error: Throwable) {
+            error.rethrowCancellation()
+            mutableState.value = HubSignInState.MethodChooser(baseUrl, offered, safeError(error))
         }
     }
 
@@ -438,7 +460,7 @@ class HubSignInViewModel(
             }
             is HubSignInState.DeviceLinkDenied -> methodChooser()
             is HubSignInState.DeviceLinkExpired -> methodChooser()
-            HubSignInState.PendingApproval -> HubSignInState.Password(username)
+            HubSignInState.PendingApproval -> if (capabilities?.deviceLinkEnabled == true) methodChooser() else HubSignInState.Password(username)
             HubSignInState.Finishing -> methodChooser()
             is HubSignInState.Done -> current
         }
@@ -460,7 +482,7 @@ class HubSignInViewModel(
         activeJob = workScope.launch(block = block)
     }
 
-    private suspend fun probeKnown(url: String) {
+    private suspend fun probeKnown(url: String, continueInBrowser: Boolean = false) {
         val normalized = HubEndpoints.normalizeBaseUrl(url)
         baseUrl = normalized
         mutableState.value = HubSignInState.Probing(normalized)
@@ -492,7 +514,11 @@ class HubSignInViewModel(
                 resumePendingLink(pending)
                 return
             }
-            mutableState.value = HubSignInState.MethodChooser(normalized, offered)
+            if (continueInBrowser && offered.deviceLinkEnabled) {
+                beginDeviceLink(offered, DeviceLinkMode.BROWSER_SIGN_IN)
+            } else {
+                mutableState.value = HubSignInState.MethodChooser(normalized, offered)
+            }
         } catch (error: Throwable) {
             error.rethrowCancellation()
             mutableState.value = HubSignInState.ProbeFailed(normalized, safeError(error))
@@ -502,6 +528,7 @@ class HubSignInViewModel(
     private suspend fun handleAuthFlow(
         flow: AuthFlowDto,
         fallback: (HubSignInFailure) -> HubSignInState,
+        allowNativeSteps: Boolean = true,
     ) {
         when (flow.status.uppercase(Locale.US)) {
             STATUS_AUTHENTICATED -> {
@@ -515,6 +542,10 @@ class HubSignInViewModel(
             }
 
             STATUS_MFA_REQUIRED -> {
+                if (!allowNativeSteps) {
+                    mutableState.value = fallback(unexpectedResponse("Browser handoff returned an unfinished MFA step"))
+                    return
+                }
                 val challenge = flow.challenge
                 mutableState.value = if (challenge.isNullOrBlank()) {
                     fallback(unexpectedResponse("MFA required without a challenge"))
@@ -524,6 +555,10 @@ class HubSignInViewModel(
             }
 
             STATUS_ENROLLMENT_REQUIRED -> {
+                if (!allowNativeSteps) {
+                    mutableState.value = fallback(unexpectedResponse("Browser handoff returned an unfinished enrollment step"))
+                    return
+                }
                 val challenge = flow.challenge
                 if (challenge.isNullOrBlank()) {
                     mutableState.value =
@@ -577,6 +612,9 @@ class HubSignInViewModel(
     }
 
     private suspend fun resumePendingLink(pending: PendingDeviceLink) {
+        // A resumed Custom Tab was already opened before the process was reclaimed.
+        // Later poll states no longer carry resumed=true, so retain that fact here too.
+        if (pending.mode == DeviceLinkMode.BROWSER_SIGN_IN) browserLaunchClaimedFor = pending.verificationUri
         val start = DeviceLinkStartDto(
             pollToken = pending.pollToken,
             linkToken = "",
@@ -660,8 +698,9 @@ class HubSignInViewModel(
                         pendingLinkStore?.clear()
                         handleAuthFlow(
                             flow,
+                            allowNativeSteps = mode != DeviceLinkMode.BROWSER_SIGN_IN,
                             fallback = { message ->
-                                start.toState(
+                                if (mode == DeviceLinkMode.BROWSER_SIGN_IN) methodChooser(message) else start.toState(
                                     DeviceLinkPhase.SCANNED,
                                     mode,
                                     message,
@@ -713,8 +752,8 @@ class HubSignInViewModel(
         resumed = resumed,
     )
 
-    private fun methodChooser(): HubSignInState =
-        capabilities?.let { HubSignInState.MethodChooser(baseUrl, it) }
+    private fun methodChooser(error: HubSignInFailure? = null): HubSignInState =
+        capabilities?.let { HubSignInState.MethodChooser(baseUrl, it, error) }
             ?: HubSignInState.UrlEntry(baseUrl)
 
     private fun authCodeError(error: Throwable): HubSignInFailure =

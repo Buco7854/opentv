@@ -392,6 +392,14 @@ absent from the initial bundle.
   fragment, token, account identity or other secret: any app can claim a custom scheme.
   It may wake the Android wait early, but the in-memory poll token and server poll remain
   authoritative; losing or intercepting the return may change latency only.
+- Android address submission starts browser sign-in directly when device linking is enabled;
+  native password/MFA is a fallback for servers without that support. The ViewModel claims
+  each automatic browser launch once across rotation and poll updates; manual reopen reuses
+  the pending request. The web approval page uses standalone `AuthLayout`, never the sticky
+  library header, so device details remain visible on short screens.
+- Android More separates local playlists from connected server identities. Server playlists
+  and their capability-driven operations live in the server workspace. Its browser management
+  link uses `/?manage=playlist`, which must also open for an empty server library.
 - `DownloadStateIcon` is the single contextual `POST_NOTIFICATIONS` request seam for every
   download source, including hub downloads. It asks only on Android 13+ and always invokes the
   enqueue callback immediately, so denial hides progress notification UI but never blocks work.

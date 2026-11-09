@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { authApi } from './api';
+import { ApiError } from '../api/http';
 import { LinkApprovalScreen } from './LinkApproval';
 import { PendingDeviceLink } from './fragment';
 import { CurrentUser, DeviceLinkRequest } from './types';
@@ -79,6 +80,18 @@ describe('LinkApprovalScreen', () => {
     expect(authApi.linkApprove).toHaveBeenCalledWith({ linkToken: 'same-device-secret' });
     await waitFor(() => expect(attemptBrowserSignInReturn).toHaveBeenCalledOnce());
     expect(attemptBrowserSignInReturn).toHaveBeenCalledWith();
+  });
+
+  it('offers retry for a network failure without treating the request as expired or approving it', async () => {
+    vi.mocked(authApi.linkLookup).mockRejectedValueOnce(new ApiError('Offline', 0, 'network'))
+      .mockResolvedValueOnce(lookup(true));
+    renderApproval({ ...pending(true), automaticApproval: false });
+    expect(await screen.findByRole('button', { name: 'Retry' })).toBeTruthy();
+    expect(screen.queryByText(/unknown or has expired/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('button', { name: 'Approve' })).toBeTruthy();
+    expect(authApi.linkLookup).toHaveBeenCalledTimes(2);
+    expect(authApi.linkApprove).not.toHaveBeenCalled();
   });
 
   it('keeps an ordinary QR request on the explicit approval screen', async () => {

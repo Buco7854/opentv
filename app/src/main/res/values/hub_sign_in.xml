@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="hub_browser_account_description">Sign in on your server’s page, then return to OpenTV.</string>
+    <string name="hub_browser_continue">Continue in browser</string>
+    <string name="hub_browser_continue_description">Your server handles passwords, passkeys and single sign-on in one place.</string>
+    <string name="hub_browser_preparing">Preparing sign-in…</string>
+    <string name="hub_browser_waiting_description">Finish signing in and approve this device in your browser. OpenTV will continue automatically.</string>
+    <string name="hub_browser_waiting">Waiting for sign-in…</string>
+    <string name="hub_browser_reopen">Reopen browser</string>
+    <string name="hub_browser_unavailable">This server cannot sign this app in. Ask your administrator to enable browser sign-in or password authentication.</string>
+    <string name="hub_browser_continue_phone">Continue on phone</string>
+</resources>

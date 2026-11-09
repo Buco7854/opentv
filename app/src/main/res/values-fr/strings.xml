@@ -467,4 +467,22 @@
     <string name="playlist_picker_current">Playlist : %1$s. Changer de playlist.</string>
     <string name="playlist_picker_empty">Aucune playlist disponible.</string>
     <string name="playlist_picker_manage_hint">Ajoutez ou gérez les playlists depuis Plus.</string>
+    <string name="management_on_device">Sur cet appareil</string>
+    <string name="management_servers">Serveurs connectés</string>
+    <string name="management_open_server">Gérer le serveur</string>
+    <string name="management_add_local">Ajouter sur cet appareil</string>
+    <string name="management_server_removed">Ce serveur n’est plus connecté.</string>
+    <string name="management_server_playlists">Playlists de ce serveur</string>
+    <string name="management_server_playlists_hint">Ces playlists sont stockées sur le serveur. Les modifications y sont appliquées, sans affecter les playlists locales.</string>
+    <string name="management_server_playlists_browser">Gérer les playlists dans le navigateur</string>
+    <string name="management_playlists_failed">Impossible de charger les playlists de ce serveur. Vérifiez la connexion et réessayez.</string>
+    <string name="management_no_playlists">Aucune playlist n’est attribuée à ce compte.</string>
+    <string name="management_account">Compte sur ce serveur</string>
+    <string name="management_device_preferences">Téléchargements sur cet appareil</string>
+    <string name="management_connection">Connexion au serveur</string>
+    <string name="management_connection_hint">La déconnexion ou la suppression du serveur conserve les fichiers déjà téléchargés sur cet appareil.</string>
+    <plurals name="management_playlist_count"><item quantity="one">%1$d playlist</item><item quantity="other">%1$d playlists</item></plurals>
+    <string name="management_provider_account">Compte du fournisseur</string>
+    <string name="management_playlist_actions">Gérer %1$s</string>
+    <string name="management_server_unreachable">Impossible de joindre ce serveur.</string>
 </resources>

@@ -467,4 +467,22 @@
     <string name="playlist_picker_current">Playlist: %1$s. Switch playlist.</string>
     <string name="playlist_picker_empty">No playlists are available.</string>
     <string name="playlist_picker_manage_hint">Add or manage playlists in More.</string>
+    <string name="management_on_device">On this device</string>
+    <string name="management_servers">Connected servers</string>
+    <string name="management_open_server">Manage server</string>
+    <string name="management_add_local">Add playlist on this device</string>
+    <string name="management_server_removed">This server is no longer connected.</string>
+    <string name="management_server_playlists">Playlists on this server</string>
+    <string name="management_server_playlists_hint">These playlists are stored on the server. Changes apply there, not to your local playlists.</string>
+    <string name="management_server_playlists_browser">Manage playlists in browser</string>
+    <string name="management_playlists_failed">Could not load this server’s playlists. Check the connection and try again.</string>
+    <string name="management_no_playlists">No playlists are assigned to this account.</string>
+    <string name="management_account">Account on this server</string>
+    <string name="management_device_preferences">Downloads on this device</string>
+    <string name="management_connection">Server connection</string>
+    <string name="management_connection_hint">Signing out or removing a server keeps files already downloaded on this device.</string>
+    <plurals name="management_playlist_count"><item quantity="one">%1$d playlist</item><item quantity="other">%1$d playlists</item></plurals>
+    <string name="management_provider_account">Provider account</string>
+    <string name="management_playlist_actions">Manage %1$s</string>
+    <string name="management_server_unreachable">Could not reach this server.</string>
 </resources>

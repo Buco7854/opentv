@@ -15,24 +15,18 @@ together with other viewers, and downloads saved to the device.
 
 ## Connecting
 
-Open the sources panel and choose **OpenTV server**, or pick it when adding a
-source, then enter the server address (for example `https://tv.example.com`).
-The app checks the address before asking for anything else, so a typo tells you
-straight away rather than failing at sign-in.
+In Library, choose **Connect a server** and enter its address (for example
+`https://tv.example.com`). The app checks the address before continuing.
 
-The app then offers only the sign-in methods your server actually enables:
+Use **Continue in browser** on the address screen to connect and sign in. Your
+server's browser page handles passwords, passkeys, single sign-on and any two-factor checks; Android does not
+ask you to choose between those methods a second time. Return to OpenTV after
+completing the browser step. If the browser was closed, you can reopen it from
+the waiting screen without starting a second sign-in request.
 
-- **Username and password**, including two-factor codes and recovery codes. If
-  your server requires two-factor authentication and you have not set it up yet,
-  the app walks you through enrolling, showing a QR code for your authenticator
-  app.
-- **Link this device**: approve from a device that is already signed in. The
-  app shows a QR code; scan it with the signed-in device and approve. On a phone
-  you can also tap **Open on this device** to approve in your own browser.
-- **Sign in with a browser**, for single sign-on and passkeys, which complete in
-  a browser. On a phone the app opens its own browser directly. A QR code is the
-  fallback on a TV, on a device without a browser, or when the browser cannot be
-  opened. Once you finish in the browser the app signs itself in.
+On a TV or a device without a browser, OpenTV shows a QR code instead. Scan it
+with your phone and complete the same browser sign-in there. A server that does
+not support browser sign-in retains the native password fallback.
 
 After approval, an Android browser may return through the fixed
 `opentv://sign-in` link. That link is only a wake-up signal: it carries no token,
@@ -65,7 +59,11 @@ in one place. The app opens only pages on that server's own origin. On Android
 11 and newer it checks browser availability before offering the handoff; the app
 declares HTTP and HTTPS browser intents for Android's package-visibility rules.
 
-From the server's entry in the sources panel you get **Account and security**
+Choose your server under **More → Connected servers** to see its playlists,
+connection and account actions. **On this device** contains only local playlists;
+adding a playlist there does not add one to your server.
+
+The server workspace includes **Account and security**
 (password, two-factor, sessions), and, if your account is an administrator,
 **Administration** and **Now watching**. On a TV, where a browser is awkward or
 absent, the app shows a QR code to open the page on your phone.

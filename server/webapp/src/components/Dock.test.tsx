@@ -9,6 +9,7 @@ import { Dock, playlistDeleteWarning, playlistRefreshNotice } from './Dock';
 
 const library = vi.hoisted(() => ({
   playlistPanelOpen: true,
+  empty: false,
   reload: vi.fn().mockResolvedValue(undefined),
   rememberPlaylist: vi.fn(),
   forgetPlaylist: vi.fn(),
@@ -17,7 +18,7 @@ const library = vi.hoisted(() => ({
 
 vi.mock('../library', () => ({
   useLibrary: () => ({
-    playlists: [{
+    playlists: library.empty ? [] : [{
       id: 7,
       name: 'Provider',
       mode: 'url',
@@ -61,6 +62,8 @@ describe('Dock playlist operations', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     library.playlistPanelOpen = true;
+    library.empty = false;
+    library.setPlaylistPanelOpen.mockClear();
     library.reload.mockClear();
     library.rememberPlaylist.mockClear();
     library.forgetPlaylist.mockClear();
@@ -71,6 +74,13 @@ describe('Dock playlist operations', () => {
   afterEach(() => {
     languageSetting.set('auto');
     document.getElementById('toast-root')?.remove();
+  });
+
+  it('opens the browser management handoff even when the server has no playlists yet', async () => {
+    library.empty = true;
+    library.playlistPanelOpen = false;
+    render(<MemoryRouter initialEntries={['/?manage=playlist']}><Dock /></MemoryRouter>);
+    await waitFor(() => expect(library.setPlaylistPanelOpen).toHaveBeenCalledWith(true));
   });
 
   it('opens an existing-playlist chooser without creation or management actions', async () => {
