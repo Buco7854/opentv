@@ -378,6 +378,9 @@ absent from the initial bundle.
   Both clients keep the brand and current-playlist chooser in the shared header;
   navigation controls have 8px phone / 12px wide gaps. Android focus rings stay
   inside their controls rather than scaling into neighboring hover highlights.
+  Utility pages use compact 20px/sp headings; category titles get their own space
+  above the display toolbar. Android's source selector is a content-sized single
+  line with a 36dp visible surface inside a 48dp touch target.
 - Android catalog gateways are cached in a thread-safe, access-order LRU capped at 64.
   Gateway lookup/construction never reads Room: `CatalogGateway.traits()` is suspending, and
   a local gateway resolves its playlist-backed traits only after the ViewModel has entered a

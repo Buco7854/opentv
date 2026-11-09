@@ -90,7 +90,7 @@ export function SettingsScreen() {
 
   return (
     <>
-      <ScreenHeader title={t('settings.title')} />
+      <ScreenHeader compact title={t('settings.title')} />
 
       <div className="mx-3 mt-1 mb-2 md:hidden">
         <Segmented className="scroll" options={sectionOptions} selected={current} onSelect={setCurrent} />

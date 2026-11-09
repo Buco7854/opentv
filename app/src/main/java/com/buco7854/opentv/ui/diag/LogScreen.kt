@@ -16,7 +16,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material3.Card
@@ -27,8 +26,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,6 +47,8 @@ import java.text.DateFormat
 import java.util.Date
 import androidx.compose.ui.res.stringResource
 import com.buco7854.opentv.R
+import com.buco7854.opentv.ui.components.ScreenHeader
+import com.buco7854.opentv.ui.components.HeaderIconButton
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -64,27 +63,16 @@ fun LogScreen(onBack: () -> Unit) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.common_error_log)) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = stringResource(R.string.common_back))
-                    }
-                },
+            ScreenHeader(
+                title = stringResource(R.string.common_error_log),
+                onBack = onBack,
                 actions = {
-                    IconButton(
-                        onClick = {
-                            clipboard.setText(AnnotatedString(entries.joinToString("\n\n") { entryText(it) }))
-                        },
-                        enabled = entries.isNotEmpty(),
-                    ) {
-                        Icon(Icons.Outlined.ContentCopy, contentDescription = stringResource(R.string.log_copy_all))
-                    }
-                    IconButton(onClick = { ErrorLog.clear() }, enabled = entries.isNotEmpty()) {
-                        Icon(Icons.Outlined.DeleteSweep, contentDescription = stringResource(R.string.common_clear))
-                    }
+                    HeaderIconButton(Icons.Outlined.ContentCopy, stringResource(R.string.log_copy_all),
+                        onClick = { clipboard.setText(AnnotatedString(entries.joinToString("\n\n") { entryText(it) })) },
+                        enabled = entries.isNotEmpty())
+                    HeaderIconButton(Icons.Outlined.DeleteSweep, stringResource(R.string.common_clear),
+                        onClick = { ErrorLog.clear() }, enabled = entries.isNotEmpty())
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
             )
         },
         contentWindowInsets = WindowInsets(0.dp),

@@ -25,15 +25,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
-import androidx.compose.material.icons.automirrored.outlined.ViewList
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.rounded.Favorite
-import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.MoreVert
-import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Replay
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Card
@@ -50,8 +46,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -217,37 +211,13 @@ fun BrowseScreen(
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
-            TopAppBar(
-                title = {
-                    Text((if (singleGroup) null else group) ?: stringResource(when (tab) {
-                        ChannelKind.MOVIE -> R.string.common_movies
-                        ChannelKind.SERIES -> R.string.common_series
-                        else -> R.string.common_live
-                    }), style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                },
-                navigationIcon = {
-                    if (group != null && !singleGroup) {
-                        IconButton(onClick = { viewModel.group.value = null }) {
-                            Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = stringResource(R.string.common_back))
-                        }
-                    }
-                },
-                actions = {
-                    if (account != null) {
-                        IconButton(onClick = onOpenAccount) {
-                            Icon(Icons.Outlined.Person, contentDescription = stringResource(R.string.account_title))
-                        }
-                    }
-                    if (group != null && tab != ChannelKind.LIVE) {
-                        IconButton(onClick = { viewModel.toggleGridView() }) {
-                            Icon(
-                                if (gridView) Icons.AutoMirrored.Outlined.ViewList else Icons.Outlined.GridView,
-                                contentDescription = stringResource(if (gridView) R.string.common_list_view else R.string.common_grid_view),
-                            )
-                        }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+            BrowseHeading(
+                title = (if (singleGroup) null else group) ?: stringResource(when (tab) {
+                    ChannelKind.MOVIE -> R.string.common_movies
+                    ChannelKind.SERIES -> R.string.common_series
+                    else -> R.string.common_live
+                }),
+                onBack = if (group != null && !singleGroup) ({ viewModel.group.value = null }) else null,
             )
         },
         // Shell already reserves dock space; zero insets avoid a double gap.
@@ -259,31 +229,23 @@ fun BrowseScreen(
                 onContentKindChanged(kind)
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Text(
-                    (if (singleGroup) null else group) ?: when (tab) {
-                        ChannelKind.MOVIE -> stringResource(R.string.browse_movies_count, movieCount)
-                        ChannelKind.SERIES -> stringResource(R.string.browse_series_count, seriesCount)
-                        else -> stringResource(R.string.browse_live_count, liveCount)
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                account?.let { info ->
-                    Text(
-                        stringResource(R.string.browse_connections, info.activeConnections, info.maxConnections),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (info.maxConnections in 1..info.activeConnections) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+            val shownCount = if (group != null) catalog.total else when (tab) {
+                ChannelKind.MOVIE -> movieCount
+                ChannelKind.SERIES -> seriesCount
+                else -> liveCount
             }
+            BrowseToolbar(
+                summary = stringResource(when (tab) {
+                    ChannelKind.MOVIE -> R.string.browse_movies_count
+                    ChannelKind.SERIES -> R.string.browse_series_count
+                    else -> R.string.browse_live_count
+                }, shownCount),
+                connections = account?.let { stringResource(R.string.browse_connections, it.activeConnections, it.maxConnections) },
+                connectionLimitReached = account?.let { it.maxConnections in 1..it.activeConnections } == true,
+                gridView = gridView,
+                onToggleGridView = if (group != null && tab != ChannelKind.LIVE) viewModel::toggleGridView else null,
+                onOpenAccount = if (account != null) onOpenAccount else null,
+            )
             val hasContent = groups.isNotEmpty() || items.isNotEmpty()
             if (hasContent) {
                 FilterField(
@@ -768,27 +730,29 @@ internal fun browseListLoading(
 
 /** Compact filter field for the browse content area. */
 @Composable
-private fun FilterField(value: String, onValueChange: (String) -> Unit, placeholder: String) {
+internal fun FilterField(value: String, onValueChange: (String) -> Unit, placeholder: String) {
     val keyboardController = LocalSoftwareKeyboardController.current
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        placeholder = { Text(placeholder) },
-        leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-        trailingIcon = {
-            if (value.isNotEmpty()) {
-                IconButton(onClick = { onValueChange("") }) {
-                    Icon(Icons.Outlined.Close, contentDescription = stringResource(R.string.browse_clear_filter))
+    BoxWithConstraints {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            placeholder = { Text(placeholder) },
+            leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+            trailingIcon = {
+                if (value.isNotEmpty()) {
+                    IconButton(onClick = { onValueChange("") }) {
+                        Icon(Icons.Outlined.Close, contentDescription = stringResource(R.string.browse_clear_filter))
+                    }
                 }
-            }
-        },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-        keyboardActions = KeyboardActions(onSearch = { keyboardController?.hide() }),
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp)
-            .padding(top = 8.dp, bottom = 4.dp),
-    )
+            },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { keyboardController?.hide() }),
+            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = if (maxWidth < 640.dp) 16.dp else 24.dp)
+                .padding(top = 8.dp, bottom = 4.dp),
+        )
+    }
 }

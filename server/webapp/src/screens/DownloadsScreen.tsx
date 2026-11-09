@@ -19,7 +19,7 @@ export function DownloadsScreen() {
 
   return (
     <>
-      <ScreenHeader title={t('downloads.title')} />
+      <ScreenHeader compact title={t('downloads.title')} />
       {!downloads.loaded ? (
         downloads.error != null
           ? <LoadFailed message={downloads.error} onRetry={downloads.refresh} />

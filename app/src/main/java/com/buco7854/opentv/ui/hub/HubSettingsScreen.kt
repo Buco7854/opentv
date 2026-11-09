@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.ui.text.style.TextOverflow
 import com.buco7854.opentv.source.SourceId
 import com.buco7854.opentv.ui.home.CatalogSourceEntry
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -24,7 +23,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.AdminPanelSettings
 import androidx.compose.material.icons.outlined.Devices
@@ -34,12 +32,10 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -58,8 +54,10 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.buco7854.opentv.OpenTvApp
 import com.buco7854.opentv.R
+import com.buco7854.opentv.ui.components.ScreenHeader
 import com.buco7854.opentv.core.model.HubSource
 import com.buco7854.opentv.ui.components.OtvButton
 import com.buco7854.opentv.ui.components.OtvTextButton
@@ -144,21 +142,10 @@ fun HubSettingsScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(source?.name ?: stringResource(R.string.hub_settings_title)) },
-                navigationIcon = {
-                    IconButton(
-                        onClick = onBack,
-                        modifier = Modifier
-                            .focusRequester(backFocusRequester)
-                            .focusHighlight(),
-                    ) {
-                        Icon(
-                            Icons.AutoMirrored.Outlined.ArrowBack,
-                            contentDescription = stringResource(R.string.common_back),
-                        )
-                    }
-                },
+            ScreenHeader(
+                source?.name ?: stringResource(R.string.hub_settings_title),
+                onBack,
+                backModifier = Modifier.focusRequester(backFocusRequester),
             )
         },
     ) { padding ->
@@ -351,7 +338,7 @@ private fun SectionTitle(title: String) {
 internal fun ServerWorkspaceHeader(hub: HubSource, onSignIn: () -> Unit) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(hub.name, style = MaterialTheme.typography.titleLarge)
+            Text(hub.name, style = MaterialTheme.typography.titleMedium.copy(fontSize = 18.sp, lineHeight = 24.sp))
             Text(hub.baseUrl, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(
                 if (hub.userId == null) stringResource(R.string.hub_status_signed_out)

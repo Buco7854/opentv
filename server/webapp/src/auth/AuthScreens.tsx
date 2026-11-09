@@ -373,7 +373,7 @@ function SecurityCard({ icon, title, subtitle, children }: {
       <div className="head">
         <span className="logo-box"><Icon name={icon} /></span>
         <div className="body">
-          <div className="title">{title}</div>
+          <h2 className="title">{title}</h2>
           <div className="sub">{subtitle}</div>
         </div>
       </div>
@@ -574,13 +574,14 @@ export function SecurityScreen() {
   const working = busy !== null;
 
   return (
-    <>
+    <div className="security-page">
       <ScreenHeader
+        compact
         title={tx('securityTitle')}
         subtitle={<span className="subtitle">{tx('securitySubtitle')}</span>}
         onBack={() => navigate(-1)}
       />
-      <div className="mx-auto flex max-w-[620px] flex-col gap-3 px-4 pb-6">
+      <div className="security-content">
         <ErrorNotice message={error} />
 
         {auth.capabilities?.passwordEnabled && passwordAccount && (
@@ -588,7 +589,7 @@ export function SecurityScreen() {
             <div className="head">
               <span className="logo-box"><Icon name="lock" /></span>
               <div className="body">
-                <div className="title">{tx('passwordCard')}</div>
+                <h2 className="title">{tx('passwordCard')}</h2>
                 <div className="sub">{tx('passwordCardBody')}</div>
               </div>
             </div>
@@ -739,7 +740,7 @@ export function SecurityScreen() {
           <RecoveryCodesPanel codes={recoveryCodes} onDone={() => setRecoveryCodes([])} />
         </Dialog>
       )}
-    </>
+    </div>
   );
 }
 

@@ -12,31 +12,45 @@ import android.view.ViewGroup
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.BroadcastFrameClock
 import androidx.compose.runtime.Recomposer
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.node.RootForTest
 import androidx.compose.ui.platform.LocalInputModeManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.source.CatalogGroup
 import com.buco7854.opentv.source.SourceId
 import com.buco7854.opentv.ui.browse.BrowseCategories
 import com.buco7854.opentv.ui.browse.BrowseTabs
+import com.buco7854.opentv.ui.browse.BrowseHeading
+import com.buco7854.opentv.ui.browse.BrowseToolbar
+import com.buco7854.opentv.ui.browse.FilterField
+import com.buco7854.opentv.ui.components.ScreenHeader
 import com.buco7854.opentv.ui.home.CatalogSourceEntry
 import com.buco7854.opentv.ui.home.HomeLibrary
 import com.buco7854.opentv.ui.theme.OpenTvDesign
@@ -182,6 +196,112 @@ class LibraryNavigationRenderingTest {
         }
     }
 
+    @Test
+    @Config(qualifiers = "fr-w320dp-h844dp-mdpi")
+    fun `long French category has a separate reachable toolbar on the narrowest phone`() {
+        val title = "Films et documentaires · Histoire, sciences et civilisations"
+        var backed = false
+        var account = false
+        var grid by mutableStateOf(false)
+        render("category-header-fr-320", width = 320) {
+            BrowseScene(title, grid = grid, onBack = { backed = true }, onAccount = { account = true }, onToggle = { grid = !grid })
+        }.use { screen ->
+            screen.assertCategoryToolbar(title, "Compte", "Vue grille")
+            screen.tap(screen.button("Vue grille"))
+            assertTrue(grid)
+            assertTrue(screen.button("Vue liste").boundsInRoot.width >= 48f)
+            screen.tap(screen.button("Compte"))
+            assertTrue(account)
+            screen.tap(screen.button("Retour"))
+            assertTrue(backed)
+        }
+    }
+
+    @Test
+    fun `long phone category title does not share space with account or view controls`() {
+        val title = "International cinema · Independent films and documentaries"
+        render("category-header-390") { BrowseScene(title) }.use { screen ->
+            screen.assertCategoryToolbar(title, "Account", "Grid view")
+        }
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h720dp-television-mdpi")
+    fun `wide category toolbar supports independent D-pad focus and activation`() {
+        val title = "Cinema, documentaries and international series for the whole family"
+        var account = false
+        render("category-header-tv", width = 1280, height = 720, keyboard = true) {
+            BrowseScene(title, wide = true, onAccount = { account = true })
+        }.use { screen ->
+            screen.assertCategoryToolbar(title, "Account", "Grid view")
+            val before = screen.button("Grid view").boundsInRoot
+            screen.focus(screen.button("Grid view"))
+            screen.awaitFocusRing(screen.button("Grid view"))
+            screen.capture("category-header-tv-focus")
+            assertEquals(before, screen.button("Grid view").boundsInRoot)
+            screen.key(android.view.KeyEvent.KEYCODE_DPAD_LEFT)
+            assertTrue(screen.button("Account").config.getOrNull(SemanticsProperties.Focused) == true)
+            screen.key(android.view.KeyEvent.KEYCODE_DPAD_CENTER)
+            assertTrue(account)
+        }
+    }
+
+    @Test
+    fun `double sized category text keeps actions visible and separate`() {
+        val title = "Independent cinema and documentaries from around the world"
+        render("category-header-font-200", fontScale = 2f) { BrowseScene(title) }.use { screen ->
+            screen.assertCategoryToolbar(title, "Account", "Grid view")
+            assertTrue(screen.button("Grid view").boundsInRoot.bottom < 844f)
+        }
+    }
+
+    @Test
+    fun `compact utility header grows for long translated titles and keeps its back action reachable`() {
+        val title = "Paramètres du serveur et des téléchargements"
+        listOf(1f, 2f).forEach { scale ->
+            var backed = false
+            render(if (scale == 1f) "utility-header" else "utility-header-font-200", fontScale = scale) {
+                ScreenHeader(title, onBack = { backed = true }, supportingText = listOf("Home server · Family library"))
+            }.use { screen ->
+                val heading = screen.nodes().single { it.config.contains(SemanticsProperties.Heading) }
+                val back = screen.button("Back")
+                assertTrue(heading.boundsInRoot.left >= back.boundsInRoot.right + 8f)
+                val layouts = mutableListOf<TextLayoutResult>()
+                assertTrue(heading.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(layouts))
+                assertEquals(20f, layouts.single().layoutInput.style.fontSize.value, .01f)
+                assertEquals(Color(0xFFF5F5F5), layouts.single().layoutInput.style.color)
+                assertTrue(back.boundsInRoot.width >= 48f && back.boundsInRoot.height >= 48f)
+                screen.tap(back)
+                assertTrue(backed)
+            }
+        }
+    }
+
+    @Composable
+    private fun BrowseScene(
+        title: String,
+        wide: Boolean = false,
+        grid: Boolean = false,
+        onBack: () -> Unit = {},
+        onAccount: () -> Unit = {},
+        onToggle: () -> Unit = {},
+    ) {
+        Scaffold(
+            topBar = { OpenTvMasthead(true, DockSection.BROWSE, "Family library", true, {}, {}, {}, {}, wide) },
+            bottomBar = { if (!wide) OpenTvDock(true, DockSection.BROWSE, {}, {}) },
+        ) { padding ->
+            Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+                Column(Modifier.widthIn(max = 1180.dp).fillMaxSize()) {
+                    BrowseHeading(title, onBack)
+                    BrowseTabs(ChannelKind.MOVIE, mapOf(ChannelKind.LIVE to 20, ChannelKind.MOVIE to 120, ChannelKind.SERIES to 80)) {}
+                    BrowseToolbar("120 films", "2 / 10 connections", false, grid, onToggle, onAccount)
+                    FilterField("", {}, "Filter this category")
+                    BrowseCategories(listOf(CatalogGroup("International cinema", 120), CatalogGroup("Documentaries", 80)), null) {}
+                }
+            }
+        }
+    }
+
     @Composable
     private fun Scene(
         wide: Boolean = false,
@@ -206,6 +326,7 @@ class LibraryNavigationRenderingTest {
         height: Int = 844,
         dark: Boolean = true,
         keyboard: Boolean = false,
+        fontScale: Float = 1f,
         content: @Composable () -> Unit,
     ): Screen {
         val controller = Robolectric.buildActivity(ComponentActivity::class.java).setup()
@@ -220,7 +341,10 @@ class LibraryNavigationRenderingTest {
                 val inputMode = LocalInputModeManager.current
                 SideEffect { inputMode.requestInputMode(InputMode.Keyboard) }
             }
-            OpenTvDesign(dark, content)
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
+                OpenTvDesign(dark, content)
+            }
         }
         controller.visible().windowFocusChanged(true)
         val decor = activity.window.decorView
@@ -265,6 +389,24 @@ class LibraryNavigationRenderingTest {
         fun hasText(label: String) = nodes().any { it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == label } == true }
         fun clickableText(label: String) = nodes().single {
             it.config.contains(SemanticsActions.OnClick) && it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == label } == true
+        }
+        fun button(description: String) = nodes().single {
+            it.config.contains(SemanticsActions.OnClick) && it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains(description) == true
+        }
+        fun assertCategoryToolbar(title: String, account: String, view: String) {
+            val heading = nodes().single {
+                it.config.contains(SemanticsProperties.Heading) && it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == title } == true
+            }
+            val layouts = mutableListOf<TextLayoutResult>()
+            assertTrue(heading.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(layouts))
+            assertFalse("Category title was truncated", layouts.any { result -> (0 until result.lineCount).any(result::isLineEllipsized) })
+            val buttons = listOf(button(account), button(view))
+            buttons.forEach { action ->
+                assertTrue(action.boundsInRoot.top >= heading.boundsInRoot.bottom)
+                assertTrue(action.boundsInRoot.width >= 48f && action.boundsInRoot.height >= 48f)
+                assertTrue(action.boundsInRoot.left >= 0 && action.boundsInRoot.right <= decor.width)
+            }
+            assertTrue(buttons[1].boundsInRoot.left - buttons[0].boundsInRoot.right >= 8f)
         }
         fun destination(label: String) = nodes().single {
             it.config.contains(SemanticsActions.OnClick) &&

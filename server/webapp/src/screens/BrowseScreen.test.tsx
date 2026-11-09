@@ -42,8 +42,8 @@ function Harness() {
   );
 }
 
-const renderBrowse = () => render(
-  <MemoryRouter initialEntries={['/browse/1?t=0']}>
+const renderBrowse = (entry = '/browse/1?t=0') => render(
+  <MemoryRouter initialEntries={[entry]}>
     <Routes>
       <Route path="/browse/:playlistId" element={<Harness />} />
       <Route path="*" element={<LocationMarker />} />
@@ -298,6 +298,24 @@ describe('BrowseScreen', () => {
     fireEvent.click(view.getByRole('button', { name: 'Clear filter' }));
     expect(view.getByText('Action')).toBeTruthy();
     expect(view.getByTestId('query').textContent).toBe('?t=1');
+  });
+
+  it('keeps a long category title separate from view actions and returns to its own content kind', async () => {
+    const title = 'International documentaries and independent films from around the world';
+    localStorage.setItem('gridBrowse', '1');
+    const view = renderBrowse(`/browse/1?t=1&g=${encodeURIComponent(title)}`);
+    const heading = await view.findByRole('heading', { name: title });
+    expect(heading.classList.contains('truncate')).toBe(false);
+    const toggle = view.getByRole('button', { name: 'List view' });
+    expect(toggle.closest('.topbar')).toBeNull();
+    expect(toggle.closest('.browse-context-toolbar')).toBeTruthy();
+    fireEvent.click(toggle);
+    expect(view.getByRole('button', { name: 'Grid view' })).toBeTruthy();
+    fireEvent.click(view.getByRole('button', { name: 'Back' }));
+    await view.findByText('Action');
+    expect(view.getByTestId('query').textContent).toBe('?t=1');
+    expect(view.queryByRole('heading', { name: title })).toBeNull();
+    localStorage.removeItem('gridBrowse');
   });
 
 });

@@ -53,6 +53,7 @@ export function AccountScreen() {
   return (
     <>
       <ScreenHeader
+        compact
         title={t('account.title')}
         subtitle={detail?.playlist.name}
         onBack={() => navigate(-1)}

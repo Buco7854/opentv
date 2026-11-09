@@ -5,22 +5,25 @@ import { createPortal } from 'react-dom';
 import { t } from '../i18n';
 import { Icon, IconName, iconMarkup } from './Icons';
 
-export function ScreenHeader({ title, home, subtitle, onBack, actions }: {
+export function ScreenHeader({ title, home, subtitle, onBack, actions, compact = false, wrapTitle = false }: {
   title: ReactNode;
   // Home variant uses the large headline style.
   home?: boolean;
   subtitle?: ReactNode;
   onBack?: () => void;
   actions?: ReactNode;
+  /** Task pages use a compact, scrolling heading rather than persistent library chrome. */
+  compact?: boolean;
+  wrapTitle?: boolean;
 }) {
   return (
-    <div className="topbar">
+    <div className={`topbar${compact ? ' utility-header' : ''}${wrapTitle ? ' wrap-title' : ''}`}>
       {onBack && <IconBtn name="back" label={t('common.back')} onClick={onBack} />}
       <div className="titles">
-        {title && <h1 className={`truncate ${home ? 'type-headline-medium' : 'type-title-large'}`}>{title}</h1>}
-        {subtitle}
+        {title && <h1 className={`${compact || wrapTitle ? '' : 'truncate '}${home ? 'type-headline-medium' : 'type-title-large'}`}>{title}</h1>}
+        {subtitle && <div className="screen-header-subtitle">{subtitle}</div>}
       </div>
-      {actions}
+      {actions && <div className="screen-header-actions">{actions}</div>}
     </div>
   );
 }

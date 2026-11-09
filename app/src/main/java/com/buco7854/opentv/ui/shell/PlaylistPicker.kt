@@ -1,7 +1,9 @@
 package com.buco7854.opentv.ui.shell
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -9,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -18,7 +21,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ExpandMore
-import androidx.compose.material.icons.automirrored.outlined.PlaylistPlay
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -35,10 +37,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -49,6 +51,7 @@ import com.buco7854.opentv.source.SourceId
 import com.buco7854.opentv.source.encode
 import com.buco7854.opentv.ui.components.OtvTextButton
 import com.buco7854.opentv.ui.components.RequestInitialFocusOnTv
+import com.buco7854.opentv.ui.components.ScreenTitle
 import com.buco7854.opentv.ui.components.focusHighlight
 import com.buco7854.opentv.ui.home.CatalogSourceEntry
 import com.buco7854.opentv.ui.home.HomeViewModel
@@ -71,6 +74,7 @@ fun PlaylistPicker(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        sheetMaxWidth = 440.dp,
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
     ) {
         PlaylistPickerContent(
@@ -96,19 +100,24 @@ internal fun PlaylistSelector(
     val description = stringResource(R.string.playlist_picker_current, title)
     val interaction = remember { MutableInteractionSource() }
     val style = libraryControlStyle(false, enabled, interaction, base = MaterialTheme.colorScheme.surfaceContainer)
-    Row(
-        modifier.heightIn(min = 48.dp).libraryControl(style, interaction, enabled, onClick = onChoose)
-            .semantics { contentDescription = description }.padding(horizontal = 12.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    // Keep a 48dp touch target around the smaller visible control.
+    Box(
+        modifier.widthIn(min = 48.dp).heightIn(min = 48.dp)
+            .libraryControl(style.copy(background = Color.Transparent, focus = Color.Transparent), interaction, enabled, onClick = onChoose)
+            .semantics { contentDescription = description },
+        contentAlignment = Alignment.Center,
     ) {
-        Icon(Icons.AutoMirrored.Outlined.PlaylistPlay, null, Modifier.size(18.dp), tint = style.foreground)
-        Column(Modifier.weight(1f), horizontalAlignment = Alignment.Start) {
-            Text(stringResource(R.string.shell_playlists), style = MaterialTheme.typography.labelSmall, color = style.foreground)
-            Text(title, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        Row(
+            Modifier.heightIn(min = 36.dp).clip(LibraryControlShape).background(style.background)
+                .border(2.dp, style.focus, LibraryControlShape).padding(horizontal = 10.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(title, modifier = Modifier.weight(1f, fill = false),
+                style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 color = if (enabled) MaterialTheme.colorScheme.onSurface else style.foreground)
+            Icon(Icons.Outlined.ExpandMore, null, Modifier.size(14.dp), tint = style.foreground)
         }
-        Icon(Icons.Outlined.ExpandMore, null, Modifier.size(14.dp), tint = style.foreground)
     }
 }
 
@@ -125,16 +134,15 @@ internal fun PlaylistPickerContent(
     val closeFocus = remember { FocusRequester() }
     RequestInitialFocusOnTv(closeFocus)
     LazyColumn(
-        modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp),
-        contentPadding = PaddingValues(start = 24.dp, end = 24.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         item {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
+                ScreenTitle(
                     stringResource(R.string.playlist_picker_title),
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.weight(1f).semantics { heading() },
+                    modifier = Modifier.weight(1f),
                 )
                 IconButton(onClick = onDismiss, modifier = Modifier.focusRequester(closeFocus).focusHighlight()) {
                     Icon(Icons.Outlined.Close, contentDescription = stringResource(R.string.common_close))
@@ -144,11 +152,11 @@ internal fun PlaylistPickerContent(
         items(sources, key = { it.sourceId.encode() }) { source ->
             val selected = source.sourceId == selectedSource
             Row(
-                modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp)
+                modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp)
                     .focusHighlight(RoundedCornerShape(12.dp)).clip(RoundedCornerShape(12.dp))
                     .background(if (selected) MaterialTheme.colorScheme.surfaceContainerHighest else MaterialTheme.colorScheme.surfaceContainer)
                     .selectable(selected = selected, role = Role.RadioButton, onClick = { onChoose(source.sourceId) })
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {

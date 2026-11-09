@@ -47,6 +47,7 @@ export function AdminScreen() {
   return (
     <div className="admin-workspace">
       <ScreenHeader
+        compact
         title={c('title')}
         subtitle={<span className="subtitle">{c('subtitle')}</span>}
       />

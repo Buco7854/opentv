@@ -142,6 +142,7 @@ export function SessionsScreen() {
   return (
     <>
       <ScreenHeader
+        compact
         title={t('sessions.title')}
         subtitle={sessions && sessions.length > 0
           ? <span className="subtitle">{t('sessions.activeCount', { count: sessions.length })}</span>

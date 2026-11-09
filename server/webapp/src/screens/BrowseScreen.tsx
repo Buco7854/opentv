@@ -203,28 +203,8 @@ export function BrowseScreen() {
     <>
       <ScreenHeader
         title={title}
+        wrapTitle
         onBack={atRoot ? undefined : () => setTabGroup(tab, null)}
-        subtitle={<div className="browse-meta">
-          <span>{t(tab === ChannelKind.LIVE ? 'browse.channelCount' : 'browse.categoryItems', {
-            count: group == null ? counts[tab as 0 | 1 | 2]
-              : tab !== ChannelKind.SERIES ? pagedChannels.total
-                : isXtreamNative ? pagedXtream.total : pagedSeries.total,
-          })}</span>
-          {detail?.playlist.hasXtreamPanel && account
-            ? account.execution === PlaylistOperationExecution.BROWSER && account.browserPath
-              ? <BrowserOperationLine path={account.browserPath} />
-              : account.execution === PlaylistOperationExecution.IN_APP
-                ? <ConnectionLine playlistId={playlistId} />
-                : null
-            : null}
-        </div>}
-        actions={
-          group != null && tab !== ChannelKind.LIVE ? (
-            <IconBtn name={grid ? 'listView' : 'grid'}
-                     label={grid ? t('browse.listView') : t('browse.gridView')} className="muted"
-                     onClick={() => { prefs.gridBrowse = !grid; setGrid(!grid); }} />
-          ) : undefined
-        }
       />
 
       <nav className="browse-sections" aria-label={t('browse.title')}>
@@ -235,6 +215,31 @@ export function BrowseScreen() {
           </button>
         ))}
       </nav>
+      <div className="browse-context-toolbar">
+        <div className="browse-meta">
+          <span>{t(tab === ChannelKind.LIVE ? 'browse.channelCount' : 'browse.categoryItems', {
+            count: group == null ? counts[tab as 0 | 1 | 2]
+              : tab !== ChannelKind.SERIES ? pagedChannels.total
+                : isXtreamNative ? pagedXtream.total : pagedSeries.total,
+          })}</span>
+          {detail?.playlist.hasXtreamPanel && account?.execution === PlaylistOperationExecution.IN_APP
+            && <ConnectionLine playlistId={playlistId} />}
+        </div>
+        <div className="browse-view-actions">
+          {detail?.playlist.hasXtreamPanel && account && (
+            account.execution === PlaylistOperationExecution.BROWSER && account.browserPath
+              ? <IconBtn name="person" label={t('playlists.account')} className="muted" onClick={() => navigate(account.browserPath!)} />
+              : account.execution === PlaylistOperationExecution.IN_APP
+                ? <IconBtn name="person" label={t('playlists.account')} className="muted" onClick={() => navigate(`/account/${playlistId}`)} />
+                : null
+          )}
+          {group != null && tab !== ChannelKind.LIVE && (
+            <IconBtn name={grid ? 'listView' : 'grid'}
+                     label={grid ? t('browse.listView') : t('browse.gridView')} className="muted"
+                     onClick={() => { prefs.gridBrowse = !grid; setGrid(!grid); }} />
+          )}
+        </div>
+      </div>
       <div className="browse-toolbar">
       <SearchField
         placeholder={group == null ? t('browse.filterCategories') : t('browse.filterCategory')}
@@ -378,28 +383,15 @@ export function BrowseScreen() {
   );
 }
 
-function BrowserOperationLine({ path }: { path: string }) {
-  const navigate = useNavigate();
-  return (
-    <button type="button" className="subtitle conn" onClick={() => navigate(path)}>
-      <Icon name="person" className="sm" />
-      {t('playlists.account')}
-    </button>
-  );
-}
-
 function ConnectionLine({ playlistId }: { playlistId: number }) {
-  const navigate = useNavigate();
   const { data: info } = useAsync(() => api.account(playlistId, false), [playlistId]);
   if (!info) return null;
   const warn = info.maxConnections >= 1 && info.activeConnections >= info.maxConnections;
   const earlier = info.stale ? ` · ${t('account.earlierData')}` : '';
   return (
-    <button type="button" className={`subtitle conn${warn ? ' warn' : ''}`}
-            onClick={() => navigate(`/account/${playlistId}`)}>
-      <Icon name="person" className="sm" />
+    <span className={`browse-connections${warn ? ' warn' : ''}`}>
       {t('browse.connections', { active: info.activeConnections, max: info.maxConnections })}{earlier}
-    </button>
+    </span>
   );
 }
 

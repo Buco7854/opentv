@@ -15,8 +15,9 @@
   .admin-mobile-nav { display: none; }
   .admin-section-heading { display: flex; align-items: start; justify-content: space-between; flex-wrap: wrap; gap: 16px; margin-bottom: 24px; }
   .admin-section-heading > div:first-child { flex: 1 1 240px; }
-  .admin-section-heading h2 { font: var(--type-title-large); letter-spacing: -0.3px; margin-bottom: 8px; }
-  .admin-heading-actions { display: flex; align-items: center; gap: 8px; }
+  .admin-section-heading h2 { font: var(--type-title-medium); letter-spacing: -0.2px; margin-bottom: 8px; }
+  .admin-heading-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .admin-heading-actions .btn:last-child { margin-left: auto; }
   .admin-heading-actions .btn { width: auto; min-height: 44px; white-space: nowrap; }
   .admin-panel-stack { display: flex; flex-direction: column; gap: 16px; }
   .admin-feedback { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 16px; margin-bottom: 16px; border: 1px solid var(--c-hairline); border-radius: 10px; font: var(--type-body-medium); }
@@ -75,9 +76,9 @@
   }
 
   .admin-hero { @apply flex items-center gap-3.5 rounded-2xl p-4; background: var(--c-panel); }
-  .admin-hero .admin-avatar { @apply size-14; font: var(--type-title-medium); }
+  .admin-hero .admin-avatar { @apply size-11; font: var(--type-title-small); }
   .admin-hero .body { @apply min-w-0 flex-1; }
-  .admin-hero .name { font: var(--type-title-large); letter-spacing: -0.2px; overflow-wrap: anywhere; }
+  .admin-hero .name { font: var(--type-title-medium); letter-spacing: -0.2px; overflow-wrap: anywhere; }
   .admin-hero .sub { @apply mt-0.5 text-on-surface-variant; font: var(--type-body-small); overflow-wrap: anywhere; }
   .admin-detail { display: flex; flex-direction: column; align-items: stretch; gap: 20px; }
   .admin-back.btn { align-self: start; width: auto; padding-left: 0; }

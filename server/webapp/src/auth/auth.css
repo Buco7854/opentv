@@ -128,16 +128,21 @@
   .link-card .actions .btn { @apply w-auto; }
 
   .security-card { @apply flex flex-col gap-4 rounded-2xl p-5; background: var(--c-panel); }
+  .security-page { max-width: 760px; margin: 0 auto; }
+  .security-content { display: flex; flex-direction: column; gap: 16px; padding: 0 24px 24px; }
+  .security-card > .head > .logo-box { width: 24px; height: 24px; border-radius: 0; background: transparent; }
+  .security-card > .head > .logo-box .icon { width: 20px; height: 20px; color: var(--c-fg2); }
   .security-card .head { @apply flex items-start gap-3.5; }
   .security-card .head .body { @apply min-w-0 flex-1; }
   .security-card .head .title { font: var(--type-title-medium); letter-spacing: -0.1px; }
   .security-card .head .sub { @apply mt-0.5 text-on-surface-variant; font: var(--type-body-small); }
   .security-card .actions { @apply flex flex-wrap gap-2; }
-  .security-card .actions .btn { @apply w-auto; }
+  .security-card .actions .btn { @apply w-auto; max-width: 100%; height: auto; min-height: 44px; padding-top: 10px; padding-bottom: 10px; }
   .key-list { @apply -mx-1 flex flex-col; }
   .key-list .row + .row { border-top: 1px solid var(--c-hairline); }
   .key-list .row .sub { @apply whitespace-normal; }
   .key-list .logo-box .icon { @apply size-5; }
+  @media (max-width: 640px) { .security-content { padding: 0 16px 24px; } }
 }
 
 @keyframes otp-blink { 50% { opacity: 0; } }

@@ -15,7 +15,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -27,8 +26,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -38,11 +35,12 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.buco7854.opentv.R
+import com.buco7854.opentv.ui.components.ScreenHeader
+import com.buco7854.opentv.ui.components.HeaderIconButton
 import com.buco7854.opentv.core.xtream.AccountInfo
 import com.buco7854.opentv.ui.components.EmptyState
 import com.buco7854.opentv.ui.components.OtvProgressBar
 import com.buco7854.opentv.ui.components.Pill
-import androidx.compose.ui.text.style.TextOverflow
 import com.buco7854.opentv.source.SourceId
 import com.buco7854.opentv.ui.components.sourceViewModel
 import java.text.DateFormat
@@ -71,49 +69,20 @@ fun AccountScreen(source: SourceId, onBack: () -> Unit) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(stringResource(R.string.account_title))
-                        state.title?.let {
-                            Text(
-                                it,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        state.serverName?.let {
-                            Text(
-                                it,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = stringResource(R.string.common_back))
-                    }
-                },
+            ScreenHeader(
+                title = stringResource(R.string.account_title),
+                onBack = onBack,
+                supportingText = listOfNotNull(state.title, state.serverName),
                 actions = {
                     if (busy) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.padding(end = 16.dp).size(22.dp),
-                            strokeWidth = 2.5.dp,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                    } else {
-                        IconButton(onClick = { viewModel.refresh() }, enabled = state.hasProviderAccount) {
-                            Icon(Icons.Outlined.Refresh, contentDescription = stringResource(R.string.account_refresh_info))
+                        Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.5.dp, color = MaterialTheme.colorScheme.onSurface)
                         }
+                    } else {
+                        HeaderIconButton(Icons.Outlined.Refresh, stringResource(R.string.account_refresh_info),
+                            onClick = { viewModel.refresh() }, enabled = state.hasProviderAccount)
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
             )
         },
         contentWindowInsets = WindowInsets(0.dp),

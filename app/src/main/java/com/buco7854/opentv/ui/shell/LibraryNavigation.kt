@@ -237,7 +237,7 @@ fun OpenTvMasthead(
                         title = playlistTitle ?: "—",
                         onChoose = onChoosePlaylist,
                         enabled = canChoosePlaylist,
-                        modifier = Modifier.widthIn(max = if (wide) 220.dp else 240.dp),
+                        modifier = Modifier.widthIn(max = if (wide) 180.dp else 156.dp),
                     )
                 }
             }
