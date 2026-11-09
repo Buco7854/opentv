@@ -4,7 +4,7 @@ import { Dialog, ScreenHeader, SearchField } from '../components/Primitives';
 import { Icon } from '../components/Icons';
 import { WatchProgressBar } from '../components/WatchProgress';
 import { WorkspaceNavigation } from '../components/WorkspaceNavigation';
-import { errorMessage, reportSuccess } from '../errors';
+import { errorMessage } from '../errors';
 import { getLocale } from '../i18n';
 import { fmtDuration } from '../lib/format';
 import { forgetWatchProgress } from '../watchProgress';
@@ -75,11 +75,12 @@ export function AccountProgressSection() {
   const [confirm, setConfirm] = useState<AccountProgress | 'all' | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const { heading, afterChange } = useSectionFocus();
   const rows = resource.data ?? [];
   const needle = query.trim().toLocaleLowerCase(getLocale());
   const visible = rows.filter((row) => progressTitle(row).toLocaleLowerCase(getLocale()).includes(needle));
-  const ask = (target: AccountProgress | 'all') => { setError(null); setConfirm(target); };
+  const ask = (target: AccountProgress | 'all') => { setNotice(null); setError(null); setConfirm(target); };
   const reset = async () => {
     if (confirm === null || busy) return;
     setBusy(true); setError(null);
@@ -90,7 +91,7 @@ export function AccountProgressSection() {
         await authApi.deleteProgress(confirm.contentId); forgetWatchProgress(confirm.contentId);
         resource.update((current) => current.filter((row) => row.contentId !== confirm.contentId));
       }
-      reportSuccess(c(confirm === 'all' ? 'allProgressReset' : 'progressReset'));
+      setNotice(c(confirm === 'all' ? 'allProgressReset' : 'progressReset'));
       setConfirm(null); afterChange();
     } catch (cause) { setError(errorMessage(cause)); } finally { setBusy(false); }
   };
@@ -98,6 +99,7 @@ export function AccountProgressSection() {
     <header className="account-section-header"><div><h2 ref={heading} tabIndex={-1}>{c('progress')}</h2><p>{c('progressHelp')}</p></div>
       <button className="btn text" disabled={busy || resource.loading} onClick={resource.reload}><Icon name="refresh" />{c('refresh')}</button>
     </header>
+    {notice && <p className="account-status" role="status">{notice}</p>}
     <CollectionNotice state={resource} />
     {resource.data !== null && <>
       {rows.length > 0 && <><SearchField placeholder={c('searchProgress')} value={query} onChange={setQuery} /><p className="account-count" role="status">{c('progressCount', { count: visible.length })}</p></>}
@@ -127,11 +129,12 @@ export function AccountSessionsSection() {
   const [confirm, setConfirm] = useState<AccountAuthSession | 'others' | 'all' | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const { heading, afterChange } = useSectionFocus();
   const currentId = auth.user?.authSessionId;
   const rows = [...(resource.data ?? [])].sort((left, right) => Number(right.id === currentId) - Number(left.id === currentId) || right.lastSeenAtMs - left.lastSeenAtMs);
   const others = rows.filter((row) => row.id !== currentId);
-  const ask = (target: AccountAuthSession | 'others' | 'all') => { setError(null); setConfirm(target); };
+  const ask = (target: AccountAuthSession | 'others' | 'all') => { setNotice(null); setError(null); setConfirm(target); };
   const signOut = async () => {
     if (confirm === null || busy) return;
     setBusy(true); setError(null);
@@ -140,10 +143,10 @@ export function AccountSessionsSection() {
         await auth.logout(confirm === 'all'); navigate('/login', { replace: true });
       } else if (confirm === 'others') {
         await authApi.revokeOtherSessions(); resource.update((current) => current.filter((row) => row.id === currentId));
-        reportSuccess(c('otherSessionsEnded'));
+        setNotice(c('otherSessionsEnded'));
       } else {
         await authApi.revokeSession(confirm.id); resource.update((current) => current.filter((row) => row.id !== confirm.id));
-        reportSuccess(c('sessionEnded'));
+        setNotice(c('sessionEnded'));
       }
       setConfirm(null); afterChange();
     } catch (cause) { setError(errorMessage(cause)); } finally { setBusy(false); }
@@ -154,6 +157,7 @@ export function AccountSessionsSection() {
     <header className="account-section-header"><div><h2 ref={heading} tabIndex={-1}>{c('sessions')}</h2><p>{c('sessionsHelp')}</p></div>
       <button className="btn text" disabled={busy || resource.loading} onClick={resource.reload}><Icon name="refresh" />{c('refresh')}</button>
     </header>
+    {notice && <p className="account-status" role="status">{notice}</p>}
     <CollectionNotice state={resource} />
     {resource.data !== null && (rows.length === 0 ? <div className="account-empty"><h3>{c('noSessions')}</h3><p>{c('noSessionsHelp')}</p></div>
       : <ul className="account-list">{rows.map((row) => <li className="account-row" key={row.id}>

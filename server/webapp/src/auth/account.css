@@ -11,6 +11,7 @@
 .account-loading { display: grid; gap: 12px; padding: 8px 0 16px; }
 .account-loading > span { display: block; height: 100px; background: var(--c-panel); border-radius: 12px; }
 .account-count { font: var(--type-body-small); color: var(--c-fg2); margin: 0 0 12px; font-variant-numeric: tabular-nums; }
+.account-status { color: var(--c-fg2); font: var(--type-body-medium); margin: 0 0 16px; }
 .account-list { display: flex; flex-direction: column; border-radius: 12px; background: var(--c-panel); padding: 0 20px; }
 .account-row { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; padding: 20px 0; }
 .account-row + .account-row { border-top: 1px solid var(--c-hairline); }

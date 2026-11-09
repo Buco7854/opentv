@@ -73,6 +73,8 @@ describe('Your account', () => {
     expect(forgetWatchProgress).toHaveBeenCalledWith('private-id');
     expect(screen.queryByRole('heading', { name: 'Evening cinema' })).toBeNull();
     expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByText('Watch progress reset.').getAttribute('role')).toBe('status');
+    expect(document.querySelector('.toast.success')).toBeNull();
   });
 
   it('resets the complete account history even with a title filter active', async () => {
@@ -115,6 +117,9 @@ describe('Your account', () => {
     expect(authApi.revokeSession).not.toHaveBeenCalled();
     expect(screen.getByText('This session')).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Sign out other devices' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText('Other devices signed out.').getAttribute('role')).toBe('status');
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out everywhere' }));
+    expect(screen.queryByText('Other devices signed out.')).toBeNull();
   });
 
   it('keeps failed all-device sign-out retryable before navigating away', async () => {
