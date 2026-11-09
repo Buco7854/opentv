@@ -119,7 +119,6 @@ fun BrowseScreen(
     onOpenMovie: (ContentRef) -> Unit,
     onOpenSeries: (CatalogItem) -> Unit,
     onOpenXtreamSeries: (CatalogItem) -> Unit,
-    onOpenAccount: () -> Unit,
     onSignIn: () -> Unit,
 ) {
     val viewModel = sourceViewModel(sourceId, ::BrowseViewModel)
@@ -154,7 +153,6 @@ fun BrowseScreen(
     }
     val gridView by viewModel.gridView.collectAsStateWithLifecycle()
     val favoriteKeys by viewModel.favoriteKeys.collectAsStateWithLifecycle()
-    val account by viewModel.account.collectAsStateWithLifecycle()
     val liveCount by viewModel.liveCount.collectAsStateWithLifecycle()
     val movieCount by viewModel.movieCount.collectAsStateWithLifecycle()
     val seriesCount by viewModel.seriesCount.collectAsStateWithLifecycle()
@@ -240,11 +238,8 @@ fun BrowseScreen(
                     ChannelKind.SERIES -> R.string.browse_series_count
                     else -> R.string.browse_live_count
                 }, shownCount),
-                connections = account?.let { stringResource(R.string.browse_connections, it.activeConnections, it.maxConnections) },
-                connectionLimitReached = account?.let { it.maxConnections in 1..it.activeConnections } == true,
                 gridView = gridView,
                 onToggleGridView = if (group != null && tab != ChannelKind.LIVE) viewModel::toggleGridView else null,
-                onOpenAccount = if (account != null) onOpenAccount else null,
             )
             val hasContent = groups.isNotEmpty() || items.isNotEmpty()
             if (hasContent) {

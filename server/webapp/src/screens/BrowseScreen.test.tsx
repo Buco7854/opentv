@@ -2,7 +2,7 @@ import { act, fireEvent, render, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  AccountInfo, api, ChannelKind, GroupCount, PlaylistDetail, PlaylistOperation,
+  api, ChannelKind, GroupCount, PlaylistDetail, PlaylistOperation,
 } from '../api';
 import { t } from '../i18n';
 import { BrowseScreen } from './BrowseScreen';
@@ -192,69 +192,31 @@ describe('BrowseScreen', () => {
     view.unmount();
   });
 
-  it('labels stale connection figures as earlier data', async () => {
-    vi.mocked(api.playlistCapabilities).mockResolvedValue({
-      operations: [{
-        operation: PlaylistOperation.VIEW_PROVIDER_ACCOUNT,
-        execution: 'IN_APP',
-        browserPath: null,
-      }],
-    });
-    vi.mocked(api.playlistDetail).mockResolvedValue({
-      ...detail,
-      playlist: {
-        ...detail.playlist,
-        mode: 'xtream',
-        hasXtreamPanel: true,
-      },
-    });
-    const account: AccountInfo = {
-      activeConnections: 1,
-      maxConnections: 2,
-      status: 'Active',
-      expiresAtMs: null,
-      isTrial: false,
-      createdAtMs: null,
-      timezone: null,
-      fetchedAtMs: 100,
-      stale: true,
-    };
-    vi.spyOn(api, 'account').mockResolvedValue(account);
-
-    const view = renderBrowse();
-
-    const figures = t('browse.connections', { active: 1, max: 2 });
-    expect(await view.findByText(`${figures} · ${t('account.earlierData')}`)).toBeTruthy();
-    view.unmount();
-  });
-
-  it('follows browser capabilities instead of invoking their in-app operations', async () => {
+  it.each([
+    [ChannelKind.LIVE, 'IN_APP'],
+    [ChannelKind.MOVIE, 'IN_APP'],
+    [ChannelKind.SERIES, 'IN_APP'],
+    [ChannelKind.LIVE, 'BROWSER'],
+    [ChannelKind.MOVIE, 'BROWSER'],
+    [ChannelKind.SERIES, 'BROWSER'],
+  ] as const)('keeps provider diagnostics out of content kind %s with %s account support', async (kind, execution) => {
     vi.mocked(api.playlistCapabilities).mockResolvedValue({
       operations: [
-        {
-          operation: PlaylistOperation.REFRESH,
-          execution: 'BROWSER',
-          browserPath: '/manage/provider',
-        },
-        {
-          operation: PlaylistOperation.VIEW_PROVIDER_ACCOUNT,
-          execution: 'BROWSER',
-          browserPath: '/manage/provider',
-        },
+        { operation: PlaylistOperation.VIEW_PROVIDER_ACCOUNT, execution, browserPath: '/manage/provider' },
+        { operation: PlaylistOperation.REFRESH, execution: 'BROWSER', browserPath: '/manage/provider' },
       ],
     });
     vi.mocked(api.playlistDetail).mockResolvedValue({
       ...detail,
-      playlist: { ...detail.playlist, hasXtreamPanel: true },
+      playlist: { ...detail.playlist, mode: 'xtream', hasXtreamPanel: true },
     });
-    const account = vi.spyOn(api, 'account');
-    const view = renderBrowse();
+    const account = vi.spyOn(api, 'account').mockRejectedValue(new Error('Unexpected provider request'));
+    const view = renderBrowse(`/browse/1?t=${kind}`);
+    await act(async () => {});
 
-    fireEvent.click(await view.findByRole('button', { name: t('playlists.account') }));
-
-    await expectPath(view, '/manage/provider');
-    expect(api.startRefreshJob).not.toHaveBeenCalled();
+    expect(view.queryByRole('button', { name: t('playlists.account') })).toBeNull();
     expect(account).not.toHaveBeenCalled();
+    expect(api.startRefreshJob).not.toHaveBeenCalled();
     view.unmount();
   });
 

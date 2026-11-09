@@ -46,7 +46,6 @@ export function BrowseScreen() {
   const operation = (name: PlaylistOperation) =>
     capabilities?.operations.find((capability) => capability.operation === name);
   const refresh = operation(PlaylistOperation.REFRESH);
-  const account = operation(PlaylistOperation.VIEW_PROVIDER_ACCOUNT);
   const categoryCorrection = operation(PlaylistOperation.CORRECT_CATEGORY_TYPE);
   const canRefreshInApp = refresh?.execution === PlaylistOperationExecution.IN_APP;
   const canCorrectCategoryInApp =
@@ -222,17 +221,8 @@ export function BrowseScreen() {
               : tab !== ChannelKind.SERIES ? pagedChannels.total
                 : isXtreamNative ? pagedXtream.total : pagedSeries.total,
           })}</span>
-          {detail?.playlist.hasXtreamPanel && account?.execution === PlaylistOperationExecution.IN_APP
-            && <ConnectionLine playlistId={playlistId} />}
         </div>
         <div className="browse-view-actions">
-          {detail?.playlist.hasXtreamPanel && account && (
-            account.execution === PlaylistOperationExecution.BROWSER && account.browserPath
-              ? <IconBtn name="person" label={t('playlists.account')} className="muted" onClick={() => navigate(account.browserPath!)} />
-              : account.execution === PlaylistOperationExecution.IN_APP
-                ? <IconBtn name="person" label={t('playlists.account')} className="muted" onClick={() => navigate(`/account/${playlistId}`)} />
-                : null
-          )}
           {group != null && tab !== ChannelKind.LIVE && (
             <IconBtn name={grid ? 'listView' : 'grid'}
                      label={grid ? t('browse.listView') : t('browse.gridView')} className="muted"
@@ -380,18 +370,6 @@ export function BrowseScreen() {
         />
       )}
     </>
-  );
-}
-
-function ConnectionLine({ playlistId }: { playlistId: number }) {
-  const { data: info } = useAsync(() => api.account(playlistId, false), [playlistId]);
-  if (!info) return null;
-  const warn = info.maxConnections >= 1 && info.activeConnections >= info.maxConnections;
-  const earlier = info.stale ? ` · ${t('account.earlierData')}` : '';
-  return (
-    <span className={`browse-connections${warn ? ' warn' : ''}`}>
-      {t('browse.connections', { active: info.activeConnections, max: info.maxConnections })}{earlier}
-    </span>
   );
 }
 

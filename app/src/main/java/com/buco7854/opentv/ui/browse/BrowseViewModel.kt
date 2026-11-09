@@ -11,8 +11,6 @@ import com.buco7854.opentv.core.model.ChannelKind
 import com.buco7854.opentv.core.model.Download
 import com.buco7854.opentv.core.model.DownloadStatus
 import com.buco7854.opentv.core.model.Playlist
-import com.buco7854.opentv.core.repo.AccountInfoResult
-import com.buco7854.opentv.core.xtream.AccountInfo
 import com.buco7854.opentv.diag.ErrorLog
 import com.buco7854.opentv.download.downloadIdentityKey
 import com.buco7854.opentv.source.CatalogGateway
@@ -95,9 +93,6 @@ class BrowseViewModel private constructor(
 
     private val mutableGuideIds = MutableStateFlow<Set<String>>(emptySet())
     val guideIds: StateFlow<Set<String>> = mutableGuideIds
-
-    private val mutableAccount = MutableStateFlow<AccountInfo?>(null)
-    val account: StateFlow<AccountInfo?> = mutableAccount
 
     private val mutableMessage = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = mutableMessage
@@ -288,21 +283,6 @@ class BrowseViewModel private constructor(
                 CatalogResult.SignedOut,
                 CatalogResult.Unreachable,
                 is CatalogResult.Failed -> Unit
-            }
-        }
-    }
-
-    fun refreshAccount(force: Boolean) {
-        val local = sourceId as? SourceId.LocalPlaylist ?: return
-        val currentGraph = graph ?: return
-        viewModelScope.launch {
-            val source = currentGraph.storage.playlists.get(local.playlistId) ?: return@launch
-            when (val result = currentGraph.account.accountInfo(source, force)) {
-                is AccountInfoResult.Fresh -> mutableAccount.value = result.info
-                // This subtitle never claims a refresh time, so retaining its last-known
-                // connection figures is more useful than clearing it during an outage.
-                is AccountInfoResult.Stale -> mutableAccount.value = result.info
-                is AccountInfoResult.Unavailable -> Unit
             }
         }
     }
@@ -557,7 +537,6 @@ class BrowseViewModel private constructor(
                     str(R.string.browse_epg_refresh_failed, ErrorLog.describe(error))
             }
             reloadNowAiring()
-            refreshAccount(force = false)
         }
     }
 

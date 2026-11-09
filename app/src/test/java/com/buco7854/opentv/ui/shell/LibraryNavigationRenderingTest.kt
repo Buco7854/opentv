@@ -201,27 +201,24 @@ class LibraryNavigationRenderingTest {
     fun `long French category has a separate reachable toolbar on the narrowest phone`() {
         val title = "Films et documentaires · Histoire, sciences et civilisations"
         var backed = false
-        var account = false
         var grid by mutableStateOf(false)
         render("category-header-fr-320", width = 320) {
-            BrowseScene(title, grid = grid, onBack = { backed = true }, onAccount = { account = true }, onToggle = { grid = !grid })
+            BrowseScene(title, grid = grid, onBack = { backed = true }, onToggle = { grid = !grid })
         }.use { screen ->
-            screen.assertCategoryToolbar(title, "Compte", "Vue grille")
+            screen.assertCategoryToolbar(title, "Vue grille")
             screen.tap(screen.button("Vue grille"))
             assertTrue(grid)
             assertTrue(screen.button("Vue liste").boundsInRoot.width >= 48f)
-            screen.tap(screen.button("Compte"))
-            assertTrue(account)
             screen.tap(screen.button("Retour"))
             assertTrue(backed)
         }
     }
 
     @Test
-    fun `long phone category title does not share space with account or view controls`() {
+    fun `long phone category title does not share space with view controls`() {
         val title = "International cinema · Independent films and documentaries"
         render("category-header-390") { BrowseScene(title) }.use { screen ->
-            screen.assertCategoryToolbar(title, "Account", "Grid view")
+            screen.assertCategoryToolbar(title, "Grid view")
         }
     }
 
@@ -229,20 +226,18 @@ class LibraryNavigationRenderingTest {
     @Config(qualifiers = "w1280dp-h720dp-television-mdpi")
     fun `wide category toolbar supports independent D-pad focus and activation`() {
         val title = "Cinema, documentaries and international series for the whole family"
-        var account = false
+        var grid = false
         render("category-header-tv", width = 1280, height = 720, keyboard = true) {
-            BrowseScene(title, wide = true, onAccount = { account = true })
+            BrowseScene(title, wide = true, onToggle = { grid = true })
         }.use { screen ->
-            screen.assertCategoryToolbar(title, "Account", "Grid view")
+            screen.assertCategoryToolbar(title, "Grid view")
             val before = screen.button("Grid view").boundsInRoot
             screen.focus(screen.button("Grid view"))
             screen.awaitFocusRing(screen.button("Grid view"))
             screen.capture("category-header-tv-focus")
             assertEquals(before, screen.button("Grid view").boundsInRoot)
-            screen.key(android.view.KeyEvent.KEYCODE_DPAD_LEFT)
-            assertTrue(screen.button("Account").config.getOrNull(SemanticsProperties.Focused) == true)
             screen.key(android.view.KeyEvent.KEYCODE_DPAD_CENTER)
-            assertTrue(account)
+            assertTrue(grid)
         }
     }
 
@@ -250,7 +245,7 @@ class LibraryNavigationRenderingTest {
     fun `double sized category text keeps actions visible and separate`() {
         val title = "Independent cinema and documentaries from around the world"
         render("category-header-font-200", fontScale = 2f) { BrowseScene(title) }.use { screen ->
-            screen.assertCategoryToolbar(title, "Account", "Grid view")
+            screen.assertCategoryToolbar(title, "Grid view")
             assertTrue(screen.button("Grid view").boundsInRoot.bottom < 844f)
         }
     }
@@ -283,7 +278,6 @@ class LibraryNavigationRenderingTest {
         wide: Boolean = false,
         grid: Boolean = false,
         onBack: () -> Unit = {},
-        onAccount: () -> Unit = {},
         onToggle: () -> Unit = {},
     ) {
         Scaffold(
@@ -294,7 +288,7 @@ class LibraryNavigationRenderingTest {
                 Column(Modifier.widthIn(max = 1180.dp).fillMaxSize()) {
                     BrowseHeading(title, onBack)
                     BrowseTabs(ChannelKind.MOVIE, mapOf(ChannelKind.LIVE to 20, ChannelKind.MOVIE to 120, ChannelKind.SERIES to 80)) {}
-                    BrowseToolbar("120 films", "2 / 10 connections", false, grid, onToggle, onAccount)
+                    BrowseToolbar("120 films", grid, onToggle)
                     FilterField("", {}, "Filter this category")
                     BrowseCategories(listOf(CatalogGroup("International cinema", 120), CatalogGroup("Documentaries", 80)), null) {}
                 }
@@ -393,20 +387,18 @@ class LibraryNavigationRenderingTest {
         fun button(description: String) = nodes().single {
             it.config.contains(SemanticsActions.OnClick) && it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains(description) == true
         }
-        fun assertCategoryToolbar(title: String, account: String, view: String) {
+        fun assertCategoryToolbar(title: String, view: String) {
             val heading = nodes().single {
                 it.config.contains(SemanticsProperties.Heading) && it.config.getOrNull(SemanticsProperties.Text)?.any { text -> text.text == title } == true
             }
             val layouts = mutableListOf<TextLayoutResult>()
             assertTrue(heading.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(layouts))
             assertFalse("Category title was truncated", layouts.any { result -> (0 until result.lineCount).any(result::isLineEllipsized) })
-            val buttons = listOf(button(account), button(view))
-            buttons.forEach { action ->
+            button(view).let { action ->
                 assertTrue(action.boundsInRoot.top >= heading.boundsInRoot.bottom)
                 assertTrue(action.boundsInRoot.width >= 48f && action.boundsInRoot.height >= 48f)
                 assertTrue(action.boundsInRoot.left >= 0 && action.boundsInRoot.right <= decor.width)
             }
-            assertTrue(buttons[1].boundsInRoot.left - buttons[0].boundsInRoot.right >= 8f)
         }
         fun destination(label: String) = nodes().single {
             it.config.contains(SemanticsActions.OnClick) &&

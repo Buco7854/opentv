@@ -36,7 +36,6 @@
 .browse-context-toolbar .browse-meta { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
 .browse-view-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-left: auto; }
 .browse-view-actions .icon-btn { flex: none; width: 48px; height: 48px; }
-.browse-connections.warn { color: var(--c-bad); }
 .browse-sections { margin: 0 24px 12px; display: flex; border-bottom: 1px solid var(--c-hairline); gap: 24px; }
 .browse-sections button { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; color: var(--c-fg2); font-size: 14px; border-bottom: 2px solid transparent; margin-bottom: -1px; }
 .browse-sections button[aria-current='page'] { color: var(--c-fg); border-color: var(--c-fg); }

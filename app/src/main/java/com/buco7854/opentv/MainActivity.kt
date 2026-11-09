@@ -570,13 +570,6 @@ internal fun AppNav(
                 onOpenXtreamSeries = {
                     nav.navigate(Routes.xtreamSeries(sourceId, it))
                 },
-                onOpenAccount = {
-                    when (sourceId) {
-                        is SourceId.LocalPlaylist -> nav.navigate(Routes.account(sourceId))
-                        is SourceId.Hub -> nav.navigate(Routes.hubSettings(sourceId.hubId))
-                        is SourceId.HubConnection -> Unit
-                    }
-                },
                 onSignIn = { nav.navigate(signInRoute(sourceId)) },
             )
         }

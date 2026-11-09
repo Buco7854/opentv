@@ -381,6 +381,8 @@ absent from the initial bundle.
   Utility pages use compact 20px/sp headings; category titles get their own space
   above the display toolbar. Android's source selector is a content-sized single
   line with a 36dp visible surface inside a 48dp touch target.
+  Provider connection counts and account links belong in account/source management;
+  Browse does not display or fetch provider-account diagnostics.
 - Android catalog gateways are cached in a thread-safe, access-order LRU capped at 64.
   Gateway lookup/construction never reads Room: `CatalogGateway.traits()` is suspending, and
   a local gateway resolves its playlist-backed traits only after the ViewModel has entered a

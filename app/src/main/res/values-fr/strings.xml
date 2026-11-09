@@ -109,7 +109,6 @@
     <string name="browse_live_count">Direct · %1$d</string>
     <string name="browse_movies_count">Films · %1$d</string>
     <string name="browse_series_count">Séries · %1$d</string>
-    <string name="browse_connections">%1$d/%2$d connexions</string>
     <string name="browse_filter_categories">Filtrer les catégories</string>
     <string name="browse_filter_category">Filtrer cette catégorie</string>
     <string name="browse_clear_filter">Effacer le filtre</string>
