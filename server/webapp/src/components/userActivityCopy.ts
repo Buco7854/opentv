@@ -92,6 +92,6 @@ const fr: Record<Key, string> = {
   sessionEnded: 'Appareil déconnecté.', otherSessionsEnded: 'Autres appareils déconnectés.',
 };
 
-export function accountText(key: Key, values: Record<string, string | number> = {}): string {
+export function activityText(key: Key, values: Record<string, string | number> = {}): string {
   return Object.entries(values).reduce((text, [name, value]) => text.replaceAll(`{${name}}`, String(value)), (getLocale() === 'fr' ? fr : en)[key]);
 }

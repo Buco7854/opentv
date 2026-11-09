@@ -1,7 +1,7 @@
 import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { api } from './api';
-import { clearUserActivitySnapshots, useAsync, useFavorites, useWatchProgress } from './hooks';
+import { clearUserActivitySnapshots, useAsync, useFavorites, useResource, useWatchProgress } from './hooks';
 import {
   confirmWatchProgress, forgetWatchProgress, publishWatchProgress, watchProgressStore,
 } from './watchProgress';
@@ -11,6 +11,38 @@ function deferred<T>() {
   const promise = new Promise<T>((done) => { resolve = done; });
   return { promise, resolve };
 }
+
+describe('useResource', () => {
+  it('keeps a confirmed list mutation when an earlier refresh finishes later', async () => {
+    const stale = deferred<string[]>();
+    const load = vi.fn().mockResolvedValueOnce(['remove', 'keep']).mockReturnValueOnce(stale.promise);
+    const { result } = renderHook(() => useResource<string[]>(load));
+    await act(async () => {});
+    act(() => result.current.reload());
+    expect(result.current.data).toEqual(['remove', 'keep']);
+    act(() => result.current.set((rows) => rows!.filter((row) => row !== 'remove')));
+    await act(async () => stale.resolve(['remove', 'keep']));
+    expect(result.current.data).toEqual(['keep']);
+    expect(result.current.loading).toBe(false);
+  });
+
+  it('loads only active sections and does not show data from a different owner', async () => {
+    const alice = vi.fn().mockResolvedValue(['Alice device']);
+    const bob = vi.fn().mockResolvedValue(['Bob device']);
+    const { result, rerender } = renderHook(
+      ({ load, enabled }) => useResource<string[]>(load, enabled),
+      { initialProps: { load: alice, enabled: false } },
+    );
+    expect(alice).not.toHaveBeenCalled();
+    rerender({ load: alice, enabled: true });
+    await act(async () => {});
+    expect(result.current.data).toEqual(['Alice device']);
+    rerender({ load: bob, enabled: true });
+    expect(result.current.data).toBeNull();
+    await act(async () => {});
+    expect(result.current.data).toEqual(['Bob device']);
+  });
+});
 
 describe('useAsync', () => {
   it('clears stale route data when its dependencies change', async () => {

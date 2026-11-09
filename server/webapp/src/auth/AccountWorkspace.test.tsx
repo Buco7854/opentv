@@ -98,7 +98,7 @@ describe('Your account', () => {
   it('names devices, marks the current session, and revokes another session only after confirmation', async () => {
     const view = openAccount('/security/sessions'); await settled();
     expect(screen.getByText('This session')).toBeTruthy();
-    expect(view.container.querySelector('.account-row')?.textContent).toContain('This session');
+    expect(view.container.querySelector('.activity-row')?.textContent).toContain('This session');
     expect(view.container.textContent).not.toContain('other-secret-id');
     fireEvent.click(screen.getByRole('button', { name: 'Sign out Living room television' }));
     expect(authApi.revokeSession).not.toHaveBeenCalled();

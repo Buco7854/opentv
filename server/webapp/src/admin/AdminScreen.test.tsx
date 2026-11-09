@@ -34,6 +34,8 @@ vi.mock('./api', () => ({
     setUserPlaylists: vi.fn(),
     sessions: vi.fn(),
     progress: vi.fn(),
+    revokeSession: vi.fn(),
+    deleteProgress: vi.fn(),
     cancelDownloadBlob: vi.fn(),
   },
 }));
@@ -68,7 +70,46 @@ describe('AdminScreen', () => {
     vi.mocked(adminApi.pendingOidc).mockReset().mockResolvedValue([]);
     vi.mocked(adminApi.downloads).mockReset().mockResolvedValue([]);
     vi.mocked(adminApi.updateUser).mockReset().mockResolvedValue(signedInAccount);
+    vi.mocked(adminApi.sessions).mockReset().mockResolvedValue([]);
+    vi.mocked(adminApi.progress).mockReset().mockResolvedValue([]);
+    vi.mocked(adminApi.revokeSession).mockReset().mockResolvedValue(null);
+    vi.mocked(adminApi.deleteProgress).mockReset().mockResolvedValue(null);
     capabilities.mockReturnValue({ passwordEnabled: true });
+  });
+
+  it('uses the shared session presentation with administrator-owned revocation', async () => {
+    vi.mocked(adminApi.sessions).mockResolvedValue([{
+      id: 'session-1', authMethod: 'PASSWORD', clientKind: 'BROWSER', deviceName: 'Office browser',
+      createdAtMs: 1_700_000_000_000, lastSeenAtMs: 1_700_000_001_000,
+      idleExpiresAtMs: 1_800_000_000_000, absoluteExpiresAtMs: 1_900_000_000_000,
+    }]);
+    renderAdmin('/admin?section=users&user=admin-1');
+    await settled();
+    fireEvent.click(screen.getByRole('button', { name: 'Sessions' }));
+    await settled();
+    expect(screen.getByRole('heading', { name: 'Office browser', level: 4 })).toBeTruthy();
+    expect(screen.getByText('This session')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke' }));
+    await settled();
+    expect(adminApi.revokeSession).toHaveBeenCalledWith('admin-1', 'session-1');
+    expect(screen.queryByRole('heading', { name: 'Office browser' })).toBeNull();
+  });
+
+  it('uses the shared progress presentation without exposing identifiers or changing the selected owner', async () => {
+    vi.mocked(adminApi.progress).mockResolvedValue([{
+      contentId: 'private-content', title: null, positionMs: 600_000, durationMs: 3_600_000, updatedMs: 1_700_000_000_000,
+    }]);
+    const view = renderAdmin('/admin?section=users&user=admin-1');
+    await settled();
+    fireEvent.click(screen.getByRole('button', { name: 'Progress' }));
+    await settled();
+    expect(screen.getByRole('heading', { name: 'Unavailable title', level: 4 })).toBeTruthy();
+    expect(screen.getByText('10 min of 1h 00min')).toBeTruthy();
+    expect(view.container.textContent).not.toContain('private-content');
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    await settled();
+    expect(adminApi.deleteProgress).toHaveBeenCalledWith('admin-1', 'private-content');
+    expect(screen.queryByRole('heading', { name: 'Unavailable title' })).toBeNull();
   });
 
   it('offers a retry instead of an endless spinner when a section fails', async () => {
@@ -229,6 +270,26 @@ describe('AdminScreen', () => {
     );
     // Nothing to hand over, so no one-time token dialog.
     expect(screen.queryByText(/one-time/i)).toBeNull();
+  });
+
+  it('refreshes an incomplete user list after account creation without losing existing accounts', async () => {
+    const created = { ...signedInAccount, id: 'new-user', username: 'direct', displayName: 'Direct' };
+    let finishInitial!: (users: AdminUser[]) => void;
+    vi.mocked(adminApi.users)
+      .mockReturnValueOnce(new Promise((resolve) => { finishInitial = resolve; }))
+      .mockResolvedValueOnce([signedInAccount, created]);
+    vi.mocked(adminApi.createUser).mockResolvedValue({ user: created, activationToken: null });
+    renderAdmin();
+    await settled();
+    fireEvent.click(screen.getByRole('button', { name: 'Create user' }));
+    fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'direct' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'a long enough one' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    await settled();
+    expect(screen.getByText('Root')).toBeTruthy();
+    expect(screen.getByText('Direct')).toBeTruthy();
+    await act(async () => finishInitial([signedInAccount]));
+    expect(screen.getByText('Direct')).toBeTruthy();
   });
 
   it('keeps the one-time setup link when refreshing the row fails', async () => {

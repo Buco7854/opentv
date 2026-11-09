@@ -427,6 +427,9 @@ absent from the initial bundle.
   under `/auth/progress` and `/auth/sessions` derives ownership only from the current actor,
   including removal of orphaned progress. Revoking other sessions preserves the current one
   and uses the existing playback/download cleanup policy.
+- Personal and admin progress/session views reuse `components/UserActivity.tsx`,
+  `ResourceFeedback` and `useResource`; confirmation forms extend `ConfirmDialog`.
+  Keep authorization and API calls in their respective screens, outside shared presentation.
 - Android Browse puts its title, tabs, view controls and filter in the same lazy scrolling
   host as catalog rows, including loading, empty and error states. Keep that host stable
   while typing a filter; replacing it on each request loses input focus and scroll state.

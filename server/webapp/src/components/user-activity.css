@@ -1,0 +1,15 @@
+.activity-list { display: flex; flex-direction: column; list-style: none; border-radius: 12px; background: var(--c-panel); padding: 0 20px; }
+.activity-row { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; padding: 20px 0; }
+.activity-row + .activity-row { border-top: 1px solid var(--c-hairline); }
+.activity-row-copy { flex: 1 1 240px; min-width: 0; }
+.activity-title { font: var(--type-title-small); overflow-wrap: anywhere; }
+.activity-row p { margin-top: 5px; color: var(--c-fg2); font: var(--type-body-small); overflow-wrap: anywhere; }
+.activity-row .progress-track { margin-top: 12px; }
+.activity-row-action { flex: none; margin-left: auto; }
+.activity-session-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.activity-session-title .pill { flex: none; }
+.admin-card > .activity-list { padding: 0; background: transparent; border-radius: 0; }
+@media (max-width: 640px) {
+  .activity-list { padding: 0 16px; }
+  .activity-row { gap: 8px; padding: 16px 0; }
+}

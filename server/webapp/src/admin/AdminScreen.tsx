@@ -52,6 +52,14 @@ export function AdminScreen() {
 
   const replaceUser = (next: AdminUser) =>
     users.set((current) => current?.map((user) => user.id === next.id ? next : user) ?? current);
+  const upsertUser = (next: AdminUser) => {
+    // An incomplete list cannot be patched into a complete one. Supersede its pending
+    // read with a fresh list so early account creation also retains the existing users.
+    if (users.data === null) { users.reload(); return; }
+    users.set((current) => current?.some((user) => user.id === next.id)
+      ? current.map((user) => user.id === next.id ? next : user)
+      : [...(current ?? []), next]);
+  };
 
   const openUser = users.data?.find((user) => user.id === openUserId) ?? null;
   const activeState = { users, template, oidc: pending, downloads }[section];
@@ -84,7 +92,7 @@ export function AdminScreen() {
               }}
             />
           )}
-          {openUserId !== null && users.data !== null && !openUser && <div className="admin-feedback" role="status">
+          {openUserId !== null && users.data !== null && !openUser && <div className="resource-feedback" role="status">
             <p>{c('errorNotFound')}</p><button className="btn text" onClick={() => setOpenUserId(null, true)}>{c('backToUsers')}</button>
           </div>}
           <div hidden={openUser !== null}>
@@ -119,9 +127,7 @@ export function AdminScreen() {
               onApproved={(identity, user) => {
                 pending.set((current) => current?.filter((item) =>
                   item.issuer !== identity.issuer || item.subject !== identity.subject) ?? current);
-                users.set((current) => current?.some((item) => item.id === user.id)
-                  ? current.map((item) => item.id === user.id ? user : item)
-                  : [...(current ?? []), user]);
+                upsertUser(user);
               }}
             />
           )}
@@ -135,7 +141,7 @@ export function AdminScreen() {
       {localAccountProvisioning && createOpen && (
         <CreateUserDialog
           onDismiss={() => setCreateOpen(false)}
-          onCreated={(user) => users.set((current) => current ? [...current, user] : [user])}
+          onCreated={upsertUser}
         />
       )}
     </div>

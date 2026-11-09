@@ -1,51 +1,16 @@
-import { Dispatch, SetStateAction, useCallback, useEffect, useState } from 'react';
+import { ResourceState, useResource } from '../hooks';
+export { ResourceFeedback as AdminSectionFeedback } from '../components/Common';
 import { Icon } from '../components/Icons';
 import { Dialog, toast } from '../components/Primitives';
 import { reportSuccess } from '../errors';
 import { AdminPlaylist } from './api';
 import { adminText as c } from './copy';
 import { errorMessage, playlistModeLabel } from './format';
-import { t } from '../i18n';
 
-export interface AdminSection<T> {
-  data: T | null;
-  error: string | null;
-  set: Dispatch<SetStateAction<T | null>>;
-  reload: () => void;
-}
+export type AdminSection<T> = ResourceState<T>;
 
 export function useAdminSection<T>(load: () => Promise<T>, enabled = true): AdminSection<T> {
-  const [data, setData] = useState<T | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [attempt, setAttempt] = useState(0);
-  useEffect(() => {
-    if (!enabled) return;
-    let active = true;
-    setError(null);
-    load().then(
-      (next) => { if (active) setData(next); },
-      (cause: unknown) => { if (active) setError(errorMessage(cause)); },
-    );
-    return () => { active = false; };
-  }, [load, attempt, enabled]);
-  const reload = useCallback(() => setAttempt((current) => current + 1), []);
-  return { data, error, set: setData, reload };
-}
-
-/** Keep a failed refresh beside the last useful data, with a local recovery action. */
-export function AdminSectionFeedback({ state }: { state: Pick<AdminSection<unknown>, 'data' | 'error' | 'reload'> }) {
-  if (state.error) return (
-    <div className="admin-feedback" role="status">
-      <p>{state.error}</p>
-      <button className="btn text" onClick={state.reload}>{t('common.retry')}</button>
-    </div>
-  );
-  if (state.data === null) return (
-    <div className="admin-loading" role="status" aria-label={t('common.working')}>
-      <span className="admin-skeleton" /><span className="admin-skeleton" /><span className="admin-skeleton" />
-    </div>
-  );
-  return null;
+  return useResource(load, enabled, errorMessage);
 }
 
 export function PlaylistPicker({ playlists, selected, onChange, disabled }: {

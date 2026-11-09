@@ -69,7 +69,11 @@ function useModalFocus(onEscape?: () => void) {
       const items = focusables();
       const first = items[0];
       const last = items[items.length - 1];
-      if (!first || !last) return;
+      if (!first || !last) {
+        e.preventDefault();
+        ref.current?.focus();
+        return;
+      }
       const active = document.activeElement;
       if (e.shiftKey && (active === first || !ref.current?.contains(active))) {
         e.preventDefault();
@@ -139,25 +143,32 @@ export function Dialog({ title, onDismiss, children, buttons, className = '', di
   );
 }
 
-export function ConfirmDialog({ title, message, confirmLabel, onConfirm, onDismiss }: {
+export function ConfirmDialog({ title, message, confirmLabel, onConfirm, onDismiss, busy = false, error = null, closeOnConfirm = true }: {
   title: string;
   message: string;
   confirmLabel: string;
   onConfirm: () => void;
   onDismiss: () => void;
+  busy?: boolean;
+  error?: string | null;
+  /** Async forms keep the dialog open so a failed operation remains retryable. */
+  closeOnConfirm?: boolean;
 }) {
   return (
     <Dialog
+      className="confirm-dialog"
       title={title}
       onDismiss={onDismiss}
+      dismissible={!busy}
       buttons={
         <>
-          <button className="btn text" onClick={onDismiss}>{t('common.cancel')}</button>
-          <button className="btn danger-text" onClick={() => { onDismiss(); onConfirm(); }}>{confirmLabel}</button>
+          <button className="btn text" disabled={busy} onClick={onDismiss}>{t('common.cancel')}</button>
+          <button className="btn danger-text" disabled={busy} onClick={() => { if (closeOnConfirm) onDismiss(); onConfirm(); }}>{busy ? t('common.working') : confirmLabel}</button>
         </>
       }
     >
       <p className="type-body-medium text-on-surface-variant">{message}</p>
+      {error && <p className="type-body-medium text-error" role="alert">{error}</p>}
     </Dialog>
   );
 }

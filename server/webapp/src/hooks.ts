@@ -1,5 +1,5 @@
 import {
-  useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore,
+  Dispatch, SetStateAction, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore,
 } from 'react';
 import { api, Download, DownloadStatus, ListingPage } from './api';
 import { GENERIC, errorMessage, reportError } from './errors';
@@ -7,6 +7,49 @@ import { t } from './i18n';
 import { watchProgressStore } from './watchProgress';
 
 const DEFAULT_PAGE_SIZE = 50;
+
+export interface ResourceState<T> {
+  data: T | null;
+  error: string | null;
+  loading: boolean;
+  set: Dispatch<SetStateAction<T | null>>;
+  reload: () => void;
+}
+
+/** Mutable sections retain useful data on refresh; a mutation supersedes pending reads. */
+export function useResource<T>(
+  load: () => Promise<T>,
+  enabled = true,
+  describeError: (cause: unknown) => string = errorMessage,
+): ResourceState<T> {
+  const [data, setData] = useState<T | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(enabled);
+  const [attempt, setAttempt] = useState(0);
+  const generation = useRef(0);
+  const owner = useRef(load);
+  useEffect(() => {
+    if (!enabled) { setLoading(false); return; }
+    if (owner.current !== load) { owner.current = load; setData(null); }
+    const request = ++generation.current;
+    setLoading(true);
+    setError(null);
+    load().then((next) => {
+      if (request === generation.current) { setData(next); setLoading(false); }
+    }, (cause: unknown) => {
+      if (request === generation.current) { setError(describeError(cause)); setLoading(false); }
+    });
+    return () => { generation.current++; };
+  }, [load, enabled, attempt, describeError]);
+  const set = useCallback<Dispatch<SetStateAction<T | null>>>((next) => {
+    generation.current++;
+    setData(next);
+    setError(null);
+    setLoading(false);
+  }, []);
+  const reload = useCallback(() => setAttempt((current) => current + 1), []);
+  return { data, error, loading, set, reload };
+}
 
 /** Server page size (OPENTV_PAGE_SIZE), fetched once per session. */
 class PageSizeStore {

@@ -9,11 +9,11 @@ import { useAuth } from '../auth/AuthProvider';
 import { AdminPlaylist, AdminUser, adminApi } from './api';
 import { adminText as c } from './copy';
 import {
-  authMethodLabel, clientLabel, dateTime, initials, reportAdminError, roleLabel,
+  authMethodLabel, dateTime, initials, reportAdminError, roleLabel,
   statusLabel, statusTone,
 } from './format';
 import { AdminSection, AdminSectionFeedback, OneTimeTokenDialog, PlaylistPicker, useAdminSection } from './AdminShared';
-import { WatchProgressBar } from '../components/WatchProgress';
+import { ProgressList, SessionList } from '../components/UserActivity';
 
 type StatusFilter = 'ALL' | AdminUser['status'];
 type Section = 'profile' | 'access' | 'sessions' | 'progress';
@@ -414,41 +414,13 @@ function SessionsSection({ userId, currentSessionId }: {
       <p className="admin-hint">{c('sessionsHelp')}</p>
       <AdminSectionFeedback state={sessions} />
       {rows.length === 0 && sessions.data !== null && (
-        <p className="admin-hint">{c('noActiveSessions')}</p>
+        <EmptyState title={c('noActiveSessions')} subtitle={c('sessionsHelp')} />
       )}
       {rows.length > 0 && (
         <>
-          <div className="admin-rows">
-            {rows.map((session) => {
-              const mine = session.id === currentSessionId;
-              return (
-                <div className="admin-row" key={session.id}>
-                  <div className="body">
-                    <div className="name-line">
-                      <span className="name">{session.deviceName || clientLabel(session.clientKind)}</span>
-                      {mine && <span className="pill strong">{c('currentSession')}</span>}
-                      {session.clientKind.toUpperCase() !== 'BROWSER' && (
-                        <span className="pill">{clientLabel(session.clientKind)}</span>
-                      )}
-                    </div>
-                    <div className="sub">
-                      {c('lastSeen', {
-                        method: authMethodLabel(session.authMethod),
-                        date: dateTime(session.lastSeenAtMs),
-                      })}
-                    </div>
-                    <div className="sub">
-                      {c('expires', {
-                        date: dateTime(Math.min(session.idleExpiresAtMs, session.absoluteExpiresAtMs)),
-                      })}
-                    </div>
-                  </div>
-                  <IconBtn name="logout" className={mine ? 'muted' : 'danger'} label={c('revoke')}
-                           disabled={busy} onClick={() => void revoke(session.id)} />
-                </div>
-              );
-            })}
-          </div>
+          <SessionList items={rows} currentSessionId={currentSessionId} titleLevel={4}
+            action={(session) => <IconBtn name="logout" className={session.id === currentSessionId ? 'muted' : 'danger'}
+              label={c('revoke')} disabled={busy} onClick={() => void revoke(session.id)} />} />
           <div className="actions end">
             <button className="btn danger-text" disabled={busy} onClick={() => setConfirmAll(true)}>
               {c('revokeAllSessions')}
@@ -492,33 +464,12 @@ function ProgressSection({ userId }: { userId: string }) {
       <p className="admin-hint">{c('progressHelp')}</p>
       <AdminSectionFeedback state={progress} />
       {items.length === 0 && progress.data !== null && (
-        <p className="admin-hint">{c('noResume')}</p>
+        <EmptyState title={c('noResume')} subtitle={c('progressHelp')} />
       )}
       {items.length > 0 && (
-        <div className="admin-rows">
-          {items.map((item) => (
-            <div className="admin-row" key={item.contentId}>
-              <div className="body">
-                <div className={`name${item.title ? '' : ' admin-mono'}`}>
-                  {item.title ?? c('contentGone')}
-                </div>
-                <div className="sub">
-                  {c('progressMinutes', {
-                    position: Math.round(item.positionMs / 60_000),
-                    duration: Math.round(item.durationMs / 60_000),
-                  })}
-                  {' · '}
-                  {c('updated', { date: dateTime(item.updatedMs) })}
-                </div>
-                <WatchProgressBar
-                  fraction={item.durationMs > 0 ? item.positionMs / item.durationMs : 0}
-                />
-              </div>
-              <IconBtn name="del" className="danger" label={c('remove')}
-                       disabled={busy} onClick={() => void remove(item.contentId)} />
-            </div>
-          ))}
-        </div>
+        <ProgressList items={items} titleLevel={4} action={(item) =>
+          <IconBtn name="del" className="danger" label={c('remove')}
+            disabled={busy} onClick={() => void remove(item.contentId)} />} />
       )}
     </section>
   );

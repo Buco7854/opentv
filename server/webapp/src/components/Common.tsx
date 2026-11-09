@@ -6,6 +6,20 @@ import { t } from '../i18n';
 import { Icon, kindIconName } from './Icons';
 import { Spinner } from './Primitives';
 
+/** Shared section feedback keeps a failed refresh beside the last useful data. */
+export function ResourceFeedback({ state }: { state: {
+  data: unknown; error: string | null; reload: () => void;
+} }) {
+  if (state.error) return <div className="resource-feedback" role="alert">
+    <p>{state.error}</p>
+    <button className="btn text" onClick={state.reload}>{t('common.retry')}</button>
+  </div>;
+  if (state.data === null) return <div className="resource-loading" role="status" aria-label={t('common.working')}>
+    <span /><span /><span />
+  </div>;
+  return null;
+}
+
 // Kind icon shown when the logo is missing or fails to load.
 export function ChannelLogo({ url, kind }: { url: string | null; kind: number }) {
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
@@ -21,7 +35,7 @@ export function ChannelLogo({ url, kind }: { url: string | null; kind: number })
 
 export function EmptyState({ title, subtitle, children, action }: {
   title: string;
-  subtitle: string;
+  subtitle?: string;
   children?: ReactNode;
   action?: ReactNode;
 }) {
@@ -29,7 +43,7 @@ export function EmptyState({ title, subtitle, children, action }: {
     <div className="empty">
       {children}
       <h3 className="type-title-large">{title}</h3>
-      <p>{subtitle}</p>
+      {subtitle && <p>{subtitle}</p>}
       {action}
     </div>
   );
