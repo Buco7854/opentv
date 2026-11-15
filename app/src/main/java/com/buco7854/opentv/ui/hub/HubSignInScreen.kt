@@ -4,7 +4,6 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.imePadding
@@ -18,7 +17,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.CircularProgressIndicator
@@ -54,7 +52,6 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
-import com.buco7854.opentv.ui.theme.ViewingAccent
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -155,60 +152,58 @@ fun HubSignInScreen(hubId: Long?, onDone: (Long) -> Unit, onBack: () -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Column(
-                modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(20.dp),
+                modifier = Modifier.widthIn(max = 400.dp).fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(28.dp),
             ) {
                 val serverStep = state is HubSignInState.UrlEntry || state is HubSignInState.Probing ||
                     state is HubSignInState.ProbeFailed || state is HubSignInState.UpdateRequired
-                val browserSignIn = when (val current = state) {
-                    is HubSignInState.MethodChooser -> current.browserSignInAvailable
-                    is HubSignInState.DeviceLink -> current.mode == DeviceLinkMode.BROWSER_SIGN_IN
-                    is HubSignInState.DeviceLinkDenied -> current.mode == DeviceLinkMode.BROWSER_SIGN_IN
-                    is HubSignInState.DeviceLinkExpired -> current.mode == DeviceLinkMode.BROWSER_SIGN_IN
-                    else -> false
-                }
-                SignInIntroduction(serverStep, hubId != null, browserSignIn)
-                if (!serverStep && serverAddress.isNotBlank()) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Icon(Icons.Outlined.CheckCircle, contentDescription = null, tint = ViewingAccent)
-                        Text(serverAddress, style = MaterialTheme.typography.bodyMedium, maxLines = 2)
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SignInIntroduction(serverStep, hubId != null)
+                    if (!serverStep && serverAddress.isNotBlank()) {
+                        Text(
+                            serverAddress,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
-                when (val current = state) {
-                    is HubSignInState.UrlEntry -> UrlEntryStep(current, viewModel::connect)
-                    is HubSignInState.Probing -> BusyStep(stringResource(R.string.hub_checking))
-                    is HubSignInState.ProbeFailed ->
-                        if (hubId == null) {
-                            UrlEntryStep(
-                                HubSignInState.UrlEntry(current.url, current.error),
-                                viewModel::connect,
-                            )
-                        } else {
-                            RetryStep(failureMessage(current.error), viewModel::retryKnownHub)
-                        }
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    when (val current = state) {
+                        is HubSignInState.UrlEntry -> UrlEntryStep(current, viewModel::connect)
+                        is HubSignInState.Probing -> BusyStep(stringResource(R.string.hub_checking))
+                        is HubSignInState.ProbeFailed ->
+                            if (hubId == null) {
+                                UrlEntryStep(
+                                    HubSignInState.UrlEntry(current.url, current.error),
+                                    viewModel::connect,
+                                )
+                            } else {
+                                RetryStep(failureMessage(current.error), viewModel::retryKnownHub)
+                            }
 
-                    is HubSignInState.UpdateRequired -> MessageStep(stringResource(R.string.hub_app_too_old))
-                    is HubSignInState.MethodChooser -> MethodChooserStep(current, viewModel)
-                    is HubSignInState.Password -> PasswordStep(current, viewModel::submitPassword)
-                    is HubSignInState.MfaChallenge -> MfaStep(current, viewModel)
-                    is HubSignInState.TotpEnrollment -> EnrollmentStep(current, viewModel::completeTotpEnrollment)
-                    is HubSignInState.DeviceLink -> DeviceLinkStep(current, viewModel::claimBrowserLaunch)
-                    is HubSignInState.DeviceLinkDenied -> RestartStep(
-                        stringResource(R.string.hub_link_denied),
-                        viewModel::restartDeviceLink,
-                    )
+                        is HubSignInState.UpdateRequired -> MessageStep(stringResource(R.string.hub_app_too_old))
+                        is HubSignInState.MethodChooser -> MethodChooserStep(current, viewModel)
+                        is HubSignInState.Password -> PasswordStep(current, viewModel::submitPassword)
+                        is HubSignInState.MfaChallenge -> MfaStep(current, viewModel)
+                        is HubSignInState.TotpEnrollment -> EnrollmentStep(current, viewModel::completeTotpEnrollment)
+                        is HubSignInState.DeviceLink -> DeviceLinkStep(current, viewModel::claimBrowserLaunch)
+                        is HubSignInState.DeviceLinkDenied -> RestartStep(
+                            stringResource(R.string.hub_link_denied),
+                            viewModel::restartDeviceLink,
+                        )
 
-                    is HubSignInState.DeviceLinkExpired -> RestartStep(
-                        stringResource(R.string.hub_link_expired),
-                        viewModel::restartDeviceLink,
-                    )
+                        is HubSignInState.DeviceLinkExpired -> RestartStep(
+                            stringResource(R.string.hub_link_expired),
+                            viewModel::restartDeviceLink,
+                        )
 
-                    HubSignInState.PendingApproval -> MessageStep(stringResource(R.string.hub_pending_approval))
-                    HubSignInState.Finishing -> BusyStep(stringResource(R.string.hub_signing_in))
-                    is HubSignInState.Done -> BusyStep(stringResource(R.string.hub_signing_in))
+                        HubSignInState.PendingApproval -> MessageStep(stringResource(R.string.hub_pending_approval))
+                        HubSignInState.Finishing -> BusyStep(stringResource(R.string.hub_signing_in))
+                        is HubSignInState.Done -> BusyStep(stringResource(R.string.hub_signing_in))
+                    }
                 }
             }
         }
@@ -216,30 +211,28 @@ fun HubSignInScreen(hubId: Long?, onDone: (Long) -> Unit, onBack: () -> Unit) {
 }
 
 @Composable
-internal fun SignInIntroduction(serverStep: Boolean, reauthenticating: Boolean, browserSignIn: Boolean = false) {
-    Text(
-        stringResource(if (serverStep) R.string.hub_step_server else R.string.hub_step_account),
-        style = MaterialTheme.typography.labelLarge,
-        color = ViewingAccent,
-    )
-    Text(
-        stringResource(
-            if (serverStep) R.string.hub_intro_connect
-            else if (reauthenticating) R.string.hub_intro_return
-            else R.string.hub_intro_sign_in,
-        ),
-        style = MaterialTheme.typography.titleLarge,
-        modifier = Modifier.semantics { heading() },
-    )
-    Text(
-        stringResource(
-            if (serverStep) R.string.hub_intro_description
-            else if (browserSignIn) R.string.hub_browser_account_description
-            else R.string.hub_account_description,
-        ),
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
+internal fun SignInIntroduction(
+    serverStep: Boolean,
+    reauthenticating: Boolean,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            stringResource(
+                if (serverStep) R.string.hub_intro_connect
+                else if (reauthenticating) R.string.hub_intro_return
+                else R.string.hub_intro_sign_in,
+            ),
+            style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.semantics { heading() },
+        )
+        if (serverStep) {
+            Text(
+                stringResource(R.string.hub_intro_description),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
 }
 
 @Composable
@@ -323,7 +316,6 @@ internal fun PasswordStep(state: HubSignInState.Password, onSubmit: (String, Str
     var password by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
-    Text(stringResource(R.string.hub_method_password), style = MaterialTheme.typography.titleMedium)
     state.error?.let { ErrorText(failureMessage(it)) }
     OutlinedTextField(
         value = username,

@@ -1,6 +1,5 @@
 import { ReactNode } from 'react';
 import { Icon } from '../components/Icons';
-import { authText as tx } from './copy';
 import './auth.css';
 
 /**
@@ -20,11 +19,13 @@ export function AuthLayout({ eyebrow, title, subtitle, children, footer, flow = 
   return (
     <main className={`auth-page${flow ? ' auth-page-flow' : ''}`}>
       <div className="auth-container">
-        <div className="auth-brand">
-          <span className="mark"><Icon name="liveTv" /></span>
-          <span className="word">OpenTV</span>
+        <div className="auth-identity">
+          <div className="auth-brand">
+            <span className="mark"><Icon name="liveTv" /></span>
+            <span className="word">OpenTV</span>
+          </div>
+          <p className="auth-server">{window.location.host}</p>
         </div>
-        <div className="auth-server"><Icon name="liveTv" /><span>{tx('serverContext')}</span><strong>{window.location.host}</strong></div>
         <header className="auth-head">
           {eyebrow && <div className="eyebrow">{eyebrow}</div>}
           <h1>{title}</h1>

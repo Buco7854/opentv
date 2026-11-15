@@ -66,7 +66,7 @@ class HubSignInRenderingTest {
         var browserStarted = false
         var passwordStarted = false
         render("signin-browser-retry") {
-            SignInIntroduction(serverStep = false, reauthenticating = false, browserSignIn = true)
+            SignInIntroduction(serverStep = false, reauthenticating = false)
             SignInContinuation(
                 HubSignInState.MethodChooser(BASE, CAPABILITIES, error = HubSignInFailure.UNREACHABLE),
                 hasBrowser = true,
@@ -86,7 +86,7 @@ class HubSignInRenderingTest {
     fun `browser waiting offers reopen only with no parallel phone or password choices`() {
         var reopened = false
         render("signin-browser-waiting") {
-            SignInIntroduction(serverStep = false, reauthenticating = false, browserSignIn = true)
+            SignInIntroduction(serverStep = false, reauthenticating = false)
             DeviceLinkWaiting(linkState(), showQr = false, onReopen = { reopened = true })
         }.use { screen ->
             assertTrue(screen.hasText("Waiting for sign-in…"))
@@ -101,7 +101,7 @@ class HubSignInRenderingTest {
     @Test
     fun `television or no browser uses a single phone QR flow`() {
         render("signin-phone-qr") {
-            SignInIntroduction(serverStep = false, reauthenticating = false, browserSignIn = true)
+            SignInIntroduction(serverStep = false, reauthenticating = false)
             DeviceLinkWaiting(linkState(), showQr = true)
         }.use { screen ->
             assertTrue(screen.hasText("Sign in on your phone"))

@@ -2,6 +2,7 @@ name: Web CI
 
 # Runs only when the server/web client, the shared modules, or the build
 # configuration change (tag pushes always run: new refs skip path filters).
+# A weekly clean rebuild also picks up base-image and Ubuntu package patches.
 on:
   push:
     branches: [main]
@@ -19,6 +20,7 @@ on:
       - "gradle.properties"
       - "gradle/**"
       - "gradlew"
+      - ".node-version"
       - ".github/workflows/web.yml"
   pull_request:
     branches: [main]
@@ -35,8 +37,11 @@ on:
       - "gradle.properties"
       - "gradle/**"
       - "gradlew"
+      - ".node-version"
       - ".github/workflows/web.yml"
   workflow_dispatch:
+  schedule:
+    - cron: "23 4 * * 2" # Tuesdays at 04:23 UTC, from the default branch.
 
 jobs:
   build:
@@ -52,15 +57,17 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v7
         with:
-          node-version: "24.18.0"
+          node-version-file: ".node-version"
+          check-latest: true
           cache: npm
           cache-dependency-path: server/webapp/package-lock.json
 
-      - name: Set up JDK 25
+      - name: Set up JDK 25 (LTS)
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "25"
+          check-latest: true
 
       - name: Set up Gradle (with caching)
         uses: gradle/actions/setup-gradle@v6
@@ -96,9 +103,11 @@ jobs:
         with:
           context: .
           push: ${{ github.event_name != 'pull_request' }}
+          pull: true
+          no-cache: ${{ github.event_name == 'schedule' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Reuse layers across runs (base images, the Android SDK install, npm
-          # and ffmpeg) so only changed layers rebuild.
+          # Ordinary builds reuse layers; scheduled builds rerun package installs
+          # against current repositories instead of reusing an old apt layer.
           cache-from: type=gha
           cache-to: type=gha,mode=max

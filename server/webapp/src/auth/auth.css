@@ -4,14 +4,15 @@
 
 @layer components {
   .auth-page {
-    @apply flex min-h-dvh flex-col items-center justify-center px-5 py-12;
+    @apply flex min-h-dvh flex-col items-center justify-center px-6 py-10;
     background: var(--c-bg);
   }
 
-  .auth-container { @apply flex w-full max-w-[420px] flex-col; }
-  .auth-brand { @apply mb-8 flex items-center gap-2.5; }
+  .auth-container { @apply flex w-full max-w-[380px] flex-col; }
+  .auth-identity { @apply mb-9 flex flex-col gap-1; }
+  .auth-brand { @apply flex items-center gap-2.5; }
   .auth-brand .mark {
-    @apply grid size-10 place-items-center rounded-[12px] text-on-surface;
+    @apply grid size-6 place-items-center text-on-surface;
     color: var(--c-fg);
   }
   .auth-brand .mark .icon { @apply size-5; stroke-width: 1.8; }
@@ -20,10 +21,11 @@
     letter-spacing: -0.5px;
   }
 
-  .auth-server { @apply mb-7 flex flex-wrap items-center gap-x-2 gap-y-1 text-on-surface-variant; font: var(--type-body-small); }
-  .auth-server .icon { @apply size-3.5; }
-  .auth-server strong { @apply min-w-0 break-all text-on-surface; font-weight: 500; }
-  .auth-password-toggle { @apply -mt-1 mb-1 min-h-11 self-end rounded-md px-2 text-on-surface-variant; font: var(--type-label-medium); }
+  .auth-server { @apply pl-[34px] text-on-surface-variant; overflow-wrap: anywhere; font: var(--type-body-small); }
+  .auth-password-field { position: relative; }
+  .auth-password-field .field > input { padding-right: 56px; }
+  .auth-password-toggle { @apply absolute right-0.5 bottom-0.5 grid size-11 place-items-center rounded-md text-on-surface-variant; }
+  .auth-password-toggle .icon { @apply size-[18px]; }
   .auth-password-toggle:hover { color: var(--c-fg); background: var(--c-press); }
   .auth-head { @apply mb-6 flex flex-col gap-1.5; }
   .auth-head .eyebrow {
@@ -36,15 +38,32 @@
 
   .auth-step { @apply flex flex-col gap-3; }
   .auth-step > .btn { min-height: 48px; border-radius: 8px; }
+  /* Sign-in has one reading edge and one primary action. Alternate methods keep
+     their own space instead of turning the form into a stack of equal choices. */
+  .auth-login { gap: 20px; }
+  .auth-login .field { display: flex; flex-direction: column; gap: 8px; }
+  .auth-login .field > label { position: static; order: -1; font: var(--type-label-large); color: var(--c-fg); }
+  .auth-login .field > input { height: 48px; padding-top: 0; border-radius: 8px; }
+  .auth-login .field > input:focus-visible { box-shadow: inset 0 0 0 2px var(--c-focus); }
+  .auth-methods { display: flex; flex-direction: column; gap: 12px; }
+  .auth-methods .btn { height: auto; min-height: 48px; padding: 12px 16px; border-radius: 8px; }
+  .auth-alternatives { border-top: 1px solid var(--c-hairline); }
+  .auth-alternatives > summary { display: flex; min-height: 52px; align-items: center; justify-content: center; gap: 8px; border-radius: 8px; cursor: pointer; list-style: none; color: var(--c-fg2); font: var(--type-label-large); }
+  .auth-alternatives > summary::-webkit-details-marker { display: none; }
+  .auth-alternatives > summary .icon { width: 16px; height: 16px; }
+  .auth-alternatives[open] > summary .icon { transform: rotate(180deg); }
+  .auth-alternatives > summary:hover { color: var(--c-fg); }
+  .auth-method-link { display: flex; min-height: 44px; align-items: center; justify-content: center; gap: 8px; padding: 8px; border-radius: 8px; font: var(--type-label-large); text-align: center; }
+  .auth-method-link .icon { width: 18px; height: 18px; flex: none; }
   .auth-choices { @apply flex flex-col gap-2; }
   .auth-choices .row .sub { @apply whitespace-normal; }
   .auth-choices .row .icon.chev { @apply size-[18px] flex-none text-on-surface-variant; }
 
   .auth-row { @apply flex items-center gap-2; }
   .auth-row .btn { @apply flex-1; }
-  .auth-foot { @apply mt-7 flex flex-col items-center gap-1; }
+  .auth-foot { @apply mt-6 flex flex-col items-center gap-1; }
   .auth-foot .link {
-    @apply rounded-lg px-2.5 py-1.5 text-on-surface-variant;
+    @apply flex min-h-11 items-center rounded-lg px-2.5 py-2 text-center text-on-surface-variant;
     font: var(--type-label-large);
   }
   .auth-foot .link:active { background: var(--c-press); }
@@ -152,8 +171,7 @@
 @layer components {
   .auth-page-flow { justify-content: flex-start; padding-top: max(24px, env(safe-area-inset-top)); padding-bottom: max(24px, env(safe-area-inset-bottom)); }
   .auth-page-flow .auth-container { max-width: 520px; }
-  .auth-page-flow .auth-brand { margin-bottom: 20px; }
-  .auth-page-flow .auth-server { margin-bottom: 24px; }
+  .auth-page-flow .auth-identity { margin-bottom: 28px; }
   .link-approval-content { min-width: 0; }
   .link-approval-content .link-question { overflow-wrap: anywhere; }
   .link-device { display: flex; align-items: flex-start; gap: 12px; }

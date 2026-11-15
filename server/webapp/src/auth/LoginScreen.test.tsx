@@ -63,6 +63,44 @@ describe('LoginScreen', () => {
     expect(screen.getByRole('link', { name: 'Sign in from another device' })).toBeTruthy();
   });
 
+  it('keeps alternate methods in a closed disclosure without clearing the password', () => {
+    renderLogin();
+    const input = screen.getByLabelText('Password') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'kept-on-this-screen' } });
+    const summary = screen.getByText('Other ways to sign in');
+    const details = summary.closest('details')!;
+    expect(details.open).toBe(false);
+    fireEvent.click(summary);
+    expect(details.open).toBe(true);
+    fireEvent.click(summary);
+    expect(details.open).toBe(false);
+    expect(input.value).toBe('kept-on-this-screen');
+  });
+
+  it('shows available methods immediately when password sign-in is disabled', () => {
+    capabilities.mockReturnValue(caps({ passwordEnabled: false, oidcEnabled: true }));
+    renderLogin();
+    expect(screen.queryByLabelText('Password')).toBeNull();
+    expect(screen.queryByText('Other ways to sign in')).toBeNull();
+    expect(screen.getByRole('button', { name: /passkey/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /single sign-on/ })).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Activate an account' })).toBeNull();
+  });
+
+  it('does not add a disclosure when password is the only available method', () => {
+    capabilities.mockReturnValue(caps({ passkeyLoginEnabled: false, deviceLinkEnabled: false }));
+    renderLogin();
+    expect(screen.queryByText('Other ways to sign in')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeTruthy();
+  });
+
+  it('keeps device linking usable when no other method is available', () => {
+    capabilities.mockReturnValue(caps({ passwordEnabled: false, passkeyLoginEnabled: false }));
+    renderLogin();
+    expect(screen.getByRole('link', { name: 'Sign in from another device' })).toBeTruthy();
+    expect(screen.queryByText(/No sign-in method is configured/)).toBeNull();
+  });
+
   it('hides the passkey button in a browser without WebAuthn', () => {
     supported.mockReturnValue(false);
     renderLogin();
@@ -79,13 +117,13 @@ describe('LoginScreen', () => {
   it('offers the first administrator alongside single sign-on on a fresh server', () => {
     capabilities.mockReturnValue(caps({ bootstrapRequired: true, oidcEnabled: true }));
     renderLogin();
-    expect(screen.getByRole('button', { name: /Create the first administrator/ })).toBeTruthy();
+    expect(screen.getByRole('link', { name: /Create the first administrator/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: /single sign-on/ })).toBeTruthy();
   });
 
   it('does not offer it once the server has an administrator', () => {
     renderLogin();
-    expect(screen.queryByRole('button', { name: /Create the first administrator/ })).toBeNull();
+    expect(screen.queryByRole('link', { name: /Create the first administrator/ })).toBeNull();
   });
 
   it('fails closed when this tab cannot persist the OIDC handoff correlation', () => {

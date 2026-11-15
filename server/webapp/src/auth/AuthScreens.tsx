@@ -11,7 +11,7 @@ import { reportSuccess } from '../errors';
 import { getLocale } from '../i18n';
 import { authApi } from './api';
 import { AuthLayout } from './AuthLayout';
-import { ChoiceRow, ErrorNotice, errorMessage, reportAuthError } from './AuthUi';
+import { ErrorNotice, errorMessage, reportAuthError } from './AuthUi';
 import { useAuth } from './AuthProvider';
 import { authText as tx } from './copy';
 import { beginOidcHandoff, readPendingDeviceLink, useFragmentToken } from './fragment';
@@ -126,9 +126,9 @@ export function LoginScreen() {
   const passkeyOffered = auth.capabilities.passkeyLoginEnabled;
   const passkeyEnabled = passkeyOffered && webAuthnSupported();
   const deviceLinkEnabled = auth.capabilities.deviceLinkEnabled;
-  // A server with no administrator yet: offer that path here rather than commandeering
-  // the screen, so signing in with single sign-on stays available.
+  // Setup stays reachable without competing with the sign-in form.
   const bootstrapOffered = auth.capabilities.bootstrapRequired;
+  const otherMethods = passkeyEnabled || oidcEnabled || deviceLinkEnabled;
 
   const form = (setFlow: (flow: AuthFlow) => void) => {
     const submit = async (event: FormEvent) => {
@@ -176,45 +176,56 @@ export function LoginScreen() {
         if (!signal.aborted) setBusy(false);
       }
     };
-    return (
-      <form className="auth-step" onSubmit={(event) => void submit(event)}>
-        <ErrorNotice message={error} />
-        {bootstrapOffered && (
-          <>
-            <ChoiceRow icon="person" title={tx('bootstrapCta')} subtitle={tx('bootstrapCtaSub')}
-                       onClick={() => navigate('/setup')} />
-            <div className="auth-sep">{tx('or')}</div>
-          </>
+    const methods = (
+      <div className="auth-methods">
+        {passkeyEnabled && (
+          <button className={`btn${passwordEnabled ? ' tonal' : ''}`} type="button" disabled={busy} onClick={() => void passkey()}>
+            <Icon name="key" />{busy ? tx('working') : tx('usePasskey')}
+          </button>
         )}
+        {oidcEnabled && (
+          <button className={`btn${passwordEnabled || passkeyEnabled ? ' tonal' : ''}`} type="button" disabled={busy} onClick={startOidc}>
+            <Icon name="link" />{tx('sso')}
+          </button>
+        )}
+        {deviceLinkEnabled && (
+          <Link className="auth-method-link" to="/login/device">
+            <Icon name="phone" />{tx('useAnotherDevice')}
+          </Link>
+        )}
+      </div>
+    );
+    return (
+      <form className="auth-step auth-login" aria-busy={busy} onSubmit={(event) => void submit(event)}>
+        <ErrorNotice message={error} />
         {passwordEnabled && (
           <>
             <TextField label={tx('username')} value={username} onChange={setUsername}
                        autoComplete="username" />
-            <TextField label={tx('password')} value={password} onChange={setPassword}
-                       type={passwordVisible ? 'text' : 'password'} autoComplete="current-password" />
-            <button type="button" className="auth-password-toggle" aria-pressed={passwordVisible}
-                    onClick={() => setPasswordVisible((visible) => !visible)}>
-              {tx(passwordVisible ? 'hidePassword' : 'showPassword')}
-            </button>
+            <div className="auth-password-field">
+              <TextField label={tx('password')} value={password} onChange={setPassword}
+                         type={passwordVisible ? 'text' : 'password'} autoComplete="current-password" />
+              <button type="button" className="auth-password-toggle" aria-pressed={passwordVisible}
+                      aria-label={tx(passwordVisible ? 'hidePassword' : 'showPassword')}
+                      onClick={() => setPasswordVisible((visible) => !visible)}>
+                <Icon name={passwordVisible ? 'visibilityOff' : 'visibility'} />
+              </button>
+            </div>
             <button className="btn"
                     disabled={busy || !username || !password}>
               {busy ? tx('working') : tx('signIn')}
             </button>
           </>
         )}
-        {passwordEnabled && (passkeyEnabled || oidcEnabled) && <div className="auth-sep">{tx('or')}</div>}
-        {passkeyEnabled && (
-          <button className="btn tonal" type="button" disabled={busy} onClick={() => void passkey()}>
-            <Icon name="key" />{busy ? tx('working') : tx('usePasskey')}
-          </button>
+        {otherMethods && (passwordEnabled ? (
+          <details className="auth-alternatives">
+            <summary>{tx('otherSignInMethods')}<Icon name="expandMore" /></summary>
+            {methods}
+          </details>
+        ) : methods)}
+        {!passwordEnabled && !otherMethods && (
+          <p className="auth-hint">{tx(passkeyOffered ? 'passkeyUnavailable' : 'noMethods')}</p>
         )}
-        {oidcEnabled && (
-          <button className="btn tonal" type="button" onClick={startOidc}>
-            <Icon name="link" />{tx('sso')}
-          </button>
-        )}
-        {passkeyOffered && !passkeyEnabled && <p className="auth-hint">{tx('passkeyUnavailable')}</p>}
-        {!passwordEnabled && !oidcEnabled && !passkeyOffered && <p className="auth-hint">{tx('noMethods')}</p>}
       </form>
     );
   };
@@ -227,11 +238,8 @@ export function LoginScreen() {
       initialFlow={null}
       footer={
         <>
-          {deviceLinkEnabled && (
-            <Link className="link" to="/login/device">{tx('useAnotherDevice')}</Link>
-          )}
-          <span className="auth-hint">{tx('haveToken')}</span>
-          <Link className="link" to="/activate">{tx('activateAccount')}</Link>
+          {passwordEnabled && <Link className="link" to="/activate">{tx('activateAccount')}</Link>}
+          {bootstrapOffered && <Link className="link" to="/setup">{tx('bootstrapCta')}</Link>}
         </>
       }
     >

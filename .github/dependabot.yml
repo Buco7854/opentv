@@ -1,0 +1,40 @@
+version: 2
+updates:
+  # Pinned application/toolchain versions need source updates as well as image
+  # rebuilds. Keep them reviewable; CI validates each proposed update.
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      kotlin:
+        patterns:
+          - "org.jetbrains.kotlin*"
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    # New Node/Java majors are not necessarily LTS. Migrate those deliberately.
+    ignore:
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
+      - dependency-name: eclipse-temurin
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: npm
+    directories:
+      - /server/webapp
+      - /docs
+      - /docs/screenshots
+    schedule:
+      interval: weekly
+      day: monday
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday

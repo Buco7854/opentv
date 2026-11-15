@@ -8,6 +8,8 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   test: {
     environment: 'jsdom',
+    // Node 26's native storage globals mask jsdom's per-window Storage.
+    execArgv: ['--no-experimental-webstorage'],
     setupFiles: './src/test-setup.ts',
   },
   build: {

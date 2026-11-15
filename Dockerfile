@@ -5,14 +5,19 @@
 # OPENTV_AUTH_ENCRYPTION_KEY at runtime; internet-facing deployments also
 # require an HTTPS OPENTV_PUBLIC_URL or a correctly configured TLS proxy.
 
-FROM node:24.18-slim AS webapp
+# Stay on the Node 26 LTS line while pulling its current patch on each rebuild.
+FROM node:26-trixie-slim AS webapp
 WORKDIR /webapp
 COPY server/webapp/package.json server/webapp/package-lock.json ./
 RUN npm ci
 COPY server/webapp/ ./
 RUN WEBAPP_OUT=/webapp/dist npm run build
 
-FROM gradle:9.6.1-jdk25 AS build
+# The wrapper pins Gradle independently of the maintained Java 25 LTS image.
+FROM eclipse-temurin:25-jdk-resolute AS build
+RUN apt-get update && apt-get upgrade -y && \
+    apt-get install -y --no-install-recommends curl unzip && \
+    rm -rf /var/lib/apt/lists/*
 
 # The Android Gradle plugin needs an SDK just to configure the :app/:core/:data
 # modules, even though only the JVM server is compiled here.
@@ -29,23 +34,24 @@ WORKDIR /src
 
 COPY settings.gradle.kts build.gradle.kts gradle.properties ./
 COPY gradle gradle
+COPY gradlew ./
 COPY core/build.gradle.kts core/
 COPY data/build.gradle.kts data/
 COPY server-data/build.gradle.kts server-data/
 COPY server/build.gradle.kts server/
 COPY app/build.gradle.kts app/
-RUN gradle --no-daemon -PwebappPrebuilt :server:dependencies --configuration runtimeClasspath > /dev/null || true
+RUN ./gradlew --no-daemon -PwebappPrebuilt :server:dependencies --configuration runtimeClasspath > /dev/null || true
 
 COPY . .
 COPY --from=webapp /webapp/dist server/src/main/resources/web
-RUN gradle --no-daemon -PwebappPrebuilt :server:installDist
+RUN ./gradlew --no-daemon -PwebappPrebuilt :server:installDist
 
-FROM eclipse-temurin:25-jre-noble
+FROM eclipse-temurin:25-jre-resolute
 
-# ffmpeg powers the track-exposing remux for VOD files in browsers. Ubuntu 24.04
-# (noble) ships ffmpeg 6.1, so the read-rate throttle that bounds disk and how far
-# ahead a provider is read is available (5.0 added -readrate, 6.1 its initial burst).
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg curl && \
+# Ubuntu 26.04 LTS supplies current ffmpeg/curl packages. ffmpeg must support
+# -readrate and -readrate_initial_burst (6.1+) for bounded provider prefetch.
+RUN apt-get update && apt-get upgrade -y && \
+    apt-get install -y --no-install-recommends ffmpeg curl && \
     rm -rf /var/lib/apt/lists/*
 
 RUN useradd --system --uid 10001 --create-home opentv && \

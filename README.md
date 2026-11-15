@@ -58,6 +58,14 @@ docker run -d -p 127.0.0.1:8080:8080 -v opentv-data:/data \
   ghcr.io/buco7854/opentv-web:latest
 ```
 
+Web CI rebuilds and publishes `latest` every Tuesday at 04:23 UTC, once this
+workflow is on the default branch. Scheduled builds pull current base images,
+skip Docker's layer cache, and upgrade Ubuntu packages, including ffmpeg and
+curl. Locked npm and Gradle dependencies still require reviewed version updates.
+Pull and recreate the container to use a refreshed image.
+Dependabot checks the Docker, Gradle, npm and GitHub Actions dependencies weekly
+and proposes version updates as pull requests.
+
 The server has local password authentication with MFA, OIDC SSO, revocable
 bearer sessions, users, roles, and playlist assignments. The web client keeps
 its bearer in `localStorage`; Android stores it encrypted under Android
@@ -128,8 +136,15 @@ push.
 ./gradlew :app:assembleDebug      # debug APK
 ```
 
-Requires JDK 17 or newer and the Android SDK (platform 37). The CI workflow runs
-the unit tests and builds a release APK on every push. It refreshes the rolling
+CI and Docker use Java 25 LTS and Node 26 LTS, taking current patch releases
+within those major versions. The Kotlin toolchain uses Kotlin 2.4.21, KSP 2.3.14,
+AGP 9.3.3 and Gradle 9.7.0. Gradle stays within
+[Kotlin's documented compatibility range](https://kotlinlang.org/docs/gradle-configure-project.html);
+AGP takes the fixes in the supported 9.3 line.
+
+Android targets Java 17 bytecode and requires JDK 17 or newer and the Android
+SDK (platform 37). The CI workflow runs the unit tests and builds a release APK
+on every push. It refreshes the rolling
 dev release on `main`, and publishes a tagged GitHub Release when you push a
 `vX.Y.Z` tag.
 
@@ -145,7 +160,7 @@ npm run docs:dev      # local preview
 npm run docs:build    # production build
 ```
 
-Requires Node.js 24.18 or newer. It deploys to GitHub Pages automatically when
+Requires Node.js 26.13.1 or newer. It deploys to GitHub Pages automatically when
 `docs/` changes on `main`.
 
 ## Privacy

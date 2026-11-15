@@ -5,11 +5,13 @@ on:
     branches: [main]
     paths:
       - "docs/**"
+      - ".node-version"
       - ".github/workflows/docs.yml"
   pull_request:
     branches: [main]
     paths:
       - "docs/**"
+      - ".node-version"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 
@@ -38,7 +40,8 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v7
         with:
-          node-version: "24.18.0"
+          node-version-file: ".node-version"
+          check-latest: true
           cache: npm
           cache-dependency-path: docs/package-lock.json
 
