@@ -12,7 +12,7 @@
     "shots": "node capture.mjs && node frame.mjs && node compress.mjs"
   },
   "dependencies": {
-    "playwright": "1.62.0",
+    "playwright": "1.65.0",
     "sharp": "0.35.3"
   }
 }
